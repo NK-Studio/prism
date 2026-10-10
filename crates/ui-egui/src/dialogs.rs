@@ -180,7 +180,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                                 crate::links::link_row(app, ui);
                             });
                             ui.add_space(10.0);
-                            ui.weak("egui · wgpu · photocraft-engine");
+                            ui.weak("egui · wgpu · Prism");
                         }
                     }
                 }
@@ -435,6 +435,19 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn about_overview_uses_the_prism_product_name() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(egui::vec2(1100.0, 740.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.state_mut().ui.open_dialog(DialogKind::About, serde_json::Map::new());
+        h.run_steps(4);
+        assert!(h.query_by_label("egui · wgpu · Prism").is_some());
+        assert!(h.query_by_label("egui · wgpu · photocraft-engine").is_none());
+    }
 
     #[test]
     fn color_picker_has_inset_content_and_actions_at_the_right_edge() {

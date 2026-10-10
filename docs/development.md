@@ -42,6 +42,30 @@ cargo xtask parity                                         # Photoshop menu cove
 
 Image code is slow at `opt-level 0`, so the workspace profile builds dependencies at `opt-level 2`. Use `--release` for anything interactive.
 
+### Faster local builds
+
+Use `cargo build-fast` to build the desktop app, or `cargo run-fast -- image.psd` to run it.
+The `fast` profile keeps optimization at level 2, disables LTO, uses 16 code-generation units,
+and enables incremental compilation. It keeps `panic = "unwind"` for the crash guard.
+The executable is `target/fast/photocraft` (`photocraft.exe` on Windows). Release packaging
+continues to use the existing `release` profile. The first fast build creates a separate cache;
+subsequent edits reuse it. Avoid running multiple Cargo builds against the same target directory:
+the build lock makes them wait for each other.
+
+For cached clean builds or switching branches, install [sccache](https://github.com/mozilla/sccache)
+and opt in per command. Its Rust cache requires disabling incremental compilation:
+
+```sh
+SCCACHE_DIR="$PWD/target/sccache" CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache cargo build-fast
+sccache --show-stats
+```
+
+On PowerShell, set `$env:SCCACHE_DIR = (Join-Path $PWD "target/sccache")`,
+`$env:CARGO_INCREMENTAL = "0"` and `$env:RUSTC_WRAPPER = "sccache"`
+before the build. Clear the incremental and wrapper variables to return to incremental builds. Cache mode and
+incremental mode have separate compiler fingerprints; choose one for a working session.
+No compiler wrapper is required by the repository's default configuration.
+
 ## Fonts (craft-fonts)
 
 Font assets shared by the Crafting Apps live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never in this repo: don't commit font files here (Inter and JetBrains Mono in `assets/fonts/` are the only exceptions; new fonts go to craft-fonts). The rules are in `craftrules/standards/fonts.md` in a sibling `craftrules` checkout (see below); that repository is not public, so outside contributors can ask a maintainer for the rules that apply to their change.

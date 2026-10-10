@@ -72,6 +72,16 @@ opt-level = 1
 lto = "thin"
 codegen-units = 1
 
+# Optimized local iteration without release LTO or serial code generation.
+# Keep unwind so the app's crash guard remains effective.
+[profile.fast]
+inherits = "release"
+opt-level = 2
+lto = false
+codegen-units = 16
+incremental = true
+panic = "unwind"
+
 # Immediate native viewports need screenshot, clipboard and custom-cursor output handling.
 [patch.crates-io]
 eframe = { path = "vendor/eframe" }
