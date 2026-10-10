@@ -6,7 +6,8 @@
 //! - on an edge or corner, a drag resizes it; ⇧ keeps the frame's aspect ratio, ⌥ resizes about
 //!   the centre, and an options-bar ratio preset always holds.
 //!
-//! ↵ commits (`image.crop`, see `canvas::commit_crop`) and Esc cancels. The pending frame lives in
+//! ↵ commits (`image.crop`, see `canvas::commit_crop`); another ↵ dismisses the unchanged canvas
+//! frame. Esc cancels the preview and hides the frame until a new gesture. The pending frame lives in
 //! `UiState::crop_rect`, so the control channel reads it. `image.crop` has no angle, so dragging
 //! outside the frame draws a new one rather than rotating it.
 //!
@@ -32,8 +33,13 @@ pub struct CropState {
     /// Space is held: drawing a new frame moves it instead of sizing it.
     pub space: bool,
     /// `UiState::crop_rect` is the untouched default frame ([`ensure_frame`]): a drag inside it
-    /// draws a new frame (as in Photoshop) instead of moving it, and committing it does nothing.
+    /// draws a new frame (as in Photoshop) instead of moving it; committing the full-canvas
+    /// frame dismisses its overlay without changing the document.
     pub default_frame: bool,
+    /// Enter or Esc dismissed the frame; a new gesture/tool/document restores it.
+    dismissed: bool,
+    /// Esc cancelled a held mouse press: its remaining move/release must not restart a crop.
+    cancelled_press: bool,
     /// The document (index and size) the default frame was made for.
     frame_for: Option<(usize, u32, u32)>,
     /// The frame is being edited (pressed since it was made): the canvas shows what lies past it.
@@ -160,11 +166,13 @@ pub fn set_space(app: &mut PhotocraftApp, down: bool) {
     app.crop.space = down;
 }
 
-/// As in Photoshop, the Crop tool always shows a frame: on picking the tool, and after a crop is
-/// cancelled or committed, it frames the selection's bounds, or the whole canvas.
+/// On picking the Crop tool or after committing a crop, frame the selection or canvas.
+/// Enter or Esc can dismiss the frame until the next gesture.
 pub fn ensure_frame(app: &mut PhotocraftApp) {
     if app.ui.tool != Tool::Crop {
         app.crop.editing = false;
+        app.crop.dismissed = false;
+        app.crop.cancelled_press = false;
         // Leaving the tool drops an untouched default frame (a drawn one stays pending).
         if app.crop.default_frame {
             app.ui.crop_rect = None;
@@ -173,6 +181,12 @@ pub fn ensure_frame(app: &mut PhotocraftApp) {
         return;
     }
     let key = app.session.active_index().zip(app.session.active()).map(|(i, st)| (i, st.doc.size.width, st.doc.size.height));
+    if app.crop.frame_for != key {
+        app.crop.dismissed = false;
+    }
+    if app.crop.dismissed && app.ui.crop_rect.is_none() && app.crop.drag.is_none() {
+        return;
+    }
     // Another document (or a resized one) gets its own default frame.
     if app.crop.default_frame && app.crop.frame_for != key && app.crop.drag.is_none() {
         app.ui.crop_rect = None;
@@ -191,6 +205,33 @@ pub fn ensure_frame(app: &mut PhotocraftApp) {
     app.crop.default_frame = true;
     app.crop.frame_for = key;
     app.crop.editing = false;
+}
+
+/// Hide the crop preview without changing the document or immediately recreating its frame.
+pub fn dismiss_frame(app: &mut PhotocraftApp) {
+    app.ui.crop_rect = None;
+    app.crop.drag = None;
+    app.crop.editing = false;
+    app.crop.default_frame = false;
+    app.crop.dismissed = true;
+    app.crop.space = false;
+    app.crop.cancelled_press = false;
+    app.crop.frame_for = app.session.active_index().zip(app.session.active()).map(|(i, st)| (i, st.doc.size.width, st.doc.size.height));
+}
+
+/// Esc cancels the preview, including a native mouse gesture still awaiting release.
+pub fn cancel_frame(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    dismiss_frame(app);
+    app.crop.cancelled_press = ctx.input(|i| i.pointer.primary_down() || i.pointer.primary_released());
+}
+
+/// Ignore the remainder of an Esc-cancelled press, including its final click on release.
+pub fn ignore_cancelled_pointer(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    let ignore = app.crop.cancelled_press;
+    if ignore && !ctx.input(|i| i.pointer.primary_down()) {
+        app.crop.cancelled_press = false;
+    }
+    ignore
 }
 
 /// A crop gesture is in progress: Space repositions the frame rather than panning.
@@ -224,6 +265,12 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
         app.crop.drag = None;
         return false;
     }
+    if app.crop.cancelled_press {
+        if matches!(ev, ToolEvent::Up { .. }) {
+            app.crop.cancelled_press = false;
+        }
+        return true;
+    }
     let p = match ev {
         ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => [x, y],
     };
@@ -232,6 +279,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
     }
     match ev {
         ToolEvent::Down { .. } => {
+            app.crop.dismissed = false;
             app.crop.editing = true;
             let frame = app.ui.crop_rect.filter(|r| r.iter().all(|v| v.is_finite()));
             app.crop.drag = Some(match frame.map(|r| (r, hit(r, p, tolerance(app)))) {
@@ -364,7 +412,7 @@ mod tests {
         // Now it's a real frame: a drag inside moves it.
         drag(&mut app, &[[60.0, 30.0], [70.0, 30.0]], NONE);
         assert_eq!(app.ui.crop_rect, Some([60.0, 20.0, 130.0, 70.0]));
-        // Cancelling frames the selection's bounds when there is one.
+        // An explicitly cleared frame initializes from the selection's bounds.
         app.run("select.rect", json!({"x": 10, "y": 10, "width": 30, "height": 20})).unwrap();
         app.ui.crop_rect = None;
         ensure_frame(&mut app);
@@ -373,6 +421,199 @@ mod tests {
         app.ui.tool = Tool::Brush;
         ensure_frame(&mut app);
         assert_eq!(app.ui.crop_rect, None);
+    }
+
+    #[test]
+    fn a_second_enter_dismisses_the_committed_crop_frame_and_a_new_drag_still_crops() {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut a = app(depth);
+            ensure_frame(&mut a);
+            drag(&mut a, &[[50.0, 20.0], [90.0, 52.0]], NONE);
+            let steps = a.session.active().unwrap().history.past_len();
+            let mut h = egui_kittest::Harness::new_ui_state(
+                |ui, a: &mut PhotocraftApp| {
+                    ensure_frame(a);
+                    crate::shortcuts::handle(a, ui.ctx());
+                },
+                a,
+            );
+            h.key_press(egui::Key::Enter);
+            h.run_steps(2);
+            assert_eq!(h.state().session.active().unwrap().doc.size, Size::new(40, 32), "{depth:?}");
+            assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, 40.0, 32.0]));
+            h.key_press(egui::Key::Enter);
+            h.run_steps(3);
+            assert!(h.state().ui.crop_rect.is_none(), "the second Enter removes the overlay: {depth:?}");
+            assert!(!shows_beyond_canvas(h.state()));
+            assert_eq!(h.state().ui.tool, Tool::Crop);
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+            drag(h.state_mut(), &[[5.0, 4.0], [25.0, 20.0]], NONE);
+            h.key_press(egui::Key::Enter);
+            h.run_steps(2);
+            assert_eq!(h.state().session.active().unwrap().doc.size, Size::new(20, 16));
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 2);
+        }
+    }
+
+    #[test]
+    fn escape_cancels_the_default_or_edited_crop_without_changing_the_document() {
+        for depth in SampleType::ALL {
+            for edited in [false, true] {
+                let mut a = app(depth);
+                a.run("select.rect", json!({"x": 10, "y": 10, "width": 100, "height": 60})).unwrap();
+                a.sync_views();
+                ensure_frame(&mut a);
+                if edited {
+                    drag(&mut a, &[[20.0, 20.0], [30.0, 20.0]], NONE);
+                    drag(&mut a, &[[120.0, 70.0], [160.0, 90.0]], NONE);
+                    assert!(shows_beyond_canvas(&a));
+                }
+                let doc = a.session.active().unwrap().doc.clone();
+                let steps = a.session.active().unwrap().history.past_len();
+                let views = a.ui.views.clone();
+                let mut h = egui_kittest::Harness::new_ui_state(
+                    |ui, a: &mut PhotocraftApp| {
+                        ensure_frame(a);
+                        crate::shortcuts::handle(a, ui.ctx());
+                    },
+                    a,
+                );
+                h.key_press(egui::Key::Escape);
+                h.run_steps(5);
+                assert!(h.state().ui.crop_rect.is_none(), "Esc keeps the overlay dismissed: {depth:?}, edited={edited}");
+                assert!(h.state().crop.drag.is_none());
+                assert!(!h.state().crop.editing && !shows_beyond_canvas(h.state()));
+                assert_eq!(h.state().ui.tool, Tool::Crop);
+                assert_eq!(h.state().ui.views, views);
+                h.key_press(egui::Key::Enter);
+                h.key_press(egui::Key::Escape);
+                h.run_steps(2);
+                // A gesture can be cancelled even before its first move creates a rectangle.
+                tool_event(h.state_mut(), ToolEvent::Down { x: 50.0, y: 20.0, pressure: 1.0 }, NONE);
+                assert!(h.state().crop.drag.is_some() && h.state().ui.crop_rect.is_none());
+                h.key_press(egui::Key::Escape);
+                h.run_steps(2);
+                assert!(h.state().crop.drag.is_none() && h.state().ui.crop_rect.is_none());
+                let st = h.state().session.active().unwrap();
+                assert!(std::sync::Arc::ptr_eq(&st.doc, &doc), "pixels, size and selection stay untouched");
+                assert_eq!(st.history.past_len(), steps);
+                drag(h.state_mut(), &[[50.0, 20.0], [90.0, 52.0]], NONE);
+                h.key_press(egui::Key::Enter);
+                h.run_steps(2);
+                assert_eq!(h.state().session.active().unwrap().doc.size, Size::new(40, 32));
+                assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+                h.key_press(egui::Key::Escape);
+                h.run_steps(3);
+                assert!(h.state().ui.crop_rect.is_none());
+                assert_eq!(h.state().session.active().unwrap().doc.size, Size::new(40, 32), "Esc keeps an already committed crop");
+                assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn escape_during_a_canvas_press_or_drag_stays_cancelled_after_release() {
+        use egui::{Event, PointerButton, pos2, vec2};
+        for (moving, space) in [(false, false), (true, false), (true, true)] {
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+                PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+                app(SampleType::U8)
+            });
+            h.run_steps(4);
+            let at = h.state().last_canvas_rect.center();
+            let end = at + vec2(80.0, 40.0);
+            let views = h.state().ui.views.clone();
+            let steps = h.state().session.active().unwrap().history.past_len();
+            let down = |p| Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: NONE };
+            let up = |p| Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: NONE };
+            h.event(Event::PointerMoved(at));
+            h.event(down(at));
+            h.step();
+            if moving {
+                h.event(Event::PointerMoved(end));
+                h.run_steps(2);
+                assert!(h.state().crop.drag.is_some());
+            }
+            if space {
+                h.event(Event::Key { key: egui::Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: NONE });
+                h.step();
+            }
+            h.key_press(egui::Key::Escape);
+            h.run_steps(3);
+            assert!(h.state().ui.crop_rect.is_none(), "cancel while the button is down: moving={moving}");
+            let released = end + vec2(20.0, 10.0);
+            h.event(Event::PointerMoved(released));
+            h.step();
+            h.event(up(released));
+            h.run_steps(4);
+            assert!(h.state().ui.crop_rect.is_none(), "release cannot restart a cancelled crop: moving={moving}");
+            assert!(h.state().crop.drag.is_none());
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), steps);
+            assert_eq!(h.state().ui.views, views, "the cancelled press must not pan, even with Space held");
+            if space {
+                h.event(Event::Key { key: egui::Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: NONE });
+                h.step();
+            }
+            // A fresh press still starts a new crop gesture.
+            let start = pos2(at.x - 40.0, at.y - 20.0);
+            h.event(Event::PointerMoved(start));
+            h.event(down(start));
+            h.step();
+            h.event(Event::PointerMoved(end));
+            h.step();
+            h.event(up(end));
+            h.run_steps(3);
+            assert!(h.state().ui.crop_rect.is_some(), "a fresh drag restores cropping");
+        }
+    }
+
+    #[test]
+    fn dismissed_crop_frame_returns_after_switching_tools_or_resizing_the_document() {
+        let mut a = app(SampleType::U8);
+        ensure_frame(&mut a);
+        crate::canvas::commit_crop(&mut a);
+        ensure_frame(&mut a);
+        assert!(a.ui.crop_rect.is_none());
+        a.ui.tool = Tool::Brush;
+        ensure_frame(&mut a);
+        a.ui.tool = Tool::Crop;
+        ensure_frame(&mut a);
+        assert_eq!(a.ui.crop_rect, Some([0.0, 0.0, 200.0, 100.0]));
+        crate::canvas::commit_crop(&mut a);
+        a.run("image.crop", json!({"x": 0, "y": 0, "width": 80, "height": 60})).unwrap();
+        ensure_frame(&mut a);
+        assert_eq!(a.ui.crop_rect, Some([0.0, 0.0, 80.0, 60.0]));
+    }
+
+    #[test]
+    fn enter_commits_thumbnail_selection_without_dragging_the_crop_frame() {
+        for depth in SampleType::ALL {
+            let mut a = app(depth);
+            a.run("layer.new.layer", json!({"name": "thumbnail contents"})).unwrap();
+            a.run("select.rect", json!({"x": 30, "y": 20, "width": 60, "height": 40})).unwrap();
+            a.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            a.run("select.deselect", json!({})).unwrap();
+            // The command dispatched by Cmd-clicking a layer thumbnail.
+            a.run("select.loadSelection", json!({"channel": "transparency"})).unwrap();
+            let steps = a.session.active().unwrap().history.past_len();
+            let mut h = egui_kittest::Harness::builder().build_ui_state(
+                |ui, a: &mut PhotocraftApp| {
+                    ensure_frame(a);
+                    crate::shortcuts::handle(a, ui.ctx());
+                },
+                a,
+            );
+            h.run_steps(2);
+            assert_eq!(h.state().ui.crop_rect, Some([30.0, 20.0, 90.0, 60.0]));
+            h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: NONE });
+            h.run_steps(2);
+            let st = h.state().session.active().unwrap();
+            assert_eq!(st.doc.size, Size::new(60, 40), "{depth:?}");
+            assert_eq!(st.doc.depth, depth);
+            assert_eq!(st.history.past_len(), steps + 1);
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            assert_eq!(h.state().session.active().unwrap().doc.size, Size::new(200, 100));
+        }
     }
 
     #[test]
@@ -386,9 +627,10 @@ mod tests {
         // A click on the frame keeps it edited.
         drag(&mut app, &[[50.0, 50.0]], NONE);
         assert!(shows_beyond_canvas(&app));
-        // Esc drops the frame: the new default one isn't edited.
-        app.ui.crop_rect = None;
+        // Cancelling drops the frame and exits the beyond-canvas preview.
+        dismiss_frame(&mut app);
         ensure_frame(&mut app);
+        assert!(app.ui.crop_rect.is_none());
         assert!(!shows_beyond_canvas(&app));
         // A drawn frame is edited until it is committed.
         drag(&mut app, &[[10.0, 10.0], [60.0, 40.0]], NONE);

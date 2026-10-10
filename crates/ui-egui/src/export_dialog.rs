@@ -263,30 +263,22 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 }
 
 /// File › Export › Quick Export as PNG: the format, quality, metadata, colour space and location
-/// from File › Export › Export Preferences (engine `file.export.quickExport`). On the web (no
-/// file system) it falls back to a PNG download through the export service.
+/// from File › Export › Export Preferences (engine `file.export.quickExport`).
 pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
-    if !cfg!(target_arch = "wasm32") {
-        let prefs = app.session.prefs().export.clone();
-        let fmt = serde_json::to_value(prefs.quick_export_format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "png".into());
-        let same = serde_json::to_value(prefs.quick_export_location).ok().is_some_and(|v| v == "sameFolder");
-        let saved = app.session.active().is_some_and(|d| d.path.is_some());
-        if same && saved {
-            return quick_export(app, json!({}));
-        }
-        let st = app.session.active().ok_or("no document")?;
-        let stem = st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(a, _)| a);
-        let (suggested, doc) = (format!("{stem}.{fmt}"), st.doc.id);
-        return app.pick_save(&suggested, move |app, path| {
-            app.refocus(doc)?;
-            quick_export(app, json!({"path": path}))
-        });
+    let prefs = app.session.prefs().export.clone();
+    let fmt = serde_json::to_value(prefs.quick_export_format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "png".into());
+    let same = serde_json::to_value(prefs.quick_export_location).ok().is_some_and(|v| v == "sameFolder");
+    let saved = app.session.active().is_some_and(|d| d.path.is_some());
+    if same && saved {
+        return quick_export(app, json!({}));
     }
-    let mut f = Map::new();
-    f.insert("format".into(), json!("png"));
-    f.insert("transparency".into(), json!(true));
-    f.insert("scale".into(), json!(100));
-    confirm(app, &f)
+    let st = app.session.active().ok_or("no document")?;
+    let stem = st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(a, _)| a);
+    let (suggested, doc) = (format!("{stem}.{fmt}"), st.doc.id);
+    app.pick_save(&suggested, move |app, path| {
+        app.refocus(doc)?;
+        quick_export(app, json!({"path": path}))
+    })
 }
 
 /// Runs Quick Export with `p` (an explicit `path`, or none for the document's folder).

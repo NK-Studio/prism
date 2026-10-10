@@ -73,13 +73,13 @@ impl Builtin {
         match self {
             Builtin::Srgb => "sRGB IEC61966-2.1",
             Builtin::DisplayP3 => "Display P3",
-            Builtin::AdobeRgbCompat => "Adobe RGB (1998)-compatible (Photocraft)",
-            Builtin::ProPhotoCompat => "ProPhoto RGB-compatible (ROMM primaries, Photocraft)",
-            Builtin::LinearSrgb => "Linear sRGB (Photocraft)",
-            Builtin::Rec2020 => "Rec. ITU-R BT.2020 (Photocraft)",
-            Builtin::GrayGamma22 => "Gray Gamma 2.2 (Photocraft)",
-            Builtin::SGray => "sGray (sRGB tone curve, Photocraft)",
-            Builtin::LabD50 => "Lab D50 identity (Photocraft)",
+            Builtin::AdobeRgbCompat => "Adobe RGB (1998)-compatible (Prism)",
+            Builtin::ProPhotoCompat => "ProPhoto RGB-compatible (ROMM primaries, Prism)",
+            Builtin::LinearSrgb => "Linear sRGB (Prism)",
+            Builtin::Rec2020 => "Rec. ITU-R BT.2020 (Prism)",
+            Builtin::GrayGamma22 => "Gray Gamma 2.2 (Prism)",
+            Builtin::SGray => "sGray (sRGB tone curve, Prism)",
+            Builtin::LabD50 => "Lab D50 identity (Prism)",
             Builtin::CoatedCmyk => crate::synth::DESCRIPTION,
         }
     }
@@ -97,10 +97,12 @@ impl Builtin {
             "gray" | "graygamma22" | "gamma22" => Some(Builtin::GrayGamma22),
             "sgray" | "graysrgb" => Some(Builtin::SGray),
             "lab" | "labd50" | "cielab" => Some(Builtin::LabD50),
-            "cmyk" | "coatedcmyk" | "defaultcmyk" | "photocraftcoatedcmyk" => Some(Builtin::CoatedCmyk),
+            "cmyk" | "coatedcmyk" | "defaultcmyk" | "photocraftcoatedcmyk" | "prismcoatedcmyk" => Some(Builtin::CoatedCmyk),
             _ => None,
         };
-        alias.or_else(|| Builtin::ALL.into_iter().find(|b| b.description().eq_ignore_ascii_case(s)))
+        // Older preferences may contain the original product description rather than a stable id.
+        let description = s.to_ascii_lowercase().replace("photocraft", "prism");
+        alias.or_else(|| Builtin::ALL.into_iter().find(|b| b.description().eq_ignore_ascii_case(&description)))
     }
 
     /// The profile (built once per process).

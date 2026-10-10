@@ -3,16 +3,16 @@
 //!
 //! Pure and platform-free, so it is tested everywhere and builds for the web; only the backend
 //! touches AppKit. What the layout does ([`mac_layout`]):
-//! - an **app menu** named PhotoCraft: About (from Help), Settings (Edit › Preferences), Language,
+//! - an **app menu** named Prism: About (from Help), Settings (Edit › Preferences), Language,
 //!   Appearance (Window › Theme), Services, Hide, Hide Others, Show All and Quit (File › Exit,
 //!   still the app's own `file.exit` so the unsaved-changes prompt runs). The other Craft apps
 //!   use the same app menu;
 //! - **Window** gets Minimize, Zoom and Bring All to Front, and **Help** the system search field;
-//! - **clashes** with the system's keys (⌘H, ⌘M, ⌘W, ⌘,) are resolved in PhotoCraft's favour, and
+//! - **clashes** with the system's keys (⌘H, ⌘M, ⌘W, ⌘,) are resolved in Prism's favour, and
 //!   reported; Hide and Minimize move to ⌃⌘H and ⌃⌘M, as Photoshop does.
 //!
 //! **Keys stay with egui.** AppKit runs a menu's key equivalents before the window sees the key,
-//! which would skip PhotoCraft's key rules (text fields keep ⌘C/⌘V/⌘Z, dialogs and Camera Raw are
+//! which would skip Prism's key rules (text fields keep ⌘C/⌘V/⌘Z, dialogs and Camera Raw are
 //! modal, Liquify has its own ⌘Z). So the backend reports a key equivalent as [`Event::Key`], and
 //! [`NativeMenu::raw_input`] feeds it to egui as the key press it was: the shortcut runs through
 //! [`crate::shortcuts::handle`] exactly as without a native menu. A click is [`Event::Click`] and
@@ -27,7 +27,7 @@ use crate::PhotocraftApp;
 use crate::i18n::{Lang, tr, tr_id};
 use crate::menus::MenuItem;
 
-pub const APP_NAME: &str = "PhotoCraft";
+pub const APP_NAME: &str = "Prism";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MenuBar {
@@ -102,7 +102,7 @@ pub enum Standard {
     CloseWindow,
 }
 
-/// Hide PhotoCraft: a custom item (the predefined one always takes ⌘H, which is View › Extras).
+/// Hide Prism: a custom item (the predefined one always takes ⌘H, which is View › Extras).
 pub const HIDE: &str = "app.hide";
 /// Minimize: a custom item (the predefined one always takes ⌘M, which is Curves).
 pub const MINIMIZE: &str = "window.minimize";
@@ -263,7 +263,7 @@ pub fn structure_key(bar: &MenuBar) -> u64 {
 
 // ----------------------------------------------------------------------------- shortcuts
 
-/// A shortcut as PhotoCraft writes it (`Cmd+Shift+Z`). `Cmd` is ⌘ and `Ctrl` the Control key,
+/// A shortcut as Prism writes it (`Cmd+Shift+Z`). `Cmd` is ⌘ and `Ctrl` the Control key,
 /// never folded together: ⌃⌘M and ⌘M are different shortcuts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Chord {
@@ -339,13 +339,13 @@ impl Chord {
 
 // ----------------------------------------------------------------------------- macOS layout
 
-/// A system key equivalent PhotoCraft already uses for something else.
+/// A system key equivalent Prism already uses for something else.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clash {
     pub shortcut: &'static str,
     /// What macOS uses it for.
     pub system: &'static str,
-    /// The PhotoCraft command bound to it.
+    /// The Prism command bound to it.
     pub command: String,
     /// What the layout did about it.
     pub resolution: &'static str,
@@ -356,13 +356,14 @@ pub struct Layout {
     pub clashes: Vec<Clash>,
 }
 
-/// Turn PhotoCraft's menus (tagged with roles) into a Mac menu bar. See the module docs.
+/// Turn Prism's menus (tagged with roles) into a Mac menu bar. See the module docs.
 pub fn mac_layout(bar: &MenuBar, lang: Lang) -> Layout {
     let mut bar = bar.clone();
     let mut clashes = Vec::new();
     let bound: HashMap<String, String> = bar.items().iter().filter_map(|it| Some((Chord::parse(it.shortcut.as_deref()?)?.portable(), it.id.clone()))).collect();
     let taken = |sc: &str, own: Option<&str>| bound.get(sc).filter(|cmd| Some(cmd.as_str()) != own).cloned();
-    let named = |s: &str| crate::i18n::fmt(tr(lang, s), &[("app", APP_NAME)]);
+    let app_name = tr(lang, APP_NAME);
+    let named = |s: &str| crate::i18n::fmt(tr(lang, s), &[("app", app_name)]);
 
     let about = take(&mut bar, |n| matches!(n, Node::Item(it) if it.role == Some(ItemRole::About)));
     let settings = take(&mut bar, |n| match n {
@@ -417,7 +418,7 @@ pub fn mac_layout(bar: &MenuBar, lang: Lang) -> Layout {
         }
         menu.push(Node::Item(quit));
     }
-    bar.menus.insert(0, Menu { title: APP_NAME.into(), role: MenuRole::App, children: menu });
+    bar.menus.insert(0, Menu { title: app_name.into(), role: MenuRole::App, children: menu });
 
     match taken("Cmd+W", None) {
         Some(command) => clashes.push(Clash { shortcut: "Cmd+W", system: "Close Window", command, resolution: "no system Close Window item" }),
@@ -462,7 +463,7 @@ pub fn mac_layout(bar: &MenuBar, lang: Lang) -> Layout {
 }
 
 /// Settings in the app menu: Edit › Preferences, a submenu of settings pages, becomes "Settings"
-/// with ⌘, on its first page unless PhotoCraft binds ⌘, elsewhere.
+/// with ⌘, on its first page unless Prism binds ⌘, elsewhere.
 fn settings_node(node: Node, comma_taken: Option<String>, lang: Lang, clashes: &mut Vec<Clash>) -> Node {
     if let Some(command) = &comma_taken {
         clashes.push(Clash { shortcut: "Cmd+,", system: "Settings", command: command.clone(), resolution: "Settings has no shortcut" });
@@ -568,7 +569,7 @@ fn translate(bar: &mut MenuBar, lang: Lang) {
     }
 }
 
-/// PhotoCraft's menus as a Mac menu bar, in the UI language; `language` is the
+/// Prism's menus as a Mac menu bar, in the UI language; `language` is the
 /// `interface.language` preference (`auto` or a code), checked in the app menu's Language.
 pub fn photocraft_layout(items: &[MenuItem], lang: Lang, language: &str) -> Layout {
     let mut bar = from_items(&crate::menus::TOP_MENUS, items);
@@ -615,7 +616,7 @@ pub trait Backend {
     fn drain(&mut self) -> Vec<Event>;
 }
 
-/// The native menu bar, while PhotoCraft uses one (the in-window menus are hidden then).
+/// The native menu bar, while Prism uses one (the in-window menus are hidden then).
 pub struct NativeMenu {
     backend: Box<dyn Backend>,
     /// Hash of the state the menus were last built from.
@@ -686,7 +687,7 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(menu) = app.services.native_menu.as_mut() else { return };
     if !menu.logged {
         for c in &layout.clashes {
-            log::info!("menu: {} is {} on macOS and {} in PhotoCraft; {}", c.shortcut, c.system, c.command, c.resolution);
+            log::info!("menu: {} is {} on macOS and {} in Prism; {}", c.shortcut, c.system, c.command, c.resolution);
         }
         menu.logged = true;
     }
@@ -750,7 +751,7 @@ mod tests {
     fn photocraft_gets_a_mac_app_menu() {
         let l = layout(true);
         let app = &l.bar.menus[0];
-        assert_eq!((app.title.as_str(), app.role), ("PhotoCraft", MenuRole::App));
+        assert_eq!((app.title.as_str(), app.role), ("Prism", MenuRole::App));
         assert_eq!(
             ids(&app.children),
             [
@@ -770,8 +771,8 @@ mod tests {
             ]
         );
         let quit = l.bar.find("file.exit").unwrap();
-        assert_eq!((quit.label.as_str(), quit.shortcut.as_deref()), ("Quit PhotoCraft", Some("Cmd+Q")));
-        assert_eq!(l.bar.find("help.about").unwrap().label, "About PhotoCraft");
+        assert_eq!((quit.label.as_str(), quit.shortcut.as_deref()), ("Quit Prism", Some("Cmd+Q")));
+        assert_eq!(l.bar.find("help.about").unwrap().label, "About Prism");
     }
 
     #[test]
@@ -782,10 +783,10 @@ mod tests {
         assert!(!ids(&by("Help").children).contains(&"help.about".to_string()));
         assert!(!ids(&by("Edit").children).contains(&"[Preferences]".to_string()));
         let titles: Vec<&str> = l.bar.menus.iter().map(|m| m.title.as_str()).collect();
-        assert_eq!(titles, ["PhotoCraft", "File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window", "Help"]);
+        assert_eq!(titles, ["Prism", "File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window", "Help"]);
     }
 
-    /// PhotoCraft keeps Photoshop's ⌘H, ⌘M, ⌘W and ⌘, (Hide Layers): the system items give way.
+    /// Prism keeps Photoshop's ⌘H, ⌘M, ⌘W and ⌘, (Hide Layers): the system items give way.
     #[test]
     fn clashes_are_resolved_in_photocrafts_favour() {
         let l = layout(true);
@@ -807,16 +808,17 @@ mod tests {
     #[test]
     fn themes_move_to_the_app_menus_appearance() {
         let mut a = app(false);
-        a.ui.theme = crate::theme::ThemeKind::Classic;
+        a.ui.theme = crate::theme::ThemeKind::ProMedium;
         let l = photocraft_layout(&crate::menus::menu_items(&a), Lang::EN, "auto");
         let app_menu = l.bar.menu(MenuRole::App).unwrap();
         let Some(Node::Submenu { children, .. }) = app_menu.children.iter().find(|n| matches!(n, Node::Submenu { label, .. } if label == "Appearance")) else {
             panic!("an Appearance submenu");
         };
         let themes = ids(children);
+        assert!(!themes.contains(&"window.theme.classic".to_string()));
         assert_eq!(themes.last().map(String::as_str), Some("window.theme.toggle"));
-        assert!(themes.contains(&"window.theme.pro".to_string()) && themes.contains(&"window.theme.classic".to_string()));
-        assert_eq!(l.bar.find("window.theme.classic").unwrap().checked, Some(true));
+        assert!(themes.contains(&"window.theme.pro".to_string()) && themes.contains(&"window.theme.proMedium".to_string()));
+        assert_eq!(l.bar.find("window.theme.proMedium").unwrap().checked, Some(true));
         assert_eq!(l.bar.find("window.theme.pro").unwrap().checked, Some(false));
         assert_eq!(l.bar.find("window.theme.toggle").unwrap().label, "Next Theme");
         let window = ids(&l.bar.menu(MenuRole::Window).unwrap().children);
@@ -920,7 +922,7 @@ mod tests {
         }
     }
 
-    /// A key equivalent reaches PhotoCraft's own key handling as the key press it was, so the
+    /// A key equivalent reaches Prism's own key handling as the key press it was, so the
     /// shortcut runs once, through the same rules as without a native menu.
     #[test]
     fn key_equivalents_run_through_the_normal_shortcut_path() {

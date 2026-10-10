@@ -19,6 +19,8 @@ avif = ["image/avif"]
 heif = ["dep:photocraft-heif"]
 
 [dependencies]
+rayon.workspace = true
+
 thiserror.workspace = true
 image = { workspace = true, features = ["gif", "bmp", "tga", "ico", "qoi", "hdr"] }
 png = "0.18"
@@ -32,10 +34,7 @@ zune-core = "0.5"
 jpeg-encoder = "0.6"
 photocraft-heif = { path = "../heif", optional = true }
 
-# Orientation is applied a band of rows per task on native; wasm stays single-threaded.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rayon.workspace = true
-
+# Orientation is applied a band of rows per task on native.
 [dev-dependencies]
 proptest.workspace = true
 # Oracle decoders for cross-checking in tests only.

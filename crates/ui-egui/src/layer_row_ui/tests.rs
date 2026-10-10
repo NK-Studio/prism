@@ -100,7 +100,7 @@ fn long_names_never_run_under_the_indicators() {
             check(&recorded(&h.ctx), &format!("@{ppp}x {width}pt"));
         }
     }
-    for theme in ["pro", "studio", "studiolight", "classic"] {
+    for theme in ["pro", "studio", "studiolight", "proMedium"] {
         let h = harness(busy(), 1.0, theme, 250.0);
         check(&recorded(&h.ctx), theme);
     }

@@ -7,9 +7,9 @@
 //! interface theme…) live here too: keeping one document means the headless MCP server sees and
 //! edits exactly what the desktop app persists, and the shell has no second store to keep in sync.
 //!
-//! The engine never touches the filesystem for preferences (it must build for wasm). Frontends
+//! The engine never touches the filesystem for preferences. Frontends
 //! persist [`Session::prefs_to_json`] wherever the platform keeps settings (the desktop app: the
-//! OS config directory; the web shell: browser storage) and restore it with
+//! OS config directory) and restore it with
 //! [`Session::load_prefs_json`].
 //!
 //! Engine-side values are applied by [`Session::apply_prefs`]: the history state limit (every
@@ -28,10 +28,10 @@ use crate::{EngineError, Result, Session};
 /// A string-valued choice enum with its JSON names (used to validate `prefs.set` and to fill
 /// dropdowns in the Preferences dialog).
 macro_rules! choice {
-    ($(#[$m:meta])* $name:ident { $($var:ident = $s:literal),+ $(,)? } default $def:ident) => {
+    ($(#[$m:meta])* $name:ident { $( $(#[$vm:meta])* $var:ident = $s:literal),+ $(,)? } default $def:ident) => {
         $(#[$m])*
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-        pub enum $name { $(#[serde(rename = $s)] $var),+ }
+        pub enum $name { $( $(#[$vm])* #[serde(rename = $s)] $var),+ }
         impl Default for $name {
             fn default() -> Self { Self::$def }
         }
@@ -55,13 +55,13 @@ choice!(TypeUnit { Points = "points", Pixels = "pixels", Millimeters = "mm" } de
 choice!(PointSize { PostScript = "postScript", Traditional = "traditional" } default PostScript);
 choice!(Interpolation { BicubicAutomatic = "bicubicAutomatic", Nearest = "nearestNeighbor", Bilinear = "bilinear", Bicubic = "bicubic", BicubicSmoother = "bicubicSmoother", BicubicSharper = "bicubicSharper", PreserveDetails = "preserveDetails" } default BicubicAutomatic);
 choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
-choice!(Theme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", StudioLight = "studioLight", Classic = "classic" } default ProMedium);
+choice!(Theme { Pro = "pro", #[serde(alias = "classic")] ProMedium = "proMedium", Studio = "studio", StudioLight = "studioLight" } default ProMedium);
 choice!(CanvasColor { Default = "default", Black = "black", DarkGray = "darkGray", MediumGray = "mediumGray", LightGray = "lightGray", Custom = "custom" } default Default);
 choice!(CanvasBorder { DropShadow = "dropShadow", Line = "line", None = "none" } default DropShadow);
 choice!(UiScale { Auto = "auto", P75 = "75", P100 = "100", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
 choice!(
     /// Graphics backend of the desktop app's window and GPU canvas (applies at next launch).
-    /// `auto` lets PhotoCraft pick (DX12 for Intel adapters on Windows); `cpu` composites on the
+    /// `auto` lets Prism pick (DX12 for Intel adapters on Windows); `cpu` composites on the
     /// CPU and draws the window with a software adapter where the platform has one. A start that
     /// crashes inside the graphics driver moves this to the next safer choice.
     GpuBackend { Auto = "auto", Vulkan = "vulkan", Dx12 = "dx12", Metal = "metal", Gl = "gl", Cpu = "cpu" } default Auto
@@ -73,9 +73,9 @@ choice!(
 );
 choice!(
     /// Linux display server of the desktop app's window (applies at next launch). `x11` runs
-    /// PhotoCraft through XWayland on a Wayland session, where native file drag and drop works
+    /// Prism through XWayland on a Wayland session, where native file drag and drop works
     /// (winit 0.30 has none on Wayland, issue #386); fractional scaling may then look softer.
-    /// It needs an X server (`DISPLAY`); without one PhotoCraft starts as `auto`. Other
+    /// It needs an X server (`DISPLAY`); without one Prism starts as `auto`. Other
     /// platforms ignore it.
     LinuxDisplayServer { Auto = "auto", X11 = "x11" } default Auto
 );
@@ -227,7 +227,7 @@ pub struct Interface {
     /// Move tool drags show only the layer's outline and an arrow, leaving its pixels in place
     /// until release. Off (the default), the pixels follow the pointer live inside the outline.
     pub show_bounding_box_when_dragging_layer: bool,
-    /// Windows and Linux: use the system's title bar and window buttons instead of PhotoCraft's
+    /// Windows and Linux: use the system's title bar and window buttons instead of Prism's
     /// own one-row title bar (tiling window managers, desktops that draw their own decorations;
     /// #1271, #1316). Read when the app starts. macOS always uses the system's.
     pub system_title_bar: bool,
@@ -401,7 +401,7 @@ impl Default for Export {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Performance {
-    /// Memory PhotoCraft may use, in MB: bounds each document's pixels plus its History (the
+    /// Memory Prism may use, in MB: bounds each document's pixels plus its History (the
     /// oldest states are dropped beyond it).
     pub memory_usage_mb: u32,
     /// Undo steps kept per document (History panel states).
@@ -858,8 +858,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "scratchDisks.disks",
     "cursors.brushPreviewColor",
     "unitsAndRulers.typeUnits",
-    "unitsAndRulers.columnWidth",
-    "unitsAndRulers.gutter",
     "unitsAndRulers.printResolution",
     "unitsAndRulers.screenResolution",
     "plugIns.showExtensionPanels",

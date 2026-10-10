@@ -1,4 +1,4 @@
-//! Font database: bundled fonts (always available, also on the web), the optional craft-fonts
+//! Font database: bundled fonts (always available), the optional craft-fonts
 //! Japanese fonts ([`crate::craft_fonts`], when built with `CRAFT_FONTS_DIR`), optional system
 //! fonts found by scanning the platform font directories (no fontconfig), user-registered font
 //! data, and PostScript-name lookup for PSD import.
@@ -17,7 +17,7 @@ pub const DEFAULT_FAMILY: &str = "Inter";
 pub const MONO_FAMILY: &str = "JetBrains Mono";
 
 // The font files are embedded once, here. The UI (`ui-egui` theme) uses these same statics:
-// a second `include_bytes!` of the same file elsewhere put a second 1.5 MB copy into the wasm.
+// a second `include_bytes!` of the same file elsewhere put a second 1.5 MB copy into the binary.
 pub static INTER_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 pub static INTER_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/Inter-Medium.ttf");
 pub static INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf");
@@ -89,7 +89,7 @@ impl Default for FontDb {
 }
 
 impl FontDb {
-    /// Bundled fonts only (deterministic: used by tests and the web build).
+    /// Bundled fonts only (deterministic: used by tests).
     pub fn new() -> Self {
         let collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
         let mut db = FontDb {
@@ -101,8 +101,7 @@ impl FontDb {
         for (_, bytes) in BUNDLED {
             db.register_font_data(bytes.to_vec());
         }
-        // The optional craft-fonts (empty unless built with CRAFT_FONTS_DIR; always empty on
-        // wasm32), before any system font.
+        // The optional craft-fonts (empty unless built with CRAFT_FONTS_DIR), before any system font.
         for f in crate::craft_fonts::CRAFT_FONTS.iter().filter(|f| f.is_japanese()) {
             db.register_static_font(f.bytes);
         }
@@ -110,7 +109,7 @@ impl FontDb {
         db
     }
 
-    /// Bundled fonts plus the fonts installed on this machine (no-op on the web).
+    /// Bundled fonts plus the fonts installed on this machine.
     pub fn with_system_fonts() -> Self {
         let mut db = Self::new();
         db.load_system_fonts();
@@ -124,7 +123,6 @@ impl FontDb {
             return;
         }
         self.system_loaded = true;
-        #[cfg(not(target_arch = "wasm32"))]
         {
             // One call per file: fontique's directory scan is much slower on large folders.
             let mut files = Vec::new();
@@ -357,7 +355,6 @@ pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
     ResolvedFont { family: family.trim().to_string(), weight, italic, exact: false }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
@@ -374,7 +371,6 @@ fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn system_font_dirs() -> Vec<std::path::PathBuf> {
     use std::path::PathBuf;
     let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -415,7 +411,7 @@ pub fn is_hidden_family(name: &str) -> bool {
     name.starts_with('.')
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     #[test]
     fn hidden_families_sort_last_and_are_not_listed() {

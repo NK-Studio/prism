@@ -715,6 +715,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Window", "Arrange"], "Tile", None, "window.arrange.tile"),
     (&["Window", "Arrange"], "---", None, "---"),
     (&["Window", "Arrange"], "Float in Window", None, "window.arrange.floatInWindow"),
+    (&["Window", "Arrange"], "Move to Main Tabs", None, "window.arrange.moveToTabs"),
     (&["Window", "Arrange"], "Float All in Windows", None, "window.arrange.floatAllInWindows"),
     (&["Window", "Arrange"], "---", None, "---"),
     (&["Window", "Arrange"], "New Window for Document", None, "window.arrange.newWindowForDocument"),

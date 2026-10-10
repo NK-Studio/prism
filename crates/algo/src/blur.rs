@@ -11,7 +11,7 @@ use crate::{Ctx, FilterParams, RadialMethod, RadialQuality};
 use self::motion as motion_rows;
 
 pub(crate) mod motion_apply;
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod motion_bench;
 mod motion_fft;
 #[cfg(test)]
@@ -385,15 +385,11 @@ fn average_samples(src: &Image, out: Rect, ctx: &Ctx, offsets: impl Fn(f32, f32,
             }
         }
     };
-    #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         res.par_chunks_mut(ow * n).enumerate().for_each(|(row, data)| process_row(out.y0 + row as i32, data));
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        res.chunks_mut(ow * n).enumerate().for_each(|(row, data)| process_row(out.y0 + row as i32, data));
-    }
+
     res
 }
 

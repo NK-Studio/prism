@@ -168,13 +168,8 @@ fn base_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn read_file(path: &str) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
-}
-#[cfg(target_arch = "wasm32")]
-fn read_file(_: &str) -> Option<Vec<u8>> {
-    None
 }
 
 /// `layer.setAdjustment` for the kinds edited one range / option at a time: params merge into the

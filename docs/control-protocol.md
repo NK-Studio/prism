@@ -7,7 +7,7 @@ photocraft --control 7878 --control-token-file /private/path/photocraft-control.
   --automation-read-root /work/project --automation-write-root /work/project
 ```
 
-If the file does not exist, PhotoCraft creates it with a fresh 256-bit token. On Unix the new file is mode `0600`; on Windows, protect it with an appropriate user-only ACL. An existing file is reused. If neither a token nor token file is configured, PhotoCraft generates a token for that launch and writes it to standard error. `PHOTOCRAFT_CONTROL_TOKEN` and `PHOTOCRAFT_CONTROL_TOKEN_FILE` are the environment-variable equivalents.
+If the file does not exist, Prism creates it with a fresh 256-bit token. On Unix the new file is mode `0600`; on Windows, protect it with an appropriate user-only ACL. An existing file is reused. If neither a token nor token file is configured, Prism generates a token for that launch and writes it to standard error. `PHOTOCRAFT_CONTROL_TOKEN` and `PHOTOCRAFT_CONTROL_TOKEN_FILE` are the environment-variable equivalents.
 
 The first request on every TCP connection must authenticate. No other method is dispatched before this succeeds:
 
@@ -34,34 +34,83 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 
 ## Methods
 
+`ui.inspect.shapeCorners` reports the selected live rectangle's `layer`, `rect`, corner
+`radii` and four `handles` in document coordinates (top-left, top-right, bottom-right,
+bottom-left), or `null` when unavailable. With Rectangle, Path Selection or Direct Selection,
+drive a handle using `ui.pointer`: `down` at its position, then `move` and `up`. The default
+drag changes all radii; `alt: true` at `down` changes only that corner. The `drag` field reports
+the captured gesture. Preview leaves the document/history untouched; release applies one
+`shape.edit`, Enter commits, and Escape or focus loss cancels. Held gestures are never restored
+from saved UI state. Numeric corner controls remain available in Properties.
+
 - `engine.execute {command, params}`: run any engine or UI command by id. Engine commands run directly with their default params and never open a dialog. Use `ui.menu.invoke` for menu-click behaviour, which opens a command's dialog when no params are given. `params` must be a JSON object (omit it or pass `null` for none); an array, string, number or boolean is an error naming the command, in every transport (control channel, `serve`, MCP and the CLI)
 - `engine.commands`: list commands with enablement
 - `ui.inspect`: full UI state (tool, panels, views, dialogs, windows, window size). The menu tree is not included; use `ui.menu.list`. `brushPicker` is `null` while closed and `{pos: [x, y], list: {collapsed, filter, view, renaming}}` while the Brush Preset picker is open (coordinates in screen points). `view` holds the View/Window/Type preferences: `screen_mode`, `extras`, `show` and `snap_to` flags, `flip_horizontal`, `arrange` (Window › Arrange layout), pixel aspect, font preview size, language options. `perf.timings.gpuInfo` holds the graphics adapter, backend, driver, the backend chosen at launch and why, the canvas renderer (`gpu`/`cpu`) and, after a device loss, `lost` (`help.systemInfo` returns the same as `info`)
-- `ui.set {tool?, panels?, dockTabs?, dock?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSize?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerView?, gradientBlendMode?, gradientClassic?}`: change UI state; any other field is an error, checked before anything changes (`theme` is `pro`, `proMedium`, `studio`, `studioLight` or `classic`; `selectionMode` is the selection tools' options-bar mode, 0 New, 1 Add, 2 Subtract, 3 Intersect; `brushSection` indexes the Brush Settings sections, `brushTab` 0 = Brush Settings, 1 = Brushes; `brushesView` and `brushPickerView` are `list` or `grid` for the Brushes panel and the Brush Preset picker; `brushPicker` is `[x, y]` in screen points to open the Brush Preset picker there (as a right-click with a painting tool does) or `null` to close it, and picking a preset in it is `tools.setBrush {"preset": name}`; `dock` is `{order: ["layers", …], heights: {"properties": 180}, collapsed: ["color"]}`, the right-dock groups top to bottom, their heights in points and the groups collapsed to their tab strip; `dockWidth` sets the right dock width in points, clamped to 250..520; `colorPanel` is `{background}`, whether the Color panel edits the background colour)
+- `ui.set {tool?, panels?, dockTabs?, dock?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSize?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerView?, gradientBlendMode?, gradientClassic?}`: change UI state; any other field is an error, checked before anything changes (`theme` is `pro`, `proMedium`, `studio`, or `studioLight`; `selectionMode` is the selection tools' options-bar mode, 0 New, 1 Add, 2 Subtract, 3 Intersect; `brushSection` indexes the Brush Settings sections, `brushTab` 0 = Brush Settings, 1 = Brushes; `brushesView` and `brushPickerView` are `list` or `grid` for the Brushes panel and the Brush Preset picker; `brushPicker` is `[x, y]` in screen points to open the Brush Preset picker there (as a right-click with a painting tool does) or `null` to close it, and picking a preset in it is `tools.setBrush {"preset": name}`; `dock` is `{order: ["layers", …], heights: {"properties": 180}, collapsed: ["color"]}`, the right-dock groups top to bottom, their heights in points and the groups collapsed to their tab strip; `dockWidth` sets the right dock width in points, clamped to 250..520; `colorPanel` is `{background}`, whether the Color panel edits the background colour)
   - `typeTransform` is `null` outside a temporary Ctrl/Cmd Type-tool drag. During a drag it reports its source document/revision, original affine, oriented `frame` (layer, local bounds, document-space corners and pivot), and captured `gesture`. Drive it with `ui.pointer` and `command: true` at `down`; `move`/`up` may release the modifier. The document/history remain unchanged during preview, and `up` applies one `type.edit` within `textEdit`'s session. Pressing Escape during the drag cancels only the preview. This pointer state is never restored from saved UI state.
 - `ui.menu.invoke {id, params?, wait?}` / `ui.menu.list`: activate a menu item by id; list the menu tree. A menu item that starts a background job (a filter without a dialog, such as Blur More) replies with the job's result once it has been applied; with `"wait": false` the reply is `{job, pending: true}` at once
 - `ui.set` also accepts `gradientBlendMode` (a layer blend mode name, such as `Difference`) and `gradientClassic` (boolean) for the Gradient tool options bar.
 - Each painting tool keeps its own brush, as in Photoshop: `tools.setBrush` and `ui.set {brushSize}` change the active tool's brush, and switching tools swaps in that tool's own (size, hardness, mode, opacity, flow, dynamics, smoothing). A tool used for the first time starts from the brush in hand. The colours, the erase flag and the stroke seed stay shared. So `ui.set {tool: "eraser", brushSize: 12}` sets the Eraser's size, and `ui.set {tool: "brush"}` afterwards brings the Brush's own size back.
   Both gradient modes use the current preset, including its opacity stops. Select `Foreground to Transparent` through `gradient.presets.select`, or pass custom `stops` and `transparency: [[0,100],[1,0]]` (location 0..1, opacity 0..100). Use `applyToLayer: false` to edit only the tool preset. Classic gradient drags dispatch `paint.gradient` without overriding them.
-- `ui.dialog.open {kind, fields?}` (kinds `newDocument`, `about`, `layerStyle {effect?}`, `colorPicker {target: foreground|background}`, `command {command}`) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`. Like `ui.menu.invoke`, `ui.dialog.confirm` waits for a background job its command starts (a filter dialog's OK) and replies with the result; `"wait": false` replies `{job, pending: true}` at once
+- `ui.dialog.open {kind, fields?}` (kinds `newDocument`, `about`, `layerStyle {effect?}`, `colorPicker {target: foreground|background|shapeFill}`, `command {command}`) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}` / `ui.dialog.focus {dialog}` (native command windows only). Like `ui.menu.invoke`, `ui.dialog.confirm` waits for a background job its command starts (a filter dialog's OK) and replies with the result; `"wait": false` replies `{job, pending: true}` at once
+
+
+Document tabs and floating document title bars share an ordered context menu: Duplicate,
+Image Size, Canvas Size, File Info, Print, followed by close and detach/attach actions.
+`ui.inspect.documentContextMenu` reports its stable document ID, source window, ordered items
+and enabled states; `ui.context.choose {id}` chooses an enabled document action too.
+Duplicate, Image Size and Canvas Size open native modal windows. Dialog inspection adds
+`presentation` (`embedded` or `native`), `sourceDocument` and `sourceRevision`; `window`
+continues to identify the originating document window. Confirm validates that document and
+revision, retaining the window, fields and `__error` on failure. Enter confirms; Escape,
+Cancel or the native close button cancels. An open dropdown consumes Escape first.
+
+`ui.click`, `ui.move`, `ui.drag`, `ui.key`, `ui.type`, `ui.pointer`, `ui.resize` and
+`ui.screenshot` accept an optional `dialog` ID as an alternative to `window`. Both together
+are an error; omitting both preserves the main-window target. Pointer coordinates for a
+native dialog are local screen points. `ui_pointer` and `ui_screenshot` in MCP bridge mode
+accept the same targets. Native command windows block document editing input.
+
+Image Size stores pixel `width`/`height`, ppi `resolution`, `resample` (including `auto` and
+`none`), and `scaleStyles` (default true). UI-only fields `__widthUnit`, `__heightUnit` and
+`__resolutionUnit` select the independent display units. Automatic uses Preserve Details
+when enlarging, Lanczos when reducing, and Bicubic for equal or mixed-axis sizes. Canvas
+Size uses pixel dimensions or deltas with `relative`, a nine-position `anchor` and
+`extensionColor`. Columns use Preferences > Units & Rulers column width and gutter.
+Duplicate fields are `name` and `mergedOnly`. Duplicates made from a floating document
+open in a new detached window with the source camera and size; tab duplicates open a tab.
+
+For an editable shape layer with a solid fill (or no fill), double-click its thumbnail or invoke
+`layer.layerContentOptions` to open the solid-colour picker. Agents can also open it with
+`ui.dialog.open {"kind":"colorPicker","target":"shapeFill"}`. Setting its `color` field to a
+six-digit hex colour previews the fill on the canvas and thumbnail without modifying the document.
+Confirm dispatches one `shape.edit` with the original alpha; Cancel/Escape restores the original.
+An unchanged confirmation adds no history. The picker is bound to its source document revision:
+if that document changes or ceases to be active, reopen the picker. Rasterized layers retain their
+regular Layer Style action; gradient/pattern shapes retain the Appearance controls.
   - Layer Style (`layerStyle {effect?}` opens on that effect kind): the fields hold the dialog's whole state, so agents read and drive it like a user. `effects` lists every effect instance in the layer's order as `{id, kind, on, params, fx}` (`fx` is the effect snapshot the dialog loaded; OK edits that snapshot with `params`, so anything the dialog doesn't model survives). `selected` picks the page (`blendingOptions` or an instance id), `preview` (default on) gates the live canvas preview, `p:blendingOptions` edits blend mode/opacity/fill opacity, and `patternList` names the usable patterns. OK replaces the layer's effects in one step (`layer.layerStyle.replace`); Cancel discards. "New Style…" saves the pending state via `style.presets.new {effects}`, a swatch click applies a style preset, and Make/Reset Default use `layer.layerStyle.makeDefault` / `layer.layerStyle.defaultFor`
   - Preferences (`ui.menu.invoke {id: "edit.preferences.interface"}`) exposes the sections in its `values` field. Apply (`ui.dialog.apply`) and OK (`ui.dialog.confirm`) on Preferences are refused over control because automation denies whole-preferences updates and filesystem-bearing preference sections. A refused `ui.dialog.apply` returns an error and keeps the dialog open; a refused `ui.dialog.confirm` returns an error but closes and removes the dialog. `ui.dialog.cancel` closes the dialog without saving. Individual safe preferences can instead be changed with `engine.execute` using `prefs.set` (e.g. `{"command": "prefs.set", "params": {"path": "interface.showTooltips", "value": false}}`). Settings marked for the next launch still require a restart.
   - Edit › Fill… (`ui.menu.invoke {id: "edit.fill"}`, Shift+F5, Shift+Backspace) opens the Fill dialog; its fields are `edit.fill`'s params (`contents`, `color`, `pattern`, `colorAdaptation`, `mode`, `opacity`, `preserveTransparency`), and OK remembers them in the preferences (`dialogs["edit.fill"]`).
   - A pixel tool pressed on a type, shape, Smart Object or fill layer (e.g. through `ui.pointer`) opens the "Rasterize?" prompt instead of painting: a dialog with `__rasterize` (`type|shape|smartObject|fill`), `message`, `layer`, `tool` and `at`. `ui.dialog.confirm` runs the `layer.rasterize.*` command and then paints at `at` (two history states, `{"rasterized", "painted"}`); `ui.dialog.cancel` does nothing.
-- `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
+- `ui.window.open {document?}`: an additional editable view of a shared document.
+- `ui.window.detach {document?}` / `ui.window.attach {window}` / `ui.window.focus {window}`: float a main tab, return it at the end of the main strip, or focus its native window. Detaching preserves pixels, path, Undo and camera. `ui.inspect` reports `windows[].kind` (`additional` or `detached`), `activeWindow`, `mainDocument` and `dockedDocuments`.
+- `ui.window.close {window}`: close an additional view, or close a detached document through the same Save/Discard/Cancel guard as File › Close.
+- `ui.click`, `ui.move`, `ui.drag`, `ui.key`, `ui.type`, `ui.pointer`, `ui.resize` and `ui.screenshot` accept optional `window` (an open window ID). Omission targets the main window. Screen coordinates are points relative to that window's client area; `ui.pointer` remains in document coordinates.
+- `ui.drag {from:[x,y], to:[x,y], window?, phase?}`: a primary-button drag through the same hit-testing as physical input. Drag a document tab at least 24 pt out of its strip to float it; drag its child-window title bar or tab onto the main strip to return it at the shown insertion position. An eligible drop outlines the document workspace in blue and reduces the entire dragged native window to 55% opacity (without darkening its pixels); detaching shows an empty document frame in the current theme’s chrome colour until release. `ui.inspect.documentDrag` reports the stable document ID, source window and `moving`/`detaching`/`docking` phase (`null` when idle). Esc cancels and restores the floating window's starting position. `phase` defaults to `complete`; use `start`, `move`, then `end` to hold the pointer for inspecting or capturing the transient preview. Floating document windows stay above the main editor while Prism is active and return to the ordinary desktop stack when another application takes focus.
 - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], tool?, modifiers?, button?}`: drive the active tool in document coordinates (pressure 0..1, tilt in degrees -90..90, barrel rotation 0..360: a simulated pen). Modifier flags (`shift`, `alt`, `command`, `ctrl`, `space`) go either at the top level or grouped under `modifiers`; when `modifiers` is present, top-level flags are ignored. `space: true` holds Space (the Crop frame, marquee, lasso or shape being drawn then moves instead of growing). `button: "right"` (or `"secondary"`) is the right button: with the Move tool (or `command: true` with any tool) it opens the canvas layer menu (`layerMenu` in `ui.inspect` lists the layers there, topmost first; select one with `layer.select`); with Marquee, Lasso, Magic Wand, Object Selection, or Pen it opens a tool context menu (`canvasToolMenu` in `ui.inspect`, with ordered command ids, separators, and enabled states); with a painting tool it opens the Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase. The menus open at the screen position of the pressed document point. Use `ui.context.choose {id}` for enabled tool-context actions. The Pen menu is documented in `docs/context-menu-parity.md`. With a Color Picker as the top dialog, `down` and `move` sample the image into its new colour instead (its eyedropper, like a click on the canvas) and the tool is not driven.
   - Magnetic Lasso (`tool: "magneticLasso"`): a `down`/`up` pair is a click. The first sets the first fastening point (its modifiers set the selection mode); later clicks fasten a point, or close the border on the first point. `move` events trace the border with or without a button held, fastening points by themselves; with `alt: true` a click draws a straight segment and a drag a freehand one. `ui.inspect` shows the border in progress under `magnetic` (`path`, `anchors`, `live`, `mode`). `ui.key` Enter closes it along the edges, Backspace removes the last fastening point, Escape cancels. To select along edges in one call instead, use the `select.magneticLasso` command with rough points around the shape.
 - `ui.click {x, y, button?, count?}` / `ui.move {x, y}`: synthetic pointer input in screen points (`button`: `left` (default), `right` or `middle`). `count` (default 1, `2` for a double-click) is at most 256; a larger one is an error and queues nothing
 - `ui.key {key, command?, shift?, alt?, ctrl?}` (flags may also be grouped under `modifiers`): press and release a key, e.g. `{"key": "ArrowLeft", "shift": true}`
+  - Crop: Enter commits the pending rectangle through `image.crop`; another Enter dismisses the unchanged canvas frame. Escape cancels the preview and removes its frame/shield, preserving pixels, selection, canvas size, camera and history. A fresh drag or tool activation restores the frame.
 - `ui.type {text}`: type text (goes to the focused widget, or to the canvas while the Type tool is editing)
-- `ui.resize {width, height}`: resize the main window
+- `ui.resize {width, height, window?}`: resize the selected native window
 - `ui.gpu.simulateLoss {error?}`: act as if the wgpu device was lost (or reported an error with `error: true`). The app switches to the CPU image compositor for the rest of the session and shows the same recovery warning as on a real loss. `gpuFallbackNotice` in `ui.inspect` contains the reason while the warning is open. Keep Using CPU saves CPU compatibility for the next launch; Retry GPU saves GPU mode and asks the user to save and restart. The window renderer still requires a working graphics or software adapter. Returns `wasActive` and `gpuInfo`. For testing the fallback
-- `ui.screenshot {path?, focus?}`: capture the main window (PNG). With no path the reply contains
+- `ui.screenshot {path?, focus?, window?}`: capture the selected native window (PNG). With no path the reply contains
   base64 PNG data; a path is relative to the automation write root. Raises the window first
   (default) because occluded macOS windows stop rendering
 - `ui.focus`: bring the main window to the front
 - `app.open {path}` / `app.save {path?}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name`, `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file, like File › Save. Automation opens and saves never fire script events. Use these two rather than `file.open`, `file.save`, `file.saveAs` or `file.saveACopy`, which the control channel refuses (see [Engine commands](#engine-commands))
-- `app.quit`
+- `app.quit`: quit after the save guard has asked about every dirty document.
 
 ## Engine commands
 
@@ -168,7 +217,7 @@ The desktop app stores them in `preferences.json` in the platform config directo
 `Recovery` folder, and the window size and position, the dock width and floating-panel geometry
 to `ui.ron` beside it (a file holding values that would crash startup is discarded). In portable mode (a `portable.txt` or `PhotoCraft.portable` file beside the
 executable, as in the Windows portable zip) that directory is `PhotoCraftData` next to the
-executable instead. The web build keeps them in `localStorage`. A save writes only the values
+executable instead. A save writes only the values
 this instance changed since it last loaded or saved them over what storage holds now, so a second
 browser tab (or app window) never reverts the other's changes; for a value changed in both, the
 latest save wins. A failed write stays pending and is retried (after 2 s, doubling up to 30 s, and
@@ -180,7 +229,7 @@ User and imported (`.abr`) brush presets live in the config directory's `Presets
 `index.json` with the group order and deleted built-ins (see `photocraft_engine::preset_store`).
 The store loads in the background at launch and syncs after every brush preset change; built-ins
 are never written. The Actions list is `actions.json` in that same folder and survives a restart.
-Headless CLI/MCP sessions and the web build keep brush presets and the action list for the session
+Headless CLI/MCP sessions keep brush presets and the action list for the session
 only, unless a store is attached. Gradient presets (including imported `.grd` groups) persist with
 the preferences.
 
@@ -352,11 +401,9 @@ a driver process crash is detected by the startup marker on the next launch.
 
 ### Camera Raw dialog
 
-On the desktop the dialog is a window of its own (title bar, moved and resized like any window), as Adobe Camera Raw is; the main window is dimmed and takes no input while it is open, and closing the window is Cancel. Where the platform has no extra windows (the web build) it is drawn over the main window.
+On the desktop the dialog is a window of its own (title bar, moved and resized like any window), as Adobe Camera Raw is; the main window is dimmed and takes no input while it is open, and closing the window is Cancel.
 
-**Screenshots:** `ui.screenshot` captures the main window only, and eframe cannot capture an
-immediate viewport, so while Camera Raw has its own window the PNG shows the dimmed main window,
-not the dialog. Read the dialog's state through `ui.inspect` (`cameraRaw`: params, histogram,
+**Screenshots:** `ui.screenshot` defaults to the main window, so while Camera Raw has its own window the PNG shows the dimmed main window. The optional `window` parameter selects document windows; Camera Raw is not a document window. Read the dialog's state through `ui.inspect` (`cameraRaw`: params, histogram,
 zoom, control rectangles) and drive it with the `ui` params below. To *see* it, render offscreen
 (`cargo run -p photocraft-ui-egui --example snapshot -- --script '[["ui.menu.invoke", {"id": "filter.cameraRaw"}]]'`
 or an `egui_kittest` harness): those embed

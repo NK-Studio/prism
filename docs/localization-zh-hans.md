@@ -1,7 +1,7 @@
 # Simplified Chinese catalog
 
 The `zh-hans` catalog is registered as **简体中文** in the shared i18n foundation
-introduced by [PhotoCraft PR #169](https://github.com/storytold/photocraft/pull/169).
+introduced by [Prism PR #169](https://github.com/storytold/photocraft/pull/169).
 Simplified Chinese support landed in
 [PR #282](https://github.com/storytold/photocraft/pull/282), after the v0.2.0 release.
 That release does not contain the language selector or this catalog; use a build
@@ -20,9 +20,6 @@ languages and the Windows user locale. `zh`, `zh-CN`, `zh-SG` and `zh-Hans`
 variants resolve to this catalog. Traditional Chinese locales (`zh-TW`, `zh-HK`,
 `zh-MO`, `zh-Hant`) resolve to the separate `zh-hant` catalog.
 
-The web build does not detect the browser language automatically; choose the
-language manually there.
-
 ## Files and integration
 
 - `crates/ui-egui/src/i18n/zh-hans.tsv` contains the translations, independent of
@@ -36,7 +33,7 @@ language manually there.
 Keep English source keys, contexts, command IDs, placeholders and escapes intact.
 Retain the trailing `…` on commands that open a dialog. Missing translations use
 the framework's English fallback. User-supplied names and document data are not
-translated. Product names and technology names such as PhotoCraft, ArtCraft,
+translated. Product names and technology names such as Prism, ArtCraft,
 OpenType, RGB, CMYK and Lab retain their spelling. Status messages, errors and
 automation output remain English as described in [UI design](ui-design.md#localisation);
 complete catalog coverage does not claim those strings are translated.
@@ -61,7 +58,7 @@ complete catalog coverage does not claim those strings are translated.
 ## Validation and maintenance
 
 Run `cargo test -p photocraft-ui-egui`, the touched-crate all-target clippy check,
-`cargo xtask layers` and `cargo xtask wasm`. The shared catalog tests validate
+`cargo xtask layers`. The shared catalog tests validate
 duplicate keys, placeholders, ellipses, menu coverage, `tl!` literals, brush
 sections and blend modes. Chinese-specific tests cover locale selection, fallback,
 plural messages, formatted labels and the painted brush section rows and heading. Render and inspect the menus, Preferences and representative
@@ -69,8 +66,7 @@ dialogs with the existing offscreen `snapshot` example.
 
 Font delivery is separate from the translation data. The catalog adds no font
 assets; the shell's CJK fallback loads fonts separately. Verify missing glyphs,
-label layout and platform-specific shortcuts visually on each target platform,
-and verify web glyph coverage separately.
+label layout and platform-specific shortcuts visually on each target platform.
 
 When English labels change, update their source keys and translations together,
 preserving contexts and placeholders. The complete-catalog tests catch missing

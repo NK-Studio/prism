@@ -123,15 +123,11 @@ pub fn render(f: &Fill, rect: Rect, frame: Rect) -> Vec<[f32; 4]> {
             }
         }
     };
-    #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         px.par_chunks_mut(w).enumerate().for_each(|(j, out)| row(rect.y0 + j as i32, out));
     }
-    #[cfg(target_arch = "wasm32")]
-    for (j, out) in px.chunks_mut(w).enumerate() {
-        row(rect.y0 + j as i32, out);
-    }
+
     px
 }
 

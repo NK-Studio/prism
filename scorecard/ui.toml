@@ -45,7 +45,7 @@ id = "UI-217-6"
 target = "Document tabs: overflow list, context menu (Close/Others/All/Reveal), drag to reorder"
 status = "partial"
 issue = 217
-note = "canvas.rs: Close/Others/All context menu with unsaved prompt; overflow, Reveal, drag reorder still missing"
+note = "canvas.rs: overflow and guarded Close/Others/All menu; native detach/attach via drag or menu, independent cameras and guarded window close (2026-10-10). Document header actions and native Duplicate/Image Size/Canvas Size dialogs added; Columns use column width/gutter. Reveal and same-strip drag reorder remain missing"
 
 [[item]]
 id = "UI-217-7"

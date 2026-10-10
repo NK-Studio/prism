@@ -665,15 +665,10 @@ impl Ex {
                 Ok(Source { uuid: path.clone(), size, dpi })
             }
             SmartSource::Linked { path } => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let bytes = std::fs::read(path).map_err(|e| format!("the linked file {path} can't be read: {e}"))?;
-                    let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
-                    self.warnings.push(format!("the linked smart object {name} was embedded (PSD export keeps no external links)"));
-                    self.embed(&name, &bytes)
-                }
-                #[cfg(target_arch = "wasm32")]
-                Err(format!("the linked file {path} can't be read here"))
+                let bytes = std::fs::read(path).map_err(|e| format!("the linked file {path} can't be read: {e}"))?;
+                let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
+                self.warnings.push(format!("the linked smart object {name} was embedded (PSD export keeps no external links)"));
+                self.embed(&name, &bytes)
             }
             SmartSource::Embedded { file_name, bytes } => self.embed(file_name, bytes),
         }

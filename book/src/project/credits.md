@@ -1,6 +1,6 @@
 # Credits
 
-PhotoCraft is created and maintained by the ArtCraft team and PhotoCraft contributors. Project ownership, copyright, and licensing remain as stated in the repository's `README.md`, `NOTICE`, and license files. Every merged contribution is credited in the repository history and release notes.
+Prism (프리즘) is independently maintained by NK-Studio and is derived from [PhotoCraft](https://github.com/storytold/photocraft), created by the ArtCraft team and PhotoCraft contributors. Original copyright, source attribution, and licensing are preserved in `README.md`, `NOTICE`, and the license files. Every merged contribution is credited in the repository history and release notes.
 
 ## Documentation
 

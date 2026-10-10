@@ -15,7 +15,7 @@
 //! Builds made with the optional craft-fonts input (`CRAFT_FONTS_DIR`,
 //! [`photocraft_text::craft_fonts`]) carry Japanese fonts (BIZ UDPGothic first): they are tried
 //! before the system Japanese fonts, in the Japanese slot of the same locale order. Without
-//! craft-fonts (and on the web, which never embeds them) nothing changes.
+//! craft-fonts nothing changes.
 
 use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
 use egui::{FontData, FontFamily, FontId, Shape};
@@ -49,7 +49,6 @@ pub fn no_embedded(_: CjkScript) -> Vec<&'static CraftFont> {
 }
 
 impl Sources {
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn system() -> Self {
         Self {
             locale: || match crate::i18n::current().code() {
@@ -60,10 +59,6 @@ impl Sources {
             last_resort: cjk::last_resort_files,
             embedded: craft_embedded,
         }
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub fn system() -> Self {
-        Self { locale: || None, files: |_| Vec::new(), last_resort: Vec::new, embedded: craft_embedded }
     }
 }
 
@@ -277,7 +272,7 @@ impl egui::Plugin for CjkFontPlugin {
     }
 }
 
-/// Installs the lazy CJK fallback (system fonts; nothing on the web).
+/// Installs the lazy CJK fallback using system fonts.
 pub fn install(ctx: &egui::Context) {
     install_with(ctx, Sources::system());
 }
@@ -299,7 +294,6 @@ pub fn install_with(ctx: &egui::Context, sources: Sources) {
 }
 
 #[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
     use std::sync::Mutex;

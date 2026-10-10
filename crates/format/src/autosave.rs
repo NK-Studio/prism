@@ -9,7 +9,6 @@
 //! [`RecoveryStore`] is the app-facing lifecycle: an entry is only deleted once
 //! the document is saved or closed, never just because it was recovered.
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -223,7 +222,6 @@ pub fn discard_recovery(recovery_dir: &Path, entry: &RecoveryEntry) -> Result<()
 /// that entry in place (each save is atomic, so the old copy stays loadable until the new one is
 /// complete), and saving or closing it removes the entry. Nothing is deleted just because it was
 /// recovered, so a second crash before the next autosave loses nothing.
-#[cfg(not(target_arch = "wasm32"))]
 pub struct RecoveryStore {
     dir: PathBuf,
     session: String,
@@ -231,7 +229,6 @@ pub struct RecoveryStore {
     adopted: HashMap<u64, String>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl RecoveryStore {
     pub fn new(recovery_dir: impl Into<PathBuf>) -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};

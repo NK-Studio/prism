@@ -166,13 +166,10 @@ pub fn build_mesh(src: &Surface, bounds: Rect, density: PuppetDensity, expansion
                 }
             }
         };
-        #[cfg(not(target_arch = "wasm32"))]
         {
             use rayon::prelude::*;
             cov.par_chunks_mut(bw).enumerate().for_each(|(by, out)| scan(by, out));
         }
-        #[cfg(target_arch = "wasm32")]
-        cov.chunks_mut(bw).enumerate().for_each(|(by, out)| scan(by, out));
     }
     // Grow / shrink by the expansion (round stamp in block units).
     let eb = (e.abs() / f64::from(g)).round() as i32;

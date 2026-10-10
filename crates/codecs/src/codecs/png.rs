@@ -350,14 +350,14 @@ fn adam7_idat(data: &[u8], w: usize, h: usize, bpp: usize, level: PngCompression
 const PARALLEL_MIN_BYTES: usize = 4 << 20;
 
 /// The zlib stream of a non-interlaced image, built in parallel (`None` below
-/// [`PARALLEL_MIN_BYTES`], on wasm, or without compression): rows get the adaptive filter
+/// [`PARALLEL_MIN_BYTES`], or without compression): rows get the adaptive filter
 /// (minimum sum of absolute differences over the five PNG filters, as libpng and the `png`
 /// crate do), then bands of rows are deflated independently at the requested level, each
 /// ending on a sync flush so the raw deflate streams concatenate into one (as `pigz` does).
 /// A 36 MP RGB export drops from ~9 s to well under a second on 12 cores; the output is a few
 /// percent larger (no dictionary across bands).
 fn parallel_idat(data: &[u8], w: usize, h: usize, bpp: usize, level: PngCompression) -> Option<Vec<u8>> {
-    if cfg!(target_arch = "wasm32") || data.len() < PARALLEL_MIN_BYTES || level == PngCompression::None || w == 0 || h == 0 {
+    if data.len() < PARALLEL_MIN_BYTES || level == PngCompression::None || w == 0 || h == 0 {
         return None;
     }
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 32);

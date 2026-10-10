@@ -96,8 +96,7 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
         }
     }
     if app.session.active_index() != Some(index) {
-        app.session.set_active(index);
-        app.jobs.focus = None;
+        crate::doc_windows::activate_main(app, index);
         // The Layers panel now lists the other document: its rows don't take the drag.
         ctx.data_mut(|d| d.remove::<u64>(egui::Id::new("layer-drag")));
     }

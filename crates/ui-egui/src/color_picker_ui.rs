@@ -467,6 +467,9 @@ pub fn take_add_swatch(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
 
 /// OK: set the foreground or background colour.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    if crate::shape_color_ui::owns(f) {
+        return crate::shape_color_ui::confirm(app, f);
+    }
     let target = f.get("__colorPicker").and_then(Value::as_str).unwrap_or("foreground");
     let color = f.get("color").and_then(Value::as_str).unwrap_or("#000000");
     if let Some(cmd) = f.get("__command").and_then(Value::as_str) {
@@ -574,7 +577,7 @@ mod tests {
         assert_eq!(h.query_all_by_label("OK").count(), 1);
         let web = h.get_by_label("Only Web Colors").rect();
         assert!(web.left() < hue.left() && web.top() > hue.bottom());
-        // The full dialog should fit even in PhotoCraft's minimum 760 x 480 window.
+        // The full dialog should fit even in Prism's minimum 760 x 480 window.
         assert!(black.bottom() - ok.top() < 360.0);
         assert!(black.right() - web.left() < 600.0);
         let hex = h.get_by_role(Role::TextInput).rect();

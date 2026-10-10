@@ -165,15 +165,11 @@ fn mask_px(s: &Surface, r: Rect, factor: u32, color: impl Fn(f32) -> Color32 + S
     if w == 0 {
         return px;
     }
-    #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         px.par_chunks_mut(w).enumerate().for_each(|(y, out)| row(y, out));
     }
-    #[cfg(target_arch = "wasm32")]
-    for (y, out) in px.chunks_mut(w).enumerate() {
-        row(y, out);
-    }
+
     px
 }
 

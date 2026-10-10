@@ -794,8 +794,7 @@ fn rows_par(src: &[f32], dst: &mut [f32], w: usize, f: impl Fn(&[f32], &mut [f32
     if w == 0 {
         return;
     }
-    let threads =
-        if cfg!(target_arch = "wasm32") || src.len() < 1 << 16 { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 16) };
+    let threads = if src.len() < 1 << 16 { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 16) };
     if threads == 1 {
         dst.chunks_mut(w).zip(src.chunks(w)).for_each(|(d, s)| f(s, d));
         return;

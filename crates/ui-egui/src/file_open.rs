@@ -84,7 +84,6 @@ impl PhotocraftApp {
     }
 
     /// Read and open the file at `path` (see [`open_file`](Self::open_file)).
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &str) -> Result<Vec<String>, String> {
         // Documents opening in the background are read on the worker too (a 2 GB PSB read
         // would block the window). Preset files (brushes, gradients) go the usual way.
@@ -95,11 +94,6 @@ impl PhotocraftApp {
         }
         let bytes = photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
         self.open_file(path, &bytes)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn open_path(&mut self, path: &str) -> Result<Vec<String>, String> {
-        Err(format!("cannot open paths on the web: {path}"))
     }
 
     /// Open several files, reporting each failure to the user instead of stopping. Relative paths
@@ -156,7 +150,7 @@ impl PhotocraftApp {
         let Some(p) = at.filter(|p| ctx.layer_id_at(*p).is_none_or(|l| l.order == egui::Order::Background)) else {
             return DropTarget::Elsewhere;
         };
-        if let Some(strip) = self.tab_strip.as_ref().filter(|s| s.rect.contains(p)) {
+        if let Some(strip) = self.tab_strip.as_ref().filter(|s| ctx.viewport_id() == egui::ViewportId::ROOT && s.rect.contains(p)) {
             return DropTarget::Tabs(strip.slot(p.x));
         }
         // The canvas shown last frame may belong to a document closed since.
@@ -230,14 +224,8 @@ impl PhotocraftApp {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn absolute(p: &str) -> String {
     std::path::absolute(p).map(|a| a.to_string_lossy().to_string()).unwrap_or_else(|_| p.to_string())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn absolute(p: &str) -> String {
-    p.to_string()
 }
 
 #[cfg(test)]

@@ -131,18 +131,14 @@ impl Plugin {
             r
         };
         // A few bands at a time (one per worker), so peak memory stays near one band per thread.
-        #[cfg(not(target_arch = "wasm32"))]
         let group = rayon::current_num_threads().max(1);
-        #[cfg(target_arch = "wasm32")]
-        let group = 1;
+
         for chunk in bands.chunks(group) {
-            #[cfg(not(target_arch = "wasm32"))]
             let results: Vec<Result<Surface>> = {
                 use rayon::prelude::*;
                 chunk.par_iter().map(run).collect()
             };
-            #[cfg(target_arch = "wasm32")]
-            let results: Vec<Result<Surface>> = chunk.iter().map(run).collect();
+
             for r in results {
                 for (c, t) in r?.tiles() {
                     out.tile_mut(*c).bytes_mut().copy_from_slice(t.bytes());

@@ -126,6 +126,46 @@ fn edit_type_command_rejects_missing_or_non_type_layers_without_changes() {
 }
 
 #[test]
+fn shape_thumbnail_opens_fill_picker_and_name_mask_and_raster_keep_their_actions() {
+    for ppp in [1.0, 2.0] {
+        let mut s = session();
+        let id =
+            s.execute("shape.create", json!({"kind":"roundedRect","rect":[20,30,180,100],"radii":20,"fill":"#f1e6d7"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        s.execute("layer.new.layer", json!({"name":"Other active layer"})).unwrap();
+        let mut h = harness(s, ppp);
+        let history = h.state().session.active().unwrap().history.past_len();
+        let at = thumbnail(&h, id);
+        double_click(&mut h, at);
+        let d = h.state().ui.dialogs.last().expect("shape fill picker");
+        assert_eq!(d.fields["__colorPicker"], "shapeFill");
+        assert_eq!(d.fields["color"], "#f1e6d7");
+        assert_eq!(d.fields["__params"]["layer"], id);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+        let at = row(&h, id).name.unwrap().center();
+        double_click(&mut h, at);
+        assert_eq!(super::renaming(&h.ctx), Some(id));
+        assert!(h.state().ui.dialogs.is_empty());
+        super::end_rename(&h.ctx, false);
+        h.run_steps(2);
+        let at =
+            crate::mask_thumbs_ui::recorded(&h.ctx, id).unwrap().0.into_iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).unwrap().1.center();
+        double_click(&mut h, at);
+        assert!(h.state().ui.dialogs.is_empty());
+        h.state_mut().run("shape.rasterize", json!({"layer":id})).unwrap();
+        h.run_steps(3);
+        let at = thumbnail(&h, id);
+        double_click(&mut h, at);
+        assert!(h.state().ui.dialogs.iter().all(|d| !crate::shape_color_ui::owns(&d.fields)));
+        assert_eq!(h.state().ui.dialogs.last().unwrap().kind, crate::state::DialogKind::LayerStyle);
+    }
+}
+
+#[test]
 fn reentering_type_edit_keeps_the_session_and_cancel_restores_cached_pixels() {
     let mut s = session();
     let id = s.execute("type.create", json!({"text": "Hello", "size": 48, "x": 100, "y": 180})).unwrap()["layer"].as_u64().unwrap();

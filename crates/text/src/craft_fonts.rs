@@ -2,8 +2,7 @@
 //!
 //! `CRAFT_FONTS` is empty unless the app was built with `CRAFT_FONTS_DIR=<craft-fonts checkout>`
 //! (see `build.rs`); every user of it must work when it is empty. Today it carries the Japanese
-//! fonts: BIZ UDPGothic (UI) and Shippori Mincho / BIZ UDMincho (serif document text). The web
-//! build (wasm32) embeds none of them: they don't fit its size cap (see `build.rs`).
+//! fonts: BIZ UDPGothic (UI) and Shippori Mincho / BIZ UDMincho (serif document text).
 
 /// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`).
 pub struct CraftFont {

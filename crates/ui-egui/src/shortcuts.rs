@@ -185,7 +185,7 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
                 (true, false) => *e = egui::Event::Copy,
                 // Text fields need the clipboard text: egui-winit reads it and sends a Paste event.
                 (false, true) if typing => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                    ctx.send_viewport_cmd_to(raw.viewport_id, egui::ViewportCommand::RequestPaste);
                     return false;
                 }
                 (false, true) => *e = press(Key::V, Modifiers::COMMAND),
@@ -249,6 +249,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Dialogs (and Liquify's panel while one of its controls has focus) keep canvas zoom; a
     // focused text field keeps its keys.
     let liquify_focus = app.distort.liquify.is_some() && focus != Focus::None;
+    if crate::native_dialogs::is_open(app) {
+        return;
+    }
     if liquify_focus || !app.ui.dialogs.is_empty() || app.discard.is_some() {
         if focus != Focus::Text {
             nav_keys(app, ctx);
@@ -259,6 +262,10 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // A focused field keeps its typing and editing keys; menu shortcuts (⌘J, ⌘S, F7…) still
         // fire, as in Photoshop.
         dispatch_pressed(app, ctx, focus, false);
+        return;
+    }
+    // Live rectangle corner widgets: ↩ commits the preview, Esc restores its original radii.
+    if crate::shape_corners_ui::keys(app, ctx) {
         return;
     }
     // Liquify / Puppet Warp / Perspective Warp: ↩ commits, Esc cancels.
@@ -344,7 +351,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             return;
         }
     }
-    if !app.ui.polygon.is_empty() || app.ui.crop_rect.is_some() {
+    if !app.ui.polygon.is_empty() || app.ui.crop_rect.is_some() || app.crop.drag.is_some() {
         if pressed(Key::Enter) {
             if !app.ui.polygon.is_empty() {
                 crate::canvas::commit_polygon(app);
@@ -356,8 +363,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if pressed(Key::Escape) {
             app.ui.polygon.clear();
             app.ui.polygon_mode.clear();
-            app.ui.crop_rect = None;
-            app.crop.drag = None;
+            crate::crop_ui::cancel_frame(app, ctx);
             return;
         }
     }

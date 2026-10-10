@@ -826,7 +826,6 @@ mod tests {
         assert!(crate::commands::command_specs().iter().any(|c| c.id == "actions.play" && !c.journal && c.menu.is_empty()));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn actions_persist_with_the_preset_store() {
         let dir = std::env::temp_dir().join(format!("pc-actions-{}-persist", std::process::id()));

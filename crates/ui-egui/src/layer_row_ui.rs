@@ -152,7 +152,7 @@ pub fn indicators(
                 }
             }
             Indicator::FxTriangle => {
-                let resp = ui.interact(r, ui.id().with(("fx-disclosure", l.id.0)), Sense::click());
+                let resp = ui.interact(r, ui.id().with(("fx-disclosure", l.id.0)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
                 paint_triangle(painter, r.center(), fx_open, if resp.hovered() { t.text } else { t.icon });
                 if resp.clicked() {
                     clicked = true;

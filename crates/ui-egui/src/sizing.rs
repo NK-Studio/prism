@@ -31,6 +31,7 @@ fn pref_unit(u: photocraft_engine::prefs::Unit) -> &'static str {
 fn pref_resample(i: photocraft_engine::prefs::Interpolation) -> &'static str {
     use photocraft_engine::prefs::Interpolation;
     match i {
+        Interpolation::BicubicAutomatic => "auto",
         Interpolation::Nearest => "nearest",
         Interpolation::Bilinear => "bilinear",
         Interpolation::BicubicSharper => "lanczos",
@@ -58,19 +59,35 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     f.insert("__origH".into(), json!(h));
     f.insert("__origRes".into(), json!(res));
     f.insert("__unit".into(), json!(unit));
-    f.insert("__bytesPerPixel".into(), json!(d.layers.first().and_then(|l| l.surface()).map_or(4, |s| s.format().bytes_per_pixel())));
+    f.insert("__widthUnit".into(), json!(unit));
+    f.insert("__heightUnit".into(), json!(unit));
+    f.insert("__resolutionUnit".into(), json!("ppi"));
+    f.insert("__sourceDoc".into(), json!(d.id.0));
+    let prefs = &app.session.prefs().units_and_rulers;
+    f.insert("__columnWidth".into(), json!(prefs.column_width));
+    f.insert("__gutter".into(), json!(prefs.gutter));
+    f.insert("__pointsPerInch".into(), json!(prefs.point_size.per_inch()));
+    f.insert("__background".into(), json!(d.layers.first().is_some_and(|l| l.name == "Background" && l.locks.transparency && l.surface().is_some())));
+    f.insert("__bytesPerPixel".into(), json!(d.mode.color_channels() * d.depth.bytes()));
     f.insert("width".into(), json!(w));
     f.insert("height".into(), json!(h));
     if command == "image.imageSize" {
         f.insert("__constrain".into(), json!(true));
         f.insert("resolution".into(), json!(res));
         f.insert("resample".into(), json!(resample));
+        f.insert("scaleStyles".into(), json!(true));
+        f.insert("__fit".into(), json!("original"));
     } else {
         f.insert("relative".into(), json!(false));
         f.insert("anchor".into(), json!("center"));
         f.insert("extensionColor".into(), json!("background"));
     }
-    Some(app.ui.open_dialog(DialogKind::Command, f))
+    if command == "image.canvasSize" && f.get("__background").and_then(Value::as_bool) != Some(true) {
+        f.insert("extensionColor".into(), json!("transparent"));
+    }
+    let id = app.ui.open_dialog(DialogKind::Command, f);
+    crate::native_dialogs::make_native(app, id);
+    Some(id)
 }
 
 fn num(f: &Map<String, Value>, k: &str) -> f64 {
@@ -112,11 +129,22 @@ pub fn human_bytes(b: f64) -> String {
     }
 }
 
-pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if f.get("__command").and_then(Value::as_str) == Some("image.canvasSize") {
-        canvas_size(ui, f);
+        canvas_size(app, ui, f);
     } else {
-        image_size(ui, f);
+        if ui.available_width() >= 700.0 {
+            let height = ui.available_height().clamp(180.0, 390.0);
+            ui.horizontal_top(|ui| {
+                let preview_width = (ui.available_width() - 412.0).max(250.0);
+                ui.allocate_ui_with_layout(vec2(preview_width, height), egui::Layout::top_down(egui::Align::Min), |ui| preview(app, ui, f, height - 32.0));
+                ui.allocate_ui_with_layout(vec2(400.0, height), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    image_size(ui, f);
+                });
+            });
+        } else {
+            image_size(ui, f);
+        }
     }
 }
 
@@ -135,28 +163,88 @@ fn info_row(ui: &mut egui::Ui, k: &str, v: String) {
 }
 
 /// Width / height field in the current unit, writing back pixels. Returns true when edited.
+fn unit_key(key: &str) -> &'static str {
+    if key == "width" { "__widthUnit" } else { "__heightUnit" }
+}
+fn column_span(f: &Map<String, Value>, n: f64) -> f64 {
+    let width = num(f, "__columnWidth").max(0.01);
+    let gutter = num(f, "__gutter").max(0.0);
+    n.signum() * (n.abs() * width + (n.abs() - 1.0).max(0.0) * gutter)
+}
+fn display_value(f: &Map<String, Value>, px: f64, unit: &str, orig: f64, res: f64) -> f64 {
+    if unit == "columns" {
+        let points = px.abs() / res.max(1.0) * 72.0;
+        let width = num(f, "__columnWidth").max(0.01);
+        let gutter = num(f, "__gutter").max(0.0);
+        px.signum() * if points <= width { points / width } else { (points + gutter) / (width + gutter) }
+    } else if unit == "pt" || unit == "pica" {
+        px / res.max(1.0) * num(f, "__pointsPerInch").max(1.0) / if unit == "pica" { 12.0 } else { 1.0 }
+    } else {
+        to_unit(px, unit, orig, res)
+    }
+}
+fn pixel_value(f: &Map<String, Value>, value: f64, unit: &str, orig: f64, res: f64) -> f64 {
+    if unit == "columns" {
+        column_span(f, value) / 72.0 * res
+    } else if unit == "pt" || unit == "pica" {
+        value / num(f, "__pointsPerInch").max(1.0) * res * if unit == "pica" { 12.0 } else { 1.0 }
+    } else {
+        from_unit(value, unit, orig, res)
+    }
+}
 fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key: &str, id: &str) -> bool {
-    let unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
+    let unit = f.get(unit_key(key)).or(f.get("__unit")).and_then(Value::as_str).unwrap_or("px").to_string();
     let res = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
     let orig = num(f, orig_key);
-    let px = num(f, key);
-    let mut v = to_unit(px, &unit, orig, res) as f32;
-    let range = if unit == "px" { -300000.0..=300000.0 } else { -30000.0..=30000.0 };
-    let changed = crate::widgets::value_field(ui, &mut v, range, "", 90.0).changed();
+    let frozen = f.get("resample").and_then(Value::as_str) == Some("none");
+    let mut v = display_value(f, num(f, key), &unit, orig, res) as f32;
+    let changed = ui
+        .push_id(id, |ui| {
+            ui.add_enabled_ui(!frozen || !matches!(unit.as_str(), "px" | "percent"), |ui| {
+                crate::widgets::value_field(ui, &mut v, -300000.0..=300000.0, "", 100.0).changed()
+            })
+            .inner
+        })
+        .inner;
     if changed {
-        let px = from_unit(v as f64, &unit, orig, res);
-        f.insert(key.into(), json!(if unit == "px" { px.round() } else { px }));
+        let px = pixel_value(f, f64::from(v), &unit, orig, res);
+        if frozen {
+            if px > 0.0 {
+                f.insert("resolution".into(), json!((res * orig / px).clamp(1.0, 10000.0)));
+            }
+            f.insert("width".into(), json!(num(f, "__origW")));
+            f.insert("height".into(), json!(num(f, "__origH")));
+        } else {
+            f.insert(key.into(), json!(if unit == "px" { px.round() } else { px }));
+        }
+        f.insert("__fit".into(), json!("custom"));
     }
-    let _ = id;
     changed
 }
-
-fn unit_dropdown(ui: &mut egui::Ui, f: &mut Map<String, Value>, id: &str) {
-    let mut unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
-    let opts: Vec<(String, &str)> = UNITS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-    if crate::widgets::dropdown(ui, id, &mut unit, &opts, 110.0) {
-        f.insert("__unit".into(), json!(unit));
+fn unit_dropdown(ui: &mut egui::Ui, f: &mut Map<String, Value>, id: &str, key: &str) {
+    let mut unit = f.get(unit_key(key)).or(f.get("__unit")).and_then(Value::as_str).unwrap_or("px").to_string();
+    let mut opts: Vec<(String, &str)> = UNITS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
+    if key == "width" {
+        opts.push(("columns".into(), "Columns"));
     }
+    if crate::widgets::dropdown(ui, id, &mut unit, &opts, 145.0) {
+        f.insert(unit_key(key).into(), json!(unit));
+    }
+}
+pub fn validate(f: &Map<String, Value>) -> Result<(), String> {
+    let relative = f.get("relative").and_then(Value::as_bool).unwrap_or(false);
+    for (key, orig) in [("width", "__origW"), ("height", "__origH")] {
+        let value = num(f, key) + if relative { num(f, orig) } else { 0.0 };
+        if !value.is_finite() || !(1.0..=300000.0).contains(&value) {
+            return Err(format!("invalid {key}: choose 1–300000 pixels"));
+        }
+    }
+    if let Some(r) = f.get("resolution")
+        && !r.as_f64().is_some_and(|r| r.is_finite() && (1.0..=10000.0).contains(&r))
+    {
+        return Err("invalid resolution: choose 1–10000 ppi".into());
+    }
+    Ok(())
 }
 
 fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
@@ -168,18 +256,39 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let (w, h) = (num(f, "width").round(), num(f, "height").round());
     info_row(ui, tl!("Image Size:"), crate::i18n::fmt(tl!("{size} (was {old})"), &[("size", &human_bytes(w * h * bpp)), ("old", &human_bytes(ow * oh * bpp))]));
     info_row(ui, tl!("Dimensions:"), format!("{} px × {} px", w as i64, h as i64));
+    ui.horizontal(|ui| {
+        label(ui, tl!("Fit To:"), 90.0);
+        let mut current = f.get("__fit").and_then(Value::as_str).unwrap_or("original").to_string();
+        let mut presets = vec![("original".to_string(), tl!("Original Size")), ("custom".to_string(), tl!("Custom"))];
+        for (category, items) in crate::new_doc_ui::CATEGORIES {
+            if matches!(*category, "Print" | "Web") {
+                for p in *items {
+                    presets.push((p.0.to_string(), p.0));
+                }
+            }
+        }
+        if crate::widgets::dropdown(ui, "image-size-fit", &mut current, &presets, 240.0) {
+            apply_fit(f, &current);
+        }
+        egui::containers::menu::MenuButton::new("⚙").ui(ui, |ui| {
+            let mut enabled = f.get("scaleStyles").and_then(Value::as_bool).unwrap_or(true);
+            if crate::widgets::checkbox(ui, &mut enabled, tl!("Scale Styles")).changed() {
+                f.insert("scaleStyles".into(), json!(enabled));
+            }
+        });
+    });
     ui.add_space(6.0);
     let mut constrain = f.get("__constrain").and_then(Value::as_bool).unwrap_or(true);
     let w_row = ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
         let c = dim_field(ui, f, "width", "__origW", "is-w");
-        unit_dropdown(ui, f, "is-unit-w");
+        unit_dropdown(ui, f, "is-unit-w", "width");
         c
     });
     let h_row = ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
         let c = dim_field(ui, f, "height", "__origH", "is-h");
-        unit_dropdown(ui, f, "is-unit-h");
+        unit_dropdown(ui, f, "is-unit-h", "height");
         c
     });
     let (w_changed, h_changed) = (w_row.inner, h_row.inner);
@@ -219,9 +328,11 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
     ui.horizontal(|ui| {
         label(ui, tl!("Resolution:"), 90.0);
-        let mut r = f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0) as f32;
-        if crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).changed() {
-            let r = r.max(1.0) as f64;
+        let mut res_unit = f.get("__resolutionUnit").and_then(Value::as_str).unwrap_or("ppi").to_string();
+        let divisor = if res_unit == "ppcm" { 2.54 } else { 1.0 };
+        let mut r = (f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0) / divisor) as f32;
+        if crate::widgets::value_field(ui, &mut r, 1.0..=10000.0, "", 90.0).changed() {
+            let r = (r as f64 * divisor).clamp(1.0, 10000.0);
             if !resampling {
                 // Without resampling the pixel count is fixed: physical size follows resolution.
                 f.insert("width".into(), json!(ow));
@@ -229,14 +340,22 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             }
             f.insert("resolution".into(), json!(r));
         }
-        ui.label(egui::RichText::new(tl!("Pixels/Inch")).color(t.text_dim).size(12.0));
+        if crate::widgets::dropdown(
+            ui,
+            "image-size-resolution-unit",
+            &mut res_unit,
+            &[("ppi".into(), tl!("Pixels/Inch")), ("ppcm".into(), tl!("Pixels/Centimeter"))],
+            145.0,
+        ) {
+            f.insert("__resolutionUnit".into(), json!(res_unit));
+        }
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         label(ui, "", 90.0);
         let mut on = resampling;
         if crate::widgets::checkbox(ui, &mut on, tl!("Resample")).changed() {
-            f.insert("resample".into(), json!(if on { "bicubic" } else { "none" }));
+            f.insert("resample".into(), json!(if on { "auto" } else { "none" }));
             if !on {
                 f.insert("width".into(), json!(ow));
                 f.insert("height".into(), json!(oh));
@@ -245,6 +364,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         if resampling {
             let mut cur = resample.clone();
             let opts = [
+                ("auto".to_string(), tl!("Automatic")),
                 ("preserveDetails".to_string(), tl!("Preserve Details")),
                 ("bicubic".to_string(), tl!("Bicubic (smooth gradients)")),
                 ("lanczos".to_string(), tl!("Lanczos (sharp)")),
@@ -258,7 +378,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     });
 }
 
-fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+fn canvas_size(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
     let bpp = num(f, "__bytesPerPixel").max(1.0);
@@ -278,12 +398,12 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
         dim_field(ui, f, "width", "__origW", "cs-w");
-        unit_dropdown(ui, f, "cs-unit-w");
+        unit_dropdown(ui, f, "cs-unit-w", "width");
     });
     ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
         dim_field(ui, f, "height", "__origH", "cs-h");
-        unit_dropdown(ui, f, "cs-unit-h");
+        unit_dropdown(ui, f, "cs-unit-h", "height");
     });
     ui.horizontal(|ui| {
         label(ui, "", 90.0);
@@ -305,19 +425,42 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
     });
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        label(ui, tl!("Canvas extension color:"), 150.0);
-        let mut cur = f.get("extensionColor").and_then(Value::as_str).unwrap_or("background").to_string();
-        let opts = [
-            ("foreground".to_string(), tl!("Foreground")),
-            ("background".to_string(), tl!("Background")),
-            ("white".to_string(), tl!("White")),
-            ("black".to_string(), tl!("Black")),
-            ("transparent".to_string(), tl!("Transparent")),
-        ];
-        if crate::widgets::dropdown(ui, "cs-ext", &mut cur, &opts, 140.0) {
-            f.insert("extensionColor".into(), json!(cur));
-        }
+    ui.add_enabled_ui(f.get("__background").and_then(Value::as_bool).unwrap_or(false), |ui| {
+        ui.horizontal(|ui| {
+            label(ui, tl!("Canvas extension color:"), 150.0);
+            let mut cur = f.get("extensionColor").and_then(Value::as_str).unwrap_or("background").to_string();
+            let opts = [
+                ("foreground".to_string(), tl!("Foreground")),
+                ("background".to_string(), tl!("Background")),
+                ("white".to_string(), tl!("White")),
+                ("black".to_string(), tl!("Black")),
+                ("transparent".to_string(), tl!("Transparent")),
+                (if cur.starts_with('#') { cur.clone() } else { "#ffffff".into() }, tl!("Other…")),
+            ];
+            if crate::widgets::dropdown(ui, "cs-ext", &mut cur, &opts, 140.0) {
+                f.insert("extensionColor".into(), json!(cur.clone()));
+            }
+            let mut rgb = match cur.as_str() {
+                "foreground" => {
+                    let q = app.session.tools.foreground;
+                    [q[0], q[1], q[2]]
+                }
+                "white" => [1.0; 3],
+                "black" => [0.0; 3],
+                hex if hex.starts_with('#') => {
+                    let component = |i: usize| hex.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok()).map_or(0.0, |v| f32::from(v) / 255.0);
+                    [component(1), component(3), component(5)]
+                }
+                _ => {
+                    let q = app.session.tools.background;
+                    [q[0], q[1], q[2]]
+                }
+            };
+            if crate::widgets::color_edit_button_rgb(ui, &mut rgb).changed() {
+                let component = |n: f32| (n.clamp(0.0, 1.0) * 255.0).round() as u8;
+                f.insert("extensionColor".into(), json!(format!("#{:02x}{:02x}{:02x}", component(rgb[0]), component(rgb[1]), component(rgb[2]))));
+            }
+        });
     });
 }
 
@@ -375,10 +518,243 @@ fn anchor_grid(ui: &mut egui::Ui, current: &str, dw: f64, dh: f64) -> Option<&'s
     picked
 }
 
+fn apply_fit(f: &mut Map<String, Value>, preset: &str) {
+    let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
+    if preset == "original" {
+        f.insert("width".into(), json!(ow));
+        f.insert("height".into(), json!(oh));
+        f.insert("resolution".into(), json!(num(f, "__origRes")));
+    } else if let Some(p) =
+        crate::new_doc_ui::CATEGORIES.iter().filter(|(c, _)| matches!(*c, "Print" | "Web")).flat_map(|(_, p)| p.iter()).find(|p| p.0 == preset)
+    {
+        let scale = (f64::from(p.1) / ow.max(1.0)).min(f64::from(p.2) / oh.max(1.0));
+        if f.get("resample").and_then(Value::as_str) == Some("none") {
+            f.insert("resample".into(), json!("auto"));
+        }
+        f.insert("width".into(), json!((ow * scale).round().max(1.0)));
+        f.insert("height".into(), json!((oh * scale).round().max(1.0)));
+        f.insert("resolution".into(), json!(p.3));
+        f.insert("__constrain".into(), json!(true));
+    }
+    f.insert("__fit".into(), json!(preset));
+}
+
+#[derive(Clone)]
+struct Preview {
+    revision: u64,
+    receiver: std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<photocraft_compose::Buffer>>>,
+    buffer: Option<std::sync::Arc<photocraft_compose::Buffer>>,
+    texture: Option<egui::TextureHandle>,
+    key: String,
+    zoom: f32,
+    pan: egui::Vec2,
+    failed: bool,
+}
+fn preview(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &Map<String, Value>, height: f32) {
+    let Some(st) = app.session.documents().iter().find(|s| Some(s.doc.id.0) == f.get("__sourceDoc").and_then(Value::as_u64)) else { return };
+    let doc = st.doc.clone();
+    let revision = st.revision;
+    let id = ui.id().with(("size-preview", doc.id.0));
+    let mut cached = ui.ctx().data(|d| d.get_temp::<Preview>(id));
+    if cached.as_ref().is_none_or(|p| p.revision != revision) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker_doc = doc.clone();
+        let failed = std::thread::Builder::new()
+            .name("size-preview".into())
+            .spawn(move || {
+                let image = photocraft_compose::thumbnail_buffer(&worker_doc, 512);
+                let _ = tx.send(image);
+            })
+            .is_err();
+        cached = Some(Preview {
+            revision,
+            receiver: std::sync::Arc::new(std::sync::Mutex::new(rx)),
+            buffer: None,
+            texture: None,
+            key: String::new(),
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+            failed,
+        });
+    }
+    let Some(mut cache) = cached else { return };
+    if cache.buffer.is_none() && !cache.failed {
+        let received = cache.receiver.lock().unwrap_or_else(std::sync::PoisonError::into_inner).try_recv();
+        match received {
+            Ok(b) => cache.buffer = Some(std::sync::Arc::new(b)),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => cache.failed = true,
+            Err(std::sync::mpsc::TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(20)),
+        }
+    }
+    let (display, display_key) = crate::canvas::canvas_display(app, &doc, crate::monitor_status::view_display(app, ui.ctx()));
+    let (w, h) = (num(f, "width").max(1.0), num(f, "height").max(1.0));
+    let method = f.get("resample").and_then(Value::as_str).unwrap_or("auto");
+    let key = format!("{w}:{h}:{method}:{display_key}");
+    if cache.key != key
+        && let Some(buffer) = cache.buffer.as_deref()
+    {
+        // Resample a bounded proxy, never a target-size document, for live visual feedback.
+        let scale = (512.0 / w.max(h)).min(1.0);
+        let (pw, ph) = ((w * scale).round().clamp(1.0, 512.0) as u32, (h * scale).round().clamp(1.0, 512.0) as u32);
+        let filter = match method {
+            "nearest" => photocraft_algo::resample::Resample::Nearest,
+            "bilinear" => photocraft_algo::resample::Resample::Bilinear,
+            "lanczos" => photocraft_algo::resample::Resample::Lanczos,
+            "preserveDetails" => photocraft_algo::resample::Resample::PreserveDetails,
+            "auto" if w >= num(f, "__origW") && h >= num(f, "__origH") && (w > num(f, "__origW") || h > num(f, "__origH")) => {
+                photocraft_algo::resample::Resample::PreserveDetails
+            }
+            "auto" if w <= num(f, "__origW") && h <= num(f, "__origH") && (w < num(f, "__origW") || h < num(f, "__origH")) => {
+                photocraft_algo::resample::Resample::Lanczos
+            }
+            _ => photocraft_algo::resample::Resample::Bicubic,
+        };
+        let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA32F);
+        let pixels: Vec<_> = buffer.px.iter().flat_map(|p| p.iter().copied()).collect();
+        surface.write_region(buffer.rect, &pixels);
+        let resized = photocraft_algo::resample::resize_surface_in_canvas(
+            &surface,
+            f64::from(pw) / f64::from(buffer.rect.width().max(1)),
+            f64::from(ph) / f64::from(buffer.rect.height().max(1)),
+            filter,
+            buffer.rect,
+        );
+        let rect = photocraft_geom::Rect::from_xywh(0, 0, pw, ph);
+        let pixels = resized.read_region(rect);
+        let image = photocraft_compose::Buffer {
+            rect,
+            px: pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| {
+                    [p.first().copied().unwrap_or(0.0), p.get(1).copied().unwrap_or(0.0), p.get(2).copied().unwrap_or(0.0), p.get(3).copied().unwrap_or(0.0)]
+                })
+                .collect(),
+        };
+        cache.texture = Some(ui.ctx().load_texture("size-preview", crate::canvas::display_image(display.as_deref(), &image), egui::TextureOptions::LINEAR));
+        cache.key = key;
+    }
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
+    ui.painter().rect_filled(rect, 0.0, Tokens::get(ui.ctx()).canvas);
+    if response.dragged() {
+        cache.pan += response.drag_delta();
+    }
+    if response.double_clicked() {
+        cache.zoom = 1.0;
+        cache.pan = egui::Vec2::ZERO;
+    }
+    if response.hovered() {
+        let scroll = ui.ctx().input(|i| i.smooth_scroll_delta.y);
+        cache.zoom = (cache.zoom * (scroll * 0.005).exp()).clamp(0.1, 16.0);
+    }
+    if let Some(texture) = &cache.texture {
+        let dimensions = vec2(texture.size()[0] as f32, texture.size()[1] as f32);
+        let fit = (rect.width() / dimensions.x).min(rect.height() / dimensions.y);
+        let image = Rect::from_center_size(rect.center() + cache.pan, dimensions * fit * cache.zoom);
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.image(
+            crate::canvas::checker(app, ui.ctx()),
+            image,
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(image.width() / 16.0, image.height() / 16.0)),
+            Color32::WHITE,
+        );
+        painter.image(texture.id(), image, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    } else {
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            if cache.failed { tl!("Error") } else { tl!("Preparing preview…") },
+            egui::FontId::proportional(12.0),
+            Tokens::get(ui.ctx()).text_dim,
+        );
+    }
+    ui.horizontal(|ui| {
+        if ui.small_button("−").clicked() {
+            cache.zoom = (cache.zoom / 1.25).max(0.1);
+        }
+        ui.label(format!("{:.0}%", cache.zoom * 100.0));
+        if ui.small_button("+").clicked() {
+            cache.zoom = (cache.zoom * 1.25).min(16.0);
+        }
+        if ui.small_button(tl!("Fit")).clicked() {
+            cache.zoom = 1.0;
+            cache.pan = egui::Vec2::ZERO;
+        }
+    });
+    ui.ctx().data_mut(|d| d.insert_temp(id, cache));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_forms_fit_their_width_in_every_theme_at_both_scales() {
+        for theme in crate::theme::ThemeKind::ALL {
+            for scale in [1.0, 2.0] {
+                for (command, width) in [("image.imageSize", 860.0), ("image.imageSize", 480.0), ("image.canvasSize", 500.0), ("image.canvasSize", 440.0)] {
+                    let ctx = egui::Context::default();
+                    crate::PhotocraftApp::setup_context(&ctx, Default::default());
+                    crate::theme::apply(&ctx, theme);
+                    ctx.set_pixels_per_point(scale);
+                    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                    app.session.execute("file.new", json!({"width":320,"height":240})).unwrap();
+                    let id = open(&mut app, command).unwrap();
+                    let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+                    let height = if command == "image.canvasSize" { 416.0 } else { 396.0 };
+                    let mut out = ctx.run_ui(
+                        egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(width, height))), ..Default::default() },
+                        |root| {
+                            egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(20)).show(root, |ui| {
+                                let right = ui.max_rect().right();
+                                let bottom = ui.max_rect().bottom();
+                                body(&mut app, ui, &mut fields);
+                                assert!(ui.min_rect().right() <= right + 1.0, "{theme:?} @ {scale}x {command}: {:?} > {right}", ui.min_rect());
+                                assert!(ui.min_rect().bottom() <= bottom + 1.0, "{theme:?} @ {scale}x {command}: {:?} > {bottom}", ui.min_rect());
+                            });
+                        },
+                    );
+                    out.textures_delta.clear();
+                }
+            }
+        }
+    }
 
+    #[test]
+    fn columns_fit_resolution_and_validation() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width":3000,"height":1500})).unwrap();
+        let id = open(&mut app, "image.imageSize").unwrap();
+        let mut f = app.ui.dialog_mut(id).unwrap().fields.clone();
+        for n in [-3.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0] {
+            let px = pixel_value(&f, n, "columns", 3000.0, 300.0);
+            assert!((display_value(&f, px, "columns", 3000.0, 300.0) - n).abs() < 1e-9);
+        }
+        assert_eq!(pixel_value(&f, 2.0, "columns", 3000.0, 300.0), 1550.0);
+        apply_fit(&mut f, "A4");
+        assert!(num(&f, "width") <= 2480.0 && num(&f, "height") <= 3508.0);
+        assert!((num(&f, "width") / num(&f, "height") - 2.0).abs() < 0.01);
+        apply_fit(&mut f, "original");
+        assert_eq!(num(&f, "width"), 3000.0);
+        assert_eq!(f["resample"], "auto");
+        f.insert("resolution".into(), json!(0));
+        assert!(validate(&f).is_err());
+    }
+    #[test]
+    fn transparent_canvas_disables_extension_and_relative_zero_is_valid() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width":20,"height":10,"background":"transparent"})).unwrap();
+        let id = open(&mut app, "image.canvasSize").unwrap();
+        let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+        assert_eq!(f["__background"], false);
+        assert_eq!(f["extensionColor"], "transparent");
+        f.insert("relative".into(), json!(true));
+        f.insert("width".into(), json!(0));
+        f.insert("height".into(), json!(0));
+        assert!(validate(f).is_ok());
+        f.insert("width".into(), json!(-20));
+        assert!(validate(f).is_err());
+    }
     #[test]
     fn unit_conversions_round_trip() {
         for unit in ["px", "percent", "in", "cm", "mm", "pt", "pica"] {
@@ -415,7 +791,18 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
+            |ui, app| {
+                if let Some(d) = app.ui.dialogs.first().cloned() {
+                    let mut fields = d.fields;
+                    egui::CentralPanel::default().show(ui, |ui| body(app, ui, &mut fields));
+                    if let Some(dialog) = app.ui.dialog_mut(d.id) {
+                        dialog.fields = fields;
+                    }
+                }
+            },
+            app,
+        );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         let id = open(h.state_mut(), "image.imageSize").unwrap();
         h.run_steps(3);

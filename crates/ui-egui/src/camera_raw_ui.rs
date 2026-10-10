@@ -260,7 +260,6 @@ fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -
     // Without the file the raw-stage settings stay RGB adjustments, like the filter's.
     let source = match (&raw.bytes, &raw.path) {
         (Some(b), _) => Some(photocraft_engine::jobs::OpenSource::Bytes(b.clone())),
-        #[cfg(not(target_arch = "wasm32"))]
         (None, Some(p)) => Some(photocraft_engine::jobs::OpenSource::Path(p.clone())),
         _ => None,
     };
@@ -273,12 +272,9 @@ fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -
         ctx.progress(0.0, "Reading");
         let bytes = match source {
             photocraft_engine::jobs::OpenSource::Bytes(b) => b,
-            #[cfg(not(target_arch = "wasm32"))]
             photocraft_engine::jobs::OpenSource::Path(p) => {
                 std::sync::Arc::new(std::fs::read(&p).map_err(|e| photocraft_engine::EngineError::Other(format!("{p}: {e}")))?)
             }
-            #[cfg(target_arch = "wasm32")]
-            photocraft_engine::jobs::OpenSource::Path(p) => return Err(photocraft_engine::EngineError::Other(format!("{p}: cannot read files here"))),
         };
         ctx.check()?;
         ctx.progress(0.05, "Developing");
@@ -836,7 +832,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status_error = true;
     }
     let Some(d) = app.camera_raw.as_ref() else { return };
-    // Where the platform has no extra windows (the web build), draw over the main window.
+    // When extra viewports are unavailable, draw over the main window.
     if ctx.embed_viewports() {
         draw(app, ctx, false);
         return;

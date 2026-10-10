@@ -1553,7 +1553,6 @@ fn large_documents_thumbnail_from_a_proxy() {
 
 /// Layers whose effect maps are built with nested Rayon work (a gradient fill's rows render in
 /// parallel), each carrying a different effect.
-#[cfg(not(target_arch = "wasm32"))]
 fn nested_parallel_fx_doc() -> Document {
     use photocraft_doc::{Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, StrokeFx, StrokePosition};
     let mut d = doc_white(512, 512);
@@ -1592,7 +1591,6 @@ fn nested_parallel_fx_doc() -> Document {
 }
 
 #[test]
-#[cfg(not(target_arch = "wasm32"))]
 fn effect_maps_with_nested_rayon_work_do_not_deadlock() {
     // #276: a tile building a layer's effect maps inside a once-init ran Rayon work; waiting on
     // it, its worker stole another tile of the same layer, which then blocked on the init held

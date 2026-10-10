@@ -254,13 +254,11 @@ pub fn warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Inter
         }
         any.then_some((*t, outp))
     };
-    #[cfg(not(target_arch = "wasm32"))]
     let done: Vec<(Rect, Vec<f32>)> = {
         use rayon::prelude::*;
         tiles.par_iter().filter_map(work).collect()
     };
-    #[cfg(target_arch = "wasm32")]
-    let done: Vec<(Rect, Vec<f32>)> = tiles.iter().filter_map(work).collect();
+
     for (r, v) in done {
         out.write_region(r, &v);
     }

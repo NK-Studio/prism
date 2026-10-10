@@ -214,13 +214,11 @@ pub fn rgba8_image(s: &Surface, area: Rect) -> Vec<[u8; 4]> {
         let y0 = area.y0 + (bi * band) as i32;
         s.read_rgba8_into(Rect::new(area.x0, y0, area.x1, y0 + (chunk.len() / w) as i32), chunk);
     };
-    #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         img.par_chunks_mut(w * band).enumerate().for_each(|(bi, c)| read(bi, c));
     }
-    #[cfg(target_arch = "wasm32")]
-    img.chunks_mut(w * band).enumerate().for_each(|(bi, c)| read(bi, c));
+
     img
 }
 
@@ -298,13 +296,11 @@ pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32
             }
             span
         };
-        #[cfg(not(target_arch = "wasm32"))]
         let spans: Vec<Option<(usize, usize)>> = {
             use rayon::prelude::*;
             marks.par_chunks_mut(w).enumerate().map(|(y, row)| scan(y, row)).collect()
         };
-        #[cfg(target_arch = "wasm32")]
-        let spans: Vec<Option<(usize, usize)>> = marks.chunks_mut(w).enumerate().map(|(y, row)| scan(y, row)).collect();
+
         for (y, sp) in spans.iter().enumerate() {
             if let Some((a, b)) = sp {
                 (bx0, bx1, by0, by1) = (bx0.min(*a), bx1.max(*b), by0.min(y), by1.max(y));
@@ -349,13 +345,11 @@ pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32
             }
         }
     };
-    #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         mask.par_chunks_mut(bw).enumerate().for_each(|(yy, row)| fill_row(yy, row));
     }
-    #[cfg(target_arch = "wasm32")]
-    mask.chunks_mut(bw).enumerate().for_each(|(yy, row)| fill_row(yy, row));
+
     let bbox = Rect::new(area.x0 + x0 as i32, area.y0 + y0 as i32, area.x0 + x1 as i32, area.y0 + y1 as i32);
     Some(Region { bbox, mask })
 }

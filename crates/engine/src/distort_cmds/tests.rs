@@ -98,8 +98,6 @@ fn liquify_elapsed_time_is_wasm_safe() {
     assert_eq!(r["changed"], true);
     let ms = r["ms"].as_f64().unwrap();
     assert!(ms.is_finite() && ms >= 0.0);
-    #[cfg(target_arch = "wasm32")]
-    assert_eq!(ms, 0.0, "the web build uses the wasm-safe stopwatch fallback");
 }
 
 #[test]

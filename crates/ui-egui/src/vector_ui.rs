@@ -396,7 +396,7 @@ pub(crate) fn draw_handle(painter: &egui::Painter, anchor: Pos2, handle: Pos2, a
 /// Work path / active shape path outlines, anchors, and the pen path in progress.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let tool = app.ui.tool;
-    let vector_tool = matches!(tool, Tool::Pen | Tool::PathSelection) || is_shape_tool(tool);
+    let vector_tool = matches!(tool, Tool::Pen | Tool::PathSelection) || is_shape_tool(tool) || app.ui.shape_corners.is_some();
     let accent = Tokens::get(painter.ctx()).accent;
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     let draw_path = |p: &Path, anchors: bool| {
@@ -409,7 +409,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     };
     // View › Show › Target Path (under Extras) hides the paths; the Pen's path in progress stays.
     let paths = app.ui.view.shows(app.ui.view.show.target_path);
-    if crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers)) {
+    if app.ui.shape_corners.is_none() && crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers)) {
         // Direct Selection (or the Pen with ⌘/Ctrl held) draws the paths it edits (#790).
         crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);
     } else if paths {
@@ -418,10 +418,11 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 draw_path(wp, tool == Tool::PathSelection);
             }
             let st = app.session.active();
-            if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
+            if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| doc.layer(id)))
                 && let LayerContent::Shape(sh) = &l.content
             {
-                draw_path(&sh.path, tool == Tool::PathSelection);
+                let preview = crate::shape_corners_ui::outline(app, l.id);
+                draw_path(preview.as_ref().unwrap_or(&sh.path), tool == Tool::PathSelection);
             }
         }
         // A targeted vector mask shows its path with any tool (#196).

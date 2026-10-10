@@ -8,7 +8,7 @@
 //! - `PHOTOCRAFT_BUILD_DATE`: the build date, conventionally `YYYY-MM-DD`
 //!
 //! Without them (a plain `cargo build`) the build reports itself as a dev build. Nothing here
-//! shells out to git, so builds work from a source tarball and for wasm.
+//! shells out to git, so builds work from a source tarball.
 
 /// The workspace version, such as `0.1.0` or `0.2.0-rc.1`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

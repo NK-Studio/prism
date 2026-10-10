@@ -265,13 +265,11 @@ impl PsdFile {
     }
 
     /// Reads a file from disk (native targets only).
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn open(path: impl AsRef<std::path::Path>) -> std::io::Result<Result<Self>> {
         Ok(Self::from_bytes(&std::fs::read(path)?))
     }
 
     /// Writes the file to disk (native targets only).
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn save(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         let b = self.to_bytes().map_err(std::io::Error::other)?;
         std::fs::write(path, b)

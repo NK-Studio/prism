@@ -456,9 +456,8 @@ fn existing_object_is_valid(path: &Path, object: &Object, what: &str) -> Result<
 /// A bundle path and its compressed bytes.
 type Compressed<'a> = (&'a String, Arc<Vec<u8>>);
 
-/// Compresses `objects` on scoped worker threads (sequentially on wasm).
 fn par_compress<'a>(objects: &[(&'a String, &'a Object)]) -> Result<Vec<Compressed<'a>>> {
-    let threads = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 32) };
+    let threads = { std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 32) };
     if threads < 2 || objects.len() < 2 {
         return Ok(objects.iter().map(|(p, o)| (*p, Arc::new(o.compressed()))).collect());
     }

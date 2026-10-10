@@ -408,13 +408,11 @@ pub fn refine_mask(sampler: &dyn Sampler, mask: &(dyn Fn(Rect) -> Vec<f32> + Syn
         let out = refine_buffer(img.as_ref(), &m, rw, rh, p);
         (*t, core(&out))
     };
-    #[cfg(not(target_arch = "wasm32"))]
     let results: Vec<(Rect, Vec<u8>)> = {
         use rayon::prelude::*;
         tiles.par_iter().map(run).collect()
     };
-    #[cfg(target_arch = "wasm32")]
-    let results: Vec<(Rect, Vec<u8>)> = tiles.iter().map(run).collect();
+
     let bw = bbox.width() as usize;
     let mut out = vec![0u8; bw * bbox.height() as usize];
     for (t, data) in results {
@@ -467,14 +465,9 @@ fn tiles_of(area: Rect) -> Vec<Rect> {
 }
 
 fn par_tiles<T: Send>(tiles: &[Rect], f: impl Fn(&Rect) -> Option<T> + Sync + Send) -> Vec<T> {
-    #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         tiles.par_iter().filter_map(f).collect()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        tiles.iter().filter_map(f).collect()
     }
 }
 

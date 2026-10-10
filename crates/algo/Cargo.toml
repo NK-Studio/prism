@@ -10,15 +10,14 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+rayon = { workspace = true }
+
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-raster = { workspace = true }
 serde = { workspace = true }
 rustfft = "6.4.1"
 
-# Parallel tiles on native; wasm builds stay single-threaded.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rayon = { workspace = true }
-
+# Parallel tiles on native.
 [dev-dependencies]
 serde_json = { workspace = true }

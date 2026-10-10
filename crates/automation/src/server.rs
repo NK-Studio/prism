@@ -114,6 +114,12 @@ pub struct ScreenshotParams {
     /// Omit or pass zero to keep the original size.
     #[serde(default)]
     pub max_side: Option<u32>,
+    /// Native document window; mutually exclusive with `dialog`.
+    #[serde(default)]
+    pub window: Option<u64>,
+    /// Native command dialog; omit both targets for the main window.
+    #[serde(default)]
+    pub dialog: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -183,6 +189,12 @@ pub struct PointerParams {
     /// picker.
     #[serde(default)]
     pub button: Option<String>,
+    /// Native document window; mutually exclusive with `dialog`.
+    #[serde(default)]
+    pub window: Option<u64>,
+    /// Native dialog; coordinates then refer to points within the dialog.
+    #[serde(default)]
+    pub dialog: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -198,7 +210,7 @@ pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
-    /// studioLight, classic), brushSection, brushTab, brushesView, brushPicker ([x, y] opens the
+    /// studioLight), brushSection, brushTab, brushesView, brushPicker ([x, y] opens the
     /// Brush Preset picker there, null closes it), brushPickerView, brushSize, gradientBlendMode
     /// (a blend mode name, for the Gradient tool), gradientClassic (bool). Other fields are an
     /// error.
@@ -322,11 +334,18 @@ impl PhotocraftMcp {
         }
     }
 
-    async fn screenshot(&self, b: &BridgeClient, max_side: Option<u32>) -> Result<CallToolResult, McpError> {
+    async fn screenshot(&self, b: &BridgeClient, max_side: Option<u32>, window: Option<u64>, dialog: Option<u64>) -> Result<CallToolResult, McpError> {
         if max_side.is_some_and(|side| side > MAX_PREVIEW_SIDE) {
             return Ok(fail(format!("automation preview side exceeds {MAX_PREVIEW_SIDE} pixels")));
         }
-        let response = match b.call("ui.screenshot", json!({})).await {
+        let mut params = json!({});
+        if let Some(id) = window {
+            params["window"] = json!(id);
+        }
+        if let Some(id) = dialog {
+            params["dialog"] = json!(id);
+        }
+        let response = match b.call("ui.screenshot", params).await {
             Ok(response) => response,
             Err(error) => return Ok(fail(error)),
         };
@@ -483,7 +502,7 @@ impl PhotocraftMcp {
         if p.index.is_some() {
             return Ok(fail("`index` is only supported in headless mode; bridge previews capture the app window"));
         }
-        self.screenshot(b, Some(max)).await
+        self.screenshot(b, Some(max), None, None).await
     }
 
     #[tool(description = "Render a bounded flattened PNG preview (bridge mode: app window screenshot).")]
@@ -611,10 +630,10 @@ impl PhotocraftMcp {
         }
     }
 
-    #[tool(description = "Bridge mode: screenshot of the live app window as PNG.")]
+    #[tool(description = "Bridge mode: screenshot of the main window, document window, or native dialog as PNG.")]
     async fn ui_screenshot(&self, Parameters(p): Parameters<ScreenshotParams>) -> Result<CallToolResult, McpError> {
         match self.bridge_client() {
-            Some(b) => self.screenshot(b, p.max_side).await,
+            Some(b) => self.screenshot(b, p.max_side, p.window, p.dialog).await,
             None => bridge_only("ui_screenshot"),
         }
     }
@@ -631,6 +650,12 @@ impl PhotocraftMcp {
                 }
                 if let Some(button) = p.button {
                     params["button"] = button.into();
+                }
+                if let Some(window) = p.window {
+                    params["window"] = json!(window);
+                }
+                if let Some(dialog) = p.dialog {
+                    params["dialog"] = json!(dialog);
                 }
                 to_result(b.call("ui.pointer", params).await)
             }
@@ -748,6 +773,16 @@ pub fn render_document_png(doc: &photocraft_doc::Document, max_side: u32) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_targets_are_optional_in_mcp_schemas() {
+        let old: ScreenshotParams = serde_json::from_value(json!({"max_side":1024})).unwrap();
+        assert_eq!((old.window, old.dialog), (None, None));
+        let dialog: ScreenshotParams = serde_json::from_value(json!({"dialog":7})).unwrap();
+        assert_eq!(dialog.dialog, Some(7));
+        let pointer: PointerParams = serde_json::from_value(json!({"events":[],"window":3})).unwrap();
+        assert_eq!(pointer.window, Some(3));
+    }
 
     #[test]
     fn mcp_text_checks_the_encoded_tool_envelope() {

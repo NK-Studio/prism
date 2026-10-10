@@ -5,12 +5,42 @@
 # .icns. The outputs are committed, so packaging never needs these tools.
 #
 #   packaging/icons.sh
+#   packaging/icons.sh --png  # macOS + Windows from photocraft-1024.png (macOS tools)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="$ROOT/assets/app-icon"
 SVG="$DIR/photocraft.svg"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+
+if [[ "${1:-}" == "--png" && "$#" == 1 ]]; then
+  SOURCE="$DIR/photocraft-1024.png"
+  command -v sips >/dev/null || { echo "error: sips not found (macOS required)" >&2; exit 1; }
+  command -v iconutil >/dev/null || { echo "error: iconutil not found (macOS required)" >&2; exit 1; }
+  # Keep the PNG artwork, alpha and existing margins; never add padding a second time.
+  SET="$TMP/photocraft.iconset"
+  mkdir -p "$SET"
+  for s in 16 32 128 256 512; do
+    sips -z "$s" "$s" "$SOURCE" --out "$SET/icon_${s}x${s}.png" >/dev/null
+    sips -z "$((s * 2))" "$((s * 2))" "$SOURCE" --out "$SET/icon_${s}x${s}@2x.png" >/dev/null
+  done
+  iconutil -c icns -o "$TMP/photocraft.icns" "$SET"
+  ICO_PNGS=()
+  for s in 16 20 24 32 40 48 64 128 256; do
+    sips -z "$s" "$s" "$SOURCE" --out "$TMP/ico-$s.png" >/dev/null
+    ICO_PNGS+=("$TMP/ico-$s.png")
+  done
+  (cd "$ROOT" && cargo run -q -p xtask -- ico "$TMP/photocraft.ico" "${ICO_PNGS[@]}")
+  cp "$TMP/photocraft.icns" "$DIR/photocraft.icns"
+  cp "$TMP/photocraft.ico" "$DIR/photocraft.ico"
+  # This PNG is also embedded as the Windows runtime window/taskbar icon.
+  cp "$TMP/ico-256.png" "$DIR/hicolor/256x256/apps/ai.storyteller.photocraft.png"
+  echo "macOS and Windows icons written from $SOURCE"
+  exit 0
+elif [[ "$#" != 0 ]]; then
+  echo "usage: packaging/icons.sh [--png]" >&2
+  exit 1
+fi
 
 command -v resvg >/dev/null || { echo "error: resvg not found (brew install resvg)" >&2; exit 1; }
 

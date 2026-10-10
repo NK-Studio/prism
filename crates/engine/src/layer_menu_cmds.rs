@@ -370,18 +370,12 @@ pub fn reveal_command(path: &str) -> (&'static str, Vec<String>) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn spawn(program: &str, args: &[String]) -> Result<()> {
     std::process::Command::new(program).args(args).spawn().map(|_| ()).map_err(|e| other(format!("{program}: {e}")))
 }
 
-#[cfg(target_arch = "wasm32")]
-fn spawn(_: &str, _: &[String]) -> Result<()> {
-    Err(other("Reveal in Finder needs the desktop app"))
-}
-
 fn native(_: &Session) -> Enabled {
-    if cfg!(target_arch = "wasm32") { Err("not available in the browser".into()) } else { Ok(()) }
+    Ok(())
 }
 
 // ---------- layer style ----------
@@ -790,14 +784,8 @@ fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result
     Ok(json!({"path": path, "bytes": out.bytes.len(), "width": ldoc.size.width, "height": ldoc.size.height, "warnings": out.warnings}))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     crate::file_cmds::write_file(path, bytes)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn write_file(_: &str, _: &[u8]) -> Result<()> {
-    Err(other("writing files needs the desktop app"))
 }
 
 macro_rules! spec {

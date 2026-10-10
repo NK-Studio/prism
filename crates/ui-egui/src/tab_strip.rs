@@ -100,7 +100,7 @@ pub const CHEVRON_W: f32 = 18.0;
 /// indices in `overflow`. A picked index is left in `picked`.
 pub fn overflow_button(ui: &mut Ui, id: egui::Id, r: Rect, tip: &str, labels: &[&str], overflow: &[usize], picked: &mut Option<usize>) {
     let t = Tokens::get(ui.ctx());
-    let resp = ui.interact(r, id, Sense::click());
+    let resp = ui.interact(r, id, Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     if resp.hovered() {
         ui.painter().rect_filled(r.shrink2(vec2(1.0, 3.0)), t.radius_sm, t.hover.gamma_multiply(0.6));
     }
@@ -146,7 +146,7 @@ fn tabs_in(
     for &(i, w) in &f.shown {
         let Some(name) = tabs.get(i) else { continue };
         let r = Rect::from_min_size(pos2(x, area.top()), vec2(w, area.height()));
-        let resp = ui.interact(r, id.with(("tab", i)), Sense::click());
+        let resp = ui.interact(r, id.with(("tab", i)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
         // The padding gives way (down to a third) before the label is cut.
         let galley = elided(ui, name, font.clone(), t.text, (w - pad / 3.0).max(1.0));
         let cut = galley.size().x + pad + 0.5 < natural.get(i).copied().unwrap_or(0.0) && galley.size().x + pad / 3.0 >= w - 0.5;

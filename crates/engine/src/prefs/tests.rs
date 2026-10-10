@@ -370,3 +370,14 @@ fn linux_only_preferences_show_only_on_linux() {
     assert!(!is_hidden("performance.gpuBackend"));
     assert!(LINUX_ONLY.iter().all(|p| choices(p).is_some()), "every Linux-only preference is a real one");
 }
+
+#[test]
+fn removed_classic_theme_migrates_only_when_loading_saved_preferences() {
+    let mut session = Session::new();
+    session.load_prefs_json(r#"{"interface":{"theme":"classic","showTooltips":false}}"#).unwrap();
+    assert_eq!(session.prefs().interface.theme, super::Theme::ProMedium);
+    assert!(!session.prefs().interface.show_tooltips);
+    assert!(!super::Theme::NAMES.contains(&"classic"));
+    assert!(super::Theme::parse("classic").is_none());
+    assert!(session.execute("prefs.set", serde_json::json!({"values":{"interface.theme":"classic"}})).is_err());
+}

@@ -32,7 +32,6 @@ pub struct Limits {
     /// Deepest call nesting.
     pub max_recursion_depth: usize,
     /// Wall-clock budget for one filter run (all bands), in milliseconds. Native builds only:
-    /// the web build has no monotonic clock in `std`, so the fuel budget alone bounds it there.
     pub wall_time_ms: u64,
 }
 
@@ -70,20 +69,13 @@ impl std::fmt::Debug for Plugin {
 /// When a run must stop: a wall-clock deadline (native) and a flag shared by parallel bands.
 #[derive(Clone)]
 pub(crate) struct Deadline {
-    #[cfg(not(target_arch = "wasm32"))]
     at: std::time::Instant,
     abort: Arc<Mutex<Option<Error>>>,
 }
 
 impl Deadline {
     pub(crate) fn new(limits: &Limits) -> Self {
-        #[cfg(target_arch = "wasm32")]
-        let _ = limits;
-        Self {
-            #[cfg(not(target_arch = "wasm32"))]
-            at: std::time::Instant::now() + std::time::Duration::from_millis(limits.wall_time_ms),
-            abort: Arc::new(Mutex::new(None)),
-        }
+        Self { at: std::time::Instant::now() + std::time::Duration::from_millis(limits.wall_time_ms), abort: Arc::new(Mutex::new(None)) }
     }
     pub(crate) fn abort(&self, error: Error) {
         // Publish the cause with the cancellation state so siblings cannot replace it with a
@@ -94,7 +86,6 @@ impl Deadline {
         if let Some(error) = self.abort.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
             return Err(error);
         }
-        #[cfg(not(target_arch = "wasm32"))]
         if std::time::Instant::now() >= self.at {
             let error = Error::Limit("time budget".into());
             self.abort(error.clone());

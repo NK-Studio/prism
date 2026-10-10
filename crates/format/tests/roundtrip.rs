@@ -78,7 +78,7 @@ fn nested_doc(levels: usize, depth: SampleType) -> Document {
 }
 
 /// serde_json's default limit (128 levels) used to make bundles with 40+ nested groups unreadable.
-/// Runs on a 1 MiB stack, the smallest main-thread stack we ship on (Windows, wasm).
+/// Runs on a 1 MiB stack, the smallest main-thread stack we ship on (Windows).
 #[test]
 fn deeply_nested_groups_roundtrip() {
     let run = || {

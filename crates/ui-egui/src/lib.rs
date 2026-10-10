@@ -22,7 +22,6 @@ pub mod adjust_ui;
 pub mod analysis_ui;
 pub mod artboard_ui;
 pub(crate) mod blend_preview;
-mod brand;
 pub mod brush_panel;
 pub mod brush_picker;
 pub mod brush_preview;
@@ -51,7 +50,10 @@ pub mod direct_select;
 pub mod discard_ui;
 pub mod distort_ui;
 pub mod doc_props_ui;
+pub mod doc_windows;
 pub mod dock;
+mod document_menu;
+mod duplicate_ui;
 pub mod enable_rules;
 pub mod eraser_ui;
 pub mod export_dialog;
@@ -88,6 +90,7 @@ pub mod menus;
 pub mod monitor_status;
 pub mod move_mods;
 pub mod move_ui;
+mod native_dialogs;
 pub mod native_menu;
 pub mod new_doc_ui;
 pub mod notices;
@@ -115,6 +118,8 @@ pub mod rotate_view;
 pub mod rulers;
 pub mod screen_picker;
 pub mod scrollbars;
+mod shape_color_ui;
+pub mod shape_corners_ui;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
 mod sizing;
@@ -157,7 +162,7 @@ use photocraft_engine::Session;
 use serde_json::Value;
 
 pub use control::{ControlRequest, ControlResponse};
-pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialogRequest};
+pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogParent, FileDialogReply, FileDialogRequest};
 pub use file_open::OsEvent;
 pub use state::{Tool, UiState};
 
@@ -202,8 +207,6 @@ pub type EncodePngFn = Box<dyn Fn(u32, u32, &[u8]) -> Result<Vec<u8>, String>>;
 pub type ClipboardSetFn = Box<dyn FnMut(u32, u32, &[u8]) -> Result<(), String>>;
 /// Read an RGBA8 image from the OS clipboard.
 pub type ClipboardGetFn = Box<dyn FnMut() -> Option<(u32, u32, Vec<u8>)>>;
-/// Shared queue of (file name, bytes) delivered asynchronously.
-pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 /// Read the saved preferences text (`None` when there is none yet).
 pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
 /// Persist the preferences text.
@@ -236,13 +239,18 @@ pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
 /// Ends the app the platform's own way (see [`Services::quit`]).
 pub type QuitFn = Box<dyn FnMut()>;
 /// Where the OS pointer is now, in egui points within the window; `None` when unknown.
+pub type WindowOpacityFn = Box<dyn FnMut(&egui::Context, f32) -> bool>;
 pub type CursorPosFn = Box<dyn FnMut(&egui::Context) -> Option<egui::Pos2>>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
 #[derive(Default)]
 pub struct Services {
-    /// User-initiated desktop/browser pixel sampling.
+    /// Whether this application is foreground; native floating documents follow its activation.
+    pub application_active: Option<Box<dyn Fn() -> bool>>,
+    /// Native viewport opacity, including OS titlebar controls. Returns whether it was applied.
+    pub window_opacity: Option<WindowOpacityFn>,
+    /// User-initiated desktop pixel sampling.
     pub screen_pick: Option<screen_picker::Service>,
     /// Decode a file's bytes into a document (PSD, PNG, JPEG, …).
     pub import: Option<ImportFn>,
@@ -250,7 +258,7 @@ pub struct Services {
     pub export: Option<ExportFn>,
     /// Show an Open or Save dialog without waiting for it (see `file_dialog`).
     pub file_dialog: Option<FileDialogFn>,
-    /// Write bytes to a path (native) or trigger a download (web).
+    /// Write bytes to a path.
     pub write: Option<WriteFn>,
     /// File access used only by control/MCP requests. Interactive dialogs keep
     /// using `file_dialog` and `write` with the user's authority.
@@ -263,15 +271,12 @@ pub struct Services {
     pub automation_authorize: Option<fn(&str, &serde_json::Value) -> photocraft_engine::Result<()>>,
     /// Encode an RGBA8 image as PNG (used for screenshots and `ui.render`).
     pub encode_png: Option<EncodePngFn>,
-    /// Open a URL in the system browser (native). Falls back to `ctx.open_url` (web) when unset.
+    /// Open a URL in the system browser (native). Falls back to `ctx.open_url` when unset.
     pub open_url: Option<OpenUrlFn>,
-    /// Files delivered asynchronously (web drag-and-drop): drained every frame.
-    pub inbox: Option<Inbox>,
     /// OS clipboard images: copies go out, screenshots and images from other apps come in.
     pub clipboard_set_image: Option<ClipboardSetFn>,
     pub clipboard_get_image: Option<ClipboardGetFn>,
-    /// Preferences persistence: the platform config directory on native, browser storage on
-    /// the web (see `prefs_ui`).
+    /// Preferences persistence in the platform config directory (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,
     pub save_prefs: Option<SaveTextFn>,
     /// The native window is connected directly to a Wayland compositor.
@@ -295,7 +300,7 @@ pub struct Services {
     pub cursor_pos: Option<CursorPosFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
-    /// one, brush presets are session-only (web, tests).
+    /// one, brush presets are session-only (tests).
     pub preset_store: Option<std::sync::mpsc::Receiver<photocraft_engine::preset_store::Opened>>,
     /// Reads the displays and their ICC profiles in the background (desktop macOS; see
     /// `monitor_status`). Without one, the canvas uses the profile chosen in Color Settings, or sRGB.
@@ -363,7 +368,7 @@ pub struct PhotocraftApp {
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<(u64, Option<String>, Sender<ControlResponse>)>,
     /// Screenshots not yet requested from the viewport: (token, earliest time in ms, frames seen).
-    queued_screenshots: Vec<(u64, f64, u32)>,
+    queued_screenshots: Vec<(u64, f64, u32, egui::ViewportId)>,
     /// Control replies waiting for queued synthetic input to be processed.
     input_waiters: Vec<Sender<ControlResponse>>,
     /// Live (uncommitted) adjustment edit shown on canvas while a slider is dragged.
@@ -409,6 +414,8 @@ pub struct PhotocraftApp {
     pub(crate) adjust_preview: Option<adjust_preview::AdjustPreview>,
     /// Synthetic input events queued by automation (`ui.click`, `ui.key`, …), injected next frame.
     pub(crate) synthetic: Vec<egui::Event>,
+    pub(crate) synthetic_window: Option<u64>,
+    pub(crate) synthetic_dialog: Option<u64>,
     /// True only while a frame is processing synthetic automation input. It
     /// makes shortcut- and dialog-triggered commands pass the same policy as
     /// direct control calls.
@@ -455,6 +462,8 @@ pub struct PhotocraftApp {
     pub(crate) guide_drag: Option<rulers::GuideDrag>,
     /// Crop tool gesture in progress (see `crop_ui`).
     pub(crate) crop: crop_ui::CropState,
+    pub(crate) shape_corner_runtime: shape_corners_ui::Runtime,
+    pub(crate) shape_color_runtime: shape_color_ui::Runtime,
     /// Type tool layout cache: ((doc, revision, layer), layout).
     pub(crate) type_layout: Option<((u64, u64, u64), std::sync::Arc<photocraft_text::TextLayout>)>,
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
@@ -489,7 +498,7 @@ pub struct PhotocraftApp {
     pub background_jobs: bool,
     /// Background job bookkeeping: opening tabs, control replies waiting on a job.
     pub jobs: jobs_ui::JobsUi,
-    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    #[cfg(debug_assertions)]
     live_tokens: theme::live::LiveTokens,
 }
 
@@ -546,6 +555,8 @@ impl PhotocraftApp {
             color_range: None,
             adjust_preview: None,
             synthetic: Vec::new(),
+            synthetic_window: None,
+            synthetic_dialog: None,
             automation_input: false,
             channel_thumbs: None,
             channel_views: HashMap::new(),
@@ -553,6 +564,8 @@ impl PhotocraftApp {
             type_transform_preview: None,
             guide_drag: None,
             crop: Default::default(),
+            shape_corner_runtime: Default::default(),
+            shape_color_runtime: Default::default(),
             hover_doc: None,
             clone_preview: None,
             info_sample: None,
@@ -582,7 +595,7 @@ impl PhotocraftApp {
             stylus: Default::default(),
             background_jobs: false,
             jobs: Default::default(),
-            #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+            #[cfg(debug_assertions)]
             live_tokens: theme::live::LiveTokens::from_env(),
         };
         // Saved preferences (and recovered documents) are in place before the first frame.
@@ -665,6 +678,7 @@ impl PhotocraftApp {
     fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
         let clip_read = std::mem::take(&mut self.clip_read_for_paste);
         if self.automation_input
+            && !native_dialogs::is_open(self)
             && let Some(authorize) = self.services.automation_command.as_ref()
         {
             authorize(id, &params)?;
@@ -738,6 +752,8 @@ impl PhotocraftApp {
     /// when tabs move (`document.move`) or close.
     pub fn sync_views(&mut self) {
         type_transform::cancel_stale(self);
+        shape_corners_ui::cancel_stale(self);
+        shape_color_ui::cancel_stale(self);
         crate::lasso_ui::cancel_stale(self);
         let ids: Vec<DocId> = self.session.documents().iter().map(|d| d.doc.id).collect();
         // Where the document of view `i` is now. Views not tracked yet keep their index.
@@ -756,6 +772,7 @@ impl PhotocraftApp {
         self.canvases.retain(|(doc, _), _| ids.contains(doc));
         self.navigator_textures.retain(|doc, _| ids.contains(doc));
         self.view_docs = ids;
+        doc_windows::sync(self);
         self.prune_thumbs();
         self.sync_mask_targets();
         // Channel-view textures outlive a hidden view (cheap re-show), not their document.
@@ -990,10 +1007,15 @@ impl PhotocraftApp {
                 }
                 control::Outcome::AfterInput => self.input_waiters.push(reply),
                 control::Outcome::AfterJob(job) => self.jobs.waiters.push((job, reply)),
-                control::Outcome::Screenshot { token, path } => {
+                control::Outcome::Screenshot { token, path, window, dialog } => {
                     // Wait out egui's fade animations (~83 ms) and a few rendered frames first.
                     let settle = ctx.global_style().animation_time as f64 * 2000.0 + 60.0;
-                    self.queued_screenshots.push((token, gpu_canvas::now_ms() + settle, 0));
+                    self.queued_screenshots.push((
+                        token,
+                        gpu_canvas::now_ms() + settle,
+                        0,
+                        dialog.map(native_dialogs::viewport).unwrap_or_else(|| doc_windows::viewport(window)),
+                    ));
                     self.pending_screenshots.push((token, path, reply));
                 }
             }
@@ -1003,10 +1025,10 @@ impl PhotocraftApp {
 
     fn issue_screenshots(&mut self, ctx: &egui::Context) {
         let now = gpu_canvas::now_ms();
-        self.queued_screenshots.retain_mut(|(token, at, frames)| {
+        self.queued_screenshots.retain_mut(|(token, at, frames, viewport)| {
             *frames += 1;
             if now >= *at && *frames >= 3 {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(*token)));
+                ctx.send_viewport_cmd_to(*viewport, egui::ViewportCommand::Screenshot(egui::UserData::new(*token)));
                 false
             } else {
                 true
@@ -1014,7 +1036,7 @@ impl PhotocraftApp {
         });
     }
 
-    fn collect_screenshots(&mut self, ctx: &egui::Context) {
+    pub(crate) fn collect_screenshots(&mut self, ctx: &egui::Context) {
         if self.pending_screenshots.is_empty() {
             return;
         }
@@ -1059,11 +1081,18 @@ impl eframe::App for PhotocraftApp {
         self.last_frame_time = now;
         self.sync_views();
         self.check_gpu(ctx);
-        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        #[cfg(debug_assertions)]
         if self.live_tokens.poll(ctx, self.ui.theme) {
             self.checker = None;
         }
+        doc_windows::focus_native(self, ctx);
+        if self.automation_input
+            && let Some(document) = doc_windows::main_index(self)
+        {
+            doc_windows::activate_main(self, document);
+        }
         self.drain_control(ctx);
+        doc_windows::queue_input(self, ctx);
         native_menu::run(self, ctx);
         if self.ui.text_edit.is_some() && !self.ui.tool.is_type() {
             type_tool::commit(self);
@@ -1086,13 +1115,8 @@ impl eframe::App for PhotocraftApp {
         // shortcuts see Esc).
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
-            shortcuts::handle(self, ctx);
-        }
-        let arrived: Vec<(String, Vec<u8>)> =
-            self.services.inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
-        for (name, bytes) in arrived {
-            if let Err(e) = self.open_bytes(&name, &bytes) {
-                self.open_failed(&name, &e);
+            if ctx.input(|i| i.focused) || self.automation_input {
+                shortcuts::handle(self, ctx);
             }
         }
         // Finder double-click / Open With / Dock drops (macOS open-documents events).
@@ -1103,7 +1127,7 @@ impl eframe::App for PhotocraftApp {
             ctx.request_repaint();
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-        if !dropped.is_empty() {
+        if !dropped.is_empty() && !native_dialogs::is_open(self) {
             let at = self.services.cursor_pos.as_mut().and_then(|f| f(ctx));
             self.open_dropped(ctx, dropped, at);
         }
@@ -1126,7 +1150,9 @@ impl eframe::App for PhotocraftApp {
         if cfg!(target_os = "windows") {
             wheel_nav::fold_legacy_pinch(ctx, raw_input);
         }
-        raw_input.events.extend(self.take_synthetic_step());
+        if self.synthetic_window.is_none() && self.synthetic_dialog.is_none() {
+            raw_input.events.extend(self.take_synthetic_step());
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -1139,6 +1165,9 @@ impl eframe::App for PhotocraftApp {
             return;
         }
         let t0 = gpu_canvas::now_ms();
+        if (!self.ui.dialogs.is_empty() && !doc_windows::dialogs_here(self, &ctx)) || !discard_ui::here(self, &ctx) {
+            ui.disable();
+        }
         // Each painting tool keeps its own brush (#218), so switch the active tool's brush in
         // before anything this frame reads it (the cursor, the options bar, a stroke).
         paint_mouse::sync_tool_brush(self);
@@ -1158,6 +1187,9 @@ impl eframe::App for PhotocraftApp {
         if screen_picker::busy(&ctx) {
             ui.disable();
             ui.set_opacity(1.0);
+        }
+        if native_dialogs::is_open(self) {
+            ui.disable();
         }
         let chrome = !self.ui.view.hides_chrome();
         if !chrome && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -1194,10 +1226,12 @@ impl eframe::App for PhotocraftApp {
         dialogs::show(self, &ctx);
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);
-        tiff_options_ui::show(self, &ctx);
-        distort_ui::show(self, &ctx);
-        camera_raw_ui::show(self, &ctx);
-        wide_angle_ui::show(self, &ctx);
+        if doc_windows::dialogs_here(self, &ctx) {
+            tiff_options_ui::show(self, &ctx);
+            distort_ui::show(self, &ctx);
+            camera_raw_ui::show(self, &ctx);
+            wide_angle_ui::show(self, &ctx);
+        }
         canvas::extra_windows(self, &ctx);
         notices::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);
@@ -1216,7 +1250,8 @@ impl eframe::App for PhotocraftApp {
         self.perf.frame(gpu_canvas::now_ms() - t0);
         // Synthetic input is injected one press/release step per frame: keep frames coming until
         // the queue is empty, then release control replies waiting on it.
-        if !self.synthetic.is_empty() {
+        doc_windows::finish_drag(self, &ctx);
+        if !self.synthetic.is_empty() || doc_windows::input_pending(self, &ctx) {
             ctx.request_repaint();
         } else if !self.input_waiters.is_empty() {
             for w in self.input_waiters.drain(..) {
@@ -1228,15 +1263,8 @@ impl eframe::App for PhotocraftApp {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn read_dropped(f: &(dyn egui::DroppedFile + Send + Sync)) -> Result<Vec<u8>, String> {
     f.bytes()
-}
-
-/// On the web, dropped-file bytes arrive asynchronously; the web shell handles drops itself.
-#[cfg(target_arch = "wasm32")]
-fn read_dropped(_f: &dyn egui::DroppedFile) -> Result<Vec<u8>, String> {
-    Err("drag-and-drop on the web is handled by the page; use File → Open".into())
 }
 
 impl PhotocraftApp {
@@ -1402,11 +1430,7 @@ impl PhotocraftApp {
     /// release, so egui sees press and release in separate frames. Hosts that don't call
     /// `raw_input_hook` (offscreen harnesses) feed these to their input themselves.
     pub fn take_synthetic_step(&mut self) -> Vec<egui::Event> {
-        let n = self
-            .synthetic
-            .iter()
-            .position(|e| matches!(e, egui::Event::PointerButton { pressed: false, .. } | egui::Event::Key { pressed: false, .. }))
-            .map_or(self.synthetic.len(), |i| i + 1);
+        let n = doc_windows::input_step_len(&self.synthetic);
         let events: Vec<_> = self.synthetic.drain(..n).collect();
         if !events.is_empty() {
             self.automation_input = true;
@@ -1418,10 +1442,11 @@ impl PhotocraftApp {
     /// very first frame renders; otherwise `logic` does it and the first frame is skipped.
     pub fn setup_context(ctx: &egui::Context, kind: theme::ThemeKind) {
         ctx.add_plugin(tool_cursor::CursorLifecycle);
+        ctx.add_plugin(doc_windows::NativeInput);
         theme::install_fonts(ctx);
         egui_extras::install_image_loaders(ctx);
         theme::apply(ctx, kind);
-        // egui's own ⌘+ / ⌘- / ⌘0 scale the whole interface; PhotoCraft zooms the canvas instead
+        // egui's own ⌘+ / ⌘- / ⌘0 scale the whole interface; Prism zooms the canvas instead
         // (shortcuts.rs), like Photoshop.
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
         // ⌘/Ctrl + wheel scrolls sideways, as in Photoshop; only a pinch zooms (wheel_nav.rs).
@@ -1450,7 +1475,7 @@ impl PhotocraftApp {
 impl PhotocraftApp {
     /// Zoom of the active document's main view (screen points per document pixel).
     pub fn current_zoom(&self) -> f32 {
-        self.session.active_index().and_then(|i| self.ui.views.get(i)).map_or(1.0, |v| v.zoom)
+        self.session.active_index().and_then(|i| self.view(i)).map_or(1.0, |v| v.zoom)
     }
 }
 
@@ -1592,6 +1617,9 @@ mod move_auto_select_tests;
 
 #[cfg(test)]
 mod hidden_layer_tests;
+
+#[cfg(test)]
+mod panel_cursor_tests;
 
 #[cfg(test)]
 mod blend_dropdown_keys_tests;

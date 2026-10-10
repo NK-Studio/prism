@@ -133,6 +133,7 @@ pub fn button_chrome(ui: &egui::Ui, rect: Rect, selected: bool, hovered: bool) -
 /// Square icon button: transparent until hovered; `selected` gets the accent treatment.
 pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(box_size), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let tint = button_chrome(ui, rect, selected, resp.hovered());
     paint(ui, rect, name, (box_size * 0.52).round(), tint);
     if tooltip.is_empty() { resp } else { resp.on_hover_text(tl!(tooltip)) }
@@ -142,6 +143,7 @@ pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tool
 pub fn rail_button(ui: &mut egui::Ui, name: &str, box_size: f32, on: bool, tooltip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(box_size), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     if on {
         ui.painter().rect_filled(rect, t.radius_sm, t.card);
         ui.painter().rect_stroke(rect, t.radius_sm, egui::Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);

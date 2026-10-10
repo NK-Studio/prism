@@ -892,7 +892,6 @@ impl Compositor {
         stats.cells = cells.len();
         // The previous intermediate submit (waited for before the next is queued; the web has
         // no blocking wait and relies on the browser's own scheduling).
-        #[cfg(not(target_arch = "wasm32"))]
         let mut last_submit: Option<wgpu::SubmissionIndex> = None;
         // Work recorded and bytes evicted since the last submit.
         let (mut work, mut freed) = (0u64, 0u64);
@@ -920,7 +919,6 @@ impl Compositor {
                 // batches of uploads and evicted pages are in flight.
                 let done = std::mem::replace(encoder, device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_compose") }));
                 let index = queue.submit([done.finish()]);
-                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(prev) = last_submit.replace(index) {
                     match &self.health {
                         Some(h) => {
@@ -931,8 +929,7 @@ impl Compositor {
                         }
                     }
                 }
-                #[cfg(target_arch = "wasm32")]
-                let _ = index;
+
                 self.staged = 0;
                 work = 0;
                 freed = 0;
@@ -1477,7 +1474,7 @@ impl Compositor {
             return;
         }
 
-        let t_trace = web_time_now();
+        let t_trace = trace_time_now();
         let mut staged = 0u64;
         // Shape over the damage (compose's own alpha).
         if !damage.is_empty() {
@@ -1619,15 +1616,12 @@ impl Compositor {
 }
 
 /// A start time when `PHOTOCRAFT_FX_TRACE=1` (it prints the CPU time of effect shapes and
-/// distance fields); never on wasm.
-fn web_time_now() -> Option<std::time::Instant> {
-    #[cfg(not(target_arch = "wasm32"))]
+/// distance fields).
+fn trace_time_now() -> Option<std::time::Instant> {
     {
         static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         T.get_or_init(|| std::env::var_os("PHOTOCRAFT_FX_TRACE").is_some()).then(std::time::Instant::now)
     }
-    #[cfg(target_arch = "wasm32")]
-    None
 }
 
 /// The uniform record of a pass.
@@ -1825,13 +1819,11 @@ pub fn f16_to_f32(h: u16) -> f32 {
 }
 
 /// Blocking readback of a composite (native tests and tools).
-#[cfg(not(target_arch = "wasm32"))]
 pub fn render_to_vec(comp: &mut Compositor, device: &wgpu::Device, queue: &wgpu::Queue, doc: &Document, rect: Rect) -> Result<Vec<[f32; 4]>, Unsupported> {
     render_to_vec_stats(comp, device, queue, doc, rect).map(|(v, _)| v)
 }
 
 /// [`render_to_vec`] plus the render's [`Stats`].
-#[cfg(not(target_arch = "wasm32"))]
 pub fn render_to_vec_stats(
     comp: &mut Compositor,
     device: &wgpu::Device,

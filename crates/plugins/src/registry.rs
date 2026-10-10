@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::Error;
 use crate::{Limits, Plugin, Result};
 
@@ -56,7 +55,6 @@ pub fn revision() -> u64 {
 
 /// Reads a `.wasm` file (refusing anything that isn't a regular file or exceeds the module limit)
 /// and loads it.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn load_file(path: &std::path::Path, limits: Limits) -> Result<Plugin> {
     use std::io::Read;
     let meta = std::fs::metadata(path).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
@@ -83,7 +81,6 @@ pub struct FolderReport {
 
 /// Installs every `*.wasm` directly in `dir` (not recursive), in file-name order. A bad module is
 /// reported and skipped; the others still load.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn load_folder(dir: &std::path::Path) -> Result<FolderReport> {
     let rd = std::fs::read_dir(dir).map_err(|e| Error::Io(format!("{}: {e}", dir.display())))?;
     let mut files: Vec<std::path::PathBuf> =

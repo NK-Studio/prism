@@ -58,13 +58,15 @@ impl FileDialogReply {
 
 /// Show a file dialog and return at once, answering through the reply when the user is done.
 /// The window (`None` in tests) is the dialog's parent.
-pub type FileDialogFn = Box<dyn FnMut(FileDialogRequest, Option<&eframe::Frame>, FileDialogReply)>;
+pub type FileDialogParent = winit::window::Window;
+pub type FileDialogFn = Box<dyn FnMut(FileDialogRequest, Option<&FileDialogParent>, FileDialogReply)>;
 
 /// What to do with the answer (`None`: cancelled).
 type Then = Box<dyn FnOnce(&mut PhotocraftApp, Option<FileDialogAnswer>) -> Result<Value, String>>;
 
 /// The file dialog in progress.
 pub(crate) struct Pending {
+    window: Option<u64>,
     /// Not shown yet: it is shown at the end of the frame, which has the window to parent it to.
     request: Option<FileDialogRequest>,
     answer: Option<Receiver<Option<FileDialogAnswer>>>,
@@ -100,7 +102,7 @@ impl PhotocraftApp {
             FileDialogRequest::Save { .. } => "save",
         };
         let then: Then = Box::new(move |app, answer| answer.map_or_else(|| Err(CANCELLED.into()), |a| then(app, a)));
-        self.file_dialog = Some(Pending { request: Some(request), answer: None, then });
+        self.file_dialog = Some(Pending { request: Some(request), answer: None, then, window: self.ui.active_window });
         Ok(json!({ "fileDialog": kind }))
     }
 
@@ -169,11 +171,18 @@ impl PhotocraftApp {
     /// continues the action that asked once the answer is in. Its errors go to the status bar.
     pub fn poll_file_dialog(&mut self, ctx: &egui::Context, parent: Option<&eframe::Frame>) {
         let Some(p) = self.file_dialog.as_mut() else { return };
+        let native_parent = p.window.and_then(|id| eframe::native_viewport_window(ctx, crate::doc_windows::viewport(Some(id))));
+        // An actual child may not have been created yet when a command asks for a dialog.
+        if p.window.is_some() && native_parent.is_none() && parent.and_then(eframe::Frame::winit_window).is_some() {
+            ctx.request_repaint();
+            return;
+        }
+        let parent_window = if p.window.is_some() { native_parent.as_deref() } else { parent.and_then(eframe::Frame::winit_window).map(AsRef::as_ref) };
         if let Some(request) = p.request.take() {
             let (tx, rx) = mpsc::channel();
             p.answer = Some(rx);
             if let Some(show) = self.services.file_dialog.as_mut() {
-                show(request, parent, FileDialogReply { tx, ctx: ctx.clone() });
+                show(request, parent_window, FileDialogReply { tx, ctx: ctx.clone() });
             }
         }
         let answer = match p.answer.as_ref().map(Receiver::try_recv) {

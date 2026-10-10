@@ -1,5 +1,5 @@
 #!/bin/sh
-# PhotoCraft AppImage entry point (packaging/linux/AppRun; installed by package.sh).
+# Prism AppImage entry point (packaging/linux/AppRun; installed by package.sh).
 #
 # On Wayland the compositor resolves a window's dock icon by taking the window's
 # app_id (ai.storyteller.photocraft) and looking up an installed .desktop file.

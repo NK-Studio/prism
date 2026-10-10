@@ -1,7 +1,7 @@
 //! Photocraft's type engine.
 //!
 //! * [`fonts::FontDb`]: bundled fonts (Inter, JetBrains Mono; always available, including on the
-//!   web), optional system fonts from a directory scan (no fontconfig), user font data, TrueType
+//!   native), optional system fonts from a directory scan (no fontconfig), user font data, TrueType
 //!   collections, PostScript-name lookup. Builds made with the optional craft-fonts input
 //!   (`CRAFT_FONTS_DIR`, see [`craft_fonts`]) also carry its Japanese fonts as fallbacks.
 //! * [`layout`]: shaping and line layout with [parley] (HarfRust shaping, bidi, line breaking),
@@ -52,7 +52,7 @@ impl Default for TextEngine {
 }
 
 impl TextEngine {
-    /// Bundled fonts only: deterministic output (tests, web).
+    /// Bundled fonts only: deterministic output (tests).
     pub fn new() -> Self {
         Self { fonts: FontDb::new(), layouter: layout::Layouter::new() }
     }
@@ -135,12 +135,12 @@ impl TextEngine {
     }
 }
 
-/// A process-wide engine for callers without their own (bundled fonts only on the web; bundled
+/// A process-wide engine for callers without their own (bundled
 /// plus system fonts elsewhere). Locking is cheap relative to layout.
 pub fn shared() -> &'static std::sync::Mutex<TextEngine> {
     static ENGINE: std::sync::OnceLock<std::sync::Mutex<TextEngine>> = std::sync::OnceLock::new();
     ENGINE.get_or_init(|| {
-        let use_system = cfg!(not(target_arch = "wasm32")) && !cfg!(test) && std::env::var_os("PHOTOCRAFT_NO_SYSTEM_FONTS").is_none();
+        let use_system = !cfg!(test) && std::env::var_os("PHOTOCRAFT_NO_SYSTEM_FONTS").is_none();
         std::sync::Mutex::new(if use_system { TextEngine::with_system_fonts() } else { TextEngine::new() })
     })
 }

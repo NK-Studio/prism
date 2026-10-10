@@ -14,7 +14,7 @@
 //!   selection's coverage.
 //!
 //! [`apply`] runs a filter over an area, tile by tile (in parallel with
-//! rayon on native targets; single-threaded on wasm).
+//! rayon on native targets).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -1044,23 +1044,19 @@ pub fn apply_tiled_with(
     // Tiles are filtered in groups of about RESULT_BUDGET bytes (at least one per core) and each
     // group is written before the next starts, so a huge layer never holds all its results as
     // floats at once.
-    #[cfg(not(target_arch = "wasm32"))]
     let threads = rayon::current_num_threads();
-    #[cfg(target_arch = "wasm32")]
-    let threads = 1;
+
     let per_tile = (tile.max(1) as usize).pow(2) * fmt.channels() * std::mem::size_of::<f32>();
     let group = (RESULT_BUDGET / per_tile.max(1)).max(threads).max(1);
     for chunk in tiles.chunks(group) {
         if ctl.cancelled() {
             return None;
         }
-        #[cfg(not(target_arch = "wasm32"))]
         let results: Vec<(Rect, Vec<f32>)> = {
             use rayon::prelude::*;
             chunk.par_iter().map(run).collect()
         };
-        #[cfg(target_arch = "wasm32")]
-        let results: Vec<(Rect, Vec<f32>)> = chunk.iter().map(run).collect();
+
         if ctl.cancelled() {
             return None;
         }
@@ -1125,13 +1121,11 @@ fn apply_box_blur(
                 s.write_region(*t, data);
             }
         };
-        #[cfg(not(target_arch = "wasm32"))]
         {
             use rayon::prelude::*;
             columns.par_iter_mut().for_each(write);
         }
-        #[cfg(target_arch = "wasm32")]
-        columns.iter_mut().for_each(write);
+
         for (s, _) in columns {
             out.put_tiles(s.tiles().map(|(c, t)| (*c, t.clone())));
         }

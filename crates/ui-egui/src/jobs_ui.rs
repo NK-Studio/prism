@@ -2,7 +2,7 @@
 //! `photocraft_engine::jobs`) while the window keeps drawing at full frame rate.
 //!
 //! - [`run`] starts a job-capable command in the background (when [`PhotocraftApp::background_jobs`]
-//!   is on: the desktop app; tests and the web run inline as before).
+//!   is on: the desktop app; tests run inline as before).
 //! - [`tick`] (every frame) applies finished jobs, reports failures, answers control requests
 //!   waiting on a job, finishes background opens and keeps frames coming while anything runs.
 //! - [`status_progress`] draws the status-bar progress with a Cancel button; [`dialog`] the modal
@@ -75,7 +75,7 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
 pub fn start_open(app: &mut PhotocraftApp, name: &str, path: Option<String>, source: OpenSource) -> Result<(), String> {
     let name = &app.open_name(name);
     match app.session.start_open(name, source).map_err(|e| e.to_string())? {
-        // Inline (wasm): finish now, like a background open that ended at once.
+        // Inline: finish now, like a background open that ended at once.
         Started::Done(v) => finish_open(app, name, path.as_deref(), &v, None),
         Started::Job(job) => {
             app.jobs.opens.push(OpenTab { job, name: name.to_string(), path, slot: None });

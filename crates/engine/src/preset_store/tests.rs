@@ -360,7 +360,6 @@ fn bench_load_500_sampled_presets() {
     eprintln!("500 sampled presets: {:.1} MB on disk; write {write:?}, load {load:?}, rename {rename:?}", bytes as f64 / 1e6);
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_store_directory_that_does_not_exist_yet_opens_without_warnings() {
     // Windows reports a file under a missing directory as "path not found" (os error 3), not

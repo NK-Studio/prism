@@ -24,22 +24,15 @@ use crate::commands::CommandSpec;
 use crate::file_cmds::{file_name, flattened, import, list_images, read_file};
 use crate::{EngineError, Result, Session};
 
-/// Wall-clock timer for the `ms` fields of results (always 0 on the web, where
-/// `std::time::Instant` is unavailable).
-pub(crate) struct Stopwatch(#[cfg(not(target_arch = "wasm32"))] std::time::Instant);
+/// Wall-clock timer for the `ms` fields of results.
+pub(crate) struct Stopwatch(std::time::Instant);
 
 impl Stopwatch {
     pub(crate) fn start() -> Self {
-        Stopwatch(
-            #[cfg(not(target_arch = "wasm32"))]
-            std::time::Instant::now(),
-        )
+        Stopwatch(std::time::Instant::now())
     }
     pub(crate) fn ms(&self) -> f64 {
-        #[cfg(not(target_arch = "wasm32"))]
-        return self.0.elapsed().as_secs_f64() * 1000.0;
-        #[cfg(target_arch = "wasm32")]
-        0.0
+        self.0.elapsed().as_secs_f64() * 1000.0
     }
 }
 

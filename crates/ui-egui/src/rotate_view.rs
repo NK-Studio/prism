@@ -145,9 +145,9 @@ pub fn trackpad_delta(ctx: &egui::Context, enabled: bool) -> Option<f32> {
 /// `view.rotateView`: set or add degrees on the active document's camera.
 pub fn command(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
     let i = app.session.active_index().ok_or("no document open")?;
-    let current = app.ui.views.get(i).map(|v| v.rotation).ok_or("no document open")?;
+    let current = app.view(i).map(|v| v.rotation).ok_or("no document open")?;
     let rotation = apply_params(current, p)?;
-    let v = app.ui.views.get_mut(i).ok_or("no document open")?;
+    let v = app.view_mut(i).ok_or("no document open")?;
     v.rotation = rotation;
     Ok(json!({"rotation": v.rotation}))
 }
@@ -155,7 +155,7 @@ pub fn command(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
 /// `view.resetView`: angle 0, zoom and centre unchanged.
 pub fn reset(app: &mut PhotocraftApp) -> Result<Value, String> {
     let i = app.session.active_index().ok_or("no document open")?;
-    let v = app.ui.views.get_mut(i).ok_or("no document open")?;
+    let v = app.view_mut(i).ok_or("no document open")?;
     v.rotation = 0.0;
     Ok(json!({"rotation": 0.0, "zoom": v.zoom, "center": v.center}))
 }

@@ -21,6 +21,7 @@ pub struct Prompt {
     /// The document the command was aimed at (`document` param, else the active one), if it has one.
     target: Option<DocId>,
     docs: Vec<DocId>,
+    window: Option<u64>,
 }
 
 fn index_of(app: &PhotocraftApp, id: DocId) -> Option<usize> {
@@ -65,7 +66,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
     if docs.is_empty() {
         return false;
     }
-    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs };
+    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs, window: if id == EXIT { None } else { app.ui.active_window } };
     match &app.discard {
         None => app.discard = Some(prompt),
         // Quitting overrides whatever is pending: it covers every document, so nothing is lost.
@@ -82,7 +83,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
 
 impl PhotocraftApp {
     /// Whether closing now would lose work: a document has unsaved changes and closing wasn't
-    /// confirmed. The web build has the browser ask before leaving the page while this holds (#1380).
+    /// confirmed.
     pub fn has_unsaved_work(&self) -> bool {
         !self.allow_close && self.session.documents().iter().any(|d| d.is_dirty())
     }
@@ -120,7 +121,7 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(Prompt { id, mut params, target, .. }) = app.discard.take() else { return };
     if id == EXIT {
         app.allow_close = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
         return;
     }
     if let Some(target) = target {
@@ -184,6 +185,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     let Some(p) = &app.discard else { return };
+    if crate::doc_windows::viewport(p.window) != ctx.viewport_id() {
+        return;
+    }
     let Some(&doc) = p.docs.first() else { return };
     let (exits, reverts) = (p.id == EXIT, p.id == "file.revert");
     let Some(name) = index_of(app, doc).map(|i| app.session.documents()[i].doc.name.clone()) else {
@@ -264,6 +268,11 @@ fn mnemonic(label: &str, key: Key) -> String {
         Some((first, rest)) if first.eq_ignore_ascii_case(k) => format!("({first}){rest}"),
         _ => format!("{label} ({k})"),
     }
+}
+
+/// The save prompt blocks every viewport but is rendered only in its originating window.
+pub(crate) fn here(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    app.discard.as_ref().is_none_or(|p| crate::doc_windows::viewport(p.window) == ctx.viewport_id())
 }
 
 #[cfg(test)]

@@ -273,7 +273,6 @@ fn psd_too_large_for_32bit_errors_on_write() {
     f.header.version = Version::Psd;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn save_and_open() {
     let f = testgen::small(Version::Psd, Compression::Rle);

@@ -111,7 +111,8 @@ pub fn paint(
     for (kind, enabled, linked) in masks(l) {
         // The chain sits in the gap before the thumbnail, centred between the two.
         let chain = Rect::from_min_max(pos2(*x - 4.0, cy - ts / 2.0), pos2(*x - 4.0 + CHAIN_W, cy + ts / 2.0));
-        let resp = ui.interact(chain, ui.id().with(("mask-chain", l.id.0, kind == MaskKind::Vector)), Sense::click());
+        let resp =
+            ui.interact(chain, ui.id().with(("mask-chain", l.id.0, kind == MaskKind::Vector)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
         if linked {
             paint_chain(painter, chain.center(), if resp.hovered() { t.text } else { t.icon });
         } else if resp.hovered() {

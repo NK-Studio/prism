@@ -109,7 +109,6 @@ fn cjk_font_order_follows_the_selected_language() {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn korean_glyphs_remain_available_after_repeated_language_switches() {
     use photocraft_text::cjk::{self, CjkChar, CjkScript};
@@ -301,4 +300,17 @@ fn drawn_text(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> Vec<String> {
         collect(&shape.shape, &mut text);
     }
     text
+}
+
+#[test]
+fn prism_help_labels_follow_the_selected_language() {
+    for language in Lang::all().filter(|language| language.complete_menus()) {
+        for key in ["Prism Website", "Prism on GitHub", "Prism website"] {
+            assert!(has(language, key), "{}: {key}", language.code());
+            let label = tr(language, key);
+            assert!(!label.to_ascii_lowercase().contains("photocraft"), "{label}");
+        }
+    }
+    assert_eq!(tr(lang("ko"), "Prism Website"), "프리즘 웹사이트");
+    assert_eq!(tr(lang("ko"), "Prism on GitHub"), "GitHub의 프리즘");
 }

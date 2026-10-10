@@ -11,6 +11,13 @@
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSApplication;
+use objc2_foundation::{NSProcessInfo, NSString};
+
+/// Unbundled Cargo/IDE launches have no CFBundleDisplayName, so AppKit otherwise uses
+/// the machine executable name (`photocraft`) for the Dock tooltip.
+pub fn set_process_display_name() {
+    NSProcessInfo::processInfo().setProcessName(&NSString::from_str("Prism"));
+}
 
 /// Stop AppKit dragging the app's windows by their title bar strip.
 pub fn disable_native_title_drag() {
@@ -21,6 +28,12 @@ pub fn disable_native_title_drag() {
     for window in NSApplication::sharedApplication(mtm).windows().iter() {
         window.setMovable(false);
     }
+}
+
+/// App activation, including native sheets: floating documents stay above the main editor
+/// only while Prism is active, and rejoin the normal desktop window stack on deactivation.
+pub fn application_active() -> bool {
+    MainThreadMarker::new().is_some_and(|mtm| NSApplication::sharedApplication(mtm).isActive())
 }
 
 /// Quit the way a Mac app does, with `-[NSApplication terminate:]` (`Services::quit`), instead of
@@ -38,4 +51,50 @@ pub fn terminate_later() {
         Some(mtm) => NSApplication::sharedApplication(mtm).terminate(None),
         None => log::warn!("quit: the main queue ran off the main thread; not terminating"),
     });
+}
+
+/// Resolve a viewport by its native desktop frame once, then retain only AppKit's stable window
+/// number. This also distinguishes extra views with identical document titles. No focus changes.
+pub fn opacity_service() -> photocraft_ui_egui::WindowOpacityFn {
+    let mut numbers = std::collections::HashMap::<egui::ViewportId, isize>::new();
+    Box::new(move |ctx, alpha| {
+        let Some(mtm) = MainThreadMarker::new() else { return false };
+        let windows = NSApplication::sharedApplication(mtm).windows();
+        numbers.retain(|_, number| windows.iter().any(|w| w.windowNumber() == *number));
+        let id = ctx.viewport_id();
+        let known = numbers.get(&id).and_then(|number| windows.iter().find(|w| w.windowNumber() == *number));
+        let window = known.or_else(|| {
+            let expected = ctx.input(|i| i.viewport().outer_rect)? * ctx.zoom_factor();
+            let screens = objc2_app_kit::NSScreen::screens(mtm);
+            let screen = screens.iter().next()?;
+            let top = screen.frame().size.height;
+            windows.iter().find(|w| {
+                let f = w.frame();
+                let actual = egui::Rect::from_min_size(
+                    egui::pos2(f.origin.x as f32, (top - f.origin.y - f.size.height) as f32),
+                    egui::vec2(f.size.width as f32, f.size.height as f32),
+                );
+                w.isVisible() && (actual.min - expected.min).length() < 3.0 && (actual.size() - expected.size()).length() < 3.0
+            })
+        });
+        let Some(window) = window else { return false };
+        numbers.insert(id, window.windowNumber());
+        let alpha = if alpha.is_finite() { f64::from(alpha.clamp(0.0, 1.0)) } else { 1.0 };
+        if (window.alphaValue() - alpha).abs() > 0.001 {
+            window.setAlphaValue(alpha);
+        }
+        true
+    })
+}
+
+#[cfg(test)]
+mod display_name_tests {
+    use super::*;
+
+    #[test]
+    fn process_display_name_is_always_english() {
+        let _language = photocraft_ui_egui::i18n::language_scope(photocraft_ui_egui::i18n::Lang::from_pref("ko-KR"));
+        set_process_display_name();
+        assert_eq!(NSProcessInfo::processInfo().processName().to_string(), "Prism");
+    }
 }

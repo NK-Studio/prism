@@ -47,6 +47,10 @@ fn toggle_maximize(ctx: &egui::Context) {
 /// maximized window's corner hits Close. Close runs File › Exit, which asks about unsaved
 /// documents first.
 pub fn caption_buttons(app: &mut PhotocraftApp, ui: &mut Ui, bar: Rect) {
+    caption_buttons_for(app, ui, bar, None);
+}
+
+pub(crate) fn caption_buttons_for(app: &mut PhotocraftApp, ui: &mut Ui, bar: Rect, window: Option<u64>) {
     let t = Tokens::get(ui.ctx());
     let max = maximized(ui.ctx());
     let right = bar.right().min(ui.ctx().content_rect().right());
@@ -81,7 +85,11 @@ pub fn caption_buttons(app: &mut PhotocraftApp, ui: &mut Ui, bar: Rect) {
         Some(Caption::Maximize) => toggle_maximize(ui.ctx()),
         Some(Caption::Close) => {
             let ctx = ui.ctx().clone();
-            let _ = crate::menus::invoke(app, &ctx, "file.exit", json!({}));
+            if let Some(window) = window {
+                let _ = crate::doc_windows::close(app, &ctx, window);
+            } else {
+                let _ = crate::menus::invoke(app, &ctx, "file.exit", json!({}));
+            }
         }
         None => {}
     }
@@ -258,14 +266,13 @@ mod tests {
     }
 
     #[test]
-    fn the_brand_mark_leads_the_bar() {
+    fn menus_lead_the_bar_without_a_brand_icon_or_reserved_gap() {
         let mut w = Win::new(1440.0);
         w.frame(vec![]);
         let out = w.frame(vec![]);
-        let mark = crate::brand::mark_rect(&w.ctx).expect("the brand mark is painted");
         let file = texts(&out).into_iter().find(|(t, _)| t == "File").map(|(_, r)| r).expect("the File menu title");
-        assert!(mark.right() < file.left(), "the mark sits left of the menus: {mark:?} {file:?}");
-        assert!(mark.left() < 20.0 && mark.width() >= 16.0, "{mark:?}");
+        assert!(file.left() < 30.0, "menus start at the bar's left margin: {file:?}");
+        assert!(w.ctx.data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::new("photocraft-brand-mark"))).is_none());
     }
 
     #[test]

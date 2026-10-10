@@ -1,6 +1,6 @@
 # Rendering
 
-PhotoCraft has two compositors with distinct roles:
+Prism has two compositors with distinct roles:
 
 - `photocraft-compose` is the CPU compositor and correctness oracle used by export and tests.
 - `photocraft-gpu` plans and executes supported canvas composition through wgpu.
@@ -18,6 +18,6 @@ cargo run -p photocraft-ui-egui --example snapshot
 cargo test -p photocraft-gpu
 ```
 
-Performance-sensitive work should avoid full-surface work per frame, operate per tile, skip empty tiles, and cache by revision. The current commands and benchmark entry points are listed in [`docs/development.md`](https://github.com/storytold/photocraft/blob/main/docs/development.md).
+Performance-sensitive work should avoid full-surface work per frame, operate per tile, skip empty tiles, and cache by revision. The current commands and benchmark entry points are listed in [`docs/development.md`](https://github.com/NK-Studio/prism/blob/main/docs/development.md).
 
 GPU processing is not a security sandbox. Dimensions, decoded buffers, shaders, and command parameters must be validated before resource creation or dispatch.

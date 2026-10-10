@@ -327,7 +327,7 @@ fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 // ----------------------------------------------------------------------------- title bar
 
-/// The app's top bar: brand mark, menus, the document title and the workspace controls. With
+/// The app's top bar: menus, the document title and the workspace controls. With
 /// [`PhotocraftApp::custom_titlebar`] (Windows and Linux) it is also the window's title bar, as in
 /// Photoshop on Windows: the caption buttons take its right end (`titlebar`).
 pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -354,15 +354,11 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
             }
-            let title = app.session.active().map(|d| format!("{}{}", d.doc.name, if d.is_dirty() { "  •" } else { "" })).unwrap_or_else(|| "PhotoCraft".into());
+            let title = app.session.active().map(|d| format!("{}{}", d.doc.name, if d.is_dirty() { "  •" } else { "" })).unwrap_or_else(|| tl!("Prism").into());
             // The menus and the right-hand controls are laid out first; the title is centred in
             // whatever room is left between them, shortened or dropped rather than drawn over them.
             let (mut menus_right, mut controls_left) = (full.left(), full.right());
             ui.horizontal_centered(|ui| {
-                let side = if t.pro { 18.0 } else { 20.0 };
-                let (mark, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
-                crate::brand::paint_mark(ui, mark);
-                ui.add_space(6.0);
                 // With the macOS menu bar the menus are at the top of the screen instead.
                 menus_right = if app.services.native_menu.is_some() { ui.cursor().left() } else { crate::menus::menu_bar(app, ui) };
                 // The menu bar takes the whole row, so the right-hand group gets its own rect:
@@ -810,7 +806,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 crate::canvas::commit_crop(app);
                             }
                             if icons::button(ui, "ban", 26.0, false, tl!("Cancel current crop operation  (Esc)")).clicked() {
-                                app.ui.crop_rect = None;
+                                crate::crop_ui::cancel_frame(app, ui.ctx());
                             }
                         });
                     }
@@ -891,26 +887,26 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         if widgets::secondary_button(ui, tl!("Fit Screen"), 0.0).clicked()
                             && let Some(i) = app.session.active_index()
                         {
-                            app.ui.views[i].fit_pending = true;
+                            app.update_view(i, |v| v.fit_pending = true);
                         }
                         if widgets::secondary_button(ui, "100%", 0.0).clicked()
                             && let Some(i) = app.session.active_index()
                         {
-                            app.ui.views[i].zoom = 1.0;
+                            app.update_view(i, |v| v.zoom = 1.0);
                         }
                     }
                     Tool::RotateView => {
                         hint(ui, tl!("Drag around the centre to rotate the view  ·  Shift constrains to 15°"));
                         if let Some(i) = app.session.active_index() {
                             ui.label(tl!("Angle"));
-                            let mut angle = app.ui.views.get(i).map(|v| v.rotation).unwrap_or(0.0);
+                            let mut angle = app.view(i).map(|v| v.rotation).unwrap_or(0.0);
                             if widgets::value_field(ui, &mut angle, -180.0..=180.0, "°", 56.0).changed()
-                                && let Some(v) = app.ui.views.get_mut(i)
+                                && let Some(v) = app.view_mut(i)
                             {
                                 v.rotation = crate::rotate_view::wrap_deg(angle);
                             }
                             if widgets::secondary_button(ui, tl!("Reset View"), 0.0).clicked()
-                                && let Some(v) = app.ui.views.get_mut(i)
+                                && let Some(v) = app.view_mut(i)
                             {
                                 v.rotation = 0.0;
                             }
@@ -921,21 +917,21 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         if widgets::secondary_button(ui, "100%", 0.0).clicked()
                             && let Some(i) = app.session.active_index()
                         {
-                            app.ui.views[i].zoom = 1.0;
-                            app.ui.views[i].fit_pending = false;
-                            app.ui.views[i].fill_pending = false;
+                            app.update_view(i, |v| v.zoom = 1.0);
+                            app.update_view(i, |v| v.fit_pending = false);
+                            app.update_view(i, |v| v.fill_pending = false);
                         }
                         if widgets::secondary_button(ui, tl!("Fit Screen"), 0.0).clicked()
                             && let Some(i) = app.session.active_index()
                         {
-                            app.ui.views[i].fit_pending = true;
-                            app.ui.views[i].fill_pending = false;
+                            app.update_view(i, |v| v.fit_pending = true);
+                            app.update_view(i, |v| v.fill_pending = false);
                         }
                         if widgets::secondary_button(ui, tl!("Fill Screen"), 0.0).clicked()
                             && let Some(i) = app.session.active_index()
                         {
-                            app.ui.views[i].fill_pending = true;
-                            app.ui.views[i].fit_pending = false;
+                            app.update_view(i, |v| v.fill_pending = true);
+                            app.update_view(i, |v| v.fit_pending = false);
                         }
                     }
                     Tool::Lasso | Tool::PolygonLasso => hint(
@@ -1037,10 +1033,10 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if let (Some(st), Some(i)) = (app.session.active(), app.session.active_index()) {
                     let (w, h, mode, bits, layers) =
                         (st.doc.size.width, st.doc.size.height, crate::canvas::mode_label(&st.doc), st.doc.depth.bits(), st.doc.layer_count());
-                    let mut pct = app.ui.views[i].zoom * 100.0;
+                    let mut pct = app.camera(i).zoom * 100.0;
                     if widgets::value_field(ui, &mut pct, 1.0..=3200.0, "%", 78.0).changed() {
-                        app.ui.views[i].zoom = pct / 100.0;
-                        app.ui.views[i].fit_pending = false;
+                        app.update_view(i, |v| v.zoom = pct / 100.0);
+                        app.update_view(i, |v| v.fit_pending = false);
                     }
                     widgets::vline(ui, 16.0);
                     label(ui, &crate::i18n::fmt(tl!("{mode} Color · {bits} bit"), &[("mode", mode), ("bits", &bits.to_string())]));
@@ -1062,7 +1058,7 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         && widgets::secondary_button(ui, tl!("Fit"), 0.0).clicked()
                         && let Some(i) = app.session.active_index()
                     {
-                        app.ui.views[i].fit_pending = true;
+                        app.update_view(i, |v| v.fit_pending = true);
                     }
                     if app.session.has_jobs() {
                         ui.add_space(6.0);
@@ -1272,11 +1268,11 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         && let Some(pp) = resp.interact_pointer_pos()
     {
         let d = (pp - rect.min) / s;
-        app.ui.views[idx].center = [d.x.clamp(0.0, size.width as f32), d.y.clamp(0.0, size.height as f32)];
-        app.ui.views[idx].fit_pending = false;
+        app.update_view(idx, |v| v.center = [d.x.clamp(0.0, size.width as f32), d.y.clamp(0.0, size.height as f32)]);
+        app.update_view(idx, |v| v.fit_pending = false);
     }
     // Visible-area rectangle.
-    let v = app.ui.views[idx].clone();
+    let v = app.camera(idx);
     let canvas = app.last_canvas_rect;
     let vw = canvas.width() / v.zoom * s;
     let vh = canvas.height() / v.zoom * s;
@@ -1289,19 +1285,19 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             for (lbl, z) in [("200%", 2.0), ("100%", 1.0)] {
                 if widgets::pill_tab(ui, lbl, (v.zoom - z).abs() < 1e-3).clicked() {
-                    app.ui.views[idx].zoom = z;
-                    app.ui.views[idx].fit_pending = false;
+                    app.update_view(idx, |v| v.zoom = z);
+                    app.update_view(idx, |v| v.fit_pending = false);
                 }
             }
             if widgets::pill_tab(ui, tl!("Fit"), false).clicked() {
-                app.ui.views[idx].fit_pending = true;
+                app.update_view(idx, |v| v.fit_pending = true);
             }
         });
     });
     let mut lz = v.zoom.max(0.01).log2();
     if widgets::slider(ui, &mut lz, -6.64..=5.0, None).changed() {
-        app.ui.views[idx].zoom = 2f32.powf(lz);
-        app.ui.views[idx].fit_pending = false;
+        app.update_view(idx, |v| v.zoom = 2f32.powf(lz));
+        app.update_view(idx, |v| v.fit_pending = false);
     }
 }
 
@@ -1740,6 +1736,7 @@ fn footer_menu_button(ui: &mut egui::Ui, icon: &str, size: f32, tip: &str) -> eg
 fn fx_button(ui: &mut egui::Ui, size: f32, tip: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     if resp.hovered() {
         ui.painter().rect_filled(r, t.radius_sm, t.hover);
     }
@@ -1828,6 +1825,7 @@ fn layer_row(
     // Photoshop's default (medium) thumbnails: 32 pt rows.
     let row_h = if t.pro { 32.0 } else { 46.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     layer_drag_and_drop(app, ctx, ui, l, rect, &resp, actions);
     if resp.drag_started() {
         crate::layer_transfer::begin_from_panel(app, ctx, l.id);
@@ -1841,17 +1839,18 @@ fn layer_row(
         return;
     }
     let painter = ui.painter_at(rect.expand(1.0));
+    let hovered = !selected && resp.contains_pointer() && app.ui.dialogs.is_empty() && app.discard.is_none();
     if t.pro {
         if selected {
             painter.rect_filled(rect, 0.0, t.row_selected);
-        } else if resp.hovered() {
-            painter.rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
+        } else if hovered {
+            painter.rect_filled(Rect::from_min_max(pos2((rect.left() + 30.0).min(rect.right()), rect.top()), rect.right_bottom()), 0.0, t.layer_hover);
         }
     } else if selected {
         painter.rect_filled(rect, t.radius, t.hover);
         painter.rect_stroke(rect, t.radius, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
-    } else if resp.hovered() {
-        painter.rect_filled(rect, t.radius, t.hover.gamma_multiply(0.5));
+    } else if hovered {
+        painter.rect_filled(rect, t.radius, t.layer_hover);
     }
     let eye_cell = Rect::from_min_max(rect.left_top(), pos2((rect.left() + 30.0).min(rect.right()), rect.bottom()));
     if let Some((_, background)) = t.layer_label_colors(l.label) {
@@ -1866,7 +1865,7 @@ fn layer_row(
     let eye = Rect::from_min_size(pos2(x, rect.center().y - 11.0), vec2(22.0, 22.0));
     // The eye takes drags too (so a drag starting on it never reorders the row): dragging down
     // the eyes gives every row swept over the visibility the first eye toggled to.
-    let eye_resp = ui.interact(eye, ui.id().with(("eye", l.id.0)), Sense::click_and_drag());
+    let eye_resp = ui.interact(eye, ui.id().with(("eye", l.id.0)), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::PointingHand);
     // A hidden layer's eye box is left empty (still clickable).
     if l.visible {
         // Centre the drawing in the column while preserving the visibility hit area.
@@ -1920,7 +1919,13 @@ fn layer_row(
     // Right-hand indicators first; the name gets what is left and ends in "…" (#144).
     let fx_open = app.session.active().is_none_or(|d| !d.fx_collapsed.contains(&l.id));
     let (name_right, indicators, fx_toggled) = crate::layer_row_ui::indicators(ui, &painter, rect, x, l, fx_open, actions);
-    let name_color = if l.visible { t.text } else { t.text_faint };
+    let name_color = if hovered {
+        t.layer_hover_text
+    } else if l.visible {
+        t.text
+    } else {
+        t.text_faint
+    };
     let font = if selected && !t.pro { theme::medium(13.0) } else { egui::FontId::proportional(if t.pro { 12.0 } else { 13.0 }) };
     // Photoshop before 2026 set the Background layer's name in italics; 2026 sets it upright.
     let italic = !t.pro && l.name == "Background" && l.locks.transparency;
@@ -1986,7 +1991,7 @@ fn layer_row(
     }
     // Double-click: the name renames in place (over the row's full height, not just the glyphs:
     // #651); the Background, which can't be renamed while it's locked, becomes a normal layer; an
-    // adjustment or fill thumbnail opens its settings and a Smart Object thumbnail its contents,
+    // adjustment/fill/shape thumbnail opens its settings and a Smart Object thumbnail its contents,
     // and a type thumbnail edits its text; anywhere else on the row opens Layer Style (#350, #537).
     // The first click already made this the active layer.
     if resp.double_clicked() {
@@ -2001,7 +2006,7 @@ fn layer_row(
             }
         } else if pos.and_then(|p| masks.hit(p)).is_none() {
             let id = match &l.content {
-                LayerContent::Adjustment(_) | LayerContent::Fill(_) if on(thumb) => "layer.layerContentOptions",
+                LayerContent::Adjustment(_) | LayerContent::Fill(_) | LayerContent::Shape(_) if on(thumb) => "layer.layerContentOptions",
                 LayerContent::Smart(_) if on(thumb) => "layer.smartObjects.editContents",
                 LayerContent::Text(_) if on(thumb) => "type.editText",
                 _ => "layer.layerStyle.blendingOptions",
@@ -2055,7 +2060,13 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
             // Keep row layout and outside thumbnail decorations when the image is clipped.
             if ui.is_rect_visible(rect) {
                 widgets::checker(p, rect, 5.0);
-                let tex = app.layer_thumb(ctx, doc, l);
+                let preview = matches!(l.content, LayerContent::Shape(_))
+                    .then(|| app.session.active_index().and_then(|idx| crate::shape_color_ui::display_doc(app, idx)).map(|(doc, _)| doc))
+                    .flatten();
+                let tex = match preview.as_ref().filter(|shown| shown.id == doc.id).and_then(|shown| shown.layer(l.id).map(|layer| (shown, layer))) {
+                    Some((shown, layer)) => app.layer_thumb(ctx, shown, layer),
+                    None => app.layer_thumb(ctx, doc, l),
+                };
                 p.image(tex, rect, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
             }
         }
@@ -2784,6 +2795,7 @@ fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usi
     }
     for (i, (name, on, kind)) in rows.into_iter().enumerate() {
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
         if !ui.is_rect_visible(rect) {
             continue;
         }
@@ -2800,7 +2812,7 @@ fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usi
         }
         // The whole eye column of the row takes the click, so it never opens the Layer Style dialog.
         let eye_cell = Rect::from_min_max(rect.left_top(), pos2((rect.left() + 30.0).min(rect.right()), rect.bottom()));
-        if ui.interact(eye_cell, ui.id().with(("fx-eye", l.id.0, i)), Sense::click()).clicked() {
+        if ui.interact(eye_cell, ui.id().with(("fx-eye", l.id.0, i)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
             let mut params = json!({"layer": l.id.0, "visible": !on});
             if let (Some(index), Some(o)) = (i.checked_sub(1), params.as_object_mut()) {
                 o.insert("index".into(), json!(index));

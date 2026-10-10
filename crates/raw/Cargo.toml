@@ -15,11 +15,10 @@ testgen = []
 corpus = []
 
 [dependencies]
-
-# Parallel bands on native; wasm builds stay single-threaded.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
 
+
+# Parallel bands on native.
 [dev-dependencies]
 photocraft-raw = { path = ".", features = ["testgen"] }
 # Writes sRGB PNG previews in the `rawinfo` example.

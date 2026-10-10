@@ -64,9 +64,16 @@ pub fn free_press(ctx: &egui::Context, canvas: egui::Rect) -> Option<egui::Pos2>
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    crate::native_dialogs::show(app, ctx);
     let dialogs = app.ui.dialogs.clone();
     let mut shown = Vec::new();
     for d in dialogs {
+        if d.presentation == crate::state::DialogPresentation::Native || crate::doc_windows::viewport(d.window) != ctx.viewport_id() {
+            continue;
+        }
+        if let Some(source) = d.source_document.and_then(|id| app.session.documents().iter().position(|s| s.doc.id == id)) {
+            crate::doc_windows::activate(app, source, d.window);
+        }
         let lang = if crate::prefs_ui::is_preferences(&d.fields) {
             crate::i18n::Lang::from_pref(d.fields.get("values").and_then(|v| v.pointer("/interface/language")).and_then(Value::as_str).unwrap_or("auto"))
         } else {
@@ -164,7 +171,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         "contributors" => crate::credits::contributors_ui(ui),
                         "models" => crate::credits::models_ui(ui),
                         _ => {
-                            ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
+                            ui.label(tl!("Prism — a native image editor written in Rust."));
                             ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
                             ui.add_space(12.0);
                             ui.vertical_centered(|ui| {
@@ -188,7 +195,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 DialogKind::Command if crate::color_range_ui::owns(&fields) => crate::color_range_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::prefs_ui::owns(&fields) => crate::prefs_ui::body(app, ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__export") => crate::export_dialog::body(app, ui, &mut fields),
-                DialogKind::Command if fields.contains_key("__sizing") => crate::sizing::body(ui, &mut fields),
+                DialogKind::Command if fields.contains_key("__sizing") => crate::sizing::body(app, ui, &mut fields),
                 DialogKind::Command if crate::adjust_dialog::owns(&fields) => crate::adjust_dialog::body(app, ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__filter") => {
                     // Color Settings: the monitor profile in use can change while it is open.
@@ -323,7 +330,7 @@ pub fn title(d: &Dialog) -> String {
     match d.kind {
         DialogKind::NewDocument => "New Document".into(),
         DialogKind::About if d.fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => "System Info".into(),
-        DialogKind::About => "About PhotoCraft".into(),
+        DialogKind::About => "About Prism".into(),
         DialogKind::LayerStyle => "Layer Style".into(),
         DialogKind::Command => d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command").trim_end_matches('…').to_string(),
         DialogKind::Error => "Error".into(),
@@ -332,12 +339,42 @@ pub fn title(d: &Dialog) -> String {
 
 /// Confirm a dialog: run its action and close it. Used by the OK button and by automation.
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
+    let d = app.ui.dialogs.iter().find(|d| d.id == id).cloned().ok_or_else(|| format!("no dialog {id}"))?;
+    if d.source_document.is_none() && d.presentation != crate::state::DialogPresentation::Native {
+        return confirm_inner(app, id);
+    }
+    let mut result = (|| {
+        crate::native_dialogs::source(app, &d)?;
+        if d.fields.contains_key("__sizing") {
+            crate::sizing::validate(&d.fields)?;
+        }
+        if d.fields.contains_key("__duplicate") && d.fields.get("name").and_then(Value::as_str).is_none_or(|n| n.trim().is_empty()) {
+            return Err("enter a document name".into());
+        }
+        confirm_inner(app, id)
+    })();
+    if d.fields.contains_key("__duplicate")
+        && let Ok(value) = result
+    {
+        result = Ok(crate::duplicate_ui::finish(app, &d, value));
+    }
+    if let Err(ref error) = result {
+        if app.ui.dialog_mut(id).is_none() {
+            app.ui.dialogs.push(d);
+        }
+        if let Some(dialog) = app.ui.dialog_mut(id) {
+            dialog.fields.insert("__error".into(), json!(error));
+        }
+    }
+    result
+}
+fn confirm_inner(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
             let r = app.run("file.new", crate::new_doc_ui::command_params(&d.fields));
             if let Some(i) = app.session.active_index() {
-                app.ui.views[i].fit_pending = true;
+                app.update_view(i, |v| v.fit_pending = true);
             }
             r
         }
@@ -368,6 +405,16 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 /// schema dialog for filters, the Color Range dialog for `select.colorRange`, otherwise a bare
 /// confirm dialog.
 pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) -> u64 {
+    if command == "image.duplicate"
+        && let Ok(id) = crate::duplicate_ui::open(app)
+    {
+        return id;
+    }
+    if crate::sizing::is_sizing(command)
+        && let Some(id) = crate::sizing::open(app, command)
+    {
+        return id;
+    }
     if command == crate::color_range_ui::COMMAND {
         return crate::color_range_ui::open(app);
     }

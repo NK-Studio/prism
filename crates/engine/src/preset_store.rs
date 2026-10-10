@@ -128,12 +128,10 @@ impl PresetBackend for MemBackend {
 }
 
 /// A store directory on disk (desktop).
-#[cfg(not(target_arch = "wasm32"))]
 pub struct DirBackend {
     root: std::path::PathBuf,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl DirBackend {
     pub fn new(root: impl Into<std::path::PathBuf>) -> Self {
         DirBackend { root: root.into() }
@@ -169,7 +167,6 @@ impl DirBackend {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl PresetBackend for DirBackend {
     fn list(&self) -> Result<Vec<(String, u64)>, String> {
         let mut out = Vec::new();
@@ -257,7 +254,7 @@ pub fn encode_tip(t: &GrayTile) -> Vec<u8> {
 pub fn decode_tip(bytes: &[u8]) -> Result<GrayTile, String> {
     let head = bytes.get(..TIP_HEADER).ok_or("truncated tip header")?;
     if &head[..6] != TIP_MAGIC {
-        return Err("not a PhotoCraft tip".into());
+        return Err("not a Prism tip".into());
     }
     let bits = head[6];
     let u32_at = |i: usize| u32::from_le_bytes([head[i], head[i + 1], head[i + 2], head[i + 3]]);
@@ -575,25 +572,18 @@ fn decode_tips(backend: &dyn PresetBackend, hashes: &[String], sizes: &HashMap<S
     // Reads stay sequential (the backend need not be Sync); decoding is the expensive part.
     let raw: Vec<Result<Vec<u8>, String>> = hashes.iter().map(read).collect();
     let dec = |r: &Result<Vec<u8>, String>| r.as_ref().map_err(Clone::clone).and_then(|b| decode_tip(b));
-    #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         raw.par_iter().map(dec).collect()
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        raw.iter().map(dec).collect()
-    }
 }
 
 /// Open a store directory (desktop). Never fails: problems become warnings.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn open_dir(root: impl Into<std::path::PathBuf>) -> Opened {
     open(Box::new(DirBackend::new(root)))
 }
 
 /// Open a store directory on a background thread; the receiver yields it once loaded.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn open_dir_async(root: std::path::PathBuf) -> std::sync::mpsc::Receiver<Opened> {
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("brush-presets".into()).spawn(move || {

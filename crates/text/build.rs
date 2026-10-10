@@ -7,21 +7,14 @@
 //! scripts run in the crate's directory, so a relative one resolves from `crates/text`. A bad
 //! checkout is a warning, or an error with `CRAFT_FONTS_REQUIRED=1` (release builds).
 //!
-//! PhotoCraft difference from the recipe: the web build (wasm32) embeds nothing. The wasm must
-//! stay under the 24 MiB gate in `packaging/web/package.sh` (#237; Cloudflare's per-file cap is
-//! 25 MiB). Measured 2026-10-06 (`trunk build --release`): 24,190,076 bytes
-//! without craft-fonts, 28,867,488 with only the UI face (BIZ UDPGothic Regular) embedded, over
-//! the 25,165,824-byte gate. The web build keeps no Japanese font until craft-fonts can be
-//! served next to the wasm instead of inside it.
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
 fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
-    let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
     let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
-    if let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR").filter(|d| !d.is_empty() && !wasm).map(PathBuf::from) {
+    if let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR").filter(|d| !d.is_empty()).map(PathBuf::from) {
         match craft_fonts(&dir) {
             Ok(entries) => src.push_str(&entries),
             Err(e) if std::env::var_os("CRAFT_FONTS_REQUIRED").is_some() => {

@@ -113,9 +113,20 @@ const MAX_RESAMPLE_BYTES: u64 = if cfg!(target_pointer_width = "64") { 8 << 30 }
 
 /// Image → Image Size.
 fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
+    for key in ["width", "height", "resolution"] {
+        if let Some(value) = p.get(key) {
+            let limit = if key == "resolution" { 10_000.0 } else { 300_000.0 };
+            if !value.as_f64().is_some_and(|n| n.is_finite() && n >= 1.0 && n <= limit) {
+                return Err(bad("image.imageSize", format!("invalid {key}")));
+            }
+        }
+    }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (ow, oh) = (d.doc.size.width, d.doc.size.height);
-    let resample = parse_resample(p.get("resample").and_then(Value::as_str).unwrap_or("bicubic"));
+    if p.get("resample").is_some_and(|v| v.as_str().is_none()) || p.get("scaleStyles").is_some_and(|v| v.as_bool().is_none()) {
+        return Err(bad("image.imageSize", "invalid resampling or style option"));
+    }
+    let method = p.get("resample").and_then(Value::as_str).unwrap_or("bicubic");
     let pw = p.get("width").and_then(Value::as_f64);
     let ph = p.get("height").and_then(Value::as_f64);
     // Missing dimension keeps the aspect ratio.
@@ -126,6 +137,22 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
         (None, None) => (ow as f64, oh as f64),
     };
     let (nw, nh) = (nw.round().clamp(1.0, 300_000.0) as u32, nh.round().clamp(1.0, 300_000.0) as u32);
+    let resolved = if method == "auto" {
+        if nw >= ow && nh >= oh && (nw > ow || nh > oh) {
+            "preserveDetails"
+        } else if nw <= ow && nh <= oh && (nw < ow || nh < oh) {
+            "lanczos"
+        } else {
+            "bicubic"
+        }
+    } else {
+        method
+    };
+    if !matches!(resolved, "bicubic" | "bilinear" | "nearest" | "nearestNeighbor" | "lanczos" | "preserveDetails" | "none") {
+        return Err(bad("image.imageSize", "unknown resampling method"));
+    }
+    let resample = parse_resample(resolved);
+    let scale_styles = p.get("scaleStyles").and_then(Value::as_bool).unwrap_or(true);
     // Each side may reach 300000 px, but resampling writes real pixels: refuse a canvas whose
     // raster alone would pass the budget, before allocating any of it (#1544).
     let bytes = u64::from(nw).saturating_mul(u64::from(nh)).saturating_mul(d.doc.pixel_format().bytes_per_pixel() as u64);
@@ -156,7 +183,9 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
             *surf = resize_surface_in_canvas(surf, sx, sy, if is_mask { Resample::Bilinear } else { filter }, canvas);
         });
         let k = ((sx + sy) / 2.0) as f32;
-        for_each_layer(&mut doc.layers, &mut |l| scale_effects(&mut l.effects, k));
+        if scale_styles {
+            for_each_layer(&mut doc.layers, &mut |l| scale_effects(&mut l.effects, k));
+        }
         for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
             ch.surface = resize_surface_in_canvas(&ch.surface, sx, sy, Resample::Bilinear, canvas);
         }
@@ -264,12 +293,31 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     let relative = p.get("relative").and_then(Value::as_bool).unwrap_or(false);
     let w = p.get("width").and_then(Value::as_f64).unwrap_or(if relative { 0.0 } else { ow });
     let h = p.get("height").and_then(Value::as_f64).unwrap_or(if relative { 0.0 } else { oh });
+    for key in ["width", "height"] {
+        if p.get(key).is_some_and(|v| !v.as_f64().is_some_and(f64::is_finite)) {
+            return Err(bad("image.canvasSize", format!("invalid {key}")));
+        }
+    }
     let (nw, nh) = if relative { (ow + w, oh + h) } else { (w, h) };
+    if !nw.is_finite() || !nh.is_finite() || !(1.0..=300_000.0).contains(&nw) || !(1.0..=300_000.0).contains(&nh) {
+        return Err(bad("image.canvasSize", "canvas dimensions must be 1–300000 pixels"));
+    }
     let (nw, nh) = (nw.round().clamp(1.0, 300_000.0) as u32, nh.round().clamp(1.0, 300_000.0) as u32);
+    if p.get("anchor").is_some_and(|v| {
+        !v.as_str().is_some_and(|s| matches!(s, "topLeft" | "top" | "topRight" | "left" | "center" | "right" | "bottomLeft" | "bottom" | "bottomRight"))
+    }) {
+        return Err(bad("image.canvasSize", "invalid anchor"));
+    }
     let (ax, ay) = anchor_factors(p.get("anchor").and_then(Value::as_str).unwrap_or("center"));
     let dx = ((nw as f64 - ow) * ax).round() as i32;
     let dy = ((nh as f64 - oh) * ay).round() as i32;
     let ext = extension_color(s, p);
+    if ext[3] > 0.0 && d.doc.layers.first().is_some_and(|l| l.name == "Background" && l.locks.transparency && l.surface().is_some()) {
+        let bytes = u64::from(nw).saturating_mul(u64::from(nh)).saturating_mul(d.doc.pixel_format().bytes_per_pixel() as u64);
+        if bytes > MAX_RESAMPLE_BYTES {
+            return Err(bad("image.canvasSize", "canvas extension exceeds the raster allocation budget"));
+        }
+    }
     s.edit("Canvas Size", |doc, _| {
         translate_doc(doc, "image.canvasSize", dx, dy)?;
         doc.size = Size::new(nw, nh);
@@ -410,6 +458,9 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     doc.id = photocraft_doc::DocId::fresh();
     doc.name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("{} copy", d.doc.name));
     if p.get("mergedOnly").and_then(Value::as_bool).unwrap_or(false) {
+        if doc.size.area().saturating_mul(16) > MAX_RESAMPLE_BYTES {
+            return Err(bad("image.duplicate", "merged duplicate exceeds the allocation budget"));
+        }
         let buf = photocraft_compose::flatten(&doc);
         let fmt = doc.pixel_format();
         let mut surf = Surface::new(fmt);
@@ -418,9 +469,47 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         surf.prune();
         doc.layers = vec![Layer::new("Background", LayerContent::Raster(surf))];
     }
-    for_each_layer(&mut doc.layers, &mut |l| l.id = photocraft_doc::LayerId::fresh());
+    let mut ids = std::collections::HashMap::new();
+    for_each_layer(&mut doc.layers, &mut |l| {
+        let old = l.id;
+        l.id = photocraft_doc::LayerId::fresh();
+        l.psd_id = None;
+        ids.insert(old, l.id);
+    });
+    for comp in doc.layer_comps.iter_mut().chain(doc.last_document_state.iter_mut()) {
+        comp.states.retain_mut(|state| {
+            if let Some(id) = ids.get(&state.layer) {
+                state.layer = *id;
+                true
+            } else {
+                false
+            }
+        });
+    }
+    doc.variables.defs.retain_mut(|v| {
+        if let Some(id) = ids.get(&v.layer) {
+            v.layer = *id;
+            true
+        } else {
+            false
+        }
+    });
+    for slice in &mut doc.slices.list {
+        slice.layer = slice.layer.and_then(|id| ids.get(&id).copied());
+    }
+    let active = d.active_layer.and_then(|id| ids.get(&id).copied());
+    let selected: Vec<_> = d.selected_layers.iter().filter_map(|id| ids.get(id).copied()).collect();
     let name = doc.name.clone();
     let index = s.add_document(doc, None);
+    if let Some(copy) = s.active_mut() {
+        copy.saved_revision = 0;
+        if active.is_some() {
+            copy.active_layer = active;
+            copy.selected_layers = selected;
+            copy.layer_anchor = active;
+        }
+        copy.history.set_current_layers(photocraft_ops::LayerTarget { active: copy.active_layer, selected: copy.selected_layers.clone() });
+    }
     Ok(json!({ "document": index, "name": name }))
 }
 
@@ -437,7 +526,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.imageSize",
             "Image Size…",
             ["Image"],
-            r##"{"width":px,"height":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails|none"="bicubic"}"##,
+            r##"{"width":px,"height":px,"resolution":ppi,"resample":"auto|bicubic|bilinear|nearest|lanczos|preserveDetails|none"="bicubic","scaleStyles":bool=true}"##,
             has_doc,
             image_size
         ),
@@ -574,6 +663,83 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_remaps_references_and_has_independent_history() {
+        let mut s = session();
+        s.edit("references", |d, _| {
+            let layer = d.layers[0].id;
+            d.variables.defs.push(photocraft_doc::variables::VariableDef { name: "show".into(), layer, kind: photocraft_doc::variables::VarKind::Visibility });
+            d.slices.list.push(photocraft_doc::Slice { layer: Some(layer), ..Default::default() });
+            d.layer_comps.push(photocraft_doc::LayerComp {
+                id: 1,
+                name: "comp".into(),
+                comment: String::new(),
+                apply_visibility: true,
+                apply_position: true,
+                apply_appearance: true,
+                states: photocraft_doc::comps::capture_states(d),
+            });
+            Ok(())
+        })
+        .unwrap();
+        let original = s.active().unwrap().doc.clone();
+        let past = s.active().unwrap().history.past_len();
+        s.execute("image.duplicate", json!({"name":"independent"})).unwrap();
+        let copy = &s.active().unwrap().doc;
+        assert_ne!(copy.id, original.id);
+        assert_ne!(copy.layers[0].id, original.layers[0].id);
+        assert_eq!(copy.variables.defs[0].layer, copy.layers[0].id);
+        assert_eq!(copy.slices.list[0].layer, Some(copy.layers[0].id));
+        assert!(copy.layer_comps[0].missing_layers(copy).is_empty());
+        assert_eq!(s.active().unwrap().history.past_len(), 0);
+        assert!(s.active().unwrap().is_dirty());
+        assert_eq!(s.documents()[0].history.past_len(), past);
+    }
+    #[test]
+    fn automatic_resampling_style_toggle_and_no_resample_across_formats() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk] {
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                for (w, h, method) in [(16, 12, "preserveDetails"), (4, 3, "lanczos"), (16, 3, "bicubic")] {
+                    let original = Document::with_background("small", Size::new(8, 6), mode, depth, photocraft_color::Color::WHITE);
+                    let mut auto = Session::new();
+                    auto.add_document(original.clone(), None);
+                    let mut explicit = Session::new();
+                    explicit.add_document(original, None);
+                    auto.execute("image.imageSize", json!({"width":w,"height":h,"resample":"auto"})).unwrap();
+                    explicit.execute("image.imageSize", json!({"width":w,"height":h,"resample":method})).unwrap();
+                    assert_eq!(doc(&auto).layers[0].surface(), doc(&explicit).layers[0].surface());
+                    assert_eq!(doc(&auto).pixel_format().sample, depth);
+                    auto.execute("image.imageSize", json!({"resolution":144,"resample":"none"})).unwrap();
+                    assert_eq!(doc(&auto).size, Size::new(w, h));
+                    auto.execute("image.duplicate", json!({"mergedOnly":true})).unwrap();
+                    assert_eq!(doc(&auto).layers.len(), 1);
+                    assert_eq!(doc(&auto).depth, depth);
+                }
+            }
+        }
+        let mut s = session();
+        let effects = doc(&s).layers[1].effects.clone();
+        s.execute("image.imageSize", json!({"width":40,"height":40,"scaleStyles":false})).unwrap();
+        assert_eq!(doc(&s).layers[1].effects, effects);
+    }
+    #[test]
+    fn invalid_sizes_fail_without_history_or_document_changes() {
+        for (command, params) in [
+            ("image.imageSize", json!({"width":0})),
+            ("image.imageSize", json!({"height":"bad"})),
+            ("image.imageSize", json!({"resolution":10001})),
+            ("image.imageSize", json!({"resample":"bad"})),
+            ("image.canvasSize", json!({"relative":true,"width":-9999})),
+            ("image.canvasSize", json!({"anchor":"bad"})),
+        ] {
+            let mut s = session();
+            let original = s.active().unwrap().doc.clone();
+            let history = s.active().unwrap().history.past_len();
+            assert!(s.execute(command, params).is_err());
+            assert!(std::sync::Arc::ptr_eq(&original, &s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+        }
+    }
+    #[test]
     fn image_size_scales_everything() {
         for resample in ["bicubic", "bilinear", "nearest", "lanczos", "preserveDetails"] {
             let mut s = session();
@@ -681,6 +847,21 @@ mod tests {
         let mut s = session();
         s.execute("image.canvasSize", json!({"width": 20, "height": 10, "relative": true, "anchor": "center"})).unwrap();
         assert_eq!(doc(&s).layers[1].surface().unwrap().content_bounds(), Rect::new(20, 10, 30, 20));
+        for (anchor, dx, dy) in [
+            ("topLeft", 0, 0),
+            ("top", 10, 0),
+            ("topRight", 20, 0),
+            ("left", 0, 5),
+            ("center", 10, 5),
+            ("right", 20, 5),
+            ("bottomLeft", 0, 10),
+            ("bottom", 10, 10),
+            ("bottomRight", 20, 10),
+        ] {
+            let mut s = session();
+            s.execute("image.canvasSize", json!({"width":20,"height":10,"relative":true,"anchor":anchor})).unwrap();
+            assert_eq!(doc(&s).layers[1].surface().unwrap().content_bounds(), Rect::new(10 + dx, 5 + dy, 20 + dx, 15 + dy), "{anchor}");
+        }
     }
 
     #[test]

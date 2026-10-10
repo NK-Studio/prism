@@ -244,9 +244,8 @@ pub fn histogram_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let pending = app.hist_job.as_ref().is_some_and(|(d, r, _)| *d == doc_id && *r == rev);
         if !pending {
             let (tx, rx) = std::sync::mpsc::channel();
-            // No threads on the web (and a spawn can fail natively): compute inline then, and
+            // If spawning a worker fails, compute inline and
             // deliver through the same channel so one receive path lands both.
-            #[cfg(not(target_arch = "wasm32"))]
             let spawned = {
                 let doc = st.doc.clone();
                 let tx = tx.clone();
@@ -261,8 +260,7 @@ pub fn histogram_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     })
                     .is_ok()
             };
-            #[cfg(target_arch = "wasm32")]
-            let spawned = false;
+
             if !spawned {
                 let t0 = crate::gpu_canvas::now_ms();
                 let h = Arc::new(compute_histograms(&st.doc, HistSource::BelowLayer(LayerId(u64::MAX)), ToneSpace::Rgb));

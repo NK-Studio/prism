@@ -1,7 +1,6 @@
 # UI localisation and live language switching
 
-PhotoCraft uses the same Rust catalog implementation in the native egui shell and the
-WebAssembly build. English source strings are lookup keys. UTF-8 TSV catalogs supply plain,
+Prism uses Rust catalogs in the native egui shell. English source strings are lookup keys. UTF-8 TSV catalogs supply plain,
 contextual, command-ID and plural translations; missing entries fall back to English.
 
 ## Supported languages
@@ -63,8 +62,7 @@ The native-only, pinned `sys-locale` dependency provides safe Rust access to the
 override falls back to English. Empty overrides use the system. Unix locale variables do not
 override Windows/macOS UI-language preferences. Tags are read once per process (at most 64,
 128 bytes each) and matched against the supported language registry. Changes to the
-OS language list itself take effect at the next launch. The web build keeps its existing
-English Auto fallback until browser-locale detection is implemented.
+OS language list itself take effect at the next launch.
 
 API implementation and licensing: [sys-locale](https://github.com/1Password/sys-locale).
 
@@ -92,8 +90,7 @@ Other languages retain the system's CJK fallback preference for document names a
 
 Font files are not added to this repository. Native rendering uses installed system fonts
 and the optional craft-fonts build input; see [Fonts](development.md#fonts-craft-fonts).
-The web build can select every catalog, but CJK glyph delivery and automatic browser-locale
-detection remain separate outstanding work. Switching catalogs does not supply missing fonts.
+Switching catalogs does not supply missing fonts.
 
 ## Add or maintain a catalog
 
@@ -101,7 +98,7 @@ detection remain separate outstanding work. Switching catalogs does not supply m
 2. Register its code, native name and plural rule in `i18n::LANGUAGES`.
 3. Translate the meaning of the English source keys. Preserve `{name}` placeholders, escaped
    characters and the trailing `…` on dialog commands. Use `@id` to disambiguate a command
-   label and `@plural` for count-sensitive text. Keep product names such as PhotoCraft.
+   label and `@plural` for count-sensitive text. Keep product names such as Prism.
 4. Set `complete_menus` when the catalog covers all enforced keys. Add source and license
    attribution for translation assets, then run the catalog and shell tests.
 
@@ -110,10 +107,9 @@ cargo test -p photocraft-ui-egui --locked
 cargo clippy -p photocraft-ui-egui --all-targets --locked -- -D warnings
 cargo xtask i18n-coverage
 cargo xtask layers
-cargo xtask wasm
 ```
 
 Render representative dialogs with the offscreen `snapshot` example, including a sequence
 of language changes in one process. Inspect the PNGs for missing glyphs and truncated labels.
-Translations are original work or reuse the open PhotoCraft contributions credited in
+Translations are original work or reuse the open Prism contributions credited in
 [ATTRIBUTION.md](../ATTRIBUTION.md); no proprietary localisation resources are used.

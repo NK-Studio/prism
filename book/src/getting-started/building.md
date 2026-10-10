@@ -1,6 +1,6 @@
 # Building
 
-PhotoCraft uses the Rust workspace at the repository root. Install the stable Rust toolchain, clone the repository, and run commands from that root.
+Prism uses the Rust workspace at the repository root. Install the stable Rust toolchain, clone the repository, and run commands from that root.
 
 ```sh
 cargo build --workspace
@@ -15,10 +15,9 @@ cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask layers
-cargo xtask wasm
 ```
 
-`cargo xtask wasm` requires the `wasm32-unknown-unknown` target. UI work should also be checked using the offscreen snapshot example described in the [development guide](https://github.com/storytold/photocraft/blob/main/docs/development.md).
+UI work should also be checked with the offscreen snapshot example in the [development guide](https://github.com/NK-Studio/prism/blob/main/docs/development.md).
 
 ## Build the documentation
 

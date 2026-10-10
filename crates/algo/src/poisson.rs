@@ -190,15 +190,13 @@ pub fn solve_membrane_reference(w: usize, h: usize, unknown: &[bool], v: &mut [f
 
 /// Map `f` over the channels of an interleaved buffer as planar slices (parallel on native).
 fn per_channel(w: usize, h: usize, ch: usize, f: impl Fn(usize) -> Vec<f32> + Sync + Send) -> Vec<f32> {
-    #[cfg(not(target_arch = "wasm32"))]
     let planes: Vec<Vec<f32>> = if w * h >= 64 * 64 {
         use rayon::prelude::*;
         (0..ch).into_par_iter().map(&f).collect()
     } else {
         (0..ch).map(&f).collect()
     };
-    #[cfg(target_arch = "wasm32")]
-    let planes: Vec<Vec<f32>> = (0..ch).map(&f).collect();
+
     let mut out = vec![0.0f32; w * h * ch];
     for (c, p) in planes.iter().enumerate() {
         for (i, v) in p.iter().enumerate() {

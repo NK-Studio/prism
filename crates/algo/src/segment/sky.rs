@@ -197,13 +197,11 @@ pub fn select_sky(sampler: &dyn Sampler, canvas: Rect, p: SkyParams) -> Option<R
         let q = guided_filter_gray(&guide, &pm, ww, wh, r, eps);
         (*t, crop(&q))
     };
-    #[cfg(not(target_arch = "wasm32"))]
     let parts: Vec<(Rect, Vec<u8>)> = {
         use rayon::prelude::*;
         tiles.par_iter().map(run).collect()
     };
-    #[cfg(target_arch = "wasm32")]
-    let parts: Vec<(Rect, Vec<u8>)> = tiles.iter().map(run).collect();
+
     let mut mask = vec![0u8; w * h];
     for (t, v) in parts {
         let tw = t.width() as usize;

@@ -15,7 +15,7 @@
 # particular not the French localisation of Adobe Photoshop. Add entries the same way.
 # Conventions: menus are nouns (Fichier, Édition, Image ...), commands are infinitives (Ouvrir…,
 # Enregistrer sous…), sentence case. French typography: a no-break space (U+00A0) before
-# « : ; ? ! » and "%", and inside guillemets « … ». Product and technology names (PhotoCraft,
+# « : ; ? ! » and "%", and inside guillemets « … ». Product and technology names (Prism,
 # ArtCraft, OpenType, Lab ...) stay as they are; RGB/CMYK read RVB/CMJN; the trailing "…" of
 # dialog commands is kept.
 	File	Fichier
@@ -660,7 +660,6 @@
 	Pro Medium Gray Theme	Thème Pro gris moyen
 	Studio Theme	Thème Studio
 	Studio Light Theme	Thème Studio clair
-	Classic Theme	Thème Classique
 	Next Theme	Thème suivant
 	Actions	Actions
 	Brush Settings	Paramètres du pinceau
@@ -690,9 +689,9 @@
 	Timeline	Montage
 	Tool Presets	Préréglages d'outils
 	Tools	Outils
-	About PhotoCraft	À propos de PhotoCraft
-	PhotoCraft Website	Site web de PhotoCraft
-	PhotoCraft on GitHub	PhotoCraft sur GitHub
+	About Prism	À propos de Prism
+	Prism Website	Site web de Prism
+	Prism on GitHub	Prism sur GitHub
 	ArtCraft Website	Site web d'ArtCraft
 	Join the ArtCraft Discord…	Rejoindre le Discord d'ArtCraft…
 	Report an Issue…	Signaler un problème…
@@ -1212,9 +1211,9 @@
 	Perspective Warp is not active	La déformation de la perspective n'est pas active
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Déformation de la perspective : tracez des plans selon la perspective de l'image, puis passez à Déformer
 	Photo Filter	Filtre photo
-	PhotoCraft	PhotoCraft
-	PhotoCraft Manages Colors	PhotoCraft gère les couleurs
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — un éditeur d'images natif et libre, écrit en Rust.
+	Prism	Prism
+	Prism Manages Colors	Prism gère les couleurs
+	Prism — a native image editor written in Rust.	Prism — un éditeur d'images natif écrit en Rust.
 	Pin Depth:	Profondeur de l'épingle :
 	Pixel Length:	Longueur en pixels :
 	Pixels/Centimeter	Pixels/centimètre
@@ -1599,7 +1598,7 @@
 	Pen Tilt	Inclinaison du stylet
 	Pen Tool	Outil Plume
 	Photo	Photo
-	PhotoCraft website	Site web de PhotoCraft
+	Prism website	Site web de Prism
 	Picas	Picas
 	Pillow Emboss	Relief en coussin
 	Pixel Replacement	Remplacement de pixels
@@ -1911,7 +1910,7 @@
 	System Info	Informations système
 	More panels	Autres panneaux
 	More documents	Autres documents
-	These settings aren't available in PhotoCraft yet.	Ces paramètres ne sont pas encore disponibles dans PhotoCraft.
+	These settings aren't available in Prism yet.	Ces paramètres ne sont pas encore disponibles dans Prism.
 	Graphics	Graphismes
 	Reset GPU Backend	Réinitialiser le moteur GPU
 	Applies at next launch.	Prend effet au prochain démarrage.
@@ -2472,8 +2471,8 @@
 	Use Global Light	Utiliser la lumière globale
 	Native file drag-and-drop is unavailable	Le glisser-déposer natif de fichiers n'est pas disponible
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Le glisser-déposer natif de fichiers n'est pas encore pris en charge sous Wayland. Utilisez Fichier › Ouvrir, ou copiez l'image dans votre gestionnaire de fichiers et collez-la avec {paste}.
-	To drop files, start PhotoCraft under XWayland: `{command}`	Pour déposer des fichiers, lancez PhotoCraft sous XWayland : `{command}`
-	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	Ou réglez Préférences › Performances › Serveur d'affichage Linux sur X11 : PhotoCraft démarre alors toujours sous XWayland.
+	To drop files, start Prism under XWayland: `{command}`	Pour déposer des fichiers, lancez Prism sous XWayland : `{command}`
+	Or set Preferences › Performance › Linux display server to X11: Prism then always starts under XWayland.	Ou réglez Préférences › Performances › Serveur d'affichage Linux sur X11 : Prism démarre alors toujours sous XWayland.
 	Edit › Paste	Édition › Coller
 	Use File › Open, or paste a copied image with {paste}.	Utilisez Fichier › Ouvrir, ou collez une image copiée avec {paste}.
 	Mixer Brush Tool	Outil Pinceau mélangeur
@@ -2488,7 +2487,7 @@
 	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	Le mode automatique utilise l'accélération GPU lorsqu'elle est disponible et repasse au rendu CPU en cas d'erreur.
 	Switched to CPU rendering	Passage au rendu CPU
 	GPU acceleration could not continue. Your documents are unchanged.	L'accélération GPU n'a pas pu continuer. Vos documents sont intacts.
-	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft utilise le compositeur d'images CPU. La fenêtre peut encore utiliser votre carte graphique.
+	Prism is using the CPU image compositor. The window may still use your graphics adapter.	Prism utilise le compositeur d'images CPU. La fenêtre peut encore utiliser votre carte graphique.
 	Retry GPU requires a restart. Save your work first.	Réessayer le GPU nécessite un redémarrage. Enregistrez votre travail au préalable.
 	Keep Using CPU	Continuer avec le CPU
 	Retry GPU	Réessayer le GPU
@@ -2671,3 +2670,14 @@ fontWeight	Italic	Italique
 	Rotate View Tool	Outil Rotation de la vue
 	Reset View	Réinitialiser la vue
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Faites glisser autour du centre pour tourner la vue  ·  Maj contraint à 15°
+
+	Move to Main Tabs	Déplacer vers les onglets principaux
+	As:	Nom :
+	Automatic	Automatique
+	Duplicate Merged Layers Only	Dupliquer les calques fusionnés uniquement
+	Fit To:	Adapter à :
+	Original Size	Taille d’origine
+	Scale Styles	Mettre les styles à l’échelle
+	{name} copy	{name} copie
+	Duplicate Image	Dupliquer l’image
+	Preparing preview…	Préparation de l’aperçu…

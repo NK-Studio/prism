@@ -5,7 +5,7 @@
 //! View menu (New Guide Layout, New Guides From Shape, Clear Canvas Guides).
 //!
 //! Commands that touch the file system take explicit paths (the UI asks for them with its own
-//! pickers) and are unavailable on the web, where there is no file system; their byte-level
+//! pickers); their byte-level
 //! cores ([`place_bytes`], [`open_bytes_as`]) work everywhere.
 
 use std::sync::Arc;
@@ -26,9 +26,9 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
-/// The file system is reachable (not on the web).
+/// The file system is reachable.
 pub(crate) fn native(_: &Session) -> std::result::Result<(), String> {
-    if cfg!(target_arch = "wasm32") { Err("not available on the web (no file system)".into()) } else { Ok(()) }
+    Ok(())
 }
 
 pub(crate) fn native_doc(s: &Session) -> std::result::Result<(), String> {
@@ -65,39 +65,23 @@ fn has_shape(s: &Session) -> std::result::Result<(), String> {
 
 // ---------- file system (native only) ----------
 
-#[cfg(not(target_arch = "wasm32"))]
 fn is_file(path: &str) -> bool {
     std::path::Path::new(path).is_file()
 }
-#[cfg(target_arch = "wasm32")]
-fn is_file(_path: &str) -> bool {
-    false
-}
 
-#[cfg(not(target_arch = "wasm32"))]
 /// Every file the engine opens is read here: in bounded reads, with a clear error when it does
 /// not fit in memory (see [`photocraft_format::read`]).
 pub(crate) fn read_file(path: &str) -> Result<Vec<u8>> {
     photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn read_file(path: &str) -> Result<Vec<u8>> {
-    Err(EngineError::Other(format!("cannot read {path}: no file system on the web")))
-}
 
-#[cfg(not(target_arch = "wasm32"))]
 /// Every file the engine writes goes through here: crash-safe (temp file + fsync + rename, see
 /// [`photocraft_format::atomic`]), so a failed save never destroys the previous file.
 pub(crate) fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| EngineError::Other(e.to_string()))
 }
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
-    Err(EngineError::Other(format!("cannot write {path}: no file system on the web")))
-}
 
 /// Files of a folder that look like images we can open, sorted by name.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn list_images(dir: &str) -> Result<Vec<String>> {
     let rd = std::fs::read_dir(dir).map_err(|e| EngineError::Other(format!("{dir}: {e}")))?;
     let mut out: Vec<String> = rd
@@ -108,10 +92,6 @@ pub(crate) fn list_images(dir: &str) -> Result<Vec<String>> {
         .collect();
     out.sort();
     Ok(out)
-}
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn list_images(dir: &str) -> Result<Vec<String>> {
-    Err(EngineError::Other(format!("cannot list {dir}: no file system on the web")))
 }
 
 /// Extensions the batch commands pick up from a folder.
@@ -965,7 +945,7 @@ pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
         lattice.layers.push(a);
     }
     let out = photocraft_compose::flatten(&lattice);
-    let mut s = format!("TITLE \"{}\"\n# Created by Photocraft\nLUT_3D_SIZE {n}\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n", title.replace('"', "'"));
+    let mut s = format!("TITLE \"{}\"\n# Created by Prism\nLUT_3D_SIZE {n}\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n", title.replace('"', "'"));
     // .cube order: red changes fastest, then green, then blue.
     for b in 0..n {
         for g in 0..n {

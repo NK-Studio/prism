@@ -44,7 +44,7 @@ pub fn triangle_rect(row: Rect, x: f32) -> Rect {
 pub fn disclosure(ui: &mut egui::Ui, row: Rect, x: &mut f32, l: &Layer, actions: &mut Vec<(String, Value)>) -> bool {
     let LayerContent::Group(g) = &l.content else { return false };
     let hit = triangle_rect(row, *x);
-    let resp = ui.interact(hit, ui.id().with(("disclosure", l.id.0)), Sense::click());
+    let resp = ui.interact(hit, ui.id().with(("disclosure", l.id.0)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let t = Tokens::get(ui.ctx());
     let c = pos2(*x + TRIANGLE_W / 2.0 - 1.0, row.center().y);
     let s = 3.5;

@@ -149,9 +149,7 @@ impl Rasterizer {
         if w == 0 || h == 0 {
             return out;
         }
-        #[cfg(not(target_arch = "wasm32"))]
         const STRIP: usize = 32;
-        #[cfg(not(target_arch = "wasm32"))]
         if h > STRIP && w * h > 64 * 1024 {
             use rayon::prelude::*;
             out.par_chunks_mut(w * STRIP).enumerate().for_each(|(i, chunk)| {

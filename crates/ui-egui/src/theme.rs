@@ -3,8 +3,6 @@
 //! - **Studio** (default): near-black surfaces, rounded cards, Inter + JetBrains Mono, soft violet
 //!   accent. Modelled on the look of modern pro editors (such as Photoshop 2025).
 //! - **Studio Light**: the same system on light surfaces.
-//! - **Classic**: a deliberately Windows-2000-era look (grey bevels, square corners, navy selection)
-//!   for people who prefer it.
 //!
 //! Widgets read [`Tokens::get`] instead of hard-coding colours, so every theme applies everywhere.
 
@@ -19,21 +17,20 @@ pub enum ThemeKind {
     Pro,
     /// Photoshop's default (second) interface brightness: #535353 panels, #282828 canvas (default).
     #[default]
+    #[serde(alias = "Classic", alias = "classic")]
     ProMedium,
     Studio,
     StudioLight,
-    Classic,
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 5] = [ThemeKind::Pro, ThemeKind::ProMedium, ThemeKind::Studio, ThemeKind::StudioLight, ThemeKind::Classic];
+    pub const ALL: [ThemeKind; 4] = [ThemeKind::Pro, ThemeKind::ProMedium, ThemeKind::Studio, ThemeKind::StudioLight];
     pub fn label(self) -> &'static str {
         match self {
             ThemeKind::Pro => "Pro (Dark)",
             ThemeKind::ProMedium => "Pro (Medium Gray)",
             ThemeKind::Studio => "Studio (Dark)",
             ThemeKind::StudioLight => "Studio (Light)",
-            ThemeKind::Classic => "Classic",
         }
     }
     /// The canonical name: `ui.set {theme}` accepts it and the Window › Theme commands are
@@ -44,7 +41,6 @@ impl ThemeKind {
             ThemeKind::ProMedium => "proMedium",
             ThemeKind::Studio => "studio",
             ThemeKind::StudioLight => "studioLight",
-            ThemeKind::Classic => "classic",
         }
     }
     pub fn next(self) -> Self {
@@ -57,7 +53,6 @@ impl ThemeKind {
             "promedium" | "promediumgray" | "medium" | "mediumgray" => Some(ThemeKind::ProMedium),
             "studio" | "studiodark" => Some(ThemeKind::Studio),
             "studiolight" | "light" => Some(ThemeKind::StudioLight),
-            "classic" | "win2000" | "retro" => Some(ThemeKind::Classic),
             _ => None,
         }
     }
@@ -108,6 +103,12 @@ pub struct Tokens {
     pub tab_strip: Color32,
     /// Selected list row (layers, history).
     pub row_selected: Color32,
+    /// Unselected layer under the pointer, distinct from selection.
+    pub layer_hover: Color32,
+    pub layer_hover_text: Color32,
+    /// Document docking feedback, independent of the theme's general accent.
+    pub docking_outline: Color32,
+    pub docking_placeholder: Color32,
     /// Scope plot background (histogram, vectorscope, clipping diagnostics).
     pub histogram_bg: Color32,
     /// Channel intensity of scope outlines and hue markers.
@@ -145,6 +146,10 @@ impl Tokens {
                 accent_soft: Color32::from_rgb(110, 110, 110),
                 separator: Color32::from_rgb(62, 62, 62),
                 tab_strip: Color32::from_rgb(74, 74, 74),
+                layer_hover: Color32::from_rgb(72, 99, 153),
+                layer_hover_text: Color32::WHITE,
+                docking_outline: Color32::from_rgb(55, 142, 240),
+                docking_placeholder: Color32::from_rgb(83, 83, 83),
                 row_selected: Color32::from_rgb(107, 107, 107),
                 ..Tokens::for_kind(ThemeKind::Pro)
             },
@@ -180,6 +185,10 @@ impl Tokens {
                 bevel: false,
                 pro: true,
                 tab_strip: Color32::from_rgb(38, 38, 38),
+                layer_hover: Color32::from_rgb(72, 99, 153),
+                layer_hover_text: Color32::WHITE,
+                docking_outline: Color32::from_rgb(55, 142, 240),
+                docking_placeholder: Color32::from_rgb(50, 50, 50),
                 row_selected: Color32::from_rgb(82, 82, 82),
                 histogram_bg: Color32::from_rgb(40, 40, 40),
                 histogram_level: 225,
@@ -219,6 +228,10 @@ impl Tokens {
                 bevel: false,
                 pro: false,
                 tab_strip: Color32::TRANSPARENT,
+                layer_hover: Color32::from_rgb(72, 99, 153),
+                layer_hover_text: Color32::WHITE,
+                docking_outline: Color32::from_rgb(55, 142, 240),
+                docking_placeholder: Color32::from_rgb(20, 20, 21),
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(14, 14, 15),
                 histogram_level: 225,
@@ -258,46 +271,11 @@ impl Tokens {
                 bevel: false,
                 pro: false,
                 tab_strip: Color32::TRANSPARENT,
+                layer_hover: Color32::from_rgb(72, 99, 153),
+                layer_hover_text: Color32::WHITE,
+                docking_outline: Color32::from_rgb(55, 142, 240),
+                docking_placeholder: Color32::from_rgb(246, 246, 248),
                 row_selected: Color32::TRANSPARENT,
-                histogram_bg: Color32::from_gray(40),
-                histogram_level: 240,
-                caption_close: Color32::from_rgb(196, 43, 28),
-                caption_close_text: Color32::WHITE,
-                scrim: Color32::from_black_alpha(110),
-            },
-            ThemeKind::Classic => Tokens {
-                kind,
-                chrome: Color32::from_rgb(212, 208, 200),
-                canvas: Color32::from_rgb(128, 128, 128),
-                canvas_dot: Color32::from_rgb(128, 128, 128),
-                dock: Color32::from_rgb(212, 208, 200),
-                card: Color32::from_rgb(212, 208, 200),
-                card_border: Color32::from_rgb(128, 128, 128),
-                field: Color32::WHITE,
-                field_border: Color32::from_rgb(128, 128, 128),
-                hover: Color32::from_rgb(226, 222, 214),
-                pressed: Color32::from_rgb(190, 186, 178),
-                text: Color32::BLACK,
-                text_dim: Color32::from_rgb(64, 64, 64),
-                text_faint: Color32::from_rgb(128, 128, 128),
-                icon: Color32::BLACK,
-                accent: Color32::from_rgb(10, 36, 106),
-                accent_soft: Color32::from_rgb(10, 36, 106),
-                accent_border: Color32::from_rgb(10, 36, 106),
-                accent_text: Color32::WHITE,
-                separator: Color32::from_rgb(128, 128, 128),
-                shadow: Color32::from_black_alpha(0),
-                primary_bg: Color32::from_rgb(212, 208, 200),
-                primary_text: Color32::BLACK,
-                danger: Color32::from_rgb(160, 0, 0),
-                warning: Color32::from_rgb(128, 96, 0),
-                radius_sm: 0.0,
-                radius: 0.0,
-                radius_lg: 0.0,
-                bevel: true,
-                pro: false,
-                tab_strip: Color32::from_rgb(212, 208, 200),
-                row_selected: Color32::from_rgb(10, 36, 106),
                 histogram_bg: Color32::from_gray(40),
                 histogram_level: 240,
                 caption_close: Color32::from_rgb(196, 43, 28),
@@ -515,6 +493,7 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     v.code_bg_color = t.field;
     v.override_text_color = Some(t.text);
     v.hyperlink_color = t.accent;
+    v.interact_cursor = Some(egui::CursorIcon::PointingHand);
     v.warn_fg_color = t.warning;
     v.error_fg_color = t.danger;
     v.window_corner_radius = CornerRadius::same(t.radius_lg as u8);
@@ -645,7 +624,7 @@ mod tests {
         let mut width = 0.0;
         ctx.run_ui(Default::default(), |ui| {
             assert!(medium_bound(ui.ctx()), "the installed stack reaches the second pass");
-            width = ui.painter().layout_no_wrap("PhotoCraft".into(), medium(13.0), Color32::WHITE).size().x;
+            width = ui.painter().layout_no_wrap("Prism".into(), medium(13.0), Color32::WHITE).size().x;
         })
         .textures_delta
         .clear();
@@ -655,7 +634,7 @@ mod tests {
         let mut scaled = 0.0;
         ctx.run_ui(Default::default(), |ui| {
             assert!(medium_bound(ui.ctx()));
-            scaled = ui.painter().layout_no_wrap("PhotoCraft".into(), medium(13.0), Color32::WHITE).size().x;
+            scaled = ui.painter().layout_no_wrap("Prism".into(), medium(13.0), Color32::WHITE).size().x;
         })
         .textures_delta
         .clear();
@@ -665,7 +644,7 @@ mod tests {
         for _ in 0..2 {
             ctx.run_ui(Default::default(), |ui| {
                 assert!(medium_bound(ui.ctx()));
-                let w = ui.painter().layout_no_wrap("PhotoCraft".into(), medium(13.0), Color32::WHITE).size().x;
+                let w = ui.painter().layout_no_wrap("Prism".into(), medium(13.0), Color32::WHITE).size().x;
                 assert!((w - scaled).abs() < 1.0, "{w} vs {scaled}");
             })
             .textures_delta
@@ -675,7 +654,8 @@ mod tests {
 
     #[test]
     fn theme_names_parse() {
-        assert_eq!(ThemeKind::from_name("Classic"), Some(ThemeKind::Classic));
+        assert_eq!(ThemeKind::from_name("Classic"), None);
+        assert_eq!(serde_json::from_str::<ThemeKind>("\"Classic\"").unwrap(), ThemeKind::ProMedium);
         assert_eq!(ThemeKind::from_name("studio (light)"), Some(ThemeKind::StudioLight));
         assert_eq!(ThemeKind::from_name("dark"), Some(ThemeKind::Pro));
         assert_eq!(ThemeKind::from_name("studio"), Some(ThemeKind::Studio));
@@ -701,7 +681,7 @@ mod tests {
 /// Set `PHOTOCRAFT_THEME_FILE=/path/tokens.json` in a debug build; the file is polled and applied
 /// on change, so colours, radii and sizes can be tuned without recompiling. Keys are `Tokens` field
 /// names; values are `"#rrggbb"`, `"#rrggbbaa"` or numbers. Compiled out of release builds.
-#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+#[cfg(debug_assertions)]
 pub mod live {
     use super::Tokens;
     use egui::Color32;
@@ -810,6 +790,10 @@ pub mod live {
                 warning,
                 tab_strip,
                 row_selected,
+                layer_hover,
+                layer_hover_text,
+                docking_outline,
+                docking_placeholder,
                 scrim
             );
         }

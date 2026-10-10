@@ -69,7 +69,7 @@ pub fn card_ex(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, colla
             ui.set_width(ui.available_width());
             // Registered before the tabs so they keep their clicks; drags fall through to it.
             let strip_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 22.0));
-            let strip = ui.interact(strip_rect, ui.id().with((id, "strip")), Sense::click_and_drag());
+            let strip = ui.interact(strip_rect, ui.id().with((id, "strip")), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::Grab);
             // Pill tabs left of the menu button; they elide or overflow into a chevron (#151).
             let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
             let tip = crate::i18n::fmt(tl!("{name} options"), &[("name", tl!(tabs.get(*selected).copied().unwrap_or(id)))]);
@@ -95,13 +95,13 @@ fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collaps
     // Tab strip. Its background senses drags (move the group) and double-clicks (collapse);
     // the tabs, registered after it, keep their clicks.
     let (strip, _) = ui.allocate_exact_size(vec2(width, 26.0), Sense::hover());
-    let strip_resp = ui.interact(strip, ui.id().with((id, "strip")), Sense::click_and_drag());
+    let strip_resp = ui.interact(strip, ui.id().with((id, "strip")), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::Grab);
     let rounding = if collapsed { CornerRadius::same(3) } else { CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 } };
     ui.painter().rect_filled(strip, rounding, t.tab_strip);
     // Panel menu (hamburger); the tabs stay left of it, eliding or overflowing (#151).
     let menu = Rect::from_center_size(pos2(strip.right() - 14.0, strip.center().y), vec2(20.0, 18.0));
     let tabs_out = crate::tab_strip::pro_tabs(ui, ui.id().with((id, "tabs")), strip, menu.left(), tabs, selected, collapsed);
-    let mresp = ui.interact(menu, ui.id().with((id, "menu")), Sense::click());
+    let mresp = ui.interact(menu, ui.id().with((id, "menu")), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let c = if mresp.hovered() { t.text } else { t.text_faint };
     for k in 0..3 {
         let y = menu.center().y - 3.5 + k as f32 * 3.5;
@@ -128,6 +128,7 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> Response {
     let galley = ui.painter().layout_no_wrap(tl!(label).to_owned(), font, t.text);
     let size = vec2(galley.size().x + 20.0, 24.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     if selected {
         surface(ui, rect, t.hover, true);
         if !t.bevel {
@@ -223,7 +224,7 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
     let (lo, hi) = (*range.start(), *range.end());
     let (field, rect) = value_field_in(ui, value, range.clone(), suffix, width, POPUP_ARROW_W);
     let arrow = Rect::from_min_max(pos2(rect.right() - POPUP_ARROW_W - 2.0, rect.top() + 2.0), rect.max - vec2(2.0, 2.0));
-    let resp = ui.interact(arrow, field.id.with("popup-slider"), Sense::click_and_drag());
+    let resp = ui.interact(arrow, field.id.with("popup-slider"), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let name = name.trim_end_matches([':', '：']).to_string();
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &name));
     let resp = resp.on_hover_text(&name);
@@ -555,6 +556,7 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let mut resp = ui
         .horizontal(|ui| {
             let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 17.0), Sense::click());
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
             let how_on = ui.ctx().animate_bool(resp.id, *on);
             let bg = if *on { t.accent } else { t.field_border };
             if t.bevel {
@@ -679,6 +681,7 @@ fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color3
     let (galley, size) = button_layout(ui, label, min_width, fg);
     let h = size.y;
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     // Painted text: name the button for accessibility (and so tests and agents can find it).
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
     if resp.has_focus() {
@@ -920,7 +923,7 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
                 p.rect_stroke(rect, 2.0, Stroke::new(1.5, if resp.hovered() { t.text_dim } else { t.text_faint }), StrokeKind::Inside);
             }
             let l = ui.add(egui::Label::new(egui::RichText::new(tl!(label)).color(t.text_dim)).sense(Sense::click()));
-            resp.union(l)
+            resp.union(l).on_hover_cursor(egui::CursorIcon::PointingHand)
         })
         .inner;
     if resp.clicked() {

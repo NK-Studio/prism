@@ -1,7 +1,7 @@
 //! Crop tool: while a frame is edited, the canvas shows the layers' pixels past its edges, as
 //! Photoshop's crop preview does.
 //!
-//! A crop with Delete Cropped Pixels off keeps what it cut away, but PhotoCraft drew only the
+//! A crop with Delete Cropped Pixels off keeps what it cut away, but Prism drew only the
 //! canvas, so a frame couldn't be pulled back out over those pixels by eye. Photoshop (measured on
 //! 25.4) grows the view to every layer's bounds and the frame once the frame is pressed: the
 //! hidden pixels under the shield, transparency as the checkerboard, until ↵ or Esc.
@@ -121,7 +121,12 @@ fn editing_a_crop_frame_shows_the_pixels_past_the_canvas() {
         app.ui.extras.rulers = false;
         app.ui.extras.snap = false;
     }
-    control(&mut h, "ui.set", json!({"tool": "crop", "zoom": 1.0, "center": [100, 50]}));
+    control(&mut h, "ui.set", json!({"tool": "brush", "zoom": 1.0, "center": [100, 50]}));
+    let normal = render(&mut h);
+    let doc = h.state().session.active().unwrap().doc.clone();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let view = h.state().ui.views[0].clone();
+    control(&mut h, "ui.set", json!({"tool": "crop"}));
     h.run_steps(3);
     assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, 200.0, 100.0]), "the default frame");
     let (red, blue, white, beyond) = ([-25.0, 50.0], [225.0, 50.0], [100.0, 110.0], [-80.0, 50.0]);
@@ -174,6 +179,10 @@ fn editing_a_crop_frame_shows_the_pixels_past_the_canvas() {
     h.event(egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
     h.run_steps(3);
     let img = render(&mut h);
-    assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, 200.0, 100.0]));
-    assert_eq!(shown(&h, &img), was, "hidden again after Esc");
+    assert!(h.state().ui.crop_rect.is_none(), "Esc removes handles and the shield");
+    assert_eq!(shown(&h, &img), shown(&h, &normal), "back to the normal canvas after Esc");
+    assert_eq!(at(&h, &img, [150.0, 30.0]), at(&h, &normal, [150.0, 30.0]));
+    assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &doc));
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps);
+    assert_eq!(h.state().ui.views[0], view);
 }

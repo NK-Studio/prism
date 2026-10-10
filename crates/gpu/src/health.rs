@@ -138,7 +138,6 @@ impl DeviceHealth {
     /// Returns whether the device is still healthy afterwards. `Device::poll` panics on a lost
     /// device, so a panic is caught and recorded as a loss (native only; the web has no blocking
     /// wait).
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn wait(&self, device: &wgpu::Device, index: Option<wgpu::SubmissionIndex>) -> bool {
         if !self.is_ok() {
             return false;

@@ -14,7 +14,7 @@
 //!
 //! Output is either raw coverage (`f32` per pixel) or sparse tiled [`Surface`]s in any
 //! [`PixelFormat`] (only tiles that differ from the default are allocated). Pure Rust, no
-//! platform dependencies; builds for `wasm32` (single-threaded there, rayon elsewhere).
+//! platform dependencies; uses rayon for parallel processing.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -169,7 +169,6 @@ fn band_tiles(band: Rect, data: &[f32], channels: usize, keep: impl Fn(&[f32]) -
 /// resulting pieces into `surface`.
 fn render_bands(surface: &mut Surface, r: Rect, f: &(dyn Fn(Rect) -> Vec<(Rect, Vec<f32>)> + Sync)) {
     let bands = tile_bands(r);
-    #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         let group = rayon::current_num_threads().max(1) * 2;
@@ -178,12 +177,6 @@ fn render_bands(surface: &mut Surface, r: Rect, f: &(dyn Fn(Rect) -> Vec<(Rect, 
             for (tr, v) in parts.into_iter().flatten() {
                 surface.write_region(tr, &v);
             }
-        }
-    }
-    #[cfg(target_arch = "wasm32")]
-    for b in bands {
-        for (tr, v) in f(b) {
-            surface.write_region(tr, &v);
         }
     }
 }

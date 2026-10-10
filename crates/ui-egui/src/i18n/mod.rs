@@ -330,6 +330,18 @@ mod tests {
     const ID: fn() -> Lang = || Lang::from_code("id").expect("id registered");
 
     #[test]
+    fn prism_brand_matches_the_interface_language() {
+        let ko = Lang::from_code("ko").expect("ko registered");
+        assert_eq!(tr(Lang::EN, "Prism"), "Prism");
+        assert_eq!(tr(ko, "Prism"), "프리즘");
+        assert_eq!(tr(ko, "About Prism"), "프리즘 정보");
+        let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let layout = crate::native_menu::photocraft_layout(&crate::menus::menu_items(&app), ko, "ko");
+        assert_eq!(layout.bar.menus.first().expect("app menu").title, "프리즘");
+        assert!(layout.bar.find("file.exit").expect("quit item").label.contains("프리즘"));
+    }
+
+    #[test]
     fn indonesian_tags_resolve() {
         for tag in ["id", "id-ID", "id_ID", "id_ID.UTF-8"] {
             assert_eq!(lang_from_tag(tag), Some(ID()), "{tag}");

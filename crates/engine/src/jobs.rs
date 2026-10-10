@@ -11,7 +11,6 @@
 //!   difference.
 //! - [`Session::start`] runs a job-capable command on a worker thread and returns its
 //!   [`JobId`]; [`Session::poll_jobs`] (called every frame by the UI) applies finished jobs.
-//!   On wasm `start` runs inline (same API, written once).
 //! - [`Session::cancel_job`] sets the flag; the algorithms check it per tile, row band or
 //!   iteration, and the result is discarded. The document is never touched by a worker.
 //! - A panic in the worker becomes an error; the document is unchanged.
@@ -155,17 +154,11 @@ pub struct JobInfo {
 type Payload = Box<dyn Any + Send>;
 type Apply = Box<dyn FnOnce(&mut Session, Payload) -> Result<Value> + Send>;
 
-/// Wall-clock milliseconds since some fixed point (0 on wasm, where `Instant` is unavailable and
-/// jobs run inline anyway).
+/// Wall-clock milliseconds since some fixed point.
 fn now_ms() -> f64 {
-    #[cfg(not(target_arch = "wasm32"))]
     {
         static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
         START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 1000.0
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        0.0
     }
 }
 
@@ -184,7 +177,6 @@ struct Running {
     color_restrict: Option<usize>,
     rx: std::sync::mpsc::Receiver<Result<Payload>>,
     apply: Option<Apply>,
-    #[cfg(not(target_arch = "wasm32"))]
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -219,7 +211,6 @@ pub struct Jobs {
     /// The last few ended jobs, for `jobs.list`.
     recent: Vec<JobInfo>,
     /// Workers of cancelled jobs that may still be unwinding (native).
-    #[cfg(not(target_arch = "wasm32"))]
     draining: Vec<std::thread::JoinHandle<()>>,
 }
 
@@ -243,7 +234,7 @@ impl std::fmt::Debug for Jobs {
 /// How [`Session::start`] ended.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Started {
-    /// The command ran to completion inline (it isn't a job, or this is wasm).
+    /// The command ran to completion inline (it isn't a background job).
     Done(Value),
     /// The command is running in the background.
     Job(JobId),
@@ -256,19 +247,13 @@ fn independent_of_document(id: &str) -> bool {
     PREFIXES.iter().any(|p| id.starts_with(p)) || IDS.contains(&id)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn read_path(path: &str) -> Result<Vec<u8>> {
     // Bounded reads, and a clear error for a file larger than memory (#375).
     photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }
 
-#[cfg(target_arch = "wasm32")]
-fn read_path(path: &str) -> Result<Vec<u8>> {
-    Err(EngineError::Other(format!("cannot open paths on the web: {path}")))
-}
-
 /// Run a job-capable command's heavy part. `work` runs on a worker thread when the command was
-/// started with [`Session::start`] (inline otherwise, and always on wasm); `apply` then runs on
+/// started with [`Session::start`] (inline otherwise); `apply` then runs on
 /// the calling thread with its output and returns the command's result. With `lock_document`,
 /// the active document is locked against other edits while the job runs, and applying fails if
 /// it was edited anyway.
@@ -282,7 +267,7 @@ pub fn run<T: Send + 'static>(
     work: impl FnOnce(&JobCtx) -> Result<T> + Send + 'static,
     apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
 ) -> Result<Value> {
-    if !s.jobs.spawn || cfg!(target_arch = "wasm32") {
+    if !s.jobs.spawn {
         let t = work(&JobCtx::new())?;
         return apply(s, t);
     }
@@ -302,7 +287,6 @@ pub fn run<T: Send + 'static>(
     });
     s.jobs.next += 1;
     let id = JobId(s.jobs.next);
-    #[cfg(not(target_arch = "wasm32"))]
     let handle = {
         let wctx = ctx.clone();
         let label_w = label.to_string();
@@ -316,11 +300,7 @@ pub fn run<T: Send + 'static>(
         });
         Some(spawned.map_err(|e| EngineError::Other(format!("could not start a background job: {e}")))?)
     };
-    #[cfg(target_arch = "wasm32")]
-    {
-        // Unreachable (wasm runs inline above); keep the types used.
-        drop((work, tx));
-    }
+
     s.jobs.pending = Some(Running {
         id,
         command: String::new(),
@@ -335,7 +315,6 @@ pub fn run<T: Send + 'static>(
         color_restrict: s.color_restrict,
         rx,
         apply: Some(erased),
-        #[cfg(not(target_arch = "wasm32"))]
         handle,
     });
     Ok(json!({"job": id.0}))
@@ -350,7 +329,7 @@ pub fn edit_job<R: Send + 'static>(
     f: impl FnOnce(&mut Document, &mut Option<LayerId>, &JobCtx) -> Result<R> + Send + 'static,
     finish: impl FnOnce(R) -> Value + Send + 'static,
 ) -> Result<Value> {
-    if !s.jobs.spawn || cfg!(target_arch = "wasm32") {
+    if !s.jobs.spawn {
         // Inline: exactly `Session::edit`, as before jobs existed.
         let ctx = JobCtx::new();
         let r = s.edit(label, |doc, active| f(doc, active, &ctx))?;
@@ -402,7 +381,7 @@ impl Session {
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
     /// (per layer for PSD/PSB) and cancellation, then add the document like
     /// [`Session::open_document`] (Color Settings policies apply). `name` names the document.
-    /// The job's result is `{document, name, warnings, color}`; on wasm it runs inline.
+    /// The job's result is `{document, name, warnings, color}`.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
@@ -439,7 +418,7 @@ impl Session {
     /// job): `work` runs on a worker, `apply` on this thread when [`Session::poll_jobs`] or
     /// [`Session::wait_job`] picks the result up. `command` and `params` identify it in
     /// [`JobInfo`]; it is not journaled. With `lock_document` the active document is locked as
-    /// for a command. Runs inline on wasm.
+    /// for a command.
     pub fn start_job<T: Send + 'static>(
         &mut self,
         command: &str,
@@ -490,7 +469,6 @@ impl Session {
                 None => break,
             }
         }
-        #[cfg(not(target_arch = "wasm32"))]
         self.jobs.draining.retain(|h| !h.is_finished());
         std::mem::take(&mut self.jobs.events)
     }
@@ -518,7 +496,6 @@ impl Session {
         let job = self.jobs.running.remove(i);
         job.ctx.cancel();
         self.end_job(&job, JobOutcome::Cancelled);
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(h) = job.handle {
             self.jobs.draining.push(h);
         }
@@ -564,9 +541,8 @@ impl Session {
     }
 
     /// Wait for background workers of cancelled jobs to exit (tests and benchmarks measure
-    /// cancel latency with it). Native only; returns at once on wasm.
+    /// cancel latency with it).
     pub fn join_cancelled_jobs(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
         for h in self.jobs.draining.drain(..) {
             let _ = h.join();
         }

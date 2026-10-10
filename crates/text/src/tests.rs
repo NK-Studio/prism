@@ -942,7 +942,7 @@ fn craft_fonts_cover_japanese_without_system_fonts() {
     assert!(l.glyphs.iter().all(|g| g.id != 0), "no .notdef with craft-fonts");
     // Sans (Inter) runs fall back to the Gothic UI family.
     assert_eq!(craft_family_of(&l), vec![crate::craft_fonts::UI_JAPANESE_FAMILY]);
-    // Serif runs fall back to a Mincho face when the build has one (not the web build).
+    // Serif runs fall back to a Mincho face when the build has one.
     if crate::CRAFT_FONTS.iter().any(|f| f.is_mincho()) {
         let mut t = point(text, 24.0);
         t.font_family = "Times New Roman".into();

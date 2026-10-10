@@ -128,8 +128,11 @@ fn write_cursor_preview() {
         (Shape::Circle { radius: 20.0, centre: true }, 2.0),
         (Shape::Crosshair { length: 8.0, gap: 2.0 }, 2.0),
         (Shape::Crosshair { length: 6.0, gap: 0.0 }, 2.0),
+        (Shape::Move, 1.0),
+        (Shape::Move, 1.5),
+        (Shape::Move, 2.0),
     ];
-    let (width, height) = (600_usize, 500_usize);
+    let (width, height) = (600_usize, cases.len() * 100);
     let mut rgba = vec![255; width * height * 4];
     for (col, background) in [0_u8, 128, 255].into_iter().enumerate() {
         for y in 0..height {
@@ -140,8 +143,8 @@ fn write_cursor_preview() {
         for (row, &(shape, scale)) in cases.iter().enumerate() {
             let image = rasterize(shape, scale).unwrap();
             let side = usize::from(image.size[0]);
-            let x0 = col * 200 + 100 - usize::from(image.hotspot[0]);
-            let y0 = row * 100 + 50 - usize::from(image.hotspot[1]);
+            let x0 = col * 200 + (200 - side) / 2;
+            let y0 = row * 100 + (100 - side) / 2;
             for (i, pixel) in image.rgba.as_chunks::<4>().0.iter().enumerate() {
                 let at = ((y0 + i / side) * width + x0 + i % side) * 4;
                 let a = f32::from(pixel[3]) / 255.0;
@@ -235,4 +238,43 @@ fn painting_preference_and_zoom_change_the_native_cursor_without_changing_pointe
     h.event(Event::PointerButton { pos: pos + vec2(20.0, 0.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
     assert!(h.output().platform_output.cursor_image.as_ref().unwrap().size[0] > cross_size);
+}
+
+#[test]
+fn move_bitmap_is_bounded_and_hotspot_is_the_arrow_tip_at_fractional_dpi() {
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        let img = rasterize(Shape::Move, scale).unwrap();
+        assert_eq!(img.rgba.len(), usize::from(img.size[0]) * usize::from(img.size[1]) * 4);
+        assert_eq!(img.hotspot, [(2.0 * scale).round() as u16; 2]);
+        assert!(alpha(&img, img.hotspot[0], img.hotspot[1]) > 0);
+        assert_eq!(alpha(&img, img.size[0] - 1, img.size[1] - 1), 0);
+    }
+    for scale in [0.0, -1.0, f32::NAN, f32::INFINITY, 10000.0] {
+        assert!(rasterize(Shape::Move, scale).is_none());
+    }
+}
+
+#[test]
+fn move_cursor_clears_its_image_on_drag_and_when_a_panel_takes_the_pointer() {
+    let ctx = egui::Context::default();
+    ctx.add_plugin(CursorLifecycle);
+    let idle = frame(&ctx, |ui| {
+        let icon = move_tool(ui.painter(), egui::pos2(20.0, 20.0), false);
+        ui.ctx().set_cursor_icon(icon);
+    });
+    assert!(idle.platform_output.cursor_image.is_some());
+    assert_eq!(idle.platform_output.cursor_icon, CursorIcon::Default);
+    let moving = frame(&ctx, |ui| {
+        let icon = move_tool(ui.painter(), egui::pos2(20.0, 20.0), true);
+        ui.ctx().set_cursor_icon(icon);
+    });
+    assert!(moving.platform_output.cursor_image.is_none());
+    assert_eq!(moving.platform_output.cursor_icon, CursorIcon::Default);
+    let panel = frame(&ctx, |ui| {
+        let icon = move_tool(ui.painter(), egui::pos2(20.0, 20.0), false);
+        ui.ctx().set_cursor_icon(icon);
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    });
+    assert!(panel.platform_output.cursor_image.is_none());
+    assert_eq!(panel.platform_output.cursor_icon, CursorIcon::PointingHand);
 }

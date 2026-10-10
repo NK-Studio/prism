@@ -4,12 +4,14 @@
 
 | Theme | Intent |
 |---|---|
-| **Pro** (default) | Photoshop-style Spectrum dark: flat charcoal panels (#323232), dark tab strips, Spectrum blue accent (#378ef0), pill buttons, checkboxes, compact 12 px type |
+| Pro (Dark) | Photoshop-style Spectrum dark: flat charcoal panels (#323232), dark tab strips, Spectrum blue accent (#378ef0), pill buttons, checkboxes, compact 12 px type |
+| **Pro Medium** (default) | Photoshop’s second brightness level: medium-gray chrome and dark canvas |
 | Studio | Dark studio style: near-black, rounded cards, pill tabs, violet accent, toggles |
 | Studio Light | Studio on light surfaces |
-| Classic | Windows-2000 bevels, square corners, navy selection |
 
-Switch themes with the sun icon, Window → Theme, or `ui.set {"theme":"classic"}` over the control channel.
+Saved Classic settings migrate to Pro Medium; Classic is no longer offered in the menus or preferences.
+
+Switch themes with the sun icon, Window → Theme, or `ui.set {"theme":"studioLight"}` over the control channel.
 
 ## Rules
 
@@ -41,9 +43,13 @@ curl -sfL -o assets/icons/<name>.svg https://raw.githubusercontent.com/lucide-ic
 | Type tool | `type_tool.rs` | Click: point text with the placeholder "Lorem Ipsum" selected. Drag: paragraph box. Inline caret and selection drawn from the text engine layout. ⌥/⌘ word and line navigation, ↩ newline, ⌘↩ or Esc commits, a click outside commits. One history step per session (`coalesce`). A new layer is named after its text; an empty one is deleted. |
 | Free Transform | `transform_tool.rs` | ⌘T. Corners scale proportionally (⇧ frees them); edges scale one axis; ⌥ scales about the reference point; ⌘-corner distorts; dragging outside rotates (⇧ snaps to 15°); dragging inside moves. Preview = document without the moving pixels + a textured 24×24 mesh. ↩ or a double-click commits via `edit.transform {rect, quad}`. |
 | Quick layer pick | `quick_pick.rs` | macOS: ⌘⌥⌃-click with any tool selects the topmost visible layer with pixels under the pointer (`layer.pickAt`) without switching tools; the drag and release are swallowed. Windows/Linux have no third modifier distinct from the ⌃⌥ brush resize, so the gesture is a no-op there (use the Move tool's Auto-Select). A failed pick is a status-bar error. |
+| Move cursor | `tool_cursor.rs`, `canvas.rs` | Idle: original arrow with a small four-way badge; moving a layer: ordinary arrow. Bitmap artwork is cached at the viewport DPI, with a canvas fallback. Precise cursors, guides, transform handles and temporary Hand retain priority. |
+| Layer hover | `layer_row_ui.rs`, `theme.rs` | Unselected rows show `layer_hover` blue and `layer_hover_text` over both thumbnail and name. Selected rows keep their existing style; the labelled eye column retains its colour. The cursor is a pointing hand. Hover leaves document selection and history unchanged. |
+| Document windows | `doc_windows.rs`, `canvas.rs` | Drag a tab 24 pt outside its strip or use Float in Window to detach. Drop its native title bar or tab on the main strip to return at the insertion indicator, or use Move to Main Tabs. A valid return target gets a blue workspace border; the source native window fades to 55% opacity, including OS caption controls. A detach in progress shows an empty frame using the current theme’s chrome colour. Esc cancels drags and restores position and opacity. Detached documents share data and Undo with the Session and retain their own camera. Main panels follow the active document window. Save/Discard/Cancel guards closing; Cancel or failed Save keeps the window. New Window for Document remains an additional view. Floating windows stay above the main editor while Prism is foreground and use ordinary desktop stacking when another app is active. |
 | Layers rows | `panels.rs` | Double-click: on the name renames in place; on the Background makes it a normal layer; on an adjustment or fill thumbnail opens its Properties; on a Smart Object thumbnail opens its contents (Edit Contents); anywhere else on the row opens Layer Style. |
 | Layer masks | `panels.rs` | Clicking the mask thumbnail targets the mask (corner-bracket frame; the tab reads "Layer, Layer Mask/8"). Brush, eraser (paints background colour), gradient and bucket then send `"target": "mask"`. Adjustment and fill layers target their mask automatically. |
 | Levels / Curves | `tone.rs` | Histogram of the image *below* the adjustment. Curves: click to add a point, drag out to delete. Every change is a coalesced `layer.setAdjustment`, so one drag = one undo step and the canvas updates at full resolution on the GPU. |
+| Rectangle corners | `shape_corners_ui.rs` | Rectangle, Path Selection and Direct Selection show four circular widgets inside the selected live rectangle. Drag adjusts all corner radii; Alt/Option at the press adjusts one corner. A live compositor preview preserves fill/stroke, release applies one `shape.edit`, Enter commits and Esc restores the original. Sharp corners can be rounded; radii stop at adjacent-side limits. Hover shows a diagonal resize cursor and a radius badge. |
 
 While editing type, hold Ctrl (Windows/Linux) or Command (macOS) for an oriented transform
 frame. Drag inside to move, a corner to scale (Shift keeps proportions; Alt/Option scales about
@@ -66,7 +72,7 @@ missing-glyph boxes. Check every new panel with the offscreen snapshot tool (`do
 
 ## Title bar
 
-The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon, `brand.rs`), then the menus, the document title and the workspace controls, like Photoshop's Ps tile and menu row.
+The app's top bar (`panels::title_bar`) contains the menus, document title and workspace controls. Detached document windows use OS decorations with their document title, plus an internal tab for returning to the main strip, canvas, rulers, scrollbars and status bar.
 
 - **Windows and Linux:** the window has no OS decorations, so there is one bar, not two stacked. The top bar is the title bar (`titlebar.rs`): Minimize, Maximize/Restore and Close (red on hover, `caption_close` tokens) sit flush in the window's top-right corner, the free gap between the menus and the controls drags the window and a double-click there maximizes it, and invisible 5 pt edges (12 pt corners) resize it. Close runs File › Exit, so unsaved documents are asked about first.
 - **macOS:** the traffic lights sit over the integrated title strip (`integrated_titlebar`).
@@ -156,8 +162,7 @@ preference label has no entry in a language marked `complete_menus`. Not transla
 messages and errors (they stay English, also for agents), names that are user data (layers, styles,
 documents), strings assembled with `format!` that were not converted to `fmt`/`trn`. Not done yet:
 right-to-left layout,
-locale-aware number and date formats, automatic language detection on the web build (native
-builds read `LANG`/`LC_*`, the macOS preferred languages and the Windows user locale).
+locale-aware number and date formats. Native builds read `LANG`/`LC_*`, the macOS preferred languages and the Windows user locale.
 
 Camera Raw has explicit coverage for all ten available languages, including Korean and
 Simplified Chinese. Its contextual `cameraRaw` entries distinguish tonal regions,
@@ -167,4 +172,4 @@ source keys, so switching languages preserves open sections. Mixer tabs wrap wit
 panel width. Catalog coverage and actual shell language-switch tests enforce these rules.
 
 Native CJK font fallback follows the selected UI script and resets its cache when switching
-languages; font delivery on the web remains separate work.
+languages.

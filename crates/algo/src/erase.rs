@@ -78,13 +78,11 @@ pub fn magic_erase(target: &mut Surface, region: &Region, amount: f32, selection
         }
         Some((r, bytes))
     };
-    #[cfg(not(target_arch = "wasm32"))]
     let done: Vec<(Rect, Vec<u8>)> = {
         use rayon::prelude::*;
         rects.into_par_iter().filter_map(work).collect()
     };
-    #[cfg(target_arch = "wasm32")]
-    let done: Vec<(Rect, Vec<u8>)> = rects.into_iter().filter_map(work).collect();
+
     let mut dmg = Rect::EMPTY;
     for (r, bytes) in done {
         target.write_interleaved(r, &bytes);

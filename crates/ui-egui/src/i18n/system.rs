@@ -2,9 +2,7 @@
 
 use super::{Lang, lang_from_tag};
 
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_SYSTEM_TAGS: usize = 64;
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_SYSTEM_TAG_BYTES: usize = 128;
 
 /// Resolve Auto against the current registry. Cache the OS's tags, rather than a language,
@@ -26,7 +24,6 @@ fn resolve(tags: &[String]) -> Lang {
     tags.iter().find_map(|tag| lang_from_tag(tag)).unwrap_or(Lang::EN)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn bounded_tags(tags: impl IntoIterator<Item = String>) -> Vec<String> {
     tags.into_iter()
         .take(MAX_SYSTEM_TAGS)
@@ -39,7 +36,6 @@ fn bounded_tags(tags: impl IntoIterator<Item = String>) -> Vec<String> {
         .collect()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn detect_system_tags() -> Vec<String> {
     if let Ok(tag) = std::env::var("PHOTOCRAFT_LOCALE")
         && !tag.trim().is_empty()
@@ -50,11 +46,6 @@ fn detect_system_tags() -> Vec<String> {
     // CFLocaleCopyPreferredLanguages (macOS); Unix uses its standard locale environment.
     // A failure in platform interop must also leave the app usable in English.
     std::panic::catch_unwind(|| bounded_tags(sys_locale::get_locales())).unwrap_or_default()
-}
-
-#[cfg(all(not(test), target_arch = "wasm32"))]
-fn detect_system_tags() -> Vec<String> {
-    Vec::new()
 }
 
 #[cfg(test)]
@@ -111,7 +102,6 @@ mod tests {
         assert_eq!(system_lang(), Lang::EN);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn native_locale_results_are_bounded_and_trimmed() {
         assert_eq!(bounded_tags(["  fr-CA  ".into(), "".into(), " ".into(), "fr-\0".into(), "x".repeat(129)]), ["fr-CA"]);

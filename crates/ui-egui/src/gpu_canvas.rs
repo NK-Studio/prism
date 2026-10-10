@@ -20,7 +20,7 @@
 //! - a one-device-pixel pixel grid above 500% zoom, over pixels with content only.
 //!
 //! GPU resources live in the renderer's `callback_resources` type map; the per-frame callback only
-//! carries plain view parameters, so it is `Send + Sync` on every target (including wasm).
+//! carries plain view parameters, so it is `Send + Sync`.
 //!
 //! The document pixels still come from the CPU compositor (`photocraft-compose`) for now; the wgpu
 //! compositor (M5) will render straight into these tiles.
@@ -462,7 +462,6 @@ impl GpuCanvas {
             d.regenerate_mips(device, queue, res, [region.x0 as u32, region.y0 as u32, region.x1 as u32, region.y1 as u32]);
             if std::env::var_os("PHOTOCRAFT_GPU_SYNC").is_some() {
                 // Benchmarking: wait for the GPU so callers can time the whole refresh.
-                #[cfg(not(target_arch = "wasm32"))]
                 self.health.wait(device, None);
             }
         } else if fresh {
@@ -645,7 +644,6 @@ impl GpuCanvas {
     /// Read back level 0 of document `key`'s canvas texture: its format, size and the stored
     /// (premultiplied) texels as `f32` RGBA, row-major. Waits for the GPU; for tests, benchmarks
     /// and debugging.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn read_texels(&self, key: u64) -> Option<(wgpu::TextureFormat, [u32; 2], Vec<[f32; 4]>)> {
         if !self.health.is_ok() {
             return None;
@@ -758,15 +756,12 @@ pub fn device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
     wgpu::Limits { max_texture_dimension_2d: a.max_texture_dimension_2d, max_buffer_size: a.max_buffer_size, ..base }
 }
 
-/// Milliseconds since first call (monotonic). Always 0 on wasm, where `std::time` is unavailable.
+/// Milliseconds since first call (monotonic).
 pub fn now_ms() -> f64 {
-    #[cfg(not(target_arch = "wasm32"))]
     {
         static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
         START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 1000.0
     }
-    #[cfg(target_arch = "wasm32")]
-    0.0
 }
 
 /// UI-thread timings (CPU side), exponentially smoothed.
@@ -968,7 +963,6 @@ fn texels_into(format: wgpu::TextureFormat, px: &[[f32; 4]], out: &mut Vec<u8>) 
     let convert = if format == FORMAT_HIGH { rgba16f } else { rgba8 };
     out.clear();
     out.resize(px.len() * bpp, 0);
-    #[cfg(not(target_arch = "wasm32"))]
     if px.len() > 1 << 18 {
         let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(16);
         let chunk = px.len().div_ceil(threads);
@@ -1011,7 +1005,6 @@ fn f32_to_f16(v: f32) -> u16 {
 }
 
 /// IEEE 754 binary16 → binary32.
-#[cfg(not(target_arch = "wasm32"))]
 fn f16_to_f32(h: u16) -> f32 {
     let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
     let exp = i32::from((h >> 10) & 0x1f);
@@ -1030,7 +1023,6 @@ fn f16_to_f32(h: u16) -> f32 {
 }
 
 /// One stored texel of `format` as f32 RGBA.
-#[cfg(not(target_arch = "wasm32"))]
 fn texel_to_f32(format: wgpu::TextureFormat, b: &[u8]) -> [f32; 4] {
     let mut o = [0.0f32; 4];
     for (i, v) in o.iter_mut().enumerate() {
@@ -2060,7 +2052,6 @@ mod tests {
         assert_eq!(premultiply_rgba8(&[[1.0, 0.5, 0.0, 0.5]]), vec![128, 64, 0, 128]);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn half_floats() {
         // Every finite half survives the round trip; ties round to even; overflow saturates.
@@ -2082,7 +2073,6 @@ mod tests {
         assert_eq!(premultiply_rgba16f(&[[2.0, -1.0, f32::NAN, 0.5]]), [0x00, 0x3c, 0, 0, 0, 0, 0x00, 0x38]);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn shaders_validate() {
         use wgpu::naga;

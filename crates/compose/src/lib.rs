@@ -82,7 +82,7 @@ impl Buffer {
 pub const RENDER_TILE: i32 = 256;
 
 /// Composite the whole document over `rect`, in parallel 256² tiles on
-/// native targets (single-threaded on wasm).
+/// native targets.
 pub fn render(doc: &Document, rect: Rect) -> Buffer {
     render_tiled(doc, rect, RENDER_TILE)
 }
@@ -147,7 +147,6 @@ fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx) -> Buffer 
         }
     };
     let band_len = w * tile as usize;
-    #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         let bands = rect.height().div_ceil(tile as u32) as usize;
@@ -170,13 +169,7 @@ fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx) -> Buffer 
             }
         }
     }
-    #[cfg(target_arch = "wasm32")]
-    for (i, band) in out.px.chunks_mut(band_len).enumerate() {
-        let y0 = rect.y0 + i as i32 * tile;
-        for t in band_tiles(y0) {
-            put(band, y0, &run(t));
-        }
-    }
+
     out
 }
 
@@ -397,15 +390,11 @@ fn render_reduced_in_bands(doc: &Document, b: Rect, w: u32, h: u32, damage: Opti
             }
         };
         let part = &mut acc[(t0 - oy0) * ow..(t1 - oy0) * ow];
-        #[cfg(not(target_arch = "wasm32"))]
         {
             use rayon::prelude::*;
             part.par_chunks_mut(ow).enumerate().for_each(|(i, out)| sum_row(t0 + i, out));
         }
-        #[cfg(target_arch = "wasm32")]
-        for (i, out) in part.chunks_mut(ow).enumerate() {
-            sum_row(t0 + i, out);
-        }
+
         Ok(())
     });
     debug_assert!(ok.is_ok());
@@ -491,7 +480,6 @@ fn prepare_effects(layers: &[Layer], rect: Rect, cx: &Ctx, setting: impl Fn(&mut
             let _ = effect_maps(l, cx);
         });
     };
-    #[cfg(not(target_arch = "wasm32"))]
     if todo.len() > 1 {
         use rayon::prelude::*;
         todo.par_iter().for_each(build);

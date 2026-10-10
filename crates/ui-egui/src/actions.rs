@@ -114,7 +114,7 @@ pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Str
 pub(crate) fn run_view(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
     app.sync_views();
     let i = app.session.active_index().ok_or("no document")?;
-    let v = app.ui.views.get_mut(i).ok_or("no document view")?;
+    let v = app.view_mut(i).ok_or("no document view")?;
     v.fill_pending = false;
     match id {
         "view.fitOnScreen" => v.fit_pending = true,

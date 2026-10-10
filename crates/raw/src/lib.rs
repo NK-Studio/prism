@@ -27,8 +27,7 @@
 //! Nikon compressed NEF (lossless and lossy), Sony compressed ARW (cRAW),
 //! Panasonic RW2 (RawFormat 5) and uncompressed Olympus ORF. Everything else reports [`RawError::Unsupported`].
 //!
-//! The crate is standalone (no workspace dependencies), does no I/O, builds for
-//! `wasm32-unknown-unknown` and never panics on hostile input: sizes are
+//! The crate is standalone (no workspace dependencies), does no I/O, and never panics on hostile input: sizes are
 //! checked against [`Limits`] before allocating.
 
 #![forbid(unsafe_code)]

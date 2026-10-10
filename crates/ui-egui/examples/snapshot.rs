@@ -17,6 +17,7 @@
 //! docs/control-protocol.md), applied in order with a few frames between them.
 //! `--right-click-at X,Y` opens a screen-space context menu after the script, including panel
 //! and document-tab menus that are outside the document-coordinate control pointer.
+//! `--drag-from X,Y --drag-to X,Y` holds a screen-space drag for transient-preview QA.
 //! `--click-at X,Y` opens a screen-space menu (for example the top Select menu) after the script.
 
 use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
@@ -133,6 +134,19 @@ fn main() {
         harness.step();
         harness.event(egui::Event::PointerButton { pos, button, pressed: false, modifiers: egui::Modifiers::NONE });
         harness.run_steps(4);
+    }
+    // Hold a real tab drag for visual review of its detach placeholder; release is deliberately
+    // omitted, so the offscreen snapshot captures the same transient frame as a mouse drag.
+    if let Some((x, y)) = arg(&args, "--drag-to").and_then(|s| s.split_once(',').and_then(|(x, y)| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?))))
+        && let Some(start) =
+            arg(&args, "--drag-from").and_then(|s| s.split_once(',').and_then(|(x, y)| Some(egui::pos2(x.parse::<f32>().ok()?, y.parse::<f32>().ok()?))))
+    {
+        harness.event(egui::Event::PointerMoved(start));
+        harness.step();
+        harness.event(egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        harness.step();
+        harness.event(egui::Event::PointerMoved(egui::pos2(x, y)));
+        harness.step();
     }
     let t_settle = std::time::Instant::now();
     while t_settle.elapsed() < std::time::Duration::from_millis(settle_ms) {

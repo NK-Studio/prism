@@ -9,7 +9,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Spanish computing vocabulary (capa, pincel, selección, lienzo ...). No proprietary localisation
 # resource, string table or product UI was consulted or copied; add entries the same way.
-# Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
+# Product and technology names (Prism, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing "…" of dialog commands is kept.
 	File	Archivo
 	Edit	Edición
@@ -668,7 +668,6 @@
 	Pro Medium Gray Theme	Tema Pro (gris medio)
 	Studio Theme	Tema Estudio
 	Studio Light Theme	Tema Estudio (claro)
-	Classic Theme	Tema Clásico
 	Next Theme	Tema siguiente
 	Actions	Acciones
 	Brush Settings	Ajustes del pincel
@@ -698,9 +697,9 @@
 	Timeline	Línea de tiempo
 	Tool Presets	Preajustes de herramienta
 	Tools	Herramientas
-	About PhotoCraft	Acerca de PhotoCraft
-	PhotoCraft Website	Sitio web de PhotoCraft
-	PhotoCraft on GitHub	PhotoCraft en GitHub
+	About Prism	Acerca de Prism
+	Prism Website	Sitio web de Prism
+	Prism on GitHub	Prism en GitHub
 	ArtCraft Website	Sitio web de ArtCraft
 	Join the ArtCraft Discord…	Únete al Discord de ArtCraft…
 	Report an Issue…	Informar de un problema…
@@ -980,8 +979,8 @@
 	Drop an image or PSD anywhere to open it.	Suelte una imagen o un PSD en cualquier lugar para abrirlo.
 	Native file drag-and-drop is unavailable	El arrastrar y soltar archivos de forma nativa no está disponible en Wayland
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	El arrastrar y soltar archivos de forma nativa aún no está disponible en Wayland. Usa Archivo › Abrir, o copia la imagen en tu gestor de archivos y pégala con {paste}.
-	To drop files, start PhotoCraft under XWayland: `{command}`	Para soltar archivos, inicia PhotoCraft bajo XWayland: `{command}`
-	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	O establece Preferencias › Rendimiento › Servidor de pantalla de Linux en X11: PhotoCraft se iniciará siempre bajo XWayland.
+	To drop files, start Prism under XWayland: `{command}`	Para soltar archivos, inicia Prism bajo XWayland: `{command}`
+	Or set Preferences › Performance › Linux display server to X11: Prism then always starts under XWayland.	O establece Preferencias › Rendimiento › Servidor de pantalla de Linux en X11: Prism se iniciará siempre bajo XWayland.
 	Edit › Paste	Edición › Pegar
 	Duplicate Layers…	Duplicar capas…
 	Duplicate style	Duplicar estilo
@@ -1228,9 +1227,9 @@
 	Perspective Warp is not active	La deformación en perspectiva no está activa
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Deformación en perspectiva: dibuje planos siguiendo la perspectiva de la imagen y luego cambie a Deformar
 	Photo Filter	Filtro fotográfico
-	PhotoCraft	PhotoCraft
-	PhotoCraft Manages Colors	PhotoCraft gestiona el color
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — un editor de imágenes nativo y de código abierto escrito en Rust.
+	Prism	Prism
+	Prism Manages Colors	Prism gestiona el color
+	Prism — a native image editor written in Rust.	Prism — un editor de imágenes nativo escrito en Rust.
 	Pin Depth:	Profundidad del pin:
 	Pixel Length:	Longitud en píxeles:
 	Pixels/Centimeter	Píxeles/centímetro
@@ -1619,7 +1618,7 @@
 	Pen Tilt	Inclinación del lápiz
 	Pen Tool	Herramienta Pluma
 	Photo	Fotografía
-	PhotoCraft website	Sitio web de PhotoCraft
+	Prism website	Sitio web de Prism
 	Picas	Picas
 	Pillow Emboss	Relieve almohadillado
 	Pixel Replacement	Sustitución de píxeles
@@ -1943,7 +1942,7 @@
 	System Info	Información del sistema
 	More panels	Más paneles
 	More documents	Más documentos
-	These settings aren't available in PhotoCraft yet.	Estos ajustes aún no están disponibles en PhotoCraft.
+	These settings aren't available in Prism yet.	Estos ajustes aún no están disponibles en Prism.
 	Graphics	Gráficos
 	Reset GPU Backend	Restablecer el backend de GPU
 	Applies at next launch.	Se aplicará en el próximo inicio.
@@ -2129,7 +2128,7 @@
 	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	Automático utiliza la GPU cuando está disponible y cambia a la CPU si hay errores.
 	Switched to CPU rendering	Se cambió al renderizado por CPU
 	GPU acceleration could not continue. Your documents are unchanged.	La aceleración GPU no pudo continuar. Los documentos no han cambiado.
-	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft compone las imágenes en la CPU. La ventana aún puede usar el adaptador gráfico.
+	Prism is using the CPU image compositor. The window may still use your graphics adapter.	Prism compone las imágenes en la CPU. La ventana aún puede usar el adaptador gráfico.
 	Retry GPU requires a restart. Save your work first.	Reintentar la GPU requiere reiniciar. Guarda primero tu trabajo.
 	Keep Using CPU	Seguir usando CPU
 	Retry GPU	Reintentar GPU
@@ -2317,3 +2316,16 @@ fontWeight	Italic	Cursiva
 	Rotate View Tool	Herramienta Rotar vista
 	Reset View	Restablecer vista
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Arrastre alrededor del centro para rotar la vista  ·  Mayús fija a 15°
+
+	Move to Main Tabs	Mover a las pestañas principales
+	As:	Como:
+	Automatic	Automático
+	Duplicate Merged Layers Only	Duplicar solo capas combinadas
+	Fit To:	Ajustar a:
+	Original Size	Tamaño original
+	Scale Styles	Escalar estilos
+	{name} copy	{name} copia
+	Duplicate Image	Duplicar imagen
+	Preparing preview…	Preparando vista previa…
+	Columns	Columnas
+	Duplicate	Duplicar

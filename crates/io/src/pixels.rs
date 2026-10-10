@@ -190,9 +190,9 @@ pub fn unmatte(m: f32, a: f32, white: f32) -> f32 {
 }
 
 /// `items.map(f)` on scoped threads (one per item; callers pass a handful of channels or
-/// bands), in order; sequential on wasm or for a single item.
+/// bands), in order; sequential for a single item.
 pub fn par_map<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
-    if cfg!(target_arch = "wasm32") || items.len() < 2 {
+    if items.len() < 2 {
         return items.into_iter().map(f).collect();
     }
     std::thread::scope(|sc| {
@@ -208,7 +208,7 @@ pub fn par_map<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Ve
 
 /// `0..n` split into about one band per core.
 pub fn bands(n: usize) -> Vec<std::ops::Range<usize>> {
-    let k = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |v| v.get()).clamp(1, 32) };
+    let k = { std::thread::available_parallelism().map_or(1, |v| v.get()).clamp(1, 32) };
     let step = n.div_ceil(k).max(1);
     (0..n).step_by(step).map(|a| a..(a + step).min(n)).collect()
 }

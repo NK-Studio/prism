@@ -604,10 +604,9 @@ fn quantize_band(px: &mut [[f32; 4]], w: usize, y0: usize, pal: &[[u8; 3]], dith
 /// position-independent. Error diffusion carries error down the image, so it stays sequential.
 fn quantize_rows(px: &mut [[f32; 4]], w: usize, pal: &[[u8; 3]], dither: Dither, amount: f32, t: Option<usize>) -> Vec<u8> {
     let h = px.len() / w.max(1);
-    if dither == Dither::Diffusion || h < 128 || cfg!(target_arch = "wasm32") {
+    if dither == Dither::Diffusion || h < 128 {
         return quantize_band(px, w, 0, pal, dither, amount, t);
     }
-    #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         let band = w * 64;
@@ -618,9 +617,6 @@ fn quantize_rows(px: &mut [[f32; 4]], w: usize, pal: &[[u8; 3]], dither: Dither,
             .for_each(|(i, (p, out))| out.copy_from_slice(&quantize_band(p, w, i * 64, pal, dither, amount, t)));
         idx
     }
-    // Single-threaded on wasm (the early return above always takes this path there).
-    #[cfg(target_arch = "wasm32")]
-    quantize_band(px, w, 0, pal, dither, amount, t)
 }
 
 /// A file-name-safe slice name.
@@ -1173,7 +1169,7 @@ fn image_assets(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"enabled": false}));
     }
     match dir {
-        Some(dir) if !cfg!(target_arch = "wasm32") => {
+        Some(dir) => {
             let (files, errors) = generate_assets(&d.doc, &dir);
             Ok(json!({"enabled": true, "dir": dir, "files": files, "errors": errors}))
         }
@@ -1184,7 +1180,7 @@ fn image_assets(s: &mut Session, p: &Value) -> Result<Value> {
 /// After a save: regenerate the document's image assets when Generate › Image Assets is on.
 pub fn on_saved(s: &Session, index: usize) -> Option<Value> {
     let d = s.documents().get(index)?;
-    if !s.file_menu.image_assets.contains(&d.doc.id) || cfg!(target_arch = "wasm32") {
+    if !s.file_menu.image_assets.contains(&d.doc.id) {
         return None;
     }
     let dir = assets_dir(d.path.as_deref()?);

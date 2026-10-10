@@ -1,6 +1,5 @@
 //! Community and project links: the Help menu, the About dialog, the start screen and the title
-//! bar all open these. URLs follow the crafting-app pattern (`getartcraft.com/apps/<app>`,
-//! `github.com/storytold/<app>`).
+//! bar all open these. Product links point to the independently maintained Prism repository.
 
 use serde_json::{Value, json};
 
@@ -8,9 +7,9 @@ use crate::PhotocraftApp;
 
 pub const DISCORD: &str = "https://discord.gg/artcraft";
 pub const ARTCRAFT_WEBSITE: &str = "https://getartcraft.com";
-pub const APP_PAGE: &str = "https://getartcraft.com/apps/photocraft";
-pub const GITHUB: &str = "https://github.com/storytold/photocraft";
-pub const ISSUES: &str = "https://github.com/storytold/photocraft/issues";
+pub const APP_PAGE: &str = "https://github.com/NK-Studio/prism";
+pub const GITHUB: &str = "https://github.com/NK-Studio/prism";
+pub const ISSUES: &str = "https://github.com/NK-Studio/prism/issues";
 
 /// Help-menu link commands: (id, url). Labels live in `menus::UI_COMMANDS`.
 pub const COMMANDS: &[(&str, &str)] =
@@ -20,7 +19,7 @@ pub fn url_for(id: &str) -> Option<&'static str> {
     COMMANDS.iter().find(|c| c.0 == id).map(|c| c.1)
 }
 
-/// Open `url` in the system browser (a new tab on the web) and note it in the status bar. Prefers
+/// Open `url` in the system browser and note it in the status bar. Prefers
 /// the platform `open_url` service (reliable on Windows/macOS/Linux); falls back to `ctx.open_url`.
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context, url: &str) -> Value {
     let opened = app.services.open_url.as_ref().map(|f| f(url).is_ok()).unwrap_or(false);
@@ -40,11 +39,11 @@ pub fn discord_button(app: &mut PhotocraftApp, ui: &mut egui::Ui, min_width: f32
     r
 }
 
-/// "PhotoCraft website · GitHub · ArtCraft" as links, centred. Clicks route through [`open`] (the
+/// "Prism website · GitHub · ArtCraft" as links, centred. Clicks route through [`open`] (the
 /// platform browser service) rather than `ui.hyperlink_to`, which uses the unreliable `ctx.open_url`.
 pub fn link_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let links = [(tl!("PhotoCraft website"), APP_PAGE), (tl!("GitHub"), GITHUB), (tl!("ArtCraft"), ARTCRAFT_WEBSITE)];
+    let links = [(tl!("Prism website"), APP_PAGE), (tl!("GitHub"), GITHUB), (tl!("ArtCraft"), ARTCRAFT_WEBSITE)];
     let font = egui::FontId::proportional(12.5);
     let sep = "  ·  ";
     let width: f32 = links.iter().map(|(l, _)| ui.painter().layout_no_wrap((*l).into(), font.clone(), t.text).size().x).sum::<f32>()
@@ -70,6 +69,16 @@ pub fn link_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn product_links_and_menu_labels_identify_prism() {
+        assert_eq!(GITHUB, "https://github.com/NK-Studio/prism");
+        assert_eq!(ISSUES, "https://github.com/NK-Studio/prism/issues");
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        for item in crate::menus::menu_items(&app).into_iter().filter(|item| matches!(item.id.as_str(), "help.website" | "help.github")) {
+            assert!(item.label.starts_with("Prism"), "{}", item.label);
+        }
+    }
 
     #[test]
     fn links_open_through_the_platform_service() {
@@ -113,8 +122,8 @@ mod tests {
         let ctx = egui::Context::default();
         for (id, url) in [
             ("help.discord", "https://discord.gg/artcraft"),
-            ("help.website", "https://getartcraft.com/apps/photocraft"),
-            ("help.github", "https://github.com/storytold/photocraft"),
+            ("help.website", "https://github.com/NK-Studio/prism"),
+            ("help.github", "https://github.com/NK-Studio/prism"),
         ] {
             let r = crate::menus::invoke(&mut app, &ctx, id, serde_json::json!({})).unwrap();
             assert_eq!(r["url"], url);

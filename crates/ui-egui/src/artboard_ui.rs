@@ -62,7 +62,7 @@ pub fn fit_artboard(app: &mut PhotocraftApp) -> Result<Value, String> {
     let b = st.doc.layer(id).and_then(Layer::artboard).map(|a| a.rect).ok_or("no artboard")?;
     let area = app.last_canvas_rect.size();
     let area = if area.x > 50.0 { area } else { egui::vec2(1200.0, 800.0) };
-    let v = &mut app.ui.views[i];
+    let v = app.view_mut(i).ok_or("no document view")?;
     // Leave room for the name above the board.
     v.zoom = ((area.x - 60.0) / b.width().max(1) as f32).min((area.y - 80.0) / b.height().max(1) as f32).clamp(0.01, 64.0);
     // Widen before adding: a board near ±2^30, or one whose far edge saturated at i32::MAX,

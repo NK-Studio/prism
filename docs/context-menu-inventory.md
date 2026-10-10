@@ -1,6 +1,6 @@
 # Context-menu inventory and parity contract
 
-This is the source-code inventory of PhotoCraft's right-click behavior at the branch point, captured 2026-10-06. It distinguishes a menu from another secondary-button gesture. The initial selection, Paths row, and document-tab menus added by this PR are called out separately. Photoshop comparison should be checked against an identified Photoshop version and platform before claiming exact parity; the current Layers menu explicitly targets Photoshop 2026 order.
+This is the source-code inventory of Prism's right-click behavior at the branch point, captured 2026-10-06. It distinguishes a menu from another secondary-button gesture. The initial selection, Paths row, and document-tab menus added by this PR are called out separately. Photoshop comparison should be checked against an identified Photoshop version and platform before claiming exact parity; the current Layers menu explicitly targets Photoshop 2026 order.
 
 ## Canvas: every tool
 
@@ -48,5 +48,5 @@ Canvas invariant: secondary click must not accidentally start a paint stroke, co
 1. Record a Photoshop reference matrix by version, operating system, surface, tool and state (empty/selection/path/text edit/multi-layer). Capture exact item labels, order, separators, submenus, disabled conditions, and modifier variants. Mark observations versus inference.
 2. Encode menu descriptors as data with predicate tests. Route document edits through existing or new engine command IDs; view-only actions can stay in UI. A menu on the canvas must receive the document coordinate and relevant target from hit testing, so actions operate on what was clicked rather than silently on an unrelated active object.
 3. Prioritize shared canvas menus, then high-value tool-specific interactions (path, selection, type, crop/zoom), then panel and tab gaps. Reuse Layers/Channels implementations where their command contract already exists. Preserve the existing Move/layer pick, brush picker, erase preference, Alt/Option brush resize, and toolbar flyout gestures.
-4. Test each descriptor's item order and enablement, dispatch with expected params, empty/invalid states, modifiers, and action result. Add UI gesture tests for right-click opening, target selection, Escape/outside dismissal, and the absence of accidental edits. Validate native and web builds.
+4. Test each descriptor's item order and enablement, dispatch with expected params, empty/invalid states, modifiers, and action result. Add UI gesture tests for right-click opening, target selection, Escape/outside dismissal, and the absence of accidental edits. Validate native builds.
 5. Capture screenshots from the running app for representative tool groups and panel states, with test fixture documents rather than personal photos. A screenshot proves visible menu composition; command tests prove its behavior.

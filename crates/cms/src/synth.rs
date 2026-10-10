@@ -2,7 +2,7 @@
 //!
 //! Adobe's CMYK profiles (U.S. Web Coated SWOP, Coated FOGRA39 …) are proprietary, and the
 //! freely downloadable characterisation-based profiles come with redistribution conditions, so
-//! Photocraft ships a CMYK profile it generates itself from a documented printer model:
+//! Prism ships a CMYK profile it generates itself from a documented printer model:
 //!
 //! * **Forward model** (CMYK → XYZ): Yule–Nielsen modified Neugebauer (n = 2) over the 16
 //!   ink overprints, with Demichel coverage weights and a parabolic tone value increase (dot
@@ -29,7 +29,7 @@ use crate::math;
 use crate::pipeline::Stage;
 use crate::profile::{ColorSpace, Lut, LutKind, Pcs, Profile, ProfileClass};
 
-pub const DESCRIPTION: &str = "Photocraft Coated CMYK (synthetic, 300% TAC, medium GCR)";
+pub const DESCRIPTION: &str = "Prism Coated CMYK (synthetic, 300% TAC, medium GCR)";
 
 /// Parameters of the synthetic profile.
 #[derive(Clone, Debug)]
@@ -362,15 +362,9 @@ fn encode_v2(lab: [f64; 3]) -> [f32; 3] {
     ]
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn par_map<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
     use rayon::prelude::*;
     (0..n).into_par_iter().map(f).collect()
-}
-
-#[cfg(target_arch = "wasm32")]
-fn par_map<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
-    (0..n).map(f).collect()
 }
 
 fn b2a_table(model: &CmykModel, p: &CmykParams, gbd: Option<&Gbd>) -> Clut {

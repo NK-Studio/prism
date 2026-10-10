@@ -196,9 +196,8 @@ fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Session) -> Res
     }
 }
 
-/// Current time as ISO 8601 UTC (`2026-10-01T12:34:56Z`); empty on the web (no clock).
+/// Current time as ISO 8601 UTC (`2026-10-01T12:34:56Z`).
 pub fn now_iso() -> String {
-    #[cfg(not(target_arch = "wasm32"))]
     {
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
         let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
@@ -213,10 +212,6 @@ pub fn now_iso() -> String {
         let m = if mp < 10 { mp + 3 } else { mp - 9 };
         let y = yoe + era * 400 + i64::from(m <= 2);
         format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        String::new()
     }
 }
 

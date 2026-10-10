@@ -66,15 +66,14 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.theme.proMedium", "Pro Medium Gray Theme", &["Window", "Theme"], None),
     ("window.theme.studio", "Studio Theme", &["Window", "Theme"], None),
     ("window.theme.studioLight", "Studio Light Theme", &["Window", "Theme"], None),
-    ("window.theme.classic", "Classic Theme", &["Window", "Theme"], None),
     ("edit.search", "Search…", &["Edit"], Some("Cmd+K")),
     ("help.discord", "Join the ArtCraft Discord…", &["Help"], None),
-    ("help.website", "PhotoCraft Website", &["Help"], None),
+    ("help.website", "Prism Website", &["Help"], None),
     ("help.artcraftWebsite", "ArtCraft Website", &["Help"], None),
-    ("help.github", "PhotoCraft on GitHub", &["Help"], None),
+    ("help.github", "Prism on GitHub", &["Help"], None),
     ("help.reportIssue", "Report an Issue…", &["Help"], None),
     ("help.systemInfo", "System Info…", &["Help"], None),
-    ("help.about", "About PhotoCraft", &["Help"], None),
+    ("help.about", "About Prism", &["Help"], None),
 ];
 
 /// Photoshop's Window › <panel> ids for the panels the shell already has, as `window.toggle.*`.
@@ -251,7 +250,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             app.save_as(path)
         }
         "file.exit" => {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
             Ok(Value::Null)
         }
         "file.clearRecent" => {
@@ -259,34 +258,20 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(Value::Null)
         }
         id if id.starts_with("file.openRecent.") => {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                match id.rsplit('.').next().and_then(|s| s.parse::<usize>().ok()).and_then(|i| app.ui.recent_files.get(i).cloned()) {
-                    Some(p) => open_path(app, &p),
-                    None => Err("no such recent file".to_string()),
-                }
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                let _ = app;
-                Err("Open Recent is unavailable on the web".to_string())
+            match id.rsplit('.').next().and_then(|s| s.parse::<usize>().ok()).and_then(|i| app.ui.recent_files.get(i).cloned()) {
+                Some(p) => open_path(app, &p),
+                None => Err("no such recent file".to_string()),
             }
         }
         "file.saveAs" => app.save_as(params.get("path").and_then(Value::as_str).map(str::to_string)),
         "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => app.run(id, params),
-        "window.newWindowForDocument" => {
-            let doc = app.session.active_index().ok_or("no document")?;
-            let wid = app.ui.alloc_id();
-            let view = app.ui.views[doc].clone();
-            app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true });
-            Ok(json!({"window": wid}))
-        }
+        "window.newWindowForDocument" => crate::doc_windows::additional(app, app.session.active_index().ok_or("no document")?),
         "window.theme.toggle" => {
             let next = app.ui.theme.next();
             app.set_theme(ctx, next);
             Ok(Value::Null)
         }
-        "window.theme.pro" | "window.theme.proMedium" | "window.theme.studio" | "window.theme.studioLight" | "window.theme.classic" => {
+        "window.theme.pro" | "window.theme.proMedium" | "window.theme.studio" | "window.theme.studioLight" => {
             let k = crate::theme::ThemeKind::from_name(&id["window.theme.".len()..]).unwrap_or_default();
             app.set_theme(ctx, k);
             Ok(Value::Null)
@@ -331,9 +316,12 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             }
             Ok(Value::Null)
         }
-        // Layer Content Options…: the adjustment / fill controls live in Properties.
+        // Shape thumbnails use the solid-colour picker; other content uses Properties.
         "layer.layerContentOptions" => {
             let r = app.run(id, params)?;
+            if crate::shape_color_ui::solid_shape(app) {
+                return crate::shape_color_ui::open(app).map(|dialog| json!({"dialog": dialog}));
+            }
             app.ui.panels.properties = true;
             app.ui.dock_tabs.properties = 0;
             Ok(r)
@@ -361,14 +349,14 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let external = app.clip_external;
             let visible = !external
                 && app.session.active_index().zip(app.session.clipboard.as_ref()).is_some_and(|(i, clip)| {
-                    let v = &app.ui.views[i];
+                    let v = app.view(i).cloned().unwrap_or_default();
                     let (hw, hh) = (app.last_canvas_rect.width() / 2.0 / v.zoom, app.last_canvas_rect.height() / 2.0 / v.zoom);
                     let r =
                         photocraft_geom::Rect::new((v.center[0] - hw) as i32, (v.center[1] - hh) as i32, (v.center[0] + hw) as i32, (v.center[1] + hh) as i32);
                     !clip.bounds.intersect(&r).is_empty()
                 });
             let p = match app.session.active_index() {
-                Some(i) if !visible => json!({"center": app.ui.views[i].center}),
+                Some(i) if !visible => json!({"center": app.camera(i).center}),
                 _ => json!({}),
             };
             app.run("edit.paste", p)
@@ -419,6 +407,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         "edit.transform.warpGrid" if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_some()) && params.get("warp").is_none() => {
             crate::transform_tool::edit_session_warp(app, id, &params).map(|_| json!({"transform": app.ui.transform}))
         }
+        "image.duplicate" if params.as_object().is_none_or(|o| o.is_empty()) => Ok(json!({"dialog":crate::duplicate_ui::open(app)?})),
         sz if crate::sizing::is_sizing(sz) && params.as_object().is_none_or(|o| o.is_empty()) => {
             Ok(json!({"dialog": crate::sizing::open(app, sz).ok_or("no document")?}))
         }
@@ -739,13 +728,9 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     }
     crate::plugin_ui::insert_menu_items(app, &mut items);
     // The File quick-export command uses the format selected in Export Preferences.
-    // On the web it intentionally downloads PNG until the quick-export service supports
-    // the other formats; the Layer quick-export command also always produces PNG.
     if let Some(item) = items.iter_mut().find(|i| i.id == "file.export.quickExportAsPng") {
         use photocraft_engine::prefs::QuickExportFormat;
-        let format = if cfg!(target_arch = "wasm32") {
-            "PNG"
-        } else {
+        let format = {
             match app.session.prefs().export.quick_export_format {
                 QuickExportFormat::Png => "PNG",
                 QuickExportFormat::Jpg => "JPG",
@@ -1380,7 +1365,7 @@ mod tests {
                 }
                 h.run_steps(3);
             };
-            let open = |h: &Harness<'_, PhotocraftApp>| h.query_by_label_contains("About PhotoCraft").is_some();
+            let open = |h: &Harness<'_, PhotocraftApp>| h.query_by_label_contains("About Prism").is_some();
             let field_id = egui::Id::new("help-menu-search").with("field");
             let help = h.get_by_label("Help").rect().center();
             click(&mut h, help);
@@ -1574,7 +1559,6 @@ mod open_recent_tests {
         assert!(invoke(&mut app, &ctx, "file.openRecent.5", json!({})).is_err());
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn opening_a_file_records_it_as_recent() {
         use photocraft_color::{ColorMode, SampleType};
@@ -1609,7 +1593,7 @@ mod quick_export_label_tests {
             let items = menu_items(&app);
             let quick: Vec<_> = items.iter().filter(|i| i.id == "file.export.quickExportAsPng").collect();
             assert_eq!(quick.len(), 1, "the catalogue and UI command must not create duplicate items");
-            let shown_format = if cfg!(target_arch = "wasm32") { "PNG" } else { expected };
+            let shown_format = { expected };
             assert_eq!(quick[0].label, format!("Quick Export as {shown_format}"));
             let id = crate::i18n::Lang::from_code("id").unwrap();
             let localized = translated_menu_label(id, quick[0]);

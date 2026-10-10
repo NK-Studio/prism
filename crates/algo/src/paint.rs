@@ -98,13 +98,11 @@ fn composite_area(
         }
         any.then_some((*r, region))
     };
-    #[cfg(not(target_arch = "wasm32"))]
     let done: Vec<(Rect, Vec<f32>)> = {
         use rayon::prelude::*;
         tiles.par_iter().filter_map(work).collect()
     };
-    #[cfg(target_arch = "wasm32")]
-    let done: Vec<(Rect, Vec<f32>)> = tiles.iter().filter_map(work).collect();
+
     for (r, region) in done {
         s.write_region(r, &region);
     }

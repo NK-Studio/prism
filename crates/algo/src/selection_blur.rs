@@ -12,7 +12,7 @@
 //!   (≤ 0.3/255 per pass); a fit that misses falls back to the direct convolution.
 //!
 //! Work is confined to the mask's non-zero bounding box grown by the kernel radius (pixels
-//! farther away stay exactly 0). Rows run in parallel (`par_rows`/`par_map`, serial on wasm);
+//! farther away stay exactly 0). Rows run in parallel (`par_rows`/`par_map`);
 //! the vertical pass walks strips of 128 columns row by row (vectorizable, no transpose). Windows
 //! lying entirely in a constant run (inside or outside the selection) are written without
 //! arithmetic.

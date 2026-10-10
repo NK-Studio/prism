@@ -80,7 +80,6 @@ fn theme_kind(t: Theme) -> ThemeKind {
         Theme::ProMedium => ThemeKind::ProMedium,
         Theme::Studio => ThemeKind::Studio,
         Theme::StudioLight => ThemeKind::StudioLight,
-        Theme::Classic => ThemeKind::Classic,
     }
 }
 
@@ -90,7 +89,6 @@ fn theme_pref(k: ThemeKind) -> Theme {
         ThemeKind::ProMedium => Theme::ProMedium,
         ThemeKind::Studio => Theme::Studio,
         ThemeKind::StudioLight => Theme::StudioLight,
-        ThemeKind::Classic => Theme::Classic,
     }
 }
 
@@ -298,7 +296,7 @@ fn persist(app: &mut PhotocraftApp, now: f64) -> Option<f64> {
                 app.ui.status = format!("Couldn't save preferences: {e}. Retrying…");
                 app.ui.status_error = true;
             } else if failures == SAVE_NOTICE_AFTER {
-                let lines = vec![e, "PhotoCraft keeps retrying; until a save succeeds, preference changes are lost when it closes.".into()];
+                let lines = vec![e, "Prism keeps retrying; until a save succeeds, preference changes are lost when it closes.".into()];
                 let id = crate::notices::post(app, "Preferences can't be saved", lines, true, None);
                 app.prefs_rt.save_retry.notice = Some(id);
             }
@@ -906,7 +904,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     f.get("__order").and_then(|o| o.get(&section)).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
                 if !has_visible_fields(&values, &section) {
                     ui.add_space(4.0);
-                    ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
+                    ui.label(RichText::new(tl!("These settings aren't available in Prism yet.")).color(t.text_faint));
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
                     section_fields(ui, &section, obj, &order, lang);
                     if section == "performance" {
@@ -1022,7 +1020,7 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
                 Value::Bool(b) => {
                     ui.label("");
                     let mut b = *b;
-                    if path == "interface.systemTitleBar" && cfg!(all(not(target_arch = "wasm32"), not(target_os = "macos"))) {
+                    if path == "interface.systemTitleBar" && cfg!(not(target_os = "macos")) {
                         ui.vertical(|ui| {
                             crate::widgets::checkbox(ui, &mut b, &label);
                             ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
@@ -1632,7 +1630,7 @@ mod tests {
     fn saving_keeps_preferences_another_instance_changed() {
         let store = Arc::new(Mutex::new(None));
         let ctx = egui::Context::default();
-        // Two browser tabs (or app windows) on the same storage.
+        // Two app windows on the same storage.
         let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
         tick(&mut a, &ctx);
         tick(&mut b, &ctx);
@@ -1651,9 +1649,9 @@ mod tests {
         assert_eq!(v["performance"]["historyStates"], 12);
         assert_eq!(v["interface"]["showTooltips"], false);
         // A value changed in both: the latest save wins.
-        b.run("prefs.set", json!({"values": {"interface.theme": "classic"}})).unwrap();
+        b.run("prefs.set", json!({"values": {"interface.theme": "studioLight"}})).unwrap();
         tick(&mut b, &ctx);
-        assert_eq!(stored(&store)["interface"]["theme"], "classic");
+        assert_eq!(stored(&store)["interface"]["theme"], "studioLight");
         // Unreadable storage is overwritten with this instance's preferences.
         *store.lock().unwrap() = Some("not json".into());
         a.run("prefs.set", json!({"values": {"performance.historyStates": 30}})).unwrap();
@@ -1686,7 +1684,7 @@ mod tests {
 
         // A persistent failure backs off up to a cap and raises a notice once.
         fail.store(true, Ordering::Relaxed);
-        app.run("prefs.set", json!({"values": {"interface.theme": "classic"}})).unwrap();
+        app.run("prefs.set", json!({"values": {"interface.theme": "proMedium"}})).unwrap();
         let mut now = 200.0;
         let mut delays = Vec::new();
         for _ in 0..6 {
@@ -1776,7 +1774,7 @@ mod tests {
         let mut input = egui::RawInput::default();
         input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(1.5);
         for (theme, scale, expected) in
-            [("pro", "100", 1.0), ("studio", "auto", 1.5), ("studioLight", "200", 2.0), ("proMedium", "100", 1.0), ("classic", "auto", 1.5)]
+            [("pro", "100", 1.0), ("studio", "auto", 1.5), ("studioLight", "200", 2.0), ("proMedium", "100", 1.0), ("proMedium", "auto", 1.5)]
         {
             app.run("prefs.set", json!({"values": {"interface.uiFontSize": "large", "interface.theme": theme, "interface.uiScale": scale}})).unwrap();
             for _ in 0..3 {
@@ -1887,10 +1885,10 @@ mod tests {
         assert_eq!(app2.session.prefs().performance.history_states, 12);
         assert_eq!(app2.ui.theme, ThemeKind::StudioLight);
         // Picking a theme from the Window menu becomes the preference.
-        crate::menus::invoke(&mut app2, &ctx, "window.theme.classic", json!({})).unwrap();
+        crate::menus::invoke(&mut app2, &ctx, "window.theme.proMedium", json!({})).unwrap();
         tick(&mut app2, &ctx);
-        assert_eq!(app2.session.prefs().interface.theme, Theme::Classic);
-        assert!(store2.lock().unwrap().as_ref().unwrap().contains("classic"));
+        assert_eq!(app2.session.prefs().interface.theme, Theme::ProMedium);
+        assert!(store2.lock().unwrap().as_ref().unwrap().contains("proMedium"));
     }
 
     #[test]
@@ -2000,7 +1998,7 @@ mod tests {
         assert_eq!(restarted.session.prefs().interface.ui_font_size, prefs::UiFontSize::Large);
     }
 
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn system_title_bar_explains_next_launch_and_preserves_apply_and_cancel() {
         use egui_kittest::{Harness, kittest::Queryable};

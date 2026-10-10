@@ -144,13 +144,8 @@ fn list(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(list_json(&s.active().ok_or(EngineError::NoDocument)?.doc))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn read(path: &str) -> Result<Vec<u8>> {
     std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
-}
-#[cfg(target_arch = "wasm32")]
-fn read(path: &str) -> Result<Vec<u8>> {
-    Err(EngineError::Other(format!("cannot read {path}: no file system on the web")))
 }
 
 /// File › Import › Notes…: append the notes of another PSD or `.pcraft` file. Notes outside the
@@ -290,7 +285,6 @@ mod tests {
         assert!(s.execute("file.import.notes", json!({"path": "/nonexistent/x.psd"})).is_err());
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn import_notes_from_pcraft_and_psd() {
         let dir = std::env::temp_dir().join(format!("pc-notes-{}", std::process::id()));

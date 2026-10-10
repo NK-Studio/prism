@@ -10,9 +10,12 @@
 //!   tree is `ui.menu.list`
 //! - `ui.set {tool?, panels?, dock?, dockTabs?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerView?, brushSize?}`:
 //!   change UI state; any other field is an error ([`UI_SET_FIELDS`])
-//! - `ui.dialog.open {kind, fields?}` (kinds: newDocument, about, layerStyle {effect?}, colorPicker {target: foreground|background}, command {command}) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`
+//! - `ui.dialog.open {kind, fields?}` (kinds: newDocument, about, layerStyle {effect?}, colorPicker {target: foreground|background|shapeFill}, command {command}) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`
 //! - `ui.dialog.apply {dialog}`: commit Preferences changes without closing the dialog
-//! - `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
+//! - `ui.window.open {document?}`: additional view; `ui.window.detach {document?}`: float a tab
+//! - `ui.window.attach {window}` / `ui.window.focus {window}` / `ui.window.close {window}`
+//! - Input, resize and screenshot methods accept optional `window`; omission targets the main window
+//! - `ui.drag {from:[x,y],to:[x,y],window?}`: synthetic primary-button screen-point drag
 //! - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` opens the tool's canvas context menu or Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
 //! - `ui.click {x, y, button?, count?}` / `ui.move {x, y}`: synthetic pointer input in screen points
 //!   (`count` at most [`MAX_CLICKS`])
@@ -61,6 +64,8 @@ pub enum Outcome {
     Screenshot {
         token: u64,
         path: Option<String>,
+        window: Option<u64>,
+        dialog: Option<u64>,
     },
     /// Synthetic input queued: reply once the app has processed all of it (so a following
     /// `ui.inspect`/`engine.execute` observes the effect).
@@ -222,9 +227,60 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let u = |k: &str| p.get(k).and_then(Value::as_u64);
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
+    let window = match p.get("window") {
+        Some(value)
+            if matches!(req.method.as_str(), "ui.click" | "ui.move" | "ui.drag" | "ui.key" | "ui.type" | "ui.pointer" | "ui.screenshot" | "ui.resize") =>
+        {
+            let Some(id) = value.as_u64() else { return err("invalid window id") };
+            if !app.ui.windows.iter().any(|w| w.open && w.id == id) {
+                return err(format!("no window {id}"));
+            }
+            Some(id)
+        }
+        _ => None,
+    };
+    let dialog = if matches!(req.method.as_str(), "ui.click" | "ui.move" | "ui.drag" | "ui.key" | "ui.type" | "ui.pointer" | "ui.screenshot" | "ui.resize") {
+        if p.get("window").is_some() && p.get("dialog").is_some() {
+            return err("specify either window or dialog");
+        }
+        match p.get("dialog") {
+            Some(v) => {
+                let Some(id) = v.as_u64() else { return err("invalid dialog id") };
+                if !app.ui.dialogs.iter().any(|d| d.id == id && d.presentation == crate::state::DialogPresentation::Native) {
+                    return err("no native dialog");
+                }
+                Some(id)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    let viewport = dialog.map(crate::native_dialogs::viewport).unwrap_or_else(|| crate::doc_windows::viewport(window));
+    if matches!(req.method.as_str(), "ui.click" | "ui.move" | "ui.drag" | "ui.key" | "ui.type" | "ui.pointer") {
+        if let Some(dialog) = dialog {
+            let _ = crate::native_dialogs::focus(app, ctx, dialog);
+        } else if let Some(window) = window {
+            if let Err(e) = crate::doc_windows::focus(app, ctx, window) {
+                return err(e);
+            }
+        } else if !crate::native_dialogs::is_open(app)
+            && let Some(document) = crate::doc_windows::main_index(app)
+        {
+            crate::doc_windows::activate_main(app, document);
+        }
+    }
     match req.method.as_str() {
         "ui.context.choose" => {
             let Some(id) = s("id") else { return err("missing `id`") };
+            if app.ui.document_context_menu.is_some() {
+                if let Some(authorize) = app.services.automation_command.as_ref()
+                    && let Err(e) = authorize(id, &json!({}))
+                {
+                    return err(e);
+                }
+                return wrap(crate::document_menu::choose(app, ctx, id));
+            }
             let Some(menu) = app.ui.canvas_tool_menu.as_ref() else { return err("no canvas context menu is open") };
             if !crate::canvas_tool_menu::available(app, menu, id) {
                 return err("context action is unavailable");
@@ -425,21 +481,21 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(i) = app.session.active_index() {
                     if let Some(z) = zoom {
-                        app.ui.views[i].zoom = (z as f32).clamp(0.01, 64.0);
-                        app.ui.views[i].fit_pending = false;
-                        app.ui.views[i].fill_pending = false;
+                        app.update_view(i, |v| v.zoom = (z as f32).clamp(0.01, 64.0));
+                        app.update_view(i, |v| v.fit_pending = false);
+                        app.update_view(i, |v| v.fill_pending = false);
                     }
                     if let Some(c) = center {
-                        app.ui.views[i].center = c;
-                        app.ui.views[i].fit_pending = false;
-                        app.ui.views[i].fill_pending = false;
+                        app.update_view(i, |v| v.center = c);
+                        app.update_view(i, |v| v.fit_pending = false);
+                        app.update_view(i, |v| v.fill_pending = false);
                     }
                     if fit {
-                        app.ui.views[i].fit_pending = true;
-                        app.ui.views[i].fill_pending = false;
+                        app.update_view(i, |v| v.fit_pending = true);
+                        app.update_view(i, |v| v.fill_pending = false);
                     }
                     if let Some(r) = rotation {
-                        app.ui.views[i].rotation = crate::rotate_view::wrap_deg(r as f32);
+                        app.update_view(i, |v| v.rotation = crate::rotate_view::wrap_deg(r as f32));
                     }
                 }
                 if let Some(k) = theme {
@@ -482,6 +538,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     };
                 }
                 "colorPicker" | "ColorPicker" => {
+                    if s("target") == Some("shapeFill") {
+                        return wrap(crate::shape_color_ui::open(app).map(|dialog| json!({"dialog": dialog})));
+                    }
                     let target = if s("target") == Some("background") { "background" } else { "foreground" };
                     return ok(json!({"dialog": crate::color_picker_ui::open(app, target)}));
                 }
@@ -518,6 +577,16 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                         dialog.fields.get("__command").and_then(Value::as_str).map(|command| (command.to_string(), Value::Object(dialog.fields.clone())))
                     }
                 });
+                let command = if req.method == "ui.dialog.confirm"
+                    && let Some(dialog) = app.ui.dialogs.iter().find(|dialog| dialog.id == id).filter(|d| crate::shape_color_ui::owns(&d.fields))
+                {
+                    match crate::shape_color_ui::params(app, &dialog.fields) {
+                        Ok(params) => Some(("shape.edit".to_string(), params)),
+                        Err(error) => return err(error),
+                    }
+                } else {
+                    command
+                };
                 if let Some((command, params)) = command
                     && let Some(authorize) = app.services.automation_command.as_ref()
                     && let Err(error) = authorize(&command, &params)
@@ -529,9 +598,13 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             }
             None => err("missing `dialog`"),
         },
-        "ui.dialog.cancel" => match u("dialog").and_then(|id| app.ui.close_dialog(id)) {
-            Some(_) => ok(Value::Null),
-            None => err("no such dialog"),
+        "ui.dialog.focus" => match u("dialog") {
+            Some(id) => wrap(crate::native_dialogs::focus(app, ctx, id)),
+            None => err("missing dialog"),
+        },
+        "ui.dialog.cancel" => match u("dialog") {
+            Some(id) => wrap(crate::native_dialogs::cancel(app, ctx, id)),
+            None => err("missing dialog"),
         },
         "ui.window.open" => {
             if let Some(d) = u("document")
@@ -541,11 +614,26 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             }
             wrap(crate::menus::invoke(app, ctx, "window.newWindowForDocument", json!({})))
         }
-        "ui.window.close" => {
-            let Some(id) = u("window") else { return err("missing `window`") };
-            let before = app.ui.windows.len();
-            app.ui.windows.retain(|w| w.id != id);
-            if app.ui.windows.len() < before { ok(Value::Null) } else { err(format!("no window {id}")) }
+        "ui.window.detach" => {
+            let document = match p.get("document") {
+                Some(v) => match v.as_u64().and_then(|i| usize::try_from(i).ok()) {
+                    Some(i) => i,
+                    None => return err("invalid document"),
+                },
+                None => match app.session.active_index() {
+                    Some(i) => i,
+                    None => return err("no document"),
+                },
+            };
+            wrap(crate::doc_windows::detach(app, ctx, document, None))
+        }
+        "ui.window.attach" | "ui.window.focus" | "ui.window.close" => {
+            let Some(window) = u("window") else { return err("missing `window`") };
+            wrap(match req.method.as_str() {
+                "ui.window.attach" => crate::doc_windows::attach(app, ctx, window, None),
+                "ui.window.focus" => crate::doc_windows::focus(app, ctx, window),
+                _ => crate::doc_windows::close(app, ctx, window),
+            })
         }
         "ui.pointer" => {
             let Some(events) = p.get("events").and_then(Value::as_array) else { return err("missing `events`") };
@@ -559,6 +647,39 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 mac_cmd: cfg!(target_os = "macos") && flag("command"),
                 ctrl: flag("ctrl"),
             };
+            if let Some(dialog) = dialog {
+                if events.len() > 4096 {
+                    return err("too many pointer events");
+                }
+                let button = match s("button") {
+                    Some("right" | "secondary") => egui::PointerButton::Secondary,
+                    Some("middle") => egui::PointerButton::Middle,
+                    _ => egui::PointerButton::Primary,
+                };
+                let mut input = Vec::new();
+                for event in events {
+                    let point = event.get("x").and_then(Value::as_f64).zip(event.get("y").and_then(Value::as_f64));
+                    let Some((x, y)) = point.filter(|(x, y)| x.is_finite() && y.is_finite() && x.abs() <= 1_000_000.0 && y.abs() <= 1_000_000.0) else {
+                        return err("invalid dialog pointer coordinates");
+                    };
+                    let pos = egui::pos2(x as f32, y as f32);
+                    input.push(egui::Event::PointerMoved(pos));
+                    match event.get("kind").and_then(Value::as_str) {
+                        Some("down" | "up") => input.push(egui::Event::PointerButton { pos, button, pressed: event["kind"] == "down", modifiers: mods }),
+                        Some("move") => {}
+                        _ => return err("invalid dialog pointer kind"),
+                    }
+                }
+                app.synthetic.extend(input);
+                app.synthetic_dialog = Some(dialog);
+                crate::doc_windows::queue_input(app, ctx);
+                app.synthetic_dialog = None;
+                ctx.request_repaint();
+                return Outcome::AfterInput;
+            }
+            if crate::native_dialogs::is_open(app) {
+                return err("a native dialog owns editing input");
+            }
             if let Some(t) = s("tool").and_then(Tool::from_name) {
                 app.ui.tool = t;
             }
@@ -639,6 +760,53 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             app.stylus.feed.set(None);
             ok(json!({"status": app.ui.status}))
         }
+        "ui.drag" => {
+            let point = |key: &str| -> Result<egui::Pos2, String> {
+                let values = p.get(key).and_then(Value::as_array).filter(|v| v.len() == 2).ok_or_else(|| format!("{key} must be [x,y]"))?;
+                let x = values.first().and_then(Value::as_f64).ok_or("invalid x")?;
+                let y = values.get(1).and_then(Value::as_f64).ok_or("invalid y")?;
+                if !x.is_finite() || !y.is_finite() || x.abs() > 1_000_000.0 || y.abs() > 1_000_000.0 {
+                    return Err("invalid drag coordinates".into());
+                }
+                Ok(egui::pos2(x as f32, y as f32))
+            };
+            let (from, to) = match (point("from"), point("to")) {
+                (Ok(a), Ok(b)) => (a, b),
+                (Err(e), _) | (_, Err(e)) => return err(e),
+            };
+            let phase = match p.get("phase") {
+                None => "complete",
+                Some(v) => match v.as_str() {
+                    Some(s) => s,
+                    None => return err("drag phase must be a string"),
+                },
+            };
+            if !matches!(phase, "complete" | "start" | "move" | "end") {
+                return err("drag phase must be complete, start, move or end");
+            }
+            let modifiers = egui::Modifiers::NONE;
+            if matches!(phase, "complete" | "start") {
+                app.synthetic.extend([
+                    egui::Event::PointerMoved(from),
+                    egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers },
+                ]);
+            }
+            app.synthetic.push(egui::Event::PointerMoved(to));
+            if matches!(phase, "complete" | "end") {
+                app.synthetic.push(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers });
+            }
+            app.synthetic_window = window;
+            app.synthetic_dialog = dialog;
+            if dialog.is_some() {
+                crate::doc_windows::queue_input(app, ctx);
+            } else {
+                crate::doc_windows::queue_drag_input(app, ctx);
+            }
+            app.synthetic_window = None;
+            app.synthetic_dialog = None;
+            ctx.request_repaint();
+            Outcome::AfterInput
+        }
         "ui.click" | "ui.move" => {
             // Screen coordinates in points (as reported by ui.inspect window size).
             let x = p.get("x").and_then(Value::as_f64).unwrap_or(0.0) as f32;
@@ -658,6 +826,11 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers: Default::default() });
                 app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: false, modifiers: Default::default() });
             }
+            app.synthetic_window = window;
+            app.synthetic_dialog = dialog;
+            crate::doc_windows::queue_input(app, ctx);
+            app.synthetic_window = None;
+            app.synthetic_dialog = None;
             ctx.request_repaint();
             Outcome::AfterInput
         }
@@ -676,18 +849,31 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             };
             app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
             app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+            app.synthetic_window = window;
+            app.synthetic_dialog = dialog;
+            crate::doc_windows::queue_input(app, ctx);
+            app.synthetic_window = None;
+            app.synthetic_dialog = None;
             ctx.request_repaint();
             Outcome::AfterInput
         }
         "ui.type" => {
             let Some(text) = s("text") else { return err("missing `text`") };
             app.synthetic.push(egui::Event::Text(text.to_string()));
+            app.synthetic_window = window;
+            app.synthetic_dialog = dialog;
+            crate::doc_windows::queue_input(app, ctx);
+            app.synthetic_window = None;
+            app.synthetic_dialog = None;
             ctx.request_repaint();
             Outcome::AfterInput
         }
         "ui.resize" => {
             let (w, h) = (p.get("width").and_then(Value::as_f64).unwrap_or(1280.0), p.get("height").and_then(Value::as_f64).unwrap_or(800.0));
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w as f32, h as f32)));
+            if !w.is_finite() || !h.is_finite() || !(160.0..=16384.0).contains(&w) || !(120.0..=16384.0).contains(&h) {
+                return err("invalid window size");
+            }
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::InnerSize(egui::vec2(w as f32, h as f32)));
             ok(Value::Null)
         }
         "ui.gpu.simulateLoss" => {
@@ -718,13 +904,13 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         "ui.screenshot" => {
             // Occluded windows don't render on macOS, so the screenshot would never arrive: raise first.
             if p.get("focus").and_then(Value::as_bool).unwrap_or(true) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
             }
             // The capture itself is issued by `PhotocraftApp::issue_screenshots` once open/close
             // animations (modals, popups) have settled.
             let token = app.ui.alloc_id();
             ctx.request_repaint();
-            Outcome::Screenshot { token, path: s("path").map(str::to_string) }
+            Outcome::Screenshot { token, path: s("path").map(str::to_string), window, dialog }
         }
         "app.open" => match s("path") {
             Some(path) => {
@@ -745,11 +931,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             None => err("missing `path`"),
         },
         "app.save" => wrap(app.save_automation(s("path").map(str::to_string)).map(|(p, w)| json!({"path": p, "warnings": w}))),
-        "app.quit" => {
-            app.allow_close = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            ok(Value::Null)
-        }
+        "app.quit" => wrap(crate::menus::invoke(app, ctx, "file.exit", Value::Null)),
         other => err(format!("unknown method `{other}`")),
     }
 }
@@ -758,7 +940,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
 pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     let screen = ctx.content_rect();
     let dialogs: Vec<Value> =
-        app.ui.dialogs.iter().map(|d| json!({"id": d.id, "kind": d.kind, "title": crate::dialogs::title(d), "fields": d.fields})).collect();
+        app.ui.dialogs.iter().map(|d| json!({"id": d.id, "kind": d.kind, "title": crate::dialogs::title(d), "fields": d.fields, "window": d.window, "presentation":d.presentation,"sourceDocument":d.source_document,"sourceRevision":d.source_revision})).collect();
     json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
@@ -766,6 +948,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "magnetic": app.ui.magnetic,
         "textEdit": app.ui.text_edit,
         "typeTransform": app.ui.type_transform,
+        "shapeCorners": crate::shape_corners_ui::inspect(app),
         "layerMenu": app.ui.layer_menu,
         "brushPicker": app.ui.brush_picker.map(|pos| json!({
             "pos": pos,
@@ -785,7 +968,12 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "view": app.ui.view,
         "views": app.ui.views,
         "dialogs": dialogs,
+        "documentContextMenu":crate::document_menu::inspect(app),
+        "documentDrag":crate::doc_windows::drag_inspect(ctx),
         "windows": app.ui.windows,
+        "activeWindow": app.ui.active_window,
+        "mainDocument": app.ui.main_document,
+        "dockedDocuments": crate::doc_windows::docked(app),
         "theme": app.ui.theme,
         "status": app.ui.status,
         "statusError": app.ui.status_error,
@@ -1235,6 +1423,33 @@ mod tests {
         assert_eq!(r["error"], "preference changes denied");
         assert_eq!(app.session.prefs().to_json(), before);
         assert!(app.ui.dialog_mut(id).is_some());
+    }
+
+    #[test]
+    fn shape_picker_confirmation_authorizes_the_actual_layer_and_fill_params() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":40,"height":30})).unwrap();
+        let layer = app.run("shape.create", json!({"rect":[2,2,20,20],"fill":"#0000ff"})).unwrap()["layer"].as_u64().unwrap();
+        let original = app.session.active().unwrap().doc.clone();
+        app.services.automation_command = Some(Box::new(move |id, p| {
+            if id == "shape.edit" {
+                assert_eq!(p["layer"], layer);
+                assert_eq!(p["fill"], json!([1.0, 0.0, 0.0, 1.0]));
+                Err("shape edits denied".into())
+            } else {
+                Ok(())
+            }
+        }));
+        let ctx = egui::Context::default();
+        let id = call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","target":"shapeFill"}))["result"]["dialog"].as_u64().unwrap();
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog":id,"field":"color","value":"#ff0000"}))["ok"], true);
+        // Presentation metadata cannot redirect the edit to a different layer/command.
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog":id,"field":"__params","value":{"layer":u64::MAX}}))["ok"], true);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog":id,"field":"__command","value":"layer.delete"}))["ok"], true);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog":id}))["ok"], false);
+        assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+        assert!(app.ui.dialog_mut(id).is_some(), "a denied edit leaves the picker open");
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog":id}))["ok"], true);
     }
 
     #[test]

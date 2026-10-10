@@ -1,4 +1,21 @@
-# PhotoCraft app icon
+# Prism app icon
+
+## Current macOS and Windows icon
+
+`photocraft-1024.png` is the owner-supplied 1024 × 1024 RGBA Prism logo.
+The macOS `photocraft.icns`, Windows `photocraft.ico`, and the 256 px runtime
+window icon are derived from this PNG, preserving its artwork and existing margins.
+Machine filenames remain `photocraft`.
+
+Regenerate these assets on macOS with `packaging/icons.sh --png` (requires
+`sips`, `iconutil`, and Cargo). The ICO contains 16, 20, 24, 32, 40, 48, 64,
+128 and 256 px images; the ICNS contains standard 1×/2× images up to 1024 px.
+
+The SVG files and other Linux sizes below still contain the previous artwork.
+Running the script without `--png` restores that SVG artwork, including replacing
+the current PNG, so use `--png` for the current macOS/Windows icon.
+
+## Previous SVG artwork
 
 A **nine-tailed kitsune with a brow diamond**: an engraving portrait, seated, looking back at the
 viewer, in the Crafting Apps' owl-template framing (full-bleed field, head and body filling the
@@ -12,7 +29,7 @@ Exactly three colours:
 |---|---|---|
 | Ink | `#0b0b0c` | line work and contours |
 | Paper | `#efe9dc` | the figure |
-| PhotoCraft blue (app colour) | `#2f7bf5` | the full-bleed field |
+| Prism blue (app colour) | `#2f7bf5` | the full-bleed field |
 
 ## Geometry
 

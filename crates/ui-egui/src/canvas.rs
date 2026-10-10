@@ -567,7 +567,7 @@ pub struct ViewXform {
 impl ViewXform {
     /// The main canvas's mapping for the active document as last laid out (inside the rulers).
     pub fn active(app: &PhotocraftApp) -> Option<Self> {
-        let v = app.ui.views.get(app.session.active_index()?)?;
+        let v = app.view(app.session.active_index()?)?;
         Some(Self {
             rect: crate::rulers::content_rect(app, app.last_canvas_rect),
             zoom: v.zoom,
@@ -651,7 +651,7 @@ pub fn zoom_step(z: f32, dir: i32) -> f32 {
     if dir > 0 { STEPS.iter().copied().find(|s| *s > z * 1.001).unwrap_or(32.0) } else { STEPS.iter().rev().copied().find(|s| *s < z * 0.999).unwrap_or(0.01) }
 }
 
-fn checker(app: &mut PhotocraftApp, ctx: &egui::Context) -> egui::TextureId {
+pub(crate) fn checker(app: &mut PhotocraftApp, ctx: &egui::Context) -> egui::TextureId {
     // Preferences › Transparency & Gamut colours (the texture is rebuilt when they change).
     let [ca, cb] = app.session.prefs().transparency_and_gamut.colors();
     if app.prefs_rt.checker_key != Some([ca, cb]) {
@@ -680,7 +680,7 @@ fn buffer_to_image(buf: &photocraft_compose::Buffer) -> egui::ColorImage {
 
 /// A composite as monitor pixels: document profile → monitor profile (nothing to do in the
 /// common sRGB-on-sRGB case).
-fn display_image(display: Option<&photocraft_engine::display_color::CanvasDisplay>, buf: &photocraft_compose::Buffer) -> egui::ColorImage {
+pub(crate) fn display_image(display: Option<&photocraft_engine::display_color::CanvasDisplay>, buf: &photocraft_compose::Buffer) -> egui::ColorImage {
     match display {
         Some(d) if !d.is_identity() => {
             let img = d.to_rgba8(buf);
@@ -693,7 +693,11 @@ fn display_image(display: Option<&photocraft_engine::display_color::CanvasDispla
 /// The canvas display of `doc` on `display` (`None`: the main window's) and a key that changes
 /// with it (folded into the canvas caches' preview keys, so a monitor or profile change
 /// re-renders).
-fn canvas_display(app: &PhotocraftApp, doc: &Document, display: Option<u32>) -> (Option<std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>>, u64) {
+pub(crate) fn canvas_display(
+    app: &PhotocraftApp,
+    doc: &Document,
+    display: Option<u32>,
+) -> (Option<std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>>, u64) {
     match app.session.color.canvas_display_for(doc, display.or(app.session.color.main_display)) {
         Ok(d) => {
             let k = d.key;
@@ -720,6 +724,12 @@ pub(crate) const GPU_OUTPUT: u32 = u32::MAX;
 
 /// The document to render: the committed one, or a clone with the live adjustment preview applied.
 fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Arc<Document>, u64) {
+    if let Some(shown) = crate::shape_color_ui::display_doc(app, idx) {
+        return shown;
+    }
+    if let Some(shown) = crate::shape_corners_ui::display_doc(app, idx) {
+        return shown;
+    }
     if let Some(shown) = crate::type_transform::display_doc(app, idx) {
         return shown;
     }
@@ -931,6 +941,18 @@ pub fn ensure_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
 fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u64), display_key: u64, last_damage: Option<DRect>) -> Option<DRect> {
     if seen.1 == now.1 ^ display_key && seen.0 + 1 == now.0 {
         return last_damage;
+    }
+    if seen.0 == now.0
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::shape_color_ui::damage(app, st.doc.id.0, now.0, seen.1 ^ display_key, now.1)
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
+    }
+    if seen.0 == now.0
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::shape_corners_ui::damage(app, st.doc.id.0, now.0, seen.1 ^ display_key, now.1)
+    {
+        return Some(r.inflate(effect_reach(&st.doc.layers)));
     }
     if seen.0 == now.0
         && let Some(st) = app.session.documents().get(idx)
@@ -1259,7 +1281,9 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
 /// Tabs + canvas for the active document, or the start screen; then drops layers dragged onto
 /// another document (`layer_transfer`).
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let workspace = ui.available_rect_before_wrap();
     documents(app, ui);
+    crate::doc_windows::drag_indicator(app, ui.ctx(), workspace);
     crate::layer_transfer::finish(app, ui.ctx());
     // Once a frame, not per document view: the right-click or options-bar Brush Preset picker.
     crate::paint_mouse::show_picker(app, ui.ctx());
@@ -1268,10 +1292,11 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the
 /// active document fills the area.
 pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usize, Rect)>> {
-    let idx = app.session.active_index()?;
-    let n = app.session.documents().len();
-    let cells = crate::view_cmds::cells(&app.ui.view.arrange, rect, n)?;
-    let mut shown: Vec<(usize, Rect)> = (0..n).map(|k| (idx + k) % n).zip(cells).collect();
+    let documents = crate::doc_windows::docked(app);
+    let active = crate::doc_windows::main_index(app)?;
+    let start = documents.iter().position(|i| *i == active).unwrap_or(0);
+    let cells = crate::view_cmds::cells(&app.ui.view.arrange, rect, documents.len())?;
+    let mut shown: Vec<_> = documents.iter().cycle().skip(start).take(documents.len()).copied().zip(cells).collect();
     shown.sort_by_key(|(d, _)| *d);
     Some(shown)
 }
@@ -1279,6 +1304,7 @@ pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usi
 fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     app.drop_canvas_rect = None;
     app.tab_strip = None;
+    crate::doc_windows::clear_drop_strip(ui.ctx());
     retain_gpu_documents(app);
     crate::transform_tool::track_steps(app, ui.ctx());
     let n = app.session.documents().len();
@@ -1296,14 +1322,26 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if !app.ui.view.hides_tabs() || opening {
         app.tab_strip = Some(tabs(app, ui));
         drop_slot_line(app, ui);
+        if let Some(strip) = &app.tab_strip {
+            crate::doc_windows::drop_strip(app, ui.ctx(), strip.rect, &strip.tabs);
+        }
     }
     if let Some(job) = app.jobs.focus.or_else(|| (n == 0).then(|| app.jobs.opens.last().map(|o| o.job)).flatten()) {
         crate::jobs_ui::open_card(app, ui, job);
         return;
     }
-    let Some(idx) = app.session.active_index() else { return };
+    let Some(idx) = crate::doc_windows::main_index(app) else {
+        paint_dots(ui, ui.available_rect_before_wrap());
+        return;
+    };
     let rect = ui.available_rect_before_wrap();
-    app.last_canvas_rect = rect;
+    let clicked = ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
+    if clicked && app.ui.dialogs.is_empty() && app.discard.is_none() {
+        crate::doc_windows::activate_main(app, idx);
+    }
+    if app.ui.active_window.is_none() {
+        app.last_canvas_rect = rect;
+    }
     app.drop_canvas_rect = Some(rect);
     // Window › Arrange: tiled / n-up layouts show several documents side by side; the active one
     // takes input, a click elsewhere activates that document.
@@ -1312,12 +1350,12 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         for (d, cell) in shown {
             let cell = cell.shrink(1.0);
             let view = app.ui.views[d].clone();
-            let v = canvas_view(app, ui, d, cell, view, d == idx);
-            if d != idx {
-                app.ui.views[d] = v;
-                if ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| cell.contains(p))) {
-                    app.session.set_active(d);
-                }
+            let v = canvas_view(app, ui, d, cell, view, d == idx && app.ui.active_window.is_none());
+            if let Some(main) = app.ui.views.get_mut(d) {
+                *main = v;
+            }
+            if d != idx && ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| cell.contains(p))) {
+                crate::doc_windows::activate_main(app, d);
             }
             let stroke = if d == idx { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, Color32::from_black_alpha(160)) };
             ui.painter().rect_stroke(cell, 0, stroke, egui::StrokeKind::Inside);
@@ -1325,7 +1363,10 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     }
     let view = app.ui.views[idx].clone();
-    canvas_view(app, ui, idx, rect, view, true);
+    let v = canvas_view(app, ui, idx, rect, view, app.ui.active_window.is_none());
+    if let Some(main) = app.ui.views.get_mut(idx) {
+        *main = v;
+    }
 }
 
 /// The tab strip; returns where its document tabs are.
@@ -1334,12 +1375,12 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     if t.pro {
         return pro_tabs(app, ui);
     }
-    let active = app.session.active_index();
-    let tab_count = app.session.documents().len();
+    let active = crate::doc_windows::main_index(app);
+    let documents = crate::doc_windows::docked(app);
+    let tab_count = documents.len();
     let mut doc_tabs = Vec::with_capacity(tab_count);
     let mut activate = None;
     let mut close = None;
-    let mut tab_action = None;
     let (mut focus_open, mut cancel_open) = (None, None);
     let focused_open = app.jobs.focus.is_some();
     // Layers dragged over a tab show its document (`layer_transfer`).
@@ -1351,10 +1392,9 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     // after the documents.
     let opening = crate::jobs_ui::open_tabs(app);
     // Every tab's natural width, whether or not it stays on the strip.
-    let natural: Vec<f32> = app
-        .session
-        .documents()
+    let natural: Vec<f32> = documents
         .iter()
+        .filter_map(|i| app.session.documents().get(*i))
         .map(|st| {
             let name = format!("{}{}", st.doc.name, if st.is_dirty() { " *" } else { "" });
             ui.painter().layout_no_wrap(name, font.clone(), t.text).size().x
@@ -1371,7 +1411,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         .jobs
         .focus
         .and_then(|job| opening.iter().position(|(open, _, _)| *open == job))
-        .map_or_else(|| app.session.active_index().unwrap_or(0), |p| tab_count + p);
+        .map_or_else(|| crate::doc_windows::main_index(app).and_then(|i| documents.iter().position(|d| *d == i)).unwrap_or(0), |p| tab_count + p);
     let frame = egui::Frame::NONE.fill(t.canvas).inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 4 }).show(ui, |ui| {
         let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), Sense::hover());
         let f = crate::tab_strip::fit(&natural, selected, row.width(), DOC_TAB_MIN_W, crate::tab_strip::CHEVRON_W);
@@ -1383,18 +1423,19 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             placed.push((i, r));
             x = r.right() + STUDIO_TAB_GAP;
         }
-        for &(i, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
+        for &(slot, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
+            let Some(&i) = documents.get(slot) else { continue };
             let Some(st) = app.session.documents().get(i) else { continue };
             let sel = Some(i) == active && !focused_open;
             let name = format!("{}{}", st.doc.name, if st.is_dirty() { " *" } else { "" });
             let meta = format!("{}/{}", mode_label(&st.doc), st.doc.depth.bits());
-            let natural_w = natural.get(i).copied().unwrap_or(0.0);
+            let natural_w = natural.get(slot).copied().unwrap_or(0.0);
             let meta_g = ui.painter().layout_no_wrap(meta, meta_font.clone(), t.text_faint);
             let name_max = (r.width() - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x).max(1.0);
             let name_g = crate::tab_strip::elided(ui, &name, font.clone(), t.text, name_max);
             // The title was cut: the tooltip has the rest of it.
             let cut = name_g.size().x + 0.5 < natural_w - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x;
-            let resp = ui.interact(r, ui.id().with(("dtab", i)), Sense::click());
+            let resp = ui.interact(r, ui.id().with(("dtab", i)), Sense::click_and_drag());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, sel, &st.doc.name));
             doc_tabs.push((i, r));
             if sel {
@@ -1423,9 +1464,8 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             } else if resp.clicked() {
                 activate = Some(i);
             }
-            resp.context_menu(|ui| {
-                tab_action = tab_context_menu(ui, i, tab_count);
-            });
+            crate::doc_windows::tab_drag(app, ui.ctx(), i, None, row, &resp);
+            crate::document_menu::response(app, ui, &resp, i, None);
         }
         // Files opening in the background: a tab with a progress underline; × cancels.
         for &(i, r) in placed.iter().filter(|(i, _)| *i >= tab_count) {
@@ -1459,12 +1499,16 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         if !f.overflow.is_empty() {
             let left = x.min((row.right() - crate::tab_strip::CHEVRON_W).max(row.left()));
             let r = Rect::from_min_size(egui::pos2(left, row.top()), egui::vec2(crate::tab_strip::CHEVRON_W, row.height()));
-            let labels: Vec<&str> =
-                app.session.documents().iter().map(|st| st.doc.name.as_str()).chain(opening.iter().map(|(_, name, _)| name.as_str())).collect();
+            let labels: Vec<&str> = documents
+                .iter()
+                .filter_map(|i| app.session.documents().get(*i))
+                .map(|st| st.doc.name.as_str())
+                .chain(opening.iter().map(|(_, name, _)| name.as_str()))
+                .collect();
             let mut picked = None;
             crate::tab_strip::overflow_button(ui, ui.id().with("dtab-overflow"), r, tl!("More documents"), &labels, &f.overflow, &mut picked);
             match picked {
-                Some(i) if i < tab_count => activate = Some(i),
+                Some(i) if i < tab_count => activate = documents.get(i).copied(),
                 Some(i) => focus_open = opening.get(i - tab_count).map(|(job, _, _)| *job).or(focus_open),
                 None => {}
             }
@@ -1477,36 +1521,18 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     if let Some(i) = close {
         let _ = crate::menus::invoke(app, ui.ctx(), "file.close", json!({"document": i}));
     }
-    if let Some((id, params)) = tab_action
-        && let Err(e) = crate::menus::invoke(app, ui.ctx(), id, params)
-    {
-        app.ui.status = e;
-        app.ui.status_error = true;
-    }
     TabStrip { rect: frame.response.rect, tabs: doc_tabs }
 }
 
 /// All tab actions go through the same guarded File commands as the menu bar, including the
 /// unsaved-changes prompt. The clicked tab is explicit even when another document is active.
+#[cfg(test)]
 fn tab_context_items(index: usize, count: usize) -> [(&'static str, &'static str, serde_json::Value, bool); 3] {
     [
         ("Close", "file.close", json!({"document": index}), true),
         ("Close Others", "file.closeOthers", json!({"document": index}), count > 1),
         ("Close All", "file.closeAll", json!({}), true),
     ]
-}
-
-fn tab_context_menu(ui: &mut egui::Ui, index: usize, count: usize) -> Option<(&'static str, serde_json::Value)> {
-    crate::widgets::menu_scroll(ui, |ui| {
-        ui.set_min_width(170.0);
-        for (label, id, params, enabled) in tab_context_items(index, count) {
-            if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
-                ui.close();
-                return Some((id, params));
-            }
-        }
-        None
-    })
 }
 
 /// Apply tab-strip clicks: a document tab shows that document, an opening tab its progress, and
@@ -1518,8 +1544,7 @@ fn open_tab_clicks(
     cancel_open: Option<photocraft_engine::jobs::JobId>,
 ) {
     if let Some(i) = activate {
-        app.session.set_active(i);
-        app.jobs.focus = None;
+        crate::doc_windows::activate_main(app, i);
     }
     if let Some(job) = focus_open {
         app.jobs.focus = Some(job);
@@ -1541,8 +1566,12 @@ const STUDIO_TAB_GAP: f32 = 4.0;
 /// Photoshop's tab title: "name @ 50% (Layer 1, RGB/8)", "(Layer 1, Layer Mask/8)" when the mask
 /// is targeted; the Background layer's name is omitted.
 fn pro_tab_title(app: &PhotocraftApp, i: usize) -> String {
+    document_title(app, i, app.ui.views.get(i).map_or(1.0, |v| v.zoom))
+}
+
+pub(crate) fn document_title(app: &PhotocraftApp, i: usize, zoom: f32) -> String {
     let Some(st) = app.session.documents().get(i) else { return String::new() };
-    let zoom = app.ui.views.get(i).map_or(100.0, |v| v.zoom * 100.0);
+    let zoom = zoom * 100.0;
     let active_layer = st.active_layer.and_then(|id| st.doc.layer(id)).filter(|l| !(l.name == "Background" && l.locks.transparency));
     let mask = app.session.active_index() == Some(i) && app.ui.mask_target && active_layer.is_some_and(|l| l.mask.is_some());
     let model = if mask { tl!("Layer Mask").to_string() } else { mode_label(&st.doc).to_string() };
@@ -1555,10 +1584,10 @@ fn pro_tab_title(app: &PhotocraftApp, i: usize) -> String {
 /// the end of the strip; the active document's tab always stays on the strip (#1276).
 fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let active = app.session.active_index().filter(|_| app.jobs.focus.is_none());
+    let active = crate::doc_windows::main_index(app).filter(|_| app.jobs.focus.is_none());
     let (mut activate, mut close) = (None, None);
-    let mut tab_action = None;
-    let tab_count = app.session.documents().len();
+    let documents = crate::doc_windows::docked(app);
+    let tab_count = documents.len();
     let dragging = crate::layer_transfer::pointer_if_armed(app, ui.ctx());
     let mut drag_over = None;
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
@@ -1568,7 +1597,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     // Files opening in the background (#210) are tabs too ("name (Opening… 45%)" with a progress
     // underline); they share the fit's index space, after the documents.
     let opening = crate::jobs_ui::open_tabs(app);
-    let mut titles: Vec<String> = (0..tab_count).map(|i| pro_tab_title(app, i)).collect();
+    let mut titles: Vec<String> = documents.iter().map(|i| pro_tab_title(app, *i)).collect();
     titles.extend(opening.iter().map(|(_, name, frac)| format!("{name} ({} {:.0}%)", tl!("Opening…"), frac * 100.0)));
     // Every tab's natural width, whether or not it stays on the strip.
     let natural: Vec<f32> = titles.iter().map(|title| ui.painter().layout_no_wrap(title.clone(), font.clone(), t.text).size().x + DOC_TAB_PAD).collect();
@@ -1576,7 +1605,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         .jobs
         .focus
         .and_then(|job| opening.iter().position(|(open, _, _)| *open == job))
-        .map_or_else(|| app.session.active_index().unwrap_or(0), |p| tab_count + p);
+        .map_or_else(|| crate::doc_windows::main_index(app).and_then(|i| documents.iter().position(|d| *d == i)).unwrap_or(0), |p| tab_count + p);
     let f = crate::tab_strip::fit(&natural, selected, strip.width(), DOC_TAB_MIN_W, crate::tab_strip::CHEVRON_W);
     let mut x = strip.left();
     let mut placed: Vec<(usize, Rect)> = Vec::with_capacity(f.shown.len());
@@ -1587,10 +1616,11 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     }
     let mut doc_tabs = Vec::with_capacity(tab_count);
     let (mut focus_open, mut cancel_open) = (None, None);
-    for &(i, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
-        let Some(title) = titles.get(i) else { continue };
+    for &(slot, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
+        let Some(&i) = documents.get(slot) else { continue };
+        let Some(title) = titles.get(slot) else { continue };
         let g = crate::tab_strip::elided(ui, title, font.clone(), t.text, (r.width() - DOC_TAB_PAD).max(1.0));
-        let resp = ui.interact(r, ui.id().with(("ptab", i)), Sense::click());
+        let resp = ui.interact(r, ui.id().with(("ptab", i)), Sense::click_and_drag());
         let sel = Some(i) == active;
         if sel {
             ui.painter().rect_filled(r, 0.0, t.chrome);
@@ -1609,16 +1639,15 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         xresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Close")));
         crate::icons::paint(ui, xr, "x", 10.0, if xresp.hovered() { t.text } else { t.text_faint });
         ui.painter().galley_with_override_text_color(at, g, if sel { t.text } else { t.text_faint });
-        let cut = natural.get(i).copied().unwrap_or(0.0) > r.width() + 0.5;
+        let cut = natural.get(slot).copied().unwrap_or(0.0) > r.width() + 0.5;
         let resp = if cut { resp.on_hover_text(title.as_str()) } else { resp };
         if xresp.clicked() {
             close = Some(i);
         } else if resp.clicked() {
             activate = Some(i);
         }
-        resp.context_menu(|ui| {
-            tab_action = tab_context_menu(ui, i, tab_count);
-        });
+        crate::doc_windows::tab_drag(app, ui.ctx(), i, None, strip, &resp);
+        crate::document_menu::response(app, ui, &resp, i, None);
         doc_tabs.push((i, r));
     }
     for &(i, r) in placed.iter().filter(|(i, _)| *i >= tab_count) {
@@ -1652,7 +1681,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         let mut picked = None;
         crate::tab_strip::overflow_button(ui, ui.id().with("ptab-overflow"), r, tl!("More documents"), &labels, &f.overflow, &mut picked);
         match picked {
-            Some(i) if i < tab_count => activate = Some(i),
+            Some(i) if i < tab_count => activate = documents.get(i).copied(),
             Some(i) => focus_open = opening.get(i - tab_count).map(|(job, _, _)| *job).or(focus_open),
             None => {}
         }
@@ -1663,12 +1692,6 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     }
     if let Some(i) = close {
         let _ = crate::menus::invoke(app, ui.ctx(), "file.close", json!({"document": i}));
-    }
-    if let Some((id, params)) = tab_action
-        && let Err(e) = crate::menus::invoke(app, ui.ctx(), id, params)
-    {
-        app.ui.status = e;
-        app.ui.status_error = true;
     }
     TabStrip { rect: strip, tabs: doc_tabs }
 }
@@ -1772,8 +1795,8 @@ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let area = ui.available_rect_before_wrap();
     paint_dots(ui, area);
-    // File › Open Recent, newest first (on the web there are no paths to reopen).
-    let recent: Vec<String> = if cfg!(target_arch = "wasm32") { Vec::new() } else { app.ui.recent_files.iter().take(HOME_RECENT).cloned().collect() };
+    // File › Open Recent, newest first.
+    let recent: Vec<String> = { app.ui.recent_files.iter().take(HOME_RECENT).cloned().collect() };
     let recent_h = if recent.is_empty() { 0.0 } else { 34.0 + recent.len() as f32 * HOME_RECENT_ROW };
     let card = Rect::from_center_size(area.center(), egui::vec2(460.0, 330.0 + recent_h));
     let new_label = crate::shortcuts::command_label(app, "New document…", "file.new");
@@ -1781,7 +1804,7 @@ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
         ui.vertical_centered(|ui| {
             ui.horizontal(|ui| {
-                let title = ui.painter().layout_no_wrap(tl!("PhotoCraft").into(), crate::theme::semibold(38.0), t.text);
+                let title = ui.painter().layout_no_wrap(tl!("Prism").into(), crate::theme::semibold(38.0), t.text);
                 let by = ui.painter().layout_no_wrap(tl!("open source").into(), egui::FontId::proportional(13.0), t.text_faint);
                 let total = title.size().x + by.size().x + 10.0;
                 ui.add_space(((card.width() - total) / 2.0).max(0.0));
@@ -1924,6 +1947,12 @@ fn hdr_preview(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f
 /// Draw one canvas view and handle its input. `primary` = main window (tools active).
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
+    if app.session.documents().get(idx).is_some_and(|st| crate::doc_windows::hides_canvas(&ctx, st.doc.id)) {
+        ui.allocate_rect(rect, Sense::hover());
+        ui.painter_at(rect).rect_filled(rect, 0.0, crate::theme::Tokens::get(&ctx).docking_placeholder);
+        return view;
+    }
+    let primary = primary && !crate::doc_windows::dragging(&ctx);
     // The display this window is on: its monitor profile (#569). A document window on a display
     // the last reading didn't know asks for a new one.
     let output = crate::monitor_status::view_display(app, &ctx);
@@ -1931,8 +1960,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         crate::monitor_status::check_window(app, &ctx);
     }
     let full = rect;
-    let rect = if primary { crate::rulers::content_rect(app, rect) } else { rect };
-    let doc = app.session.documents()[idx].doc.clone();
+    let rect = crate::rulers::content_rect(app, rect);
+    let Some(doc) = app.session.documents().get(idx).map(|s| s.doc.clone()) else { return view };
     let size = [doc.size.width, doc.size.height];
     if view.doc_size != size {
         // Like Photoshop: keep the zoom level, re-centre the resized document.
@@ -2300,19 +2329,31 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             crate::color_range_ui::canvas_eyedropper(app, &ctx, p, press);
         }
     }
+    let cancelled_crop_press = primary && app.ui.tool == Tool::Crop && crate::crop_ui::ignore_cancelled_pointer(app, &ctx);
+    let corner_input = primary && crate::shape_corners_ui::canvas_input(app, &ctx, &xf, &response);
     if tool == Tool::Hand && response.dragged() {
-        let d = xf.unmap_vec(response.drag_delta()) / view.zoom;
-        view.center[0] -= d.x;
-        view.center[1] -= d.y;
+        if !cancelled_crop_press && !corner_input {
+            let d = xf.unmap_vec(response.drag_delta()) / view.zoom;
+            view.center[0] -= d.x;
+            view.center[1] -= d.y;
+        }
     } else if primary {
         let mods = ui.input(|i| i.modifiers);
         // Tools follow the left button; the right one opens the Brush Preset picker or erases
         // (Preferences › Tools, `paint_mouse`).
         crate::paint_mouse::sync_tool_brush(app);
         let mut buttons = crate::paint_mouse::canvas_buttons(app, &response, tool);
+        if cancelled_crop_press || corner_input {
+            (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
+        }
         // The Crop tool's frame is edited from the press (before egui's drag threshold), so the
         // pixels past the canvas show at once, as in Photoshop.
-        if tool == Tool::Crop && response.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down()) && crate::crop_ui::press(app) {
+        if tool == Tool::Crop
+            && !cancelled_crop_press
+            && response.is_pointer_button_down_on()
+            && ui.input(|i| i.pointer.primary_down())
+            && crate::crop_ui::press(app)
+        {
             ctx.request_repaint();
         }
         // Capture temporary Type transforms at the actual press, before egui's drag threshold.
@@ -2552,6 +2593,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         crate::distort_ui::draw_overlay(app, &painter, &xf);
         crate::retouch_ui::draw_source_marker(app, &painter, &xf);
         crate::vector_ui::draw_overlay(app, &painter, &xf, &doc);
+        crate::shape_corners_ui::draw(app, &painter, &xf);
         crate::analysis_ui::draw_overlay(app, &painter, &xf);
         crate::gradient_ui::draw_overlay(app, &painter, &xf);
         crate::slice_ui::draw_overlay(app, &painter, &xf);
@@ -2564,6 +2606,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             ui.ctx().set_cursor_icon(if vertical { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
         } else if let Some(c) = response.hover_pos().and_then(|p| crate::transform_tool::cursor(app, xf.to_doc(p), ui.input(|i| i.modifiers.alt))) {
             ui.ctx().set_cursor_icon(c);
+        } else if let Some(c) = response.hover_pos().filter(|_| tool != Tool::Hand).and_then(|p| crate::shape_corners_ui::cursor(app, xf.to_doc(p))) {
+            ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().filter(|_| tool.is_type()).and_then(|p| {
             let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
             crate::type_transform::cursor(app, &ctx, &xf, p, mods)
@@ -2571,8 +2615,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Crop).and_then(|p| crate::crop_ui::cursor(app, xf.to_doc(p))) {
             ui.ctx().set_cursor_icon(c);
-        } else if app.drag.as_ref().is_some_and(|d| d.sel_move.is_some())
-            || response.hover_pos().is_some_and(|p| app.drag.is_none() && selection_drag_kind(app, tool, xf.to_doc(p), ui.input(|i| i.modifiers)).is_some())
+        } else if tool != Tool::Move
+            && (app.drag.as_ref().is_some_and(|d| d.sel_move.is_some())
+                || response
+                    .hover_pos()
+                    .is_some_and(|p| app.drag.is_none() && selection_drag_kind(app, tool, xf.to_doc(p), ui.input(|i| i.modifiers)).is_some()))
         {
             // Over the ants with a marquee or lasso: a press drags the selection.
             ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
@@ -2643,7 +2690,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 Tool::Move | Tool::Type | Tool::VerticalType if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise => {
                     egui::CursorIcon::Crosshair
                 }
-                Tool::Move => egui::CursorIcon::Move,
+                Tool::Move => crate::tool_cursor::move_tool(&painter, p, app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move) && response.dragged()),
                 Tool::Hand => {
                     if response.dragged() {
                         egui::CursorIcon::Grabbing
@@ -2701,13 +2748,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         app.perf.span("scrollbars", crate::gpu_canvas::now_ms() - t0);
         app.hover_doc = response.hover_pos().map(|p| xf.to_doc(p));
     }
-    if primary && app.ui.extras.rulers {
+    if app.ui.extras.rulers {
         crate::rulers::draw_rulers(app, ui, full, &xf);
     }
     crate::rotate_view::overlay(app, &ctx, &painter, &xf, &mut view, &response);
-    if primary {
-        app.ui.views[idx] = view.clone();
-    }
     view
 }
 
@@ -3206,6 +3250,9 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     let armed = std::mem::take(&mut app.brush_resize_armed);
     crate::transform_tool::end_if_left(app);
     let mods = crate::workspace_ui::sticky_mods(app, mods);
+    if crate::shape_corners_ui::pointer(app, ev, mods) {
+        return;
+    }
     if app.ui.transform.is_none() && crate::type_transform::pointer(app, ev, mods) {
         return;
     }
@@ -3675,30 +3722,158 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
 /// Extra OS windows showing documents (multi-window / multi-monitor).
 pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let wins = app.ui.windows.clone();
-    for w in wins.into_iter().filter(|w| w.open) {
+    for id in wins.into_iter().filter(|w| w.open).map(|w| w.id) {
+        let Some(w) = app.ui.windows.iter().find(|w| w.open && w.id == id).cloned() else { continue };
         let Some(st) = app.session.documents().get(w.document) else { continue };
-        let title = format!("{} — window {}", st.doc.name, w.id);
-        let vid = egui::ViewportId::from_hash_of(("docwin", w.id));
-        let builder = egui::ViewportBuilder::default().with_title(title).with_inner_size([800.0, 600.0]);
-        let mut view = w.view.clone();
-        let mut close = false;
-        ctx.show_viewport_immediate(vid, builder, |ui, _class| {
-            if ui.ctx().input(|i| i.viewport().close_requested()) {
-                close = true;
-            }
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
-                let rect = ui.available_rect_before_wrap();
-                view = canvas_view(app, ui, w.document, rect, view.clone(), false);
-            });
-        });
-        if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
-            win.view = view;
-            if close {
-                win.open = false;
-            }
+        let title = document_title(app, w.document, w.view.zoom);
+        let vid = crate::doc_windows::viewport(Some(w.id));
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title(title)
+            .with_inner_size(w.size.unwrap_or([800.0, 600.0]))
+            .with_min_inner_size([320.0, 240.0])
+            .with_decorations(cfg!(target_os = "macos"))
+            .with_fullsize_content_view(cfg!(target_os = "macos"))
+            .with_titlebar_shown(false)
+            .with_title_shown(false)
+            .with_window_level(crate::doc_windows::window_level(app, ctx));
+        if let Some([x, y]) = w.position {
+            builder = builder.with_position(egui::pos2(x, y));
         }
+        let _ = st;
+        ctx.show_viewport_immediate(vid, builder, |ui, _class| {
+            let child = ui.ctx().clone();
+            crate::doc_windows::sync_window_level(app, &child);
+            let previous_automation = app.automation_input;
+            app.automation_input = crate::doc_windows::automated(&child);
+            app.collect_screenshots(&child);
+            let focused = child.input(|i| i.focused);
+            let accepts_focus = crate::doc_windows::requested_focus(&child).is_none_or(|id| id == w.id);
+            if (app.automation_input || (focused && accepts_focus)) && app.ui.dialogs.is_empty() && app.discard.is_none() {
+                crate::doc_windows::activate(app, w.document, Some(w.id));
+            }
+            if child.input(|i| i.viewport().close_requested()) {
+                // Keep the viewport alive until File Close's save guard actually removes its doc.
+                child.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                if let Err(e) = crate::doc_windows::close(app, &child, w.id) {
+                    app.ui.status = e;
+                    app.ui.status_error = true;
+                }
+            }
+            if !app.ui.windows.iter().any(|x| x.id == w.id) || app.session.documents().get(w.document).is_none() {
+                app.automation_input = previous_automation;
+                return;
+            }
+            if focused || app.automation_input {
+                crate::shortcuts::handle(app, &child);
+            }
+            let Some(mut view) = app.ui.windows.iter().find(|x| x.id == w.id).map(|x| x.view.clone()) else {
+                app.automation_input = previous_automation;
+                return;
+            };
+            let blocked = (!app.ui.dialogs.is_empty() && !crate::doc_windows::dialogs_here(app, &child)) || !crate::discard_ui::here(app, &child);
+            if blocked {
+                ui.disable();
+            }
+            egui::Panel::top(egui::Id::new(("document-window-title", w.id))).exact_size(32.0).show(ui, |ui| {
+                let t = crate::theme::Tokens::get(&child);
+                let bar = ui.available_rect_before_wrap();
+                ui.painter().rect_filled(bar, 0.0, t.chrome);
+                let mut region = bar;
+                if cfg!(target_os = "macos") {
+                    region.min.x += 80.0;
+                } else {
+                    region.max.x -= crate::titlebar::WIDTH;
+                }
+                let response = ui.allocate_rect(region, Sense::click_and_drag());
+                let title = document_title(app, w.document, view.zoom);
+                let g = crate::tab_strip::elided(ui, &title, egui::FontId::proportional(12.0), t.text, region.width() - 12.0);
+                ui.painter().galley(egui::pos2(region.center().x - g.size().x / 2.0, region.center().y - g.size().y / 2.0), g, t.text);
+                if w.kind == crate::state::DocWindowKind::Detached {
+                    crate::doc_windows::tab_drag(app, &child, w.document, Some(w.id), region, &response);
+                } else if response.drag_started_by(egui::PointerButton::Primary) {
+                    child.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+                if response.double_clicked() {
+                    child.send_viewport_cmd(egui::ViewportCommand::Maximized(!child.input(|i| i.viewport().maximized.unwrap_or(false))));
+                }
+                crate::document_menu::response(app, ui, &response, w.document, Some(w.id));
+                if !cfg!(target_os = "macos") {
+                    crate::titlebar::caption_buttons_for(app, ui, bar, Some(w.id));
+                }
+            });
+            egui::Panel::top(egui::Id::new(("document-window-tab", w.id))).exact_size(26.0).show(ui, |ui| {
+                let t = crate::theme::Tokens::get(&child);
+                let rect = ui.available_rect_before_wrap();
+                let response = ui.allocate_rect(rect, Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::Default);
+                ui.painter().rect_filled(rect, 0.0, t.chrome);
+                let title = document_title(app, w.document, view.zoom);
+                let g = crate::tab_strip::elided(ui, &title, egui::FontId::proportional(11.5), t.text, rect.width() - 12.0);
+                ui.painter().galley(rect.min + egui::vec2(6.0, (rect.height() - g.size().y) / 2.0), g, t.text);
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, true, &title));
+                if w.kind == crate::state::DocWindowKind::Detached {
+                    crate::doc_windows::tab_drag(app, &child, w.document, Some(w.id), rect, &response);
+                }
+                crate::document_menu::response(app, ui, &response, w.document, Some(w.id));
+            });
+            egui::Panel::bottom(egui::Id::new(("document-window-status", w.id))).exact_size(24.0).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let mut zoom = view.zoom * 100.0;
+                    if ui.add(egui::DragValue::new(&mut zoom).range(1.0..=6400.0).suffix("%")).changed() {
+                        view.zoom = zoom / 100.0;
+                        view.fit_pending = false;
+                        view.fill_pending = false;
+                    }
+                    ui.separator();
+                    if let Some(st) = app.session.documents().get(w.document) {
+                        ui.label(format!("{} × {} px ({:.0} ppi)", st.doc.size.width, st.doc.size.height, st.doc.resolution_dpi));
+                    }
+                });
+            });
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(&child).canvas)).show(ui, |ui| {
+                let rect = ui.available_rect_before_wrap();
+                let interactive = app.ui.active_window == Some(w.id) && !blocked && !crate::doc_windows::dragging(&child);
+                if interactive {
+                    app.last_canvas_rect = rect;
+                }
+                view = canvas_view(app, ui, w.document, rect, view.clone(), interactive);
+            });
+            crate::doc_windows::move_window(&child, w.id);
+            crate::doc_windows::fade_window(app, &child, w.id);
+            if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
+                win.view = view;
+                if let Some(rect) = child.input(|i| i.viewport().inner_rect) {
+                    win.size = Some([rect.width(), rect.height()]);
+                }
+                if let Some(rect) = child.input(|i| i.viewport().outer_rect) {
+                    win.position = Some([rect.min.x, rect.min.y]);
+                }
+            }
+            if !cfg!(target_os = "macos") {
+                crate::titlebar::resize_zones(ui);
+            }
+            let dropped = child.input(|i| i.raw.dropped_files.clone());
+            if !dropped.is_empty() && !blocked {
+                let at = app.services.cursor_pos.as_mut().and_then(|f| f(&child));
+                app.open_dropped(&child, dropped, at);
+                app.place_next_dropped(&child);
+            }
+            crate::paint_mouse::show_picker(app, &child);
+            crate::dialogs::show(app, &child);
+            crate::discard_ui::show(app, &child);
+            if crate::doc_windows::dialogs_here(app, &child) {
+                crate::tiff_options_ui::show(app, &child);
+                crate::distort_ui::show(app, &child);
+                crate::camera_raw_ui::show(app, &child);
+                crate::wide_angle_ui::show(app, &child);
+            }
+            if crate::doc_windows::input_pending(app, &child) {
+                child.request_repaint();
+            }
+            let typing = child.text_edit_focused();
+            child.data_mut(|d| d.insert_temp(egui::Id::new(("document-text-focus", vid)), typing));
+            app.automation_input = previous_automation;
+        });
     }
-    app.ui.windows.retain(|w| w.open);
 }
 
 /// Selection mode from the options bar, overridden by modifier keys (⇧ add, ⌥ subtract, ⇧⌥ intersect).
@@ -3761,8 +3936,15 @@ pub fn commit_polygon(app: &mut PhotocraftApp) {
 /// Apply the crop tool's rectangle.
 pub fn commit_crop(app: &mut PhotocraftApp) {
     let Some(r) = app.ui.crop_rect.take() else { return };
-    // The untouched default frame crops nothing (Photoshop's ↵ on it does nothing).
-    if std::mem::take(&mut app.crop.default_frame) {
+    // Only the untouched full-canvas frame is a no-op. A frame initialized from a
+    // selection (including thumbnail transparency) must commit without a drag.
+    if std::mem::take(&mut app.crop.default_frame)
+        && app.session.active().is_some_and(|st| {
+            let b = st.doc.bounds();
+            r == [f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)]
+        })
+    {
+        crate::crop_ui::dismiss_frame(app);
         return;
     }
     let (x, y) = (r[0].round(), r[1].round());
@@ -3771,7 +3953,7 @@ pub fn commit_crop(app: &mut PhotocraftApp) {
     if app.run("image.crop", json!({"x": x, "y": y, "width": w, "height": h, "deleteCroppedPixels": delete})).is_ok()
         && let Some(i) = app.session.active_index()
     {
-        app.ui.views[i].fit_pending = true;
+        app.update_view(i, |v| v.fit_pending = true);
     }
 }
 

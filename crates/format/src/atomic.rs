@@ -1,4 +1,4 @@
-//! Crash-safe file replacement: the one way PhotoCraft writes a document to disk.
+//! Crash-safe file replacement: the one way Prism writes a document to disk.
 //!
 //! [`atomic_write`] never truncates the destination. It writes a temporary file in the **same
 //! directory**, flushes it to stable storage (`sync_all`), renames it over the destination and,
@@ -17,9 +17,6 @@
 //!   (`F_FULLFSYNC`), which SMB shares and some virtual file systems refuse while a plain `fsync`
 //!   works. [`sync_file`] falls back to the plain one there (#1336).
 //!
-//! On the web there is no file system: writes go through the platform services (downloads), so
-//! this module is never reached there; on `wasm32` every call returns the `std` "unsupported"
-//! error.
 //!
 //! [`atomic_write_with`] takes an [`AtomicFs`] so tests can inject failures at each step.
 
@@ -194,12 +191,9 @@ pub fn retry_rename(retry: RenameRetry, mut rename: impl FnMut() -> io::Result<(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn sleep_ms(ms: u64) {
     std::thread::sleep(std::time::Duration::from_millis(ms));
 }
-#[cfg(target_arch = "wasm32")]
-fn sleep_ms(_ms: u64) {}
 
 /// Write through a symlink to the file it points at, instead of replacing the link.
 fn resolve_symlink(path: &Path) -> PathBuf {

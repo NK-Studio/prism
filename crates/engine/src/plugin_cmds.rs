@@ -162,14 +162,8 @@ fn install(_s: &mut Session, p: &Value) -> Result<Value> {
     Ok(describe(&registry::install(plugin)))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn load_path(path: &str) -> Result<Plugin> {
     registry::load_file(std::path::Path::new(path), photocraft_plugins::Limits::default()).map_err(err)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn load_path(_: &str) -> Result<Plugin> {
-    Err(EngineError::Other("installing from a path is not available on the web; pass the module as base64 `data`".into()))
 }
 
 /// The plug-in folder last loaded from the preferences, and what happened.
@@ -190,17 +184,11 @@ pub(crate) fn sync_prefs(s: &Session) {
     *last = Some((folder.to_string(), load_folder(folder)));
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn load_folder(folder: &str) -> Value {
     match registry::load_folder(std::path::Path::new(folder)) {
         Ok(r) => json!({"folder": folder, "loaded": r.loaded, "failed": r.failed.iter().map(|(f, e)| json!({"file": f, "error": e})).collect::<Vec<_>>()}),
         Err(e) => json!({"folder": folder, "error": e.to_string()}),
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn load_folder(folder: &str) -> Value {
-    json!({"folder": folder, "error": "plug-in folders are not available on the web"})
 }
 
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {

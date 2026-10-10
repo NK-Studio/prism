@@ -1,5 +1,4 @@
 //! Opt-in release comparisons against the Motion Blur row kernel merged in upstream PR #902.
-#![cfg(not(target_arch = "wasm32"))]
 
 use super::*;
 use photocraft_color::{ColorMode, PixelFormat, SampleType};

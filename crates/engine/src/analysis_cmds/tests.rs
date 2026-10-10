@@ -245,7 +245,6 @@ fn log_delete_and_csv_export() {
     assert!(header.contains("Length") && header.contains("Gray Value (Mean)"));
     assert!(lines.next().unwrap().starts_with("Measurement 1,t,"));
     assert!(lines.next().unwrap().contains(",5.0,"), "{csv}");
-    #[cfg(not(target_arch = "wasm32"))]
     {
         let path = std::env::temp_dir().join(format!("pc-log-{}.csv", std::process::id()));
         let r = s.execute("measurementLog.export", json!({"path": path.to_str().unwrap(), "rows": [2]})).unwrap();

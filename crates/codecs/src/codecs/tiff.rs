@@ -50,7 +50,7 @@ const TAG_PHOTOSHOP: u16 = 34377;
 const TAG_IMAGE_SOURCE_DATA: u16 = 37724;
 
 /// `true` when [`encode`] writes little-endian (`II`) files: the `tiff` encoder writes the
-/// running target's byte order, and every target PhotoCraft builds for is little-endian.
+/// running target's byte order, and every target Prism builds for is little-endian.
 /// Byte-order-sensitive payloads (Photoshop layer data) must be produced to match.
 pub fn writes_little_endian() -> bool {
     cfg!(target_endian = "little")
@@ -681,14 +681,12 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
 fn zeroed(len: usize) -> Result<Vec<u8>, CodecError> {
     let mut v = Vec::new();
     v.try_reserve_exact(len).map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {len} bytes for the image")))?;
-    #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         // The capacity is already there: this only writes the zeros.
         v.par_extend(rayon::iter::repeat_n(0u8, len));
     }
-    #[cfg(target_arch = "wasm32")]
-    v.resize(len, 0);
+
     Ok(v)
 }
 
@@ -708,7 +706,6 @@ impl std::ops::Add for Tally {
 
 /// Decodes every band into `data`, in parallel on native targets (one decoder and scratch
 /// buffer per worker).
-#[cfg(not(target_arch = "wasm32"))]
 fn decode_bands<'a, O>(lay: &Layout, data: &mut [u8], band_bytes: usize, _first: &mut Decoder<Patched<'a>>, open: &O) -> Result<Tally, CodecError>
 where
     O: Fn() -> Result<Decoder<Patched<'a>>, CodecError> + Sync,
@@ -724,20 +721,6 @@ where
             },
         )
         .try_reduce(Tally::default, |a, b| Ok(a + b))
-}
-
-/// Decodes every band into `data`, one after the other.
-#[cfg(target_arch = "wasm32")]
-fn decode_bands<'a, O>(lay: &Layout, data: &mut [u8], band_bytes: usize, first: &mut Decoder<Patched<'a>>, _open: &O) -> Result<Tally, CodecError>
-where
-    O: Fn() -> Result<Decoder<Patched<'a>>, CodecError> + Sync,
-{
-    let mut scratch = Vec::new();
-    let mut tally = Tally::default();
-    for (b, band) in data.chunks_mut(band_bytes.max(1)).enumerate() {
-        tally = tally + decode_band(lay, first, &mut scratch, b, band)?;
-    }
-    Ok(tally)
 }
 
 /// Decodes band `b` (one strip, or one row of tiles, in every plane) into its output rows.

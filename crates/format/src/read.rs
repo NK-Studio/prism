@@ -8,7 +8,6 @@
 //! - **A clear out-of-memory error.** The buffer is reserved up front with `try_reserve_exact`,
 //!   and a file larger than the memory available says how much it needed.
 //!
-//! On `wasm32` there is no file system and every call returns the `std` "unsupported" error.
 
 use std::io::{self, Read};
 use std::path::Path;

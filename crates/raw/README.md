@@ -1,8 +1,7 @@
 # photocraft-raw
 
 A clean-room, pure-Rust camera raw decoder and developer. The crate is standalone (no workspace
-dependencies), has no `unsafe`, does no I/O (`&[u8]` in), builds for `wasm32-unknown-unknown`
-(sequential there, rayon-parallel on native) and never panics on hostile input: every offset is
+dependencies), has no `unsafe`, does no I/O (`&[u8]` in), uses rayon for parallel processing and never panics on hostile input: every offset is
 bounds-checked and sizes are checked against `Limits` before allocating.
 
 ```rust

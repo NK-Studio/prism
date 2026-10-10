@@ -603,7 +603,6 @@ mod tests {
         s.execute(RAW, json!({"exposure": 1})).unwrap();
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn lens_correction_batch_over_files() {
         let dir = std::env::temp_dir().join(format!("pc-lens-{}", std::process::id()));

@@ -1,6 +1,6 @@
 # Summary
 
-[PhotoCraft Documentation](README.md)
+[Prism Documentation](README.md)
 
 # Getting started
 

@@ -7,9 +7,6 @@
 //!   normalised force (`POINTER_PEN_INFO::pressure / 1024`); egui-winit forwards it as
 //!   `egui::Event::Touch { force }` alongside the emulated pointer. [`Stylus::update`] reads it.
 //!   winit drops the pen's tilt and rotation, so those stay 0.
-//! - **Web**: eframe forwards touch force but not pen pointer events, so the web runner listens
-//!   to `pointerdown`/`pointermove` itself and writes `pressure`, `tiltX`, `tiltY`, `twist` and
-//!   the eraser button of `pointerType == "pen"` events into the [`StylusFeed`].
 //! - **macOS**: winit 0.30 drops `NSEvent` tablet data, so the desktop app installs an AppKit
 //!   local event monitor (the `photocraft-tablet` crate) that writes pressure, tilt, rotation and
 //!   the eraser end into the [`StylusFeed`] before winit handles each event.
@@ -81,7 +78,7 @@ impl StylusFeed {
 /// Per-app stylus state.
 #[derive(Clone, Debug)]
 pub struct Stylus {
-    /// Pen samples pushed by the platform (desktop tablet monitor, web runner) or by automation.
+    /// Pen samples pushed by the platform (desktop tablet monitor) or by automation.
     pub feed: StylusFeed,
     /// Preferences › Tools › Use Tablet Pressure: off, a pen paints like a mouse.
     pub use_pressure: bool,

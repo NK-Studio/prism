@@ -91,13 +91,11 @@ pub fn segment(img: &RgbImage, seeds: &[bool]) -> (Gmm, Gmm, Vec<bool>) {
         };
         (cf, cb)
     };
-    #[cfg(not(target_arch = "wasm32"))]
     let costs: Vec<(f32, f32)> = {
         use rayon::prelude::*;
         img.px.par_iter().zip(geo.par_iter()).map(eval).collect()
     };
-    #[cfg(target_arch = "wasm32")]
-    let costs: Vec<(f32, f32)> = img.px.iter().zip(geo.iter()).map(eval).collect();
+
     let (cf, cb): (Vec<f32>, Vec<f32>) = costs.into_iter().unzip();
     let fixed: Vec<u8> = seeds.iter().map(|s| if *s { HARD_FG } else { FREE }).collect();
     let cut = grid_cut(img, &cf, &cb, &fixed, GAMMA, contrast_beta(img));

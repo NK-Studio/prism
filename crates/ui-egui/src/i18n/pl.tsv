@@ -13,7 +13,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Polish image-editing vocabulary (warstwa, maska, zaznaczenie, pędzel, rozmycie, krycie ...). No
 # proprietary localisation resource, string table or product UI was consulted or copied; add
-# entries the same way. Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...)
+# entries the same way. Product and technology names (Prism, ArtCraft, OpenType, CMYK, Lab ...)
 # stay in Latin letters; the trailing "…" of dialog commands is kept.
 # Conventions: menus are nouns (Plik, Edycja, Obraz ...), commands are infinitives (Otwórz…,
 # Zapisz jako…), sentence case as in the English source. Quotes: „…”.
@@ -670,7 +670,6 @@
 	Pro Medium Gray Theme	Motyw Pro (średni szary)
 	Studio Theme	Motyw Studio
 	Studio Light Theme	Motyw Studio (jasny)
-	Classic Theme	Motyw klasyczny
 	Next Theme	Następny motyw
 	Actions	Akcje
 	Brush Settings	Ustawienia pędzla
@@ -700,9 +699,9 @@
 	Timeline	Oś czasu
 	Tool Presets	Ustawienia wstępne narzędzi
 	Tools	Narzędzia
-	About PhotoCraft	O programie PhotoCraft
-	PhotoCraft Website	Strona internetowa PhotoCraft
-	PhotoCraft on GitHub	PhotoCraft na GitHubie
+	About Prism	O programie Prism
+	Prism Website	Strona internetowa Prism
+	Prism on GitHub	Prism na GitHubie
 	ArtCraft Website	Strona internetowa ArtCraft
 	Join the ArtCraft Discord…	Dołącz do Discorda ArtCraft…
 	Report an Issue…	Zgłoś problem…
@@ -983,7 +982,7 @@
 	Draw with the Pen tool (P) or make a work path from a selection.	Rysuj narzędziem Pióro (P) lub utwórz ścieżkę roboczą z zaznaczenia.
 	Drop an image or PSD anywhere to open it.	Upuść obraz lub plik PSD w dowolnym miejscu, aby go otworzyć.
 	Native file drag-and-drop is unavailable	Natywne przeciąganie plików jest niedostępne
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Natywne przeciąganie plików nie jest jeszcze obsługiwane w Waylandzie. Użyj Plik › Otwórz lub uruchom PhotoCraft w XWayland poleceniem `WAYLAND_DISPLAY= photocraft`.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run Prism under XWayland with `WAYLAND_DISPLAY= photocraft`.	Natywne przeciąganie plików nie jest jeszcze obsługiwane w Waylandzie. Użyj Plik › Otwórz lub uruchom Prism w XWayland poleceniem `WAYLAND_DISPLAY= photocraft`.
 	Duplicate Layers…	Duplikuj warstwy…
 	Duplicate style	Duplikuj styl
 	Edit Toolbar…	Edytuj pasek narzędzi…
@@ -1228,9 +1227,9 @@
 	Perspective Warp is not active	Wypaczenie perspektywy nie jest aktywne
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Wypaczenie perspektywy: narysuj płaszczyzny zgodnie z perspektywą obrazu, a następnie przełącz na wypaczenie
 	Photo Filter	Filtr fotograficzny
-	PhotoCraft	PhotoCraft
-	PhotoCraft Manages Colors	Kolorami zarządza PhotoCraft
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — natywny edytor obrazów o otwartym kodzie źródłowym, napisany w Rust.
+	Prism	Prism
+	Prism Manages Colors	Kolorami zarządza Prism
+	Prism — a native image editor written in Rust.	Prism — natywny edytor obrazów napisany w Rust.
 	Pin Depth:	Głębokość szpilki:
 	Pixel Length:	Długość w pikselach:
 	Pixels/Centimeter	Pikseli/centymetr
@@ -1617,7 +1616,7 @@
 	Pen Tilt	Nachylenie pióra
 	Pen Tool	Narzędzie Pióro
 	Photo	Zdjęcie
-	PhotoCraft website	Strona internetowa PhotoCraft
+	Prism website	Strona internetowa Prism
 	Picas	Pikasy
 	Pillow Emboss	Płaskorzeźba poduszkowa
 	Pixel Replacement	Zamiana pikseli
@@ -1938,7 +1937,7 @@
 	System Info…	Informacje o systemie…
 	System Info	Informacje o systemie
 	More panels	Więcej paneli
-	These settings aren't available in PhotoCraft yet.	Te ustawienia nie są jeszcze dostępne w PhotoCraft.
+	These settings aren't available in Prism yet.	Te ustawienia nie są jeszcze dostępne w Prism.
 	Graphics	Grafika
 	Reset GPU Backend	Resetuj backend GPU
 	Applies at next launch.	Zadziała po następnym uruchomieniu.
@@ -2496,7 +2495,7 @@
 	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	Tryb automatyczny używa akceleracji GPU, gdy jest dostępna, a w razie błędów przełącza się na renderowanie CPU.
 	Switched to CPU rendering	Przełączono na renderowanie CPU
 	GPU acceleration could not continue. Your documents are unchanged.	Akceleracja GPU nie mogła być kontynuowana. Twoje dokumenty nie zostały zmienione.
-	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft używa kompozytora obrazu CPU. Okno może nadal korzystać z karty graficznej.
+	Prism is using the CPU image compositor. The window may still use your graphics adapter.	Prism używa kompozytora obrazu CPU. Okno może nadal korzystać z karty graficznej.
 	Retry GPU requires a restart. Save your work first.	Ponowna próba z GPU wymaga restartu. Najpierw zapisz swoją pracę.
 	Keep Using CPU	Nadal używaj CPU
 	Retry GPU	Spróbuj ponownie z GPU
@@ -3210,8 +3209,8 @@ cameraRaw	Roughness	Chropowatość
 	Could not open	Nie można otworzyć
 	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: ścieżka nie jest prawidłowym Unicode; zmień nazwę pliku i otwórz go ponownie.
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Natywne przeciąganie i upuszczanie plików nie jest jeszcze obsługiwane w Wayland. Użyj Plik › Otwórz albo skopiuj obraz w menedżerze plików i wklej go za pomocą {paste}.
-	To drop files, start PhotoCraft under XWayland: `{command}`	Aby upuszczać pliki, uruchom PhotoCraft pod XWayland: `{command}`
-	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	Albo ustaw Preferencje › Wydajność › Serwer wyświetlania Linuksa na X11: PhotoCraft będzie wtedy zawsze uruchamiany pod XWayland.
+	To drop files, start Prism under XWayland: `{command}`	Aby upuszczać pliki, uruchom Prism pod XWayland: `{command}`
+	Or set Preferences › Performance › Linux display server to X11: Prism then always starts under XWayland.	Albo ustaw Preferencje › Wydajność › Serwer wyświetlania Linuksa na X11: Prism będzie wtedy zawsze uruchamiany pod XWayland.
 	Edit › Paste	Edycja › Wklej
 	Use File › Open, or paste a copied image with {paste}.	Użyj Plik › Otwórz albo wklej skopiowany obraz za pomocą {paste}.
 
@@ -3272,3 +3271,14 @@ cameraRaw	Roughness	Chropowatość
 	Rotate View Tool	Narzędzie Obróć widok
 	Reset View	Resetuj widok
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Przeciągnij wokół środka, aby obrócić widok  ·  Shift ogranicza do 15°
+
+	Move to Main Tabs	Przenieś do głównych kart
+	As:	Jako:
+	Automatic	Automatycznie
+	Duplicate Merged Layers Only	Powiel tylko scalone warstwy
+	Fit To:	Dopasuj do:
+	Original Size	Rozmiar oryginalny
+	Scale Styles	Skaluj style
+	{name} copy	{name} kopia
+	Duplicate Image	Powiel obraz
+	Preparing preview…	Przygotowywanie podglądu…

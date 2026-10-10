@@ -1,5 +1,5 @@
 # Release pipeline: every push to `release` builds signed installers for every platform and
-# creates or updates the draft GitHub Release "PhotoCraft v<version>". See docs/releasing.md.
+# creates or updates the draft GitHub Release "Prism v<version>". See docs/releasing.md.
 #
 # All jobs run in the `release` environment (restricted to the `release` branch), which holds
 # the signing secrets. Every secret is optional: missing ones produce unsigned artifacts and a
@@ -32,7 +32,7 @@ env:
   INPUT_VERSION: ${{ inputs.version }}
   # craft-fonts (https://github.com/storytold/craft-fonts): shared font assets every release
   # embeds (today the Japanese fonts). An optional build input for everyone else; see
-  # docs/development.md › Fonts. Bump deliberately; every desktop build job checks out this commit (not web).
+  # docs/development.md › Fonts. Bump deliberately; every desktop build job checks out this commit.
   CRAFT_FONTS_REF: abb83316d96aa59c1cf64784289e378fe9fa5695
 
 jobs:
@@ -62,7 +62,7 @@ jobs:
             echo "date=$(date -u +%Y-%m-%d)"
             echo "prerelease=$pre"
           } >>"$GITHUB_OUTPUT"
-          echo "### PhotoCraft v$v (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
+          echo "### Prism v$v (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
 
   macos:
     name: macOS universal
@@ -335,44 +335,10 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
 
-  web:
-    name: Web (wasm)
-    needs: version
-    runs-on: ubuntu-latest
-    # No `environment: release`: this job reads no secrets, so a branch dry run can run it.
-    env:
-      PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
-      TRUNK_VERSION: 0.21.14
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: release-web
-      - name: Install trunk
-        run: |
-          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz -C "$HOME/.cargo/bin" trunk
-          trunk --version
-      - name: Apply version override
-        if: inputs.version != ''
-        run: cargo xtask version set "$PHOTOCRAFT_VERSION"
-      # No craft-fonts here: the wasm32 build never embeds it (crates/text/build.rs), since even
-      # one Japanese font takes the wasm over packaging/web/package.sh's 24 MiB gate.
-      - name: Build and zip
-        run: packaging/web/package.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-web
-          path: dist/release/*
-          if-no-files-found: error
 
   release:
     name: Draft GitHub Release
-    needs: [version, macos, windows, linux, flatpak, freebsd, web]
+    needs: [version, macos, windows, linux, flatpak, freebsd]
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -396,7 +362,7 @@ jobs:
         working-directory: artifacts
         run: |
           tag="v$VERSION"
-          title="PhotoCraft v$VERSION"
+          title="Prism v$VERSION"
           pre=()
           if [ "$PRERELEASE" = true ]; then pre=(--prerelease); fi
           if draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then

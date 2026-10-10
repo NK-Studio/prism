@@ -271,6 +271,7 @@ pub fn handles(id: &str) -> bool {
                     | "floatInWindow"
                     | "floatAllInWindows"
                     | "newWindowForDocument"
+                    | "moveToTabs"
                     | "matchZoom"
                     | "matchLocation"
                     | "matchRotation"
@@ -322,6 +323,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         i if i.starts_with("window.arrange.") => match &i["window.arrange.".len()..] {
             "consolidateAllToTabs" => true,
             "floatInWindow" | "newWindowForDocument" => doc,
+            "moveToTabs" => app.ui.active_window.is_some_and(|id| app.ui.windows.iter().any(|w| w.id == id && w.kind == crate::state::DocWindowKind::Detached)),
             "matchZoom" | "matchLocation" | "matchRotation" | "matchAll" => app.session.documents().len() > 1 || !app.ui.windows.is_empty(),
             _ => {
                 app.session.documents().len() > 1
@@ -551,7 +553,7 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
         return Ok(json!(k));
     }
     if let Some(k) = id.strip_prefix("window.arrange.") {
-        return arrange(app, k);
+        return arrange(app, ctx, k, p);
     }
     match id {
         "view.extras" => {
@@ -579,8 +581,9 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
             // Print Size assumes Photoshop's default 72 ppi screen resolution.
             let dpi = app.session.active().map_or(72.0, |d| d.doc.resolution_dpi.max(1.0));
             let z = if id == "view.twoHundredPercent" { 2.0 } else { 72.0 / dpi };
-            app.ui.views[i].zoom = z.clamp(0.01, 64.0);
-            Ok(json!({"zoom": app.ui.views[i].zoom}))
+            let v = app.view_mut(i).ok_or("no document view")?;
+            v.zoom = z.clamp(0.01, 64.0);
+            Ok(json!({"zoom": v.zoom}))
         }
         "view.fitLayersOnScreen" => fit_layers(app),
         "view.fitArtboardOnScreen" => crate::artboard_ui::fit_artboard(app),
@@ -603,22 +606,14 @@ fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
     }
     let area = app.last_canvas_rect.size();
     let area = if area.x > 50.0 { area } else { egui::vec2(1200.0, 800.0) };
-    let v = &mut app.ui.views[i];
+    let v = app.view_mut(i).ok_or("no document view")?;
     v.zoom = ((area.x - 40.0) / b.width().max(1) as f32).min((area.y - 40.0) / b.height().max(1) as f32).clamp(0.01, 64.0);
     v.center = [(b.x0 + b.x1) as f32 / 2.0, (b.y0 + b.y1) as f32 / 2.0];
     v.fit_pending = false;
     Ok(json!({"zoom": v.zoom, "bounds": [b.x0, b.y0, b.x1, b.y1]}))
 }
 
-fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize) -> u64 {
-    let wid = app.ui.alloc_id();
-    let mut view = app.ui.views.get(doc).cloned().unwrap_or_default();
-    view.fit_pending = offset > 0 || view.fit_pending;
-    app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true });
-    wid
-}
-
-fn arrange(app: &mut PhotocraftApp, k: &str) -> Result<Value, String> {
+fn arrange(app: &mut PhotocraftApp, ctx: &egui::Context, k: &str, p: &Value) -> Result<Value, String> {
     if LAYOUTS.contains(&k) {
         app.ui.view.arrange = k.to_string();
         // Each document fits its new cell.
@@ -627,22 +622,32 @@ fn arrange(app: &mut PhotocraftApp, k: &str) -> Result<Value, String> {
     }
     match k {
         "consolidateAllToTabs" => {
-            app.ui.view.arrange = "tabs".into();
-            app.ui.windows.clear();
+            crate::doc_windows::consolidate(app);
             Ok(json!({"arrange": "tabs"}))
         }
-        "newWindowForDocument" | "floatInWindow" => {
-            let doc = app.session.active_index().ok_or("no document")?;
-            Ok(json!({"window": float_window(app, doc, 0)}))
+        "newWindowForDocument" => crate::doc_windows::additional(app, app.session.active_index().ok_or("no document")?),
+        "floatInWindow" => {
+            let doc = match p.get("document") {
+                Some(v) => v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or("invalid document")?,
+                None => app.session.active_index().ok_or("no document")?,
+            };
+            crate::doc_windows::detach(app, ctx, doc, None)
         }
+        "moveToTabs" => crate::doc_windows::attach(app, ctx, app.ui.active_window.ok_or("no active document window")?, None),
         "floatAllInWindows" | "cascade" => {
-            let n = app.session.documents().len();
-            let ids: Vec<u64> = (0..n).map(|d| float_window(app, d, d)).collect();
+            let documents = crate::doc_windows::docked(app);
+            let mut ids = Vec::new();
+            for (offset, document) in documents.into_iter().enumerate() {
+                let result = crate::doc_windows::detach(app, ctx, document, Some([80.0 + offset as f32 * 24.0, 80.0 + offset as f32 * 24.0]))?;
+                if let Some(id) = result.get("window").and_then(Value::as_u64) {
+                    ids.push(id);
+                }
+            }
             Ok(json!({"windows": ids}))
         }
         "matchZoom" | "matchLocation" | "matchRotation" | "matchAll" => {
             let i = app.session.active_index().ok_or("no document")?;
-            let src = app.ui.views.get(i).cloned().ok_or("no document")?;
+            let src = app.view(i).cloned().ok_or("no document")?;
             let (zoom, loc, rot) =
                 (matches!(k, "matchZoom" | "matchAll"), matches!(k, "matchLocation" | "matchAll"), matches!(k, "matchRotation" | "matchAll"));
             let apply = |v: &mut crate::state::View| {
@@ -806,15 +811,7 @@ fn default_dir(app: &PhotocraftApp) -> String {
 
 fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "file.closeAll" || id == "file.closeOthers" {
-        // Keep the remaining document's view (views are index-aligned with documents).
-        let keep = app.session.active_index().and_then(|i| app.ui.views.get(i).cloned());
-        let r = app.run(id, params.clone());
-        if r.is_ok() {
-            app.ui.views = if id == "file.closeAll" { Vec::new() } else { keep.into_iter().collect() };
-            app.ui.windows.clear();
-            app.sync_views();
-        }
-        return Some(r);
+        return Some(app.run(id, params.clone()));
     }
     if id == "type.pasteLoremIpsum" && no_params(params) {
         // While typing, paste at the caret.

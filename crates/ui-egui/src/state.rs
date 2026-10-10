@@ -361,10 +361,31 @@ impl Default for Panels {
 /// A modal or modeless dialog, identified by `id`, with editable fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Dialog {
+    #[serde(default)]
+    pub presentation: DialogPresentation,
+    #[serde(default)]
+    pub source_document: Option<photocraft_doc::DocId>,
+    #[serde(default)]
+    pub source_revision: Option<u64>,
+    #[serde(default)]
+    pub window: Option<u64>,
     pub id: u64,
     pub kind: DialogKind,
     /// Field values by name. Dialog widgets read and write these; so can automation.
     pub fields: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DialogPresentation {
+    #[default]
+    Embedded,
+    Native,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DocumentContextMenu {
+    pub document: photocraft_doc::DocId,
+    pub window: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -404,9 +425,23 @@ impl Default for View {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DocWindowKind {
+    #[default]
+    Additional,
+    Detached,
+}
+
 /// An extra OS window showing a document ("Window → Arrange → New Window for Document").
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DocWindow {
+    #[serde(default)]
+    pub size: Option<[f32; 2]>,
+    #[serde(default)]
+    pub kind: DocWindowKind,
+    #[serde(default)]
+    pub position: Option<[f32; 2]>,
     pub id: u64,
     pub document: usize,
     pub view: View,
@@ -827,6 +862,9 @@ pub struct UiState {
     /// Direct Selection tool: selected anchors and the drag in progress (#790).
     #[serde(default)]
     pub direct_selection: crate::direct_select::DirectSelection,
+    /// Live rectangle corner gesture, exposed to automation but never restored as a held pointer.
+    #[serde(default, skip_deserializing)]
+    pub shape_corners: Option<crate::shape_corners_ui::CornerDrag>,
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
@@ -865,7 +903,14 @@ pub struct UiState {
     /// Views per open document (index-aligned with the session's documents).
     pub views: Vec<View>,
     pub dialogs: Vec<Dialog>,
+    #[serde(default)]
+    pub document_context_menu: Option<DocumentContextMenu>,
     pub windows: Vec<DocWindow>,
+    /// Last document displayed in the main workspace; panels can follow a different window.
+    #[serde(default)]
+    pub main_document: Option<photocraft_doc::DocId>,
+    #[serde(default)]
+    pub active_window: Option<u64>,
     pub theme: crate::theme::ThemeKind,
     pub workspace: String,
     pub palette_open: bool,
@@ -959,11 +1004,15 @@ impl Default for UiState {
             layer_filter: Vec::new(),
             pen: None,
             direct_selection: Default::default(),
+            shape_corners: None,
             selected_path: None,
             panels: Panels::default(),
             views: Vec::new(),
             dialogs: Vec::new(),
+            document_context_menu: None,
             windows: Vec::new(),
+            main_document: None,
+            active_window: None,
             theme: crate::theme::ThemeKind::ProMedium,
             workspace: "Essentials".into(),
             palette_open: false,
@@ -1001,7 +1050,15 @@ impl UiState {
 
     pub fn open_dialog(&mut self, kind: DialogKind, fields: serde_json::Map<String, serde_json::Value>) -> u64 {
         let id = self.alloc_id();
-        self.dialogs.push(Dialog { id, kind, fields });
+        self.dialogs.push(Dialog {
+            id,
+            kind,
+            fields,
+            window: self.active_window,
+            presentation: Default::default(),
+            source_document: None,
+            source_revision: None,
+        });
         id
     }
 
