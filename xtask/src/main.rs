@@ -5,6 +5,7 @@
 
 mod corpus;
 mod corpus_pins;
+mod dev;
 mod i18n_coverage;
 mod ico;
 mod layers;
@@ -22,6 +23,8 @@ const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
+  dev [--check | --run] [--no-cache] [--features LIST] [-- <app args>]
+                  fast local build, optional compiler cache and native app bundle
   layers          enforce the crate dependency layering (plan/architecture.md §3)
   ci              fmt --check, clippy -D warnings, test, layers (stops at first failure)
   corpus [--all | --pngsuite | --psd | --psd-tools | --photoshop] [--local] [--update-manifest]
@@ -50,6 +53,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
     let result = match args.first().map(String::as_str) {
+        Some("dev") => dev::run(&rest),
         Some("layers") => cmd_layers(),
         Some("ci") => cmd_ci(),
         Some("corpus") => corpus::cmd(&rest),

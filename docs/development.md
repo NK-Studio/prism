@@ -44,6 +44,27 @@ Image code is slow at `opt-level 0`, so the workspace profile builds dependencie
 
 ### Faster local builds
 
+`cargo dev` builds the native desktop app with the existing `fast` profile. It finds an optional
+`sccache` on PATH and keeps workspace incremental compilation enabled; eligible nonincremental
+dependencies can use the compiler cache. An explicit compiler wrapper is preserved. Missing or
+unavailable sccache falls back to the compiler, and an automatically chosen sccache tolerates server
+I/O failures. No global Cargo configuration or release settings are changed.
+
+```sh
+cargo dev                              # build; macOS updates target/fast/Prism.app
+cargo dev --check                      # compiler check, no bundle or launch
+cargo dev --run -- image.psd           # explicitly launch after building
+cargo dev --no-cache                   # bypass compiler wrappers for this build
+cargo dev --features heif              # forward optional Cargo features
+```
+
+The artifact path comes from Cargo, so configured target directories are respected. On macOS,
+the development bundle uses the existing icon and plist, copies optional craft-fonts licenses,
+and is ad-hoc signed in a staging directory before replacing the previous app. Failed compilation
+or signing keeps the old bundle. Unchanged inputs skip bundle assembly and signing. On Windows,
+the result is the native `.exe`; `--run` launches that executable. This local command does not
+generate installers or change release signing.
+
 Use `cargo build-fast` to build the desktop app, or `cargo run-fast -- image.psd` to run it.
 The `fast` profile keeps optimization at level 2, disables LTO, uses 16 code-generation units,
 and enables incremental compilation. It keeps `panic = "unwind"` for the crash guard.
