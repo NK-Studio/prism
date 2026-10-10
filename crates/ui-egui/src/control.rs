@@ -727,6 +727,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if matches!(s("button"), Some("secondary" | "right")) {
                     let down = matches!(ev, ToolEvent::Down { .. });
+                    if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none()) {
+                        if down {
+                            crate::canvas_tool_menu::open_transform(app, screen_point(app, x, y));
+                        }
+                        continue;
+                    }
                     // Right-click with the Move tool, or ⌘/Ctrl+right-click: list the layers there.
                     if crate::layer_pick_ui::is_gesture(app.ui.tool, mods) {
                         if down {

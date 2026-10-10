@@ -85,6 +85,27 @@ fn history(h: &Harness<'static, PhotocraftApp>) -> usize {
     h.state().session.active().unwrap().history.entries().len()
 }
 
+#[test]
+fn rotation_shortcuts_confirm_or_cancel_the_whole_preview() {
+    let mut h = harness();
+    let initial_doc = h.state().session.active().unwrap().doc.clone();
+    let initial_history = history(&h);
+    begin(&mut h);
+    assert!(execute(&mut h, "edit.transform.rotate90Cw"));
+    assert!(execute(&mut h, "edit.transform.flipHorizontal"));
+    key(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(h.state().ui.transform.is_none());
+    assert!(std::sync::Arc::ptr_eq(&initial_doc, &h.state().session.active().unwrap().doc));
+    assert_eq!(history(&h), initial_history);
+    begin(&mut h);
+    assert!(execute(&mut h, "edit.transform.rotate90Cw"));
+    key(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(width(&h), 60);
+    assert_eq!(history(&h), initial_history + 1);
+    key(&mut h, Modifiers::COMMAND, Key::Z);
+    assert_eq!(width(&h), 100);
+}
+
 fn key(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers, k: Key) {
     h.key_press_modifiers(m, k);
     h.run_steps(2);

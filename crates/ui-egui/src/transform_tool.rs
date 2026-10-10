@@ -20,6 +20,10 @@ use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, ViewXform};
 use crate::state::{MadeLayer, Tool, TransformMode, TransformSession};
 
+#[cfg(test)]
+#[path = "transform_preset_tests.rs"]
+mod preset_tests;
+
 /// Which Split button is armed. The guide follows the pointer and the split is added on release.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SplitTool {
@@ -66,6 +70,16 @@ pub struct TransformPreview {
     steps: Steps,
     /// The tool the session began with: picking another one applies the transform.
     tool: Tool,
+    /// Source identity at session start; presets must never act on a replacement target.
+    source: Option<Source>,
+}
+
+struct Source {
+    revision: u64,
+    layer: u64,
+    selection: bool,
+    target: Option<serde_json::Value>,
+    paint_target: serde_json::Value,
 }
 
 /// Grab radius of the box's handles, in screen points. Generous, so a corner is easy to catch;
@@ -179,6 +193,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         split_quick: false,
         steps: Steps::default(),
         tool: app.ui.tool,
+        source: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -313,6 +328,7 @@ fn begin_lone(
         split_quick: false,
         steps: Steps::default(),
         tool: app.ui.tool,
+        source: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -372,6 +388,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         split_quick: false,
         steps: Steps::default(),
         tool: app.ui.tool,
+        source: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -588,8 +605,11 @@ pub fn cancel(app: &mut PhotocraftApp) {
 
 /// The session's starting box: where Undo stops.
 fn start_steps(app: &mut PhotocraftApp) {
+    let paint_target = crate::canvas::paint_target(app);
     if let (Some(t), Some(pv)) = (&app.ui.transform, app.transform_preview.as_mut()) {
         pv.steps = Steps { settled: Some(Step::of(t)), ..Steps::default() };
+        pv.source =
+            app.session.active().map(|st| Source { revision: st.revision, layer: t.layer, selection: t.selection, target: t.target.clone(), paint_target });
     }
 }
 
@@ -607,6 +627,9 @@ pub fn track_steps(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// Toggle Last State, which would change the document under the box), `None` for the rest.
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
     let t = app.ui.transform.as_ref()?;
+    if preset_matrix(id).is_some() {
+        return Some(preset_ready(app).is_ok());
+    }
     let steps = app.transform_preview.as_ref().map(|pv| &pv.steps);
     match id {
         "edit.undo" => Some(steps.is_some_and(|s| s.can_undo(&Step::of(t)))),
@@ -621,12 +644,82 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
 /// document under the box, is refused. `None` for other commands or when not transforming.
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
     app.ui.transform.as_ref()?;
+    if let Some(matrix) = preset_matrix(id) {
+        return Some(apply_preset(app, matrix));
+    }
     match id {
         "edit.undo" => Some(Ok(step(app, false))),
         "edit.redo" => Some(Ok(step(app, true))),
         "edit.toggleLastState" => Some(Err("Commit or cancel the transform first".into())),
         _ => None,
     }
+}
+
+/// Exact document-axis transforms; screen rotation never changes their direction.
+fn preset_matrix(id: &str) -> Option<[f64; 4]> {
+    Some(match id {
+        "edit.transform.rotate180" => [-1.0, 0.0, 0.0, -1.0],
+        "edit.transform.rotate90Cw" => [0.0, 1.0, -1.0, 0.0],
+        "edit.transform.rotate90Ccw" => [0.0, -1.0, 1.0, 0.0],
+        "edit.transform.flipHorizontal" => [-1.0, 0.0, 0.0, 1.0],
+        "edit.transform.flipVertical" => [1.0, 0.0, 0.0, -1.0],
+        _ => return None,
+    })
+}
+
+fn preset_ready(app: &PhotocraftApp) -> Result<(), String> {
+    let t = app.ui.transform.as_ref().ok_or("no transform session")?;
+    let pv = app.transform_preview.as_ref().ok_or("no transform preview")?;
+    let st = app.session.active().ok_or("no document")?;
+    let source = pv.source.as_ref().ok_or("no transform source")?;
+    if t.warp.is_some() || pv.gesture.is_some() || pv.warp_drag.is_some() {
+        return Err("Finish the handle drag or leave Warp before rotating or flipping".into());
+    }
+    if t.session != pv.session || st.doc.id != pv.doc.id || st.revision != source.revision {
+        return Err("The transform source has changed; cancel and start a new transform".into());
+    }
+    if t.layer != source.layer
+        || t.selection != source.selection
+        || t.target != source.target
+        || pv.tool != app.ui.tool
+        || (!t.selection && (st.active_layer.map_or(0, |id| id.0) != t.layer || crate::canvas::paint_target(app) != source.paint_target))
+    {
+        return Err("The transform target has changed; cancel and start a new transform".into());
+    }
+    if !t.selection {
+        if let Some(layer) = st.doc.layer(LayerId(t.layer)) {
+            let locks = st.doc.effective_locks(layer.id);
+            let parent = st.doc.path_of(layer.id).and_then(|path| path.split_last().map(|(_, parents)| st.doc.locks_at(parents))).unwrap_or_default();
+            if locks.all || (locks.position && (layer.name != "Background" || parent.position)) {
+                return Err("The transform layer is locked".into());
+            }
+        } else if t.target.is_none() {
+            return Err("The transform layer no longer exists".into());
+        }
+    }
+    if !t.quad.iter().flatten().chain(t.pivot.iter()).all(|v| v.is_finite()) {
+        return Err("The transform coordinates must be finite".into());
+    }
+    Ok(())
+}
+
+/// Change only the quad: the cached original pixels are sampled once, on final confirmation.
+fn apply_preset(app: &mut PhotocraftApp, [a, b, c, d]: [f64; 4]) -> Result<serde_json::Value, String> {
+    preset_ready(app)?;
+    let t = app.ui.transform.as_mut().ok_or("no transform session")?;
+    let pv = app.transform_preview.as_mut().ok_or("no transform preview")?;
+    let [px, py] = t.pivot;
+    let quad = t.quad.map(|[x, y]| {
+        let (dx, dy) = (x - px, y - py);
+        [px + a * dx + c * dy, py + b * dx + d * dy]
+    });
+    if !quad.iter().flatten().all(|v| v.is_finite()) {
+        return Err("The rotated transform coordinates are out of range".into());
+    }
+    pv.steps.settle(Step::of(t));
+    t.quad = quad;
+    pv.steps.settle(Step::of(t));
+    Ok(json!({"transform": t}))
 }
 
 /// Undo (or redo) one step of the open session; nothing mid-drag or with no step to take.

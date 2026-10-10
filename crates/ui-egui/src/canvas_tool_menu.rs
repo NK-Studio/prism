@@ -19,6 +19,9 @@ pub struct CanvasToolMenu {
     /// Opened over a Free Transform box: its modes instead of the tool's actions.
     #[serde(default)]
     pub transform: bool,
+    /// Keep an open menu bound to the box it was opened over.
+    #[serde(default)]
+    pub transform_session: Option<u64>,
 }
 
 /// One menu row: label and command id. `None` is a separator.
@@ -32,6 +35,13 @@ pub const TRANSFORM_MENU: &[Row] = &[
     Some(("Skew", "edit.transform.skew")),
     Some(("Distort", "edit.transform.distort")),
     Some(("Perspective", "edit.transform.perspective")),
+    None,
+    Some(("Rotate 180°", "edit.transform.rotate180")),
+    Some(("Rotate 90° Clockwise", "edit.transform.rotate90Cw")),
+    Some(("Rotate 90° Counter Clockwise", "edit.transform.rotate90Ccw")),
+    None,
+    Some(("Flip Horizontal", "edit.transform.flipHorizontal")),
+    Some(("Flip Vertical", "edit.transform.flipVertical")),
 ];
 
 /// Photoshop's selection-tool context menu with an active selection, in its order. Its Generative
@@ -141,7 +151,7 @@ pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> b
 /// Scale and Rotate are Free Transform's mode, so only Free Transform shows it checked.
 fn mode_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
     menu.transform
-        && !matches!(command, "edit.transform.scale" | "edit.transform.rotate")
+        && matches!(command, "edit.freeTransform" | "edit.transform.skew" | "edit.transform.distort" | "edit.transform.perspective")
         && app.ui.transform.as_ref().is_some_and(|t| t.mode == crate::state::TransformMode::for_command(command))
 }
 
@@ -152,11 +162,23 @@ pub fn open_transform(app: &mut PhotocraftApp, pos: [f32; 2]) -> bool {
     }
     app.ui.brush_picker = None;
     app.ui.layer_menu = None;
-    app.ui.canvas_tool_menu = Some(CanvasToolMenu { pos, tool: app.ui.tool, has_selection: false, has_path: false, path_name: None, transform: true });
+    let Some(session) = app.ui.transform.as_ref().map(|t| t.session) else { return false };
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu {
+        pos,
+        tool: app.ui.tool,
+        has_selection: false,
+        has_path: false,
+        path_name: None,
+        transform: true,
+        transform_session: Some(session),
+    });
     true
 }
 
 pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if menu.transform && menu.transform_session.is_some_and(|session| app.ui.transform.as_ref().is_none_or(|t| t.session != session)) {
+        return false;
+    }
     if menu.transform || menu.tool != Tool::Pen {
         return crate::menus::is_enabled(app, command);
     }
@@ -204,7 +226,7 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, pos: [f32; 2]) -> bool {
     let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
     let has_path = crate::vector_ui::active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let path_name = crate::vector_ui::active_path_name(app);
-    app.ui.canvas_tool_menu = Some(CanvasToolMenu { pos, tool, has_selection, has_path, path_name, transform: false });
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu { pos, tool, has_selection, has_path, path_name, transform: false, transform_session: None });
     true
 }
 
@@ -417,6 +439,48 @@ mod tests {
 
     fn labels(rows: &[Row]) -> Vec<Option<&str>> {
         rows.iter().map(|row| row.map(|(label, _)| label)).collect()
+    }
+
+    #[test]
+    fn transform_presets_follow_modes_and_close_only_the_menu() {
+        assert_eq!(
+            labels(TRANSFORM_MENU),
+            vec![
+                Some("Free Transform"),
+                Some("Scale"),
+                Some("Rotate"),
+                Some("Skew"),
+                Some("Distort"),
+                Some("Perspective"),
+                None,
+                Some("Rotate 180°"),
+                Some("Rotate 90° Clockwise"),
+                Some("Rotate 90° Counter Clockwise"),
+                None,
+                Some("Flip Horizontal"),
+                Some("Flip Vertical")
+            ]
+        );
+        let mut app = app();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let ctx = Context::default();
+        crate::transform_tool::begin(&mut app, &ctx).unwrap();
+        assert!(open_transform(&mut app, [10.0, 10.0]));
+        let menu = app.ui.canvas_tool_menu.as_ref().unwrap();
+        assert!(mode_checked(&app, menu, "edit.freeTransform"));
+        for (_, id) in TRANSFORM_MENU.iter().flatten().skip(6) {
+            assert!(!mode_checked(&app, menu, id));
+            assert!(available(&app, menu, id));
+        }
+        let session = app.ui.transform.as_ref().unwrap().session;
+        choose(&mut app, &ctx, "edit.transform.rotate90Cw");
+        assert!(app.ui.canvas_tool_menu.is_none());
+        assert_eq!(app.ui.transform.as_ref().unwrap().session, session);
+        // An old menu cannot control a newly opened box.
+        assert!(open_transform(&mut app, [10.0, 10.0]));
+        crate::transform_tool::cancel(&mut app);
+        crate::transform_tool::begin(&mut app, &ctx).unwrap();
+        assert!(!available(&app, app.ui.canvas_tool_menu.as_ref().unwrap(), "edit.transform.rotate180"));
     }
 
     #[test]

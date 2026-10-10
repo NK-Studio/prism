@@ -473,6 +473,10 @@ fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
 }
 
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
+    // A live box owns preset/history enablement, including a selection or mask target.
+    if let Some(e) = crate::transform_tool::is_enabled(app, id) {
+        return e;
+    }
     // Photoshop greys these for the Background layer, other layer kinds or single-layer documents.
     if crate::enable_rules::disabled(app, id) {
         return false;
@@ -490,9 +494,6 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         return e;
     }
     if let Some(e) = crate::plugin_ui::is_enabled(app, id) {
-        return e;
-    }
-    if let Some(e) = crate::transform_tool::is_enabled(app, id) {
         return e;
     }
     match id {

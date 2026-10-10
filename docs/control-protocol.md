@@ -114,6 +114,14 @@ regular Layer Style action; gradient/pattern shapes retain the Appearance contro
 
 ## Engine commands
 
+While ordinary Free Transform is open, `edit.transform.rotate180`, `edit.transform.rotate90Cw`,
+`edit.transform.rotate90Ccw`, `edit.transform.flipHorizontal` and `edit.transform.flipVertical`
+change the current preview about its pivot. Each call is one session Undo/Redo step; no source
+pixels change until confirmation. Without a session they retain their immediate engine behavior.
+`ui.pointer` with `button: "right"` opens the same transform menu as a physical right-click,
+including in a detached view targeted by `window`; choose a row with `ui.context.choose {id}`.
+Handle drags and stale or changed targets reject presets without changing the preview.
+
 Change the UI language without restarting with `prefs.set`:
 `{"path":"interface.language","value":"fr"}`. Supported codes and preview/apply behaviour
 are documented in [UI localisation](localization.md). `prefs.get` and the existing preference
