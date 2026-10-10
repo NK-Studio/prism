@@ -255,6 +255,43 @@ fn move_bitmap_is_bounded_and_hotspot_is_the_arrow_tip_at_fractional_dpi() {
 }
 
 #[test]
+fn native_move_cursor_uses_the_backends_coordinate_units_at_each_dpi() {
+    let ctx = egui::Context::default();
+    ctx.add_plugin(CursorLifecycle);
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        ctx.set_pixels_per_point(scale);
+        let output = frame(&ctx, |ui| {
+            let icon = move_tool(ui.painter(), egui::pos2(20.0, 20.0), false);
+            ui.ctx().set_cursor_icon(icon);
+        });
+        assert_eq!(ctx.pixels_per_point(), scale);
+        let image = output.platform_output.cursor_image.unwrap();
+        let expected = if cfg!(target_os = "macos") { 1.0 } else { scale };
+        assert_eq!(image.size, [(32.0 * expected).ceil() as u16; 2]);
+        assert_eq!(image.hotspot, [(2.0 * expected).round() as u16; 2]);
+    }
+}
+
+#[test]
+fn painted_move_cursor_keeps_its_point_size_at_each_dpi() {
+    let ctx = egui::Context::default();
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        ctx.set_pixels_per_point(scale);
+        let output = frame(&ctx, |ui| paint(ui.painter(), egui::pos2(20.0, 20.0), Shape::Move));
+        let bounds = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Mesh(mesh) => Some(mesh.calc_bounds()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(bounds.min, egui::pos2(18.0, 18.0));
+        assert_eq!(bounds.size(), vec2(32.0, 32.0));
+    }
+}
+
+#[test]
 fn move_cursor_clears_its_image_on_drag_and_when_a_panel_takes_the_pointer() {
     let ctx = egui::Context::default();
     ctx.add_plugin(CursorLifecycle);

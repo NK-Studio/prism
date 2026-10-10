@@ -70,7 +70,7 @@ fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
     // The native backend uploads cursor images in root and immediate document viewports.
     // Unsupported/oversize artwork retains the painter fallback below.
     if cfg!(target_os = "windows") || shape == Shape::Move {
-        let scale = ctx.pixels_per_point();
+        let scale = native_raster_scale(ctx.pixels_per_point());
         if let Some(image) = cached_image(ctx, shape, scale) {
             ctx.set_cursor_image(Some(image));
             ctx.data_mut(|d| {
@@ -88,6 +88,14 @@ fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
     }
     paint(painter, at, shape);
     CursorIcon::None
+}
+
+/// winit's AppKit backend uses bitmap dimensions for NSImage's size in points,
+/// including its hotspot. AppKit then applies the screen's backing scale itself.
+/// Windows expects physical pixels instead. The canvas fallback below still needs
+/// pixels_per_point for its texture, since the painter converts it back to points.
+fn native_raster_scale(pixels_per_point: f32) -> f32 {
+    if cfg!(target_os = "macos") { 1.0 } else { pixels_per_point }
 }
 
 fn cached_image(ctx: &egui::Context, shape: Shape, scale: f32) -> Option<CustomCursorImage> {
