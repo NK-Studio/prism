@@ -71,14 +71,6 @@ choice!(
     /// CPU disables image acceleration; the native window may still need hardware graphics.
     RenderingMode { Auto = "auto", Gpu = "gpu", Cpu = "cpu" } default Auto
 );
-choice!(
-    /// Linux display server of the desktop app's window (applies at next launch). `x11` runs
-    /// Prism through XWayland on a Wayland session, where native file drag and drop works
-    /// (winit 0.30 has none on Wayland, issue #386); fractional scaling may then look softer.
-    /// It needs an X server (`DISPLAY`); without one Prism starts as `auto`. Other
-    /// platforms ignore it.
-    LinuxDisplayServer { Auto = "auto", X11 = "x11" } default Auto
-);
 choice!(UiFontSize { Tiny = "tiny", Small = "small", Medium = "medium", Large = "large" } default Small);
 choice!(LogDestination { Metadata = "metadata", TextFile = "textFile", Both = "both" } default Metadata);
 choice!(LogDetail { SessionsOnly = "sessionsOnly", Concise = "concise", Detailed = "detailed" } default Concise);
@@ -227,7 +219,7 @@ pub struct Interface {
     /// Move tool drags show only the layer's outline and an arrow, leaving its pixels in place
     /// until release. Off (the default), the pixels follow the pointer live inside the outline.
     pub show_bounding_box_when_dragging_layer: bool,
-    /// Windows and Linux: use the system's title bar and window buttons instead of Prism's
+    /// Windows and FreeBSD: use the system's title bar and window buttons instead of Prism's
     /// own one-row title bar (tiling window managers, desktops that draw their own decorations;
     /// #1271, #1316). Read when the app starts. macOS always uses the system's.
     pub system_title_bar: bool,
@@ -420,8 +412,6 @@ pub struct Performance {
     /// sliders while they drag) render on a reduced copy: fast, but blocky when zoomed in. Off:
     /// they render at full resolution.
     pub low_resolution_previews: bool,
-    /// Linux display server (applies at next launch; see [`LinuxDisplayServer`]).
-    pub linux_display_server: LinuxDisplayServer,
     /// Memory budget of the layer-effect cache, in MB.
     pub effect_cache_mb: u32,
     pub legacy_compositing: bool,
@@ -451,7 +441,6 @@ impl Default for Performance {
             rendering_mode: None,
             gpu_backend: GpuBackend::Auto,
             low_resolution_previews: true,
-            linux_display_server: LinuxDisplayServer::Auto,
             effect_cache_mb: 768,
             legacy_compositing: false,
         }
@@ -888,12 +877,8 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
 
 /// Is the preference at `path` (`"section.key"`) hidden from the Preferences dialog?
 pub fn is_hidden(path: &str) -> bool {
-    HIDDEN_UNTIL_IMPLEMENTED.contains(&path) || (!cfg!(target_os = "linux") && LINUX_ONLY.contains(&path))
+    HIDDEN_UNTIL_IMPLEMENTED.contains(&path)
 }
-
-/// Preferences that only do something on Linux; the dialog doesn't show them elsewhere. They
-/// still load, save and round-trip on every platform.
-pub const LINUX_ONLY: &[&str] = &["performance.linuxDisplayServer"];
 
 /// Choices of an enumerated preference (dotted path, e.g. `"cursors.painting"`).
 pub fn choices(path: &str) -> Option<&'static [&'static str]> {
@@ -926,7 +911,6 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "rawDefaults.bitDepth" => RawDepth::NAMES,
         "rawDefaults.sharpenFor" => RawSharpen::NAMES,
         "performance.gpuBackend" => GpuBackend::NAMES,
-        "performance.linuxDisplayServer" => LinuxDisplayServer::NAMES,
         "performance.renderingMode" => RenderingMode::NAMES,
         _ => return None,
     })

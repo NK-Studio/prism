@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- AppStream metadata (software centres, Flathub). Template: package.sh and the Flatpak
-     manifest substitute @VERSION@ and @DATE@ from Cargo.toml and the build date. -->
+<!-- FreeBSD AppStream metadata (software centres). Template: package.sh substitutes @VERSION@ and @DATE@ from Cargo.toml and the build date. -->
 <component type="desktop-application">
   <id>ai.storyteller.photocraft</id>
   <metadata_license>CC0-1.0</metadata_license>

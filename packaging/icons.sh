@@ -45,7 +45,7 @@ fi
 command -v resvg >/dev/null || { echo "error: resvg not found (brew install resvg)" >&2; exit 1; }
 
 # The artwork is a full-bleed 512-unit tile (rx=112). macOS icons pad it to Apple's 824/1024 body
-# grid (transparent margin). Windows and Linux icons crop 22 units off each side (into the
+# grid (transparent margin). Windows and FreeBSD icons crop 22 units off each side (into the
 # rounded corners) so the portrait reads at 16-48 px.
 grep -q 'viewBox="0 0 512 512"' "$SVG" || { echo "error: expected viewBox=\"0 0 512 512\" in $SVG" >&2; exit 1; }
 MAC="$TMP/mac.svg"
@@ -57,7 +57,7 @@ render() { resvg -w "$2" -h "$2" "$1" "$3" </dev/null; }
 
 render "$MAC" 1024 "$DIR/photocraft-1024.png"
 
-# Linux hicolor theme.
+# FreeBSD hicolor theme (the 256px PNG is also the runtime window icon).
 for s in 16 24 32 48 64 128 256 512; do
   mkdir -p "$DIR/hicolor/${s}x${s}/apps"
   render "$TIGHT" "$s" "$DIR/hicolor/${s}x${s}/apps/ai.storyteller.photocraft.png"

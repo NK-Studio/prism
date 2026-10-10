@@ -22,7 +22,7 @@ const OPEN_EXTS: &[&str] = &[
 ];
 
 /// Open dialog extensions that also match uppercase and mixed-case names (`IMG_0001.JPG`).
-/// On Linux and the BSDs rfd turns each extension into a case-sensitive `*.ext` glob for the XDG
+/// On FreeBSD rfd turns each extension into a case-sensitive `*.ext` glob for the XDG
 /// portal or zenity, so every letter becomes a character class, as the portal spec suggests
 /// (`*.[iI][cC][oO]`). Windows and macOS take literal extensions and ignore case already.
 fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
@@ -212,25 +212,6 @@ fn image_from_files(paths: &[PathBuf]) -> Option<(u32, u32, Vec<u8>)> {
     })
 }
 
-/// The shell command that starts this install under XWayland, where winit delivers file drops
-/// (winit 0.30 has none on Wayland, #386). A Flatpak gets the X11 socket only without the Wayland
-/// one, an AppImage relaunches by its own path, and anything else is `photocraft` on the PATH.
-/// `None` outside Flatpak when there is no X server (`DISPLAY` unset) to run on.
-#[cfg(any(target_os = "linux", test))]
-pub fn xwayland_command(flatpak_id: Option<&str>, appimage: Option<&str>, x_display: bool) -> Option<String> {
-    if let Some(id) = flatpak_id.filter(|id| !id.is_empty()) {
-        return Some(format!("flatpak run --nosocket=wayland --socket=x11 {}", shell_word(id)));
-    }
-    let exe = appimage.filter(|path| !path.is_empty()).map_or_else(|| "photocraft".to_string(), shell_word);
-    x_display.then(|| format!("WAYLAND_DISPLAY= {exe}"))
-}
-
-/// `s` as one POSIX shell word: bare when every character is safe there, else single-quoted.
-#[cfg(any(target_os = "linux", test))]
-fn shell_word(s: &str) -> String {
-    if s.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-+:,@".contains(&b)) { s.to_string() } else { format!("'{}'", s.replace('\'', r"'\''")) }
-}
-
 pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
     let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
     let automation_read = automation.clone().map(|workspace| {
@@ -317,7 +298,6 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         os_events: None,
         // Set by main, which starts loading the store before the window opens.
         preset_store: None,
-        is_wayland: false,
         ..recovery_services(recovery_dir())
     }
 }
@@ -428,23 +408,6 @@ mod tests {
     fn open_filters_keep_literal_extensions_on_windows_and_macos() {
         assert_eq!(open_filter_extensions(OPEN_EXTS), OPEN_EXTS);
         assert_eq!(open_filter_extensions(&["pcraft"]), ["pcraft"]);
-    }
-
-    #[test]
-    fn xwayland_command_matches_how_photocraft_was_installed() {
-        // Flatpak: WAYLAND_DISPLAY doesn't reach the sandbox's socket choice; flatpak's flags do.
-        let flatpak = xwayland_command(Some("ai.storyteller.photocraft"), None, false);
-        assert_eq!(flatpak.as_deref(), Some("flatpak run --nosocket=wayland --socket=x11 ai.storyteller.photocraft"));
-        // AppImage: its own path, quoted for the shell (spaces, quotes).
-        let appimage = xwayland_command(None, Some("/home/me/My Apps/it's.AppImage"), true);
-        assert_eq!(appimage.as_deref(), Some(r"WAYLAND_DISPLAY= '/home/me/My Apps/it'\''s.AppImage'"));
-        let bare = xwayland_command(None, Some("/opt/photocraft-0.3.0-linux-x86_64.AppImage"), true);
-        assert_eq!(bare.as_deref(), Some("WAYLAND_DISPLAY= /opt/photocraft-0.3.0-linux-x86_64.AppImage"));
-        // deb, rpm, AUR, tarball: the binary on the PATH.
-        assert_eq!(xwayland_command(None, None, true).as_deref(), Some("WAYLAND_DISPLAY= photocraft"));
-        assert_eq!(xwayland_command(Some(""), Some(""), true).as_deref(), Some("WAYLAND_DISPLAY= photocraft"));
-        // No X server (XWayland disabled): nothing to suggest.
-        assert_eq!(xwayland_command(None, Some("/opt/p.AppImage"), false), None);
     }
 
     /// Tests every native save dialog and records the suggested file name. Each name's file type must come first

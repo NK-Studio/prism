@@ -1390,11 +1390,6 @@
 	BLANK DOCUMENT PRESETS ({n})	НАБОРЫ ПУСТЫХ ДОКУМЕНТОВ ({n})
 	Create a new document or open an existing file.	Создайте новый документ или откройте существующий файл.
 	Drop an image or PSD anywhere to open it.	Перетащите изображение или PSD в любое место окна, чтобы открыть.
-	Use File › Open, or paste a copied image with {paste}.	Выберите Файл › Открыть или вставьте скопированное изображение с помощью {paste}.
-	Native file drag-and-drop is unavailable	Нативное перетаскивание файлов в Wayland недоступно
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Нативное перетаскивание файлов в Wayland пока не поддерживается. Откройте файл через Файл › Открыть или скопируйте изображение в файловом менеджере и вставьте его с помощью {paste}.
-	To drop files, start Prism under XWayland: `{command}`	Чтобы перетаскивать файлы, запустите Prism в XWayland: `{command}`
-	Or set Preferences › Performance › Linux display server to X11: Prism then always starts under XWayland.	Или выберите в Настройки › Производительность › Дисплейный сервер Linux значение X11: Prism будет всегда запускаться в XWayland.
 	Edit › Paste	Редактирование › Вставить
 	Photo	Фото
 	Print	Печать
@@ -2179,8 +2174,6 @@
 	Font preview	Предпросмотр шрифтов
 	Full size tip	Весь диаметр кисти
 	GPU backend	Бэкенд GPU
-	Linux display server	Дисплейный сервер Linux
-	X11	X11
 	Gamut warning color	Цвет предупреждения об охвате
 	Gamut warning opacity	Непрозрачность предупреждения об охвате
 	General	Основные

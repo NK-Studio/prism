@@ -365,13 +365,6 @@ fn gpu_backend_round_trips_and_validates() {
 }
 
 #[test]
-fn linux_only_preferences_show_only_on_linux() {
-    assert_eq!(is_hidden("performance.linuxDisplayServer"), !cfg!(target_os = "linux"));
-    assert!(!is_hidden("performance.gpuBackend"));
-    assert!(LINUX_ONLY.iter().all(|p| choices(p).is_some()), "every Linux-only preference is a real one");
-}
-
-#[test]
 fn removed_classic_theme_migrates_only_when_loading_saved_preferences() {
     let mut session = Session::new();
     session.load_prefs_json(r#"{"interface":{"theme":"classic","showTooltips":false}}"#).unwrap();
@@ -380,4 +373,14 @@ fn removed_classic_theme_migrates_only_when_loading_saved_preferences() {
     assert!(!super::Theme::NAMES.contains(&"classic"));
     assert!(super::Theme::parse("classic").is_none());
     assert!(session.execute("prefs.set", serde_json::json!({"values":{"interface.theme":"classic"}})).is_err());
+}
+
+#[test]
+fn removed_linux_preference_does_not_break_saved_preferences() {
+    let mut session = Session::new();
+    session.load_prefs_json(r#"{"performance":{"linuxDisplayServer":"x11","gpuBackend":"metal"}}"#).unwrap();
+    assert_eq!(session.prefs().performance.gpu_backend, GpuBackend::Metal);
+    assert!(choices("performance.linuxDisplayServer").is_none());
+    let saved = serde_json::to_value(session.prefs()).unwrap();
+    assert!(saved["performance"].get("linuxDisplayServer").is_none());
 }

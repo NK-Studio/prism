@@ -8,7 +8,7 @@
 //!    `%APPDATA%`. The Windows portable zip ships with `portable.txt`; the MSI doesn't. If that
 //!    folder can't be written (read-only medium, Program Files), the app warns and falls back.
 //! 3. The platform convention: macOS `~/Library/Application Support/Photocraft`, Windows
-//!    `%APPDATA%\Photocraft`, Linux `$XDG_CONFIG_HOME/photocraft` or `~/.config/photocraft`.
+//!    `%APPDATA%\Photocraft`, FreeBSD `$XDG_CONFIG_HOME/photocraft` or `~/.config/photocraft`.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

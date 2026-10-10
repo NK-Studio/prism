@@ -977,15 +977,10 @@
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Clic: seleccionar punto · Arrastrar: mover punto, manejador o segmento · {shift}-clic: añadir · {alt}-clic: subtrazado completo
 	Draw with the Pen tool (P) or make a work path from a selection.	Dibuja con la herramienta Pluma (P) o crea un trazado de trabajo a partir de una selección.
 	Drop an image or PSD anywhere to open it.	Suelte una imagen o un PSD en cualquier lugar para abrirlo.
-	Native file drag-and-drop is unavailable	El arrastrar y soltar archivos de forma nativa no está disponible en Wayland
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	El arrastrar y soltar archivos de forma nativa aún no está disponible en Wayland. Usa Archivo › Abrir, o copia la imagen en tu gestor de archivos y pégala con {paste}.
-	To drop files, start Prism under XWayland: `{command}`	Para soltar archivos, inicia Prism bajo XWayland: `{command}`
-	Or set Preferences › Performance › Linux display server to X11: Prism then always starts under XWayland.	O establece Preferencias › Rendimiento › Servidor de pantalla de Linux en X11: Prism se iniciará siempre bajo XWayland.
 	Edit › Paste	Edición › Pegar
 	Duplicate Layers…	Duplicar capas…
 	Duplicate style	Duplicar estilo
 	Edit Toolbar…	Editar barra de herramientas…
-	Use File › Open, or paste a copied image with {paste}.	Usa Archivo › Abrir, o pega una imagen copiada con {paste}.
 	Edit in Quick Mask Mode  (Q)	Editar en modo de máscara rápida  (Q)
 	Edit in Standard Mode  (Q)	Editar en modo estándar  (Q)
 	Effects	Efectos
@@ -2013,8 +2008,6 @@
 	CPU (no GPU acceleration)	CPU (sin aceleración por GPU)
 	DirectX 12	DirectX 12
 	GPU backend	Backend de GPU
-	Linux display server	Servidor de pantalla de Linux
-	X11	X11
 	Metal	Metal
 	OpenGL	OpenGL
 	Use tablet pressure	Usar la presión de la tableta

@@ -279,11 +279,6 @@ pub struct Services {
     /// Preferences persistence in the platform config directory (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,
     pub save_prefs: Option<SaveTextFn>,
-    /// The native window is connected directly to a Wayland compositor.
-    pub is_wayland: bool,
-    /// On Wayland, the shell command that starts this install under XWayland, where native file
-    /// drops work (#386); `None` when there is no X server to run it on.
-    pub xwayland_command: Option<String>,
     /// Crash-recovery autosave (Preferences › File Handling) and recovery at launch.
     pub autosave: Option<AutosaveFn>,
     /// None for services that report synchronous success through `autosave`.
@@ -379,7 +374,7 @@ pub struct PhotocraftApp {
     styled: bool,
     /// Whether the window uses an integrated (transparent) macOS title bar.
     pub integrated_titlebar: bool,
-    /// Windows and Linux: the window has no OS decorations and the app's top bar is the title bar
+    /// Windows and FreeBSD: the window has no OS decorations and the app's top bar is the title bar
     /// (caption buttons, window dragging and edge resizing, `titlebar`).
     pub custom_titlebar: bool,
     fonts_ready: bool,
@@ -600,7 +595,6 @@ impl PhotocraftApp {
         };
         // Saved preferences (and recovered documents) are in place before the first frame.
         prefs_ui::load(&mut app);
-        notices::wayland_file_drop_guidance(&mut app);
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
         app

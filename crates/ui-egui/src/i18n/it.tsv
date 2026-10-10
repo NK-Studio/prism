@@ -976,15 +976,10 @@
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Clic: seleziona punto · Trascina: sposta punto, maniglia o segmento · {shift}-clic: aggiungi · {alt}-clic: intero sottotracciato
 	Draw with the Pen tool (P) or make a work path from a selection.	Disegna con Penna (P) o crea un tracciato di lavoro da una selezione.
 	Drop an image or PSD anywhere to open it.	Trascina un'immagine o PSD ovunque per aprirlo.
-	Native file drag-and-drop is unavailable	Il drag-and-drop nativo file non è disponibile su Wayland
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Il drag-and-drop nativo non è ancora supportato su Wayland. Usa File › Apri, oppure copia l'immagine nel file manager e incollala con {paste}.
-	To drop files, start Prism under XWayland: `{command}`	Per trascinare file, avvia Prism sotto XWayland: `{command}`
-	Or set Preferences › Performance › Linux display server to X11: Prism then always starts under XWayland.	Oppure imposta Preferenze › Prestazioni › Server grafico Linux su X11: Prism partirà sempre sotto XWayland.
 	Edit › Paste	Modifica › Incolla
 	Duplicate Layers…	Duplica livelli…
 	Duplicate style	Duplica stile
 	Edit Toolbar…	Modifica barra strumenti…
-	Use File › Open, or paste a copied image with {paste}.	Usa File › Apri, oppure incolla un'immagine copiata con {paste}.
 	Edit in Quick Mask Mode  (Q)	Modifica in maschera veloce (Q)
 	Edit in Standard Mode  (Q)	Modifica in modalità standard (Q)
 	Effects	Effetti
@@ -2011,8 +2006,6 @@
 	CPU (no GPU acceleration)	CPU (nessuna accelerazione GPU)
 	DirectX 12	DirectX 12
 	GPU backend	Backend GPU
-	Linux display server	Server grafico Linux
-	X11	X11
 	Metal	Metal
 	OpenGL	OpenGL
 	Use tablet pressure	Usa pressione tavoletta

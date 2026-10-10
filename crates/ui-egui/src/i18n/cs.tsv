@@ -992,15 +992,10 @@
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Klik: vybrat bod · Tažení: přesunout bod, úchyt nebo segment · {shift}+klik: přidat · {alt}+klik: celá podcesta
 	Draw with the Pen tool (P) or make a work path from a selection.	Kreslete nástrojem pero (P) nebo vytvořte pracovní cestu z výběru.
 	Drop an image or PSD anywhere to open it.	Přetáhněte sem obrázek nebo PSD a otevře se.
-	Native file drag-and-drop is unavailable	Nativní přetahování souborů ve Waylandu není dostupné
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Nativní přetahování souborů ve Waylandu zatím není podporováno. Použijte Soubor › Otevřít, nebo obrázek zkopírujte ve správci souborů a vložte ho pomocí {paste}.
-	To drop files, start Prism under XWayland: `{command}`	Chcete-li soubory přetahovat, spusťte Prism v XWayland: `{command}`
-	Or set Preferences › Performance › Linux display server to X11: Prism then always starts under XWayland.	Nebo nastavte Předvolby › Výkon › Zobrazovací server Linuxu na X11: Prism se pak vždy spustí v XWayland.
 	Edit › Paste	Úpravy › Vložit
 	Duplicate Layers…	Duplikovat vrstvy…
 	Duplicate style	Duplikovat styl
 	Edit Toolbar…	Upravit panel nástrojů…
-	Use File › Open, or paste a copied image with {paste}.	Použijte Soubor › Otevřít, nebo vložte zkopírovaný obrázek pomocí {paste}.
 	Edit in Quick Mask Mode  (Q)	Upravit v režimu rychlé masky  (Q)
 	Edit in Standard Mode  (Q)	Upravit ve standardním režimu  (Q)
 	Effects	Efekty
@@ -2028,8 +2023,6 @@
 	CPU (no GPU acceleration)	CPU (bez akcelerace GPU)
 	DirectX 12	DirectX 12
 	GPU backend	Grafický backend
-	Linux display server	Zobrazovací server Linuxu
-	X11	X11
 	Metal	Metal
 	OpenGL	OpenGL
 	Use tablet pressure	Použít přítlak tabletu

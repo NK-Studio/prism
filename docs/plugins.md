@@ -2,7 +2,7 @@
 
 Prism does not host native Photoshop plug-ins (`.8BF`, CEP, UXP): that needs unsafe FFI into
 arbitrary machine code. Instead, plug-ins are **WebAssembly
-modules** run in a sandbox. One `.wasm` file works on macOS, Windows, Linux and FreeBSD.
+modules** run in a sandbox. One `.wasm` file works on macOS, Windows and FreeBSD.
 
 This page is the contract for plug-in authors and the reference for the host
 (`crates/plugins`, the `plugin.*` commands in `crates/engine/src/plugin_cmds.rs`).

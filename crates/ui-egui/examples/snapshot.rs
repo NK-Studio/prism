@@ -7,8 +7,7 @@
 //! ```
 //!
 //! `--safe-gpu` draws the canvas on the CPU path, like the app's `--safe-gpu` launch.
-//! `--wayland-notice` previews the native file drag-and-drop guidance shown in Wayland sessions.
-//! `--custom-titlebar` draws the Windows/Linux title bar (caption buttons in the top bar).
+//! `--custom-titlebar` draws the Windows/FreeBSD title bar (caption buttons in the top bar).
 //!
 //! `--monitor 1366x768 --window-top 31` simulates the display the window is on (in points) and
 //! where its content starts on it, e.g. a window running under a Windows taskbar.
@@ -35,7 +34,6 @@ fn main() {
         .and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse::<f32>().ok()?, b.parse::<f32>().ok()?))))
         .unwrap_or((1440.0, 900.0));
     let scale: f32 = arg(&args, "--scale").and_then(|s| s.parse().ok()).unwrap_or(2.0);
-    let wayland_notice = args.iter().any(|a| a == "--wayland-notice");
     let script: Vec<(String, Value)> =
         arg(&args, "--script").map(|s| serde_json::from_str::<Vec<(String, Value)>>(&s).expect("--script must be [[method, params], …]")).unwrap_or_default();
 
@@ -65,9 +63,6 @@ fn main() {
     let mut harness =
         egui_kittest::Harness::builder().with_size(egui::vec2(w, h)).with_pixels_per_point(scale).with_max_steps(64).wgpu().build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut services = services;
-            services.is_wayland = wayland_notice;
-            services.xwayland_command = wayland_notice.then(|| "WAYLAND_DISPLAY= photocraft".into());
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
             app.background_jobs = background_jobs;
             app.custom_titlebar = custom_titlebar;

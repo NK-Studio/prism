@@ -981,8 +981,6 @@
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Klik: zaznacz punkt kontrolny · Przeciągnięcie: przesuń punkt, uchwyt lub segment · {shift}-klik: dodaj · {alt}-klik: cała podścieżka
 	Draw with the Pen tool (P) or make a work path from a selection.	Rysuj narzędziem Pióro (P) lub utwórz ścieżkę roboczą z zaznaczenia.
 	Drop an image or PSD anywhere to open it.	Upuść obraz lub plik PSD w dowolnym miejscu, aby go otworzyć.
-	Native file drag-and-drop is unavailable	Natywne przeciąganie plików jest niedostępne
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run Prism under XWayland with `WAYLAND_DISPLAY= photocraft`.	Natywne przeciąganie plików nie jest jeszcze obsługiwane w Waylandzie. Użyj Plik › Otwórz lub uruchom Prism w XWayland poleceniem `WAYLAND_DISPLAY= photocraft`.
 	Duplicate Layers…	Duplikuj warstwy…
 	Duplicate style	Duplikuj styl
 	Edit Toolbar…	Edytuj pasek narzędzi…
@@ -2006,8 +2004,6 @@
 	CPU (no GPU acceleration)	CPU (bez akceleracji GPU)
 	DirectX 12	DirectX 12
 	GPU backend	Backend GPU
-	Linux display server	Serwer wyświetlania Linuksa
-	X11	X11
 	Metal	Metal
 	OpenGL	OpenGL
 	Use tablet pressure	Użyj nacisku tabletu
@@ -3208,11 +3204,7 @@ cameraRaw	Roughness	Chropowatość
 	Show/Hide Panels	Pokaż/ukryj panele
 	Could not open	Nie można otworzyć
 	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: ścieżka nie jest prawidłowym Unicode; zmień nazwę pliku i otwórz go ponownie.
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Natywne przeciąganie i upuszczanie plików nie jest jeszcze obsługiwane w Wayland. Użyj Plik › Otwórz albo skopiuj obraz w menedżerze plików i wklej go za pomocą {paste}.
-	To drop files, start Prism under XWayland: `{command}`	Aby upuszczać pliki, uruchom Prism pod XWayland: `{command}`
-	Or set Preferences › Performance › Linux display server to X11: Prism then always starts under XWayland.	Albo ustaw Preferencje › Wydajność › Serwer wyświetlania Linuksa na X11: Prism będzie wtedy zawsze uruchamiany pod XWayland.
 	Edit › Paste	Edycja › Wklej
-	Use File › Open, or paste a copied image with {paste}.	Użyj Plik › Otwórz albo wklej skopiowany obraz za pomocą {paste}.
 
 # Swatches panel
 	Create new swatch	Utwórz nową próbkę

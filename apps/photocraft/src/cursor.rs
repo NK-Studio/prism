@@ -4,9 +4,7 @@
 //! during an OS drag the window gets no pointer events, so egui's last pointer is stale.
 //!
 //! - **macOS**: `NSEvent.mouseLocation`, converted into the content view of our window under it.
-//! - **X11**: `QueryPointer` on our window (a second, pure-Rust X connection).
 //! - **Windows**: `GetCursorPos`, relative to the window's client area.
-//! - **Wayland**: winit 0.30 delivers no file drops there, so there's nothing to place.
 //!
 //! No `unsafe`: every OS call goes through a safe binding.
 //!
@@ -43,42 +41,6 @@ mod platform {
     }
 }
 
-#[cfg(target_os = "linux")]
-mod platform {
-    use eframe::wgpu::rwh::{HasWindowHandle, RawWindowHandle};
-    use photocraft_ui_egui::CursorPosFn;
-    use x11rb::protocol::xproto::ConnectionExt;
-    use x11rb::rust_connection::RustConnection;
-
-    pub fn service(cc: &eframe::CreationContext<'_>) -> Option<CursorPosFn> {
-        let window = match cc.window_handle().ok()?.as_raw() {
-            RawWindowHandle::Xlib(h) => u32::try_from(h.window).ok()?,
-            RawWindowHandle::Xcb(h) => h.window.get(),
-            _ => return None,
-        };
-        // Opened on first use and kept: the pointer is read every frame while files hover.
-        let mut conn: Option<RustConnection> = None;
-        Some(Box::new(move |ctx: &egui::Context| match pointer_in(&mut conn, window) {
-            Ok(p) => p.map(|(x, y)| egui::pos2(f32::from(x), f32::from(y)) / ctx.pixels_per_point()),
-            Err(e) => {
-                log::warn!("couldn't read the pointer position: {e}");
-                conn = None;
-                None
-            }
-        }))
-    }
-
-    /// The pointer in pixels relative to `window` (`None` when it's on another screen).
-    fn pointer_in(conn: &mut Option<RustConnection>, window: u32) -> Result<Option<(i16, i16)>, String> {
-        let conn = match conn {
-            Some(c) => c,
-            None => conn.insert(RustConnection::connect(None).map_err(|e| e.to_string())?.0),
-        };
-        let reply = conn.query_pointer(window).map_err(|e| e.to_string())?.reply().map_err(|e| e.to_string())?;
-        Ok(reply.same_screen.then_some((reply.win_x, reply.win_y)))
-    }
-}
-
 #[cfg(target_os = "windows")]
 mod platform {
     use photocraft_ui_egui::CursorPosFn;
@@ -102,7 +64,7 @@ fn client_points(screen_px: egui::Pos2, inner_min: egui::Pos2, ppp: f32) -> egui
     ((screen_px - inner_min * ppp) / ppp).to_pos2()
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod platform {
     use photocraft_ui_egui::CursorPosFn;
 

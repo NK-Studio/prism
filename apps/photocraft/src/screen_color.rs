@@ -1,9 +1,9 @@
 //! Desktop colour capture starts only on an explicit UI request. No snapshots are written to
-//! disk, transmitted or retained after a pick. Wayland delegates to its permission portal.
+//! disk, transmitted or retained after a pick.
 use photocraft_ui_egui::screen_picker::{Capture, MAX_PIXELS, Pending, ScreenImage, Service};
 
-pub fn service(cc: &eframe::CreationContext<'_>, wayland: bool) -> Option<Service> {
-    if !cfg!(any(target_os = "linux", target_os = "macos", target_os = "windows")) {
+pub fn service(cc: &eframe::CreationContext<'_>) -> Option<Service> {
+    if !cfg!(any(target_os = "macos", target_os = "windows")) {
         return None;
     }
     let window = cc.winit_window()?.clone();
@@ -24,7 +24,7 @@ pub fn service(cc: &eframe::CreationContext<'_>, wayland: bool) -> Option<Servic
         let scale = ctx.native_pixels_per_point().unwrap_or(1.0);
         let wake = ctx.clone();
         if let Err(e) = std::thread::Builder::new().name("screen-color-picker".into()).spawn(move || {
-            let result = capture(wayland, scale, &stop, &placements);
+            let result = capture(scale, &stop, &placements);
             let _ = tx.send(result);
             wake.request_repaint();
         }) {
@@ -47,137 +47,8 @@ fn find_monitor(placements: &[Placement], x: i32, y: i32, w: u32, h: u32) -> Opt
 fn count(width: usize, height: usize) -> Result<usize, String> {
     width.checked_mul(height).filter(|&n| n > 0 && n <= MAX_PIXELS).ok_or_else(|| "Screen capture exceeds the 64 MP memory budget".into())
 }
-#[cfg(target_os = "linux")]
-fn capture(wayland: bool, scale: f32, stop: &std::sync::atomic::AtomicBool, placements: &[Placement]) -> Result<Capture, String> {
-    if wayland {
-        return portal(stop);
-    }
-    use x11rb::{
-        connection::Connection,
-        image::{Image, PixelLayout},
-        protocol::{
-            randr::ConnectionExt as _,
-            xproto::{AtomEnum, ConnectionExt, VisualClass},
-        },
-    };
-    let (conn, index) = x11rb::connect(None).map_err(|e| e.to_string())?;
-    let screen = conn.setup().roots.get(index).ok_or("X11 screen is missing")?;
-    let (w, h) = (screen.width_in_pixels, screen.height_in_pixels);
-    count(usize::from(w), usize::from(h))?;
-    let mut monitors = conn.randr_get_monitors(screen.root, true).ok().and_then(|c| c.reply().ok()).map(|r| r.monitors).unwrap_or_default();
-    monitors.sort_by_key(|m| !m.primary);
-    if !monitors.iter().any(|m| m.primary)
-        && let Some(first) = monitors.first_mut()
-    {
-        first.primary = true;
-    }
-    let regions: Vec<(i16, i16, u16, u16, bool)> =
-        if monitors.is_empty() { vec![(0, 0, w, h, true)] } else { monitors.iter().map(|m| (m.x, m.y, m.width, m.height, m.primary)).collect() };
-    if regions.len() > 16 {
-        return Err("Too many screens for the color picker".into());
-    }
-    let mut total = 0usize;
-    for &(x, y, mw, mh, _) in &regions {
-        if x < 0 || y < 0 || u32::from(x as u16) + u32::from(mw) > u32::from(w) || u32::from(y as u16) + u32::from(mh) > u32::from(h) {
-            return Err("Invalid X11 display geometry".into());
-        }
-        total = total
-            .checked_add(count(usize::from(mw), usize::from(mh))?)
-            .filter(|&n| n <= MAX_PIXELS)
-            .ok_or("Combined displays exceed the screen picker memory budget")?;
-    }
-    let (image, visual_id) = Image::get(&conn, screen.root, 0, 0, w, h).map_err(|e| format!("Screen capture failed: {e}"))?;
-    let visual = screen.allowed_depths.iter().flat_map(|d| &d.visuals).find(|v| v.visual_id == visual_id).ok_or("Unsupported X11 screen visual")?;
-    if visual.class != VisualClass::TRUE_COLOR {
-        return Err("Screen picking requires an X11 TrueColor visual".into());
-    }
-    let layout = PixelLayout::from_visual_type(*visual).map_err(|e| e.to_string())?;
-    let atom = conn.intern_atom(true, b"_ICC_PROFILE").map_err(|e| e.to_string())?.reply().map_err(|e| e.to_string())?.atom;
-    let primary_profile = if atom == 0 {
-        None
-    } else {
-        let reply = conn.get_property(false, screen.root, atom, AtomEnum::ANY, 0, 256 * 1024).map_err(|e| e.to_string())?.reply().map_err(|e| e.to_string())?;
-        (reply.bytes_after == 0 && reply.format == 8 && !reply.value.is_empty()).then_some(reply.value)
-    };
-    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
-    let byte = |v: u16| ((u32::from(v) + 128) / 257) as u8;
-    let mut images = Vec::new();
-    for (x, y, mw, mh, primary) in regions {
-        if stop.load(std::sync::atomic::Ordering::Relaxed) {
-            return Ok(Capture::Color(None));
-        }
-        let mut rgba = Vec::with_capacity(count(usize::from(mw), usize::from(mh))?.saturating_mul(4));
-        for row in 0..mh {
-            for col in 0..mw {
-                let (r, g, b) = layout.decode(image.get_pixel((x as u16) + col, (y as u16) + row));
-                rgba.extend_from_slice(&[byte(r), byte(g), byte(b), 255]);
-            }
-        }
-        images.push(ScreenImage {
-            monitor: find_monitor(placements, i32::from(x), i32::from(y), u32::from(mw), u32::from(mh)),
-            position: egui::pos2(f32::from(x), f32::from(y)) / scale,
-            size: egui::vec2(f32::from(mw), f32::from(mh)) / scale,
-            width: usize::from(mw),
-            height: usize::from(mh),
-            rgba,
-            profile: if primary { primary_profile.clone() } else { None },
-        });
-    }
-    Ok(Capture::Images(images))
-}
-#[cfg(target_os = "linux")]
-fn portal(stop: &std::sync::atomic::AtomicBool) -> Result<Capture, String> {
-    use std::collections::HashMap;
-    use zbus::{
-        blocking::Proxy,
-        zvariant::{OwnedObjectPath, OwnedValue, Value},
-    };
-    let conn = zbus::blocking::connection::Builder::session()
-        .map_err(|e| e.to_string())?
-        .method_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let unique = conn.unique_name().ok_or("Portal connection has no unique name")?.as_str().trim_start_matches(':').replace('.', "_");
-    let token = format!("photocraft_{}", std::process::id());
-    let path = format!("/org/freedesktop/portal/desktop/request/{unique}/{token}");
-    let request = Proxy::new(&conn, "org.freedesktop.portal.Desktop", path.as_str(), "org.freedesktop.portal.Request").map_err(|e| e.to_string())?;
-    use futures_lite::StreamExt;
-    let mut replies = futures_lite::future::block_on(request.inner().receive_signal("Response")).map_err(|e| e.to_string())?;
-    let screenshot = Proxy::new(&conn, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.Screenshot")
-        .map_err(|e| e.to_string())?;
-    let options: HashMap<&str, Value<'_>> = HashMap::from([("handle_token", Value::from(token.as_str()))]);
-    let _handle: OwnedObjectPath =
-        screenshot.call("PickColor", &("", options)).map_err(|e| format!("The desktop portal does not support color picking: {e}"))?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
-    let reply = loop {
-        if stop.load(std::sync::atomic::Ordering::Relaxed) || std::time::Instant::now() >= deadline {
-            let _: Result<(), _> = request.call("Close", &());
-            return Ok(Capture::Color(None));
-        }
-        let next = futures_lite::future::block_on(futures_lite::future::race(async { Some(replies.next().await) }, async {
-            async_io::Timer::after(std::time::Duration::from_millis(50)).await;
-            None
-        }));
-        if let Some(message) = next {
-            break message.ok_or("The desktop color picker closed without a result")?;
-        }
-    };
-    let (code, values): (u32, HashMap<String, OwnedValue>) = reply.body().deserialize().map_err(|e| e.to_string())?;
-    if code == 1 {
-        return Ok(Capture::Color(None));
-    }
-    if code != 0 {
-        return Err("The desktop color picker could not sample this screen".into());
-    }
-    let value = values.get("color").ok_or("Desktop picker returned no color")?;
-    let (r, g, b): (f64, f64, f64) = value.try_clone().map_err(|e| e.to_string())?.try_into().map_err(|e: zbus::zvariant::Error| e.to_string())?;
-    if [r, g, b].iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
-        return Err("Desktop picker returned an invalid color".into());
-    }
-    Ok(Capture::Color(Some([r as f32, g as f32, b as f32])))
-}
 #[cfg(target_os = "windows")]
-fn capture(_wayland: bool, _scale: f32, stop: &std::sync::atomic::AtomicBool, placements: &[Placement]) -> Result<Capture, String> {
+fn capture(_scale: f32, stop: &std::sync::atomic::AtomicBool, placements: &[Placement]) -> Result<Capture, String> {
     let monitors = xcap::Monitor::all().map_err(|e| e.to_string())?;
     if monitors.is_empty() || monitors.len() > 16 {
         return Err("No supported screen is available".into());
@@ -217,7 +88,7 @@ fn capture(_wayland: bool, _scale: f32, stop: &std::sync::atomic::AtomicBool, pl
     Ok(Capture::Images(images))
 }
 #[cfg(target_os = "macos")]
-fn capture(_wayland: bool, _scale: f32, stop: &std::sync::atomic::AtomicBool, placements: &[Placement]) -> Result<Capture, String> {
+fn capture(_scale: f32, stop: &std::sync::atomic::AtomicBool, placements: &[Placement]) -> Result<Capture, String> {
     use core_graphics2::{display::get_active_display_list, image::CGImageAlphaInfo as Alpha, window};
     if !window::preflight_screen_capture_access() && !window::request_screen_capture_access() {
         return Err("Allow Prism in System Settings > Privacy & Security > Screen Recording, then reopen Prism".into());
@@ -304,7 +175,7 @@ fn capture(_wayland: bool, _scale: f32, stop: &std::sync::atomic::AtomicBool, pl
     Ok(Capture::Images(images))
 }
 // CoreGraphics rows can be padded and their byte order/alpha vary. Kept platform independent
-// so Linux CI also tests the macOS decoding path against synthetic pixels.
+// so platform-independent tests also cover the macOS decoding path against synthetic pixels.
 #[cfg(any(target_os = "macos", test))]
 fn checked_stride(width: usize, height: usize, stride: usize) -> Result<usize, String> {
     count(width, height)?;
@@ -357,49 +228,6 @@ mod tests {
         assert!(unpack_rgba(&[0; 3], 1, 1, 4, [0, 1, 2, 3], false, true).is_err());
         assert!(unpack_rgba(&[0; 4], 1, 1, 4, [4, 1, 2, 3], false, true).is_err());
     }
-    #[cfg(target_os = "linux")]
-    #[test]
-    #[ignore = "requires a live X11 display; draws only a tiny synthetic fixture"]
-    fn screen_capture_reads_a_known_x11_fixture_pixel() {
-        use x11rb::{
-            COPY_DEPTH_FROM_PARENT,
-            connection::Connection,
-            protocol::xproto::{ConfigureWindowAux, ConnectionExt, CreateWindowAux, StackMode, WindowClass},
-        };
-        let (conn, index) = x11rb::connect(None).unwrap();
-        let screen = &conn.setup().roots[index];
-        let window = conn.generate_id().unwrap();
-        conn.create_window(
-            COPY_DEPTH_FROM_PARENT,
-            window,
-            screen.root,
-            200,
-            200,
-            8,
-            8,
-            0,
-            WindowClass::INPUT_OUTPUT,
-            0,
-            &CreateWindowAux::new().override_redirect(1).background_pixel(0xff8040),
-        )
-        .unwrap()
-        .check()
-        .unwrap();
-        conn.map_window(window).unwrap().check().unwrap();
-        conn.configure_window(window, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE)).unwrap().check().unwrap();
-        conn.flush().unwrap();
-        // X11 request completion precedes the compositor presenting the mapped fixture.
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        let images = capture(false, 1.0, &std::sync::atomic::AtomicBool::new(false), &[]);
-        conn.destroy_window(window).unwrap().check().unwrap();
-        conn.flush().unwrap();
-        let Capture::Images(images) = images.unwrap() else { panic!("not an image capture") };
-        let first = images.iter().find(|m| m.position.x <= 200.0 && m.position.y <= 200.0).unwrap();
-        let x = (200.0 - first.position.x) as usize;
-        let y = (200.0 - first.position.y) as usize;
-        let offset = (y * first.width + x) * 4;
-        assert_eq!(&first.rgba[offset..offset + 4], &[255, 128, 64, 255]);
-    }
     #[test]
     fn screen_capture_matches_negative_and_hidpi_monitor_geometry() {
         let m = [Placement { index: 2, x: -3840, y: 0, width: 3840, height: 2160 }];
@@ -407,7 +235,7 @@ mod tests {
         assert_eq!(find_monitor(&m, 0, 0, 1920, 1080), None);
     }
 }
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn capture(_wayland: bool, _scale: f32, _stop: &std::sync::atomic::AtomicBool, _placements: &[Placement]) -> Result<Capture, String> {
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn capture(_scale: f32, _stop: &std::sync::atomic::AtomicBool, _placements: &[Placement]) -> Result<Capture, String> {
     Err("Screen color picking is unavailable on this platform".into())
 }

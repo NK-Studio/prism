@@ -8,7 +8,7 @@
 //! died inside the driver, and this one retries with the next safer backend:
 //!
 //! - Windows: Vulkan → DX12 → CPU
-//! - Linux and other Unix: Vulkan → GL → CPU
+//! - FreeBSD and other Unix: Vulkan → GL → CPU
 //! - macOS: Metal → CPU
 //!
 //! The choice that worked is remembered in `performance.gpuBackend` (Preferences › Performance,
@@ -39,7 +39,7 @@ const MARKER_MAX: u64 = 64 << 10;
 pub enum Os {
     Windows,
     Mac,
-    /// Linux, the BSDs and other Unix.
+    /// FreeBSD and other Unix.
     Other,
 }
 
@@ -350,7 +350,7 @@ pub struct Sentinel {
 pub type SharedSentinel = Arc<Mutex<Option<Sentinel>>>;
 
 /// Only renderer errors should affect the next launch's graphics backend. Windowing errors
-/// (such as a missing Linux display) and app setup errors never indicate a driver failure.
+/// (such as an unavailable display) and app setup errors never indicate a driver failure.
 pub fn keep_marker_after_run(result: &eframe::Result) -> bool {
     matches!(result, Err(eframe::Error::Wgpu(_)))
 }
@@ -408,17 +408,6 @@ impl Sentinel {
     }
 }
 
-/// The Linux display-server preference (`performance.linuxDisplayServer`) from the preferences
-/// file, read before the window opens; `Auto` when the file or value is missing or unknown.
-#[cfg(any(target_os = "linux", test))]
-pub fn read_display_server(path: Option<&Path>) -> photocraft_engine::prefs::LinuxDisplayServer {
-    let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
-    v.get("performance")
-        .and_then(|p| serde_json::from_value::<photocraft_engine::prefs::Performance>(p.clone()).ok())
-        .map(|performance| performance.linux_display_server)
-        .unwrap_or_default()
-}
-
 /// Read the policy leniently at startup, including old settings without renderingMode.
 pub fn read_rendering_prefs(path: Option<&Path>) -> (GpuBackend, RenderingMode) {
     let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
@@ -437,27 +426,6 @@ mod tests {
 
     fn crashed(backend: &str, adapter_backend: &str) -> Marker {
         Marker { backend: backend.into(), adapter: "Intel(R) UHD Graphics".into(), adapter_backend: adapter_backend.into(), ..Default::default() }
-    }
-
-    #[test]
-    fn display_server_preference_is_read_before_the_window_opens() {
-        use photocraft_engine::prefs::LinuxDisplayServer;
-        let dir = std::env::temp_dir().join(format!("photocraft-display-server-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("preferences.json");
-        let read = |json: &str| {
-            std::fs::write(&file, json).unwrap();
-            read_display_server(Some(&file))
-        };
-        assert_eq!(read(r#"{"performance":{"linuxDisplayServer":"x11"}}"#), LinuxDisplayServer::X11);
-        assert_eq!(read(r#"{"performance":{"linuxDisplayServer":"auto","gpuBackend":"vulkan"}}"#), LinuxDisplayServer::Auto);
-        // Unknown values, other types, broken JSON and a missing file all start as Auto.
-        assert_eq!(read(r#"{"performance":{"linuxDisplayServer":"wayland"}}"#), LinuxDisplayServer::Auto);
-        assert_eq!(read(r#"{"performance":{"linuxDisplayServer":11}}"#), LinuxDisplayServer::Auto);
-        assert_eq!(read("{not json"), LinuxDisplayServer::Auto);
-        assert_eq!(read_display_server(Some(&dir.join("missing.json"))), LinuxDisplayServer::Auto);
-        assert_eq!(read_display_server(None), LinuxDisplayServer::Auto);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -496,7 +464,7 @@ mod tests {
         assert_eq!(plan(Auto, Some(&crashed("auto", "")), None, false, Os::Windows).backend, Dx12);
         // `auto` that had already picked DX12 (the Intel default) goes to the CPU.
         assert_eq!(plan(Auto, Some(&crashed("auto", "dx12")), None, false, Os::Windows).backend, Cpu);
-        // Linux: Vulkan → GL → CPU.
+        // FreeBSD: Vulkan → GL → CPU.
         assert_eq!(plan(Auto, Some(&crashed("auto", "vulkan")), None, false, Os::Other).backend, Gl);
         assert_eq!(plan(Gl, Some(&crashed("gl", "gl")), None, false, Os::Other).backend, Cpu);
         // macOS: Metal → CPU.

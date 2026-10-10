@@ -1,5 +1,5 @@
 # Scorecard checklist: distribution (#220) and what ships today (.github/workflows/release.yml).
-# Statuses must be true on main. Verified against 4b53f62 on 2026-10-05.
+# Linux targets removed on 2026-10-10; remaining distribution status is tracked below.
 area = "distribution"
 title = "Distribution"
 order = 8
@@ -17,22 +17,10 @@ status = "partial"
 note = "release.yml:113-114; signing skipped with a warning until the signing material exists"
 
 [[item]]
-id = "DIST-3"
-target = "Linux x86_64 and aarch64: AppImage, deb, rpm, tar.gz"
-status = "done"
-note = "release.yml:162-163,186"
-
-[[item]]
-id = "DIST-4"
-target = "Flatpak single-file bundles, x86_64 and aarch64"
-status = "done"
-note = "release.yml:204-216 (#163)"
-
-[[item]]
 id = "DIST-6"
 target = "FreeBSD 14 x86_64 tar.gz (/usr/local tree) built in a FreeBSD VM"
 status = "partial"
-note = "release.yml:242-283 (freebsd job) + packaging/freebsd/package.sh; layout checked with --dry-run, not yet produced by a release run"
+note = "release.yml (freebsd job) + packaging/freebsd/package.sh; relocated desktop metadata passes --dry-run on macOS, native FreeBSD release run remains unverified"
 
 [[item]]
 id = "DIST-220-1"
@@ -61,10 +49,3 @@ target = "Translation coverage per language reported by xtask; RTL layout for Ar
 status = "partial"
 issue = 220
 note = "`cargo xtask i18n-coverage` reports per-language coverage (#427); no RTL layout yet"
-
-[[item]]
-id = "DIST-220-5"
-target = "Linux AppImage x86_64 + aarch64 ship; Flatpak kept; Flathub later (#173)"
-status = "partial"
-issue = 220
-note = "AppImage and Flatpak ship (release.yml:162-216); Flathub not done"

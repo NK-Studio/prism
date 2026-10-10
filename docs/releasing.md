@@ -1,7 +1,7 @@
 # Releasing Prism
 
 Every push to the `release` branch runs `.github/workflows/release.yml`. The workflow builds
-signed installers for macOS, Windows, Linux, plus a FreeBSD tarball, then creates
+signed installers for macOS and Windows, plus a FreeBSD tarball, then creates
 or updates a **draft** GitHub Release named `Prism v<version>`. Nobody sees a draft until a
 maintainer publishes it.
 
@@ -51,8 +51,6 @@ in the dialog.
 | macOS 11+ (universal: Apple silicon + Intel) | `photocraft-<v>-macos-universal.dmg`, `photocraft-cli-<v>-macos-universal.zip` | `macos-15` |
 | Windows 10+ x64 | `photocraft-<v>-windows-x64.msi`, `photocraft-<v>-windows-x64-portable.zip` | `windows-latest` |
 | Windows 10+ x86 (32-bit) | `photocraft-<v>-windows-x86.msi`, `photocraft-<v>-windows-x86-portable.zip` | `windows-latest` |
-| Linux x86_64 | `photocraft-<v>-linux-x86_64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04` (Flatpak: `ubuntu-24.04`) |
-| Linux aarch64 | `photocraft-<v>-linux-aarch64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04-arm` (Flatpak: `ubuntu-24.04-arm`) |
 | FreeBSD 14 x86_64 | `photocraft-<v>-freebsd-x86_64.tar.gz` | FreeBSD 14.3 VM on `ubuntu-latest` |
 
 Every binary reports its version, the commit and the build date: `photocraft --version`,
@@ -60,7 +58,7 @@ Every binary reports its version, the commit and the build date: `photocraft --v
 `PHOTOCRAFT_BUILD_DATE`, and `crates/engine/src/build_info.rs` reads them at compile time. A plain
 `cargo build` doesn't set them and reports `0.2.0 (dev build)`.
 
-Every desktop build job (macOS, Windows, Linux, FreeBSD) also checks out [craft-fonts](https://github.com/storytold/craft-fonts)
+Every desktop build job (macOS, Windows, FreeBSD) also checks out [craft-fonts](https://github.com/storytold/craft-fonts)
 at the commit in `CRAFT_FONTS_REF` (top of `release.yml`) and builds with `CRAFT_FONTS_DIR` and
 `CRAFT_FONTS_REQUIRED=1`, so desktop releases embed its Japanese fonts and fail rather than ship without them. The packages carry each font's licence as
 `OFL-<family>.txt` (`copy_font_licences` in `packaging/env.sh`; the portable zip on Windows;
@@ -146,7 +144,7 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   recovery autosaves and the GPU startup marker go to `PhotoCraftData\` next to the exe instead
   of `%APPDATA%\Photocraft`. If that folder isn't writable the app warns and uses `%APPDATA%`.
   The MSI has no marker. The logic is in `apps/photocraft/src/app_dirs.rs` and works the same
-  on macOS and Linux.
+  on macOS.
 - **Signing:** `packaging/windows/sign.ps1` signs both `.exe` files and then the `.msi` with
   `signtool`, using SHA-256 and an RFC 3161 timestamp. It uses whichever material is present:
   1. a `.pfx` file (`WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`), timestamped by
@@ -159,82 +157,6 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
 Locally on Windows: `dotnet tool install -g wix --version 5.0.2`, then
 `pwsh packaging/windows/package.ps1 -Arch x64`.
 
-### Linux
-
-`packaging/linux/package.sh` stages one FHS tree and makes every format from it. The tree
-holds both binaries, `ai.storyteller.photocraft.desktop`, hicolor icons from 16 px to 512 px
-plus a scalable SVG, AppStream metainfo, and a shared-mime-info file for `.pcraft`, `.psb` and
-`.qoi`.
-
-Why these formats:
-
-- **AppImage** runs on any distribution without installing anything. The
-  download-and-go option and the fallback for distros the packages don't cover. It's built
-  with the maintained `AppImage/appimagetool`, whose static runtime doesn't need libfuse2.
-  Each AppImage embeds update information (`gh-releases-zsync|…|latest|…`, #349) and ships
-  with a `.zsync` beside it, so AppImageUpdate, AppImageLauncher and similar tools can find
-  the next release and download only the blocks that changed.
-  Its `AppRun` (`packaging/linux/AppRun`) also integrates with the desktop on launch: on
-  Wayland the dock icon comes from the compositor resolving the window's app_id against an
-  *installed* `.desktop` file, which an AppImage alone never provides — without this every
-  AppImage run shows the generic Wayland logo (#593). Best effort: it installs
-  `~/.local/share/applications/ai.storyteller.photocraft.desktop` with `Exec` rewritten to
-  the AppImage's path (`TryExec` dropped, the binary isn't on the host PATH) and the
-  hicolor icons beside it, rewriting only when the content changed, and any failure leaves
-  the launch untouched. `PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1` opts out; to uninstall, `rm
-  ~/.local/share/applications/ai.storyteller.photocraft.desktop` and `find
-  ~/.local/share/icons/hicolor -name 'ai.storyteller.photocraft*' -delete`. The script is
-  covered by `packaging/linux/apprun-test.sh` in the packaging-lint workflow.
-- **.deb** covers Debian, Ubuntu, Mint, Pop!_OS and elementary. **.rpm** covers Fedora, RHEL
-  and its clones, and openSUSE. Both integrate with the menu, MIME and icon caches (the
-  `postinst.sh` hook) and uninstall cleanly. Both are built by
-  [nfpm](https://nfpm.goreleaser.com/): one maintained, dependency-free tool and one config
-  (`nfpm.yaml`). It doesn't need cargo-deb and cargo-generate-rpm metadata in our crates, and
-  it can build both formats on Ubuntu.
-- **.tar.gz** is for people who manage their own `/opt` or `~/.local`.
-- **Flatpak bundle** (`.flatpak`) is a single file that installs into Flatpak, sandboxed and
-  updatable by installing a newer bundle, for people who prefer Flatpak to AppImage.
-  `packaging/linux/flatpak-bundle.sh` repackages the job's `.tar.gz` with
-  `packaging/linux/flatpak/ai.storyteller.photocraft.bundle.yml` on the freedesktop 26.08
-  runtime. It does no Rust build and needs no network inside `flatpak-builder`, so the bundle
-  holds the same binaries as the other formats. A separate `flatpak` job per architecture
-  (`ubuntu-24.04` and `ubuntu-24.04-arm`, for flatpak-builder 1.4) downloads the Linux job's
-  artifact, runs the script, installs the bundle and runs `photocraft-cli --version` inside the
-  sandbox as a smoke test. The bundle names Flathub as its runtime repo, so users install
-  it with:
-
-  ```sh
-  flatpak install --user photocraft-<v>-linux-x86_64.flatpak   # pulls org.freedesktop.Platform//26.08 from Flathub if missing
-  flatpak run ai.storyteller.photocraft
-  ```
-
-  Sandbox permissions (justified in the manifest): Wayland with X11 fallback, IPC (X11
-  shared memory), `dri` for the GPU, and read/write access to Pictures and Documents. Every
-  other file goes through the file-chooser and document portals. There's no network, so the
-  `--control` server is only reachable from inside the sandbox until the user runs
-  `flatpak override --user --share=network ai.storyteller.photocraft`. Host fonts are read from
-  `/run/host/fonts` and `/run/host/user-fonts`. Locally (on Linux, with `flatpak` and
-  `flatpak-builder`): `packaging/linux/package.sh --formats tar && packaging/linux/flatpak-bundle.sh`.
-- **Flathub**: `packaging/linux/flatpak/ai.storyteller.photocraft.yml` builds from source and
-  is ready for a Flathub submission (it keeps the same runtime and `finish-args` as the bundle
-  manifest, which packaging-lint checks). CI doesn't build it. A real build needs vendored crate
-  sources (`cargo-sources.json` from `flatpak-cargo-generator.py`) and adds 20+ minutes per
-  architecture. Build it by hand with the commands in the manifest's header.
-
-All Linux binaries are built on Ubuntu 22.04 and need **glibc ≥ 2.35**: Ubuntu 22.04+,
-Debian 12+, Fedora 36+, RHEL 10, openSUSE Tumbleweed. They link only glibc and libgcc_s. X11,
-Wayland, xkbcommon, Vulkan and EGL are loaded at runtime from the system, which is also where
-the GPU driver has to come from. That's why the .deb and .rpm declare them as dependencies
-(the full list, and why each is there, is in `packaging/linux/nfpm.yaml`) and the AppImage
-doesn't bundle them. The Flatpak gets them from the freedesktop runtime. Because the AppImage
-and the tarball can't declare dependencies, `photocraft` checks for the libraries its session
-(X11 or Wayland) needs before it opens a window (`apps/photocraft/src/linux_libs.rs`) and, if
-one is missing, prints the package to install and exits with status 1 instead of crashing.
-`PHOTOCRAFT_SKIP_LIB_CHECK=1` skips the check.
-
-Locally (on Linux): install [nfpm](https://nfpm.goreleaser.com/install/), then
-`packaging/linux/package.sh` (or `--formats "deb tar"`).
-
 ### FreeBSD
 
 GitHub has no FreeBSD runners, so the `freebsd` job runs `packaging/freebsd/package.sh` in a
@@ -244,7 +166,7 @@ binaries with `CARGO_BUILD_JOBS=4` (more runs the 12 GB VM out of memory) and wr
 `photocraft-<v>-freebsd-x86_64.tar.gz`. FreeBSD's `uname -m` says `amd64`; the file name uses
 `x86_64` like the other artifacts. The tarball is a `/usr/local`-style tree: `bin/photocraft`,
 `bin/photocraft-cli`, and under `share/` the same desktop entry, MIME type, AppStream metainfo
-and hicolor icons as Linux, plus the licences, `NOTICE` and `ATTRIBUTION.md` in
+and hicolor icons from `packaging/freebsd`, plus the licences, `NOTICE` and `ATTRIBUTION.md` in
 `share/doc/photocraft/`. Users install it with:
 
 ```sh
@@ -267,8 +189,8 @@ and lists the tarball, which checks the layout without a FreeBSD machine.
 
 All secrets live in the repository's **`release` environment** (*Settings → Environments →
 release*). Restrict its deployment branches to `release`. Every job in `release.yml` that
-signs or publishes declares `environment: release` (the Flatpak and FreeBSD jobs sign nothing
-and don't), so only pushes to that branch, or manual runs on it, can read the secrets. Each secret is optional. If one is missing, that platform's artifacts are unsigned and
+signs or publishes declares `environment: release` (the FreeBSD job signs nothing
+and does not declare it), so only pushes to that branch, or manual runs on it, can read the secrets. Each secret is optional. If one is missing, that platform's artifacts are unsigned and
 the run shows a `::warning::`.
 
 | Secret | Used for |
@@ -304,5 +226,4 @@ The outputs are committed, so packaging never needs those tools.
 
 `.github/workflows/packaging-lint.yml` runs in seconds on any change to `packaging/`, the
 workflows or the icons. It runs actionlint, shellcheck, a PowerShell parse, xmllint,
-`desktop-file-validate`, `appstreamcli validate`, and a YAML check that the two Flatpak
-manifests agree on the runtime and permissions.
+`desktop-file-validate` and `appstreamcli validate` for FreeBSD metadata.

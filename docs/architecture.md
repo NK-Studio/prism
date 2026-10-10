@@ -13,7 +13,7 @@ This plan sets out:
 ## 1. Goals and principles
 
 **Goals**
-- A native, portable (macOS / Windows / Linux), fully open-source layered image editor, roughly matching Photoshop's feature surface over time.
+- A native, portable (macOS / Windows / FreeBSD), fully open-source layered image editor, roughly matching Photoshop's feature surface over time.
 - **The UI can be swapped** without touching the core: egui today, maybe Slint, Qt or something else later.
 - PSD read and write lives in its **own crate that can be published separately.**
 
@@ -149,7 +149,7 @@ photocraft/
 1. A crate may depend only on crates in **lower** layers. No cycles and no sideways dependencies, except where listed.
 2. **Nothing below L6 may depend on any UI toolkit, winit, or a `platform` implementation.** Platform services reach the engine through traits defined in `engine` (or in `platform`'s trait-only core), and are injected at startup.
 3. **`photocraft-psd` depends on no workspace crate.** The doc ⇄ PSD mapping lives in `io`. This keeps the PSD crate publishable and reusable by other projects. The same holds for every standalone crate, with one documented exception: `codecs` → `heif` (both standalone and publishable; `STANDALONE_EXCEPTIONS` in `xtask/src/layers.rs`).
-4. **Native targets:** build and test the desktop app on macOS, Windows, Linux and FreeBSD.
+4. **Native targets:** build and test the desktop app on macOS, Windows and FreeBSD.
 5. `gpu` is optional for `engine`. Engine features are `gpu` (default on) and `cpu-only`, and `cpu-only` builds are what the headless CLI and CI tests use.
 6. **C dependencies** (optional LibRaw, pdfium) only behind features, only in `codecs`, `raw` or `io`.
 
@@ -459,7 +459,7 @@ psd/src/
 | Engine | command-level tests: open fixture → dispatch commands → assert snapshot/render; action replays |
 | UI | headless egui tests (egui_kittest) for panels; kept thin because the UI is thin |
 | Perf | criterion benches + budget checks in CI (composite 4k² 20 layers, brush dab throughput, open 100 MP) |
-| Portability | CI matrix: macOS arm64, Windows x64, Linux x64 |
+| Portability | CI matrix: macOS arm64, Windows x64; separate FreeBSD VM checks |
 
 **Performance targets for v1:**
 - Stroke-to-pixel within one frame at 120 Hz.

@@ -3,7 +3,7 @@
 The Camera Raw dialog's preview has Zoom, Hand, Fit in View, 100%, and zoom preset
 controls at the bottom left.
 
-Choose **Fit in View**, or press **Ctrl+0** on Windows/Linux (**Command+0** on macOS),
+Choose **Fit in View**, or press **Ctrl+0** on Windows (**Command+0** on macOS),
 to fit the whole image inside the preview.
 
 At **100%**, one source pixel maps to one physical display pixel, including HiDPI.
@@ -12,7 +12,7 @@ sharpening, and grain can be inspected beyond the reduced proxy's resolution.
 
 ## Controls
 
-| Action | Windows / Linux | macOS |
+| Action | Windows | macOS |
 |---|---|---|
 | Select Zoom | Z | Z |
 | Scrub zoom in / out | Left-drag right / left with Zoom | Same |

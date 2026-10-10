@@ -982,15 +982,10 @@
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	クリック: アンカーポイントを選択 · ドラッグ: ポイント、ハンドル、セグメントを移動 · {shift}+クリック: 追加 · {alt}+クリック: サブパス全体
 	Draw with the Pen tool (P) or make a work path from a selection.	ペンツール(P)で描くか、選択範囲から作業用パスを作成します。
 	Drop an image or PSD anywhere to open it.	画像や PSD をここにドロップすると開きます。
-	Native file drag-and-drop is unavailable	Wayland ではネイティブのファイルドラッグ＆ドロップを利用できません
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland ではネイティブのファイルドラッグ＆ドロップはまだ利用できません。[ファイル › 開く] を使うか、ファイルマネージャーで画像をコピーして {paste} で貼り付けてください。
-	To drop files, start Prism under XWayland: `{command}`	ファイルをドロップするには、XWayland 上で Prism を起動してください: `{command}`
-	Or set Preferences › Performance › Linux display server to X11: Prism then always starts under XWayland.	または 環境設定 › パフォーマンス › Linux ディスプレイサーバー を X11 にすると、Prism は常に XWayland 上で起動します。
 	Edit › Paste	[編集 › 貼り付け]
 	Duplicate Layers…	レイヤーを複製…
 	Duplicate style	スタイルを複製
 	Edit Toolbar…	ツールバーを編集…
-	Use File › Open, or paste a copied image with {paste}.	[ファイル › 開く] を使うか、コピーした画像を {paste} で貼り付けてください。
 	Edit in Quick Mask Mode  (Q)	クイックマスクモードで編集(Q)
 	Edit in Standard Mode  (Q)	標準モードで編集(Q)
 	Effects	効果
@@ -2019,8 +2014,6 @@
 	CPU (no GPU acceleration)	CPU(GPU アクセラレーションなし)
 	DirectX 12	DirectX 12
 	GPU backend	GPU バックエンド
-	Linux display server	Linux ディスプレイサーバー
-	X11	X11
 	Metal	Metal
 	OpenGL	OpenGL
 	Use tablet pressure	タブレットの筆圧を使用
@@ -3155,7 +3148,6 @@ fontWeight	Italic	斜体
 	Mouse Controls	マウス操作
 	Mouse Coordinates	マウス座標
 	NTSC (1953)	NTSC (1953)
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run Prism under XWayland with `WAYLAND_DISPLAY= photocraft`.	Wayland ではネイティブのファイルのドラッグ&ドロップにまだ対応していません。ファイル › 開く を使うか、XWayland 上で `WAYLAND_DISPLAY= photocraft` として Prism を実行してください。
 	New Brush	新規ブラシ
 	New Channel	新規チャンネル
 	New Layer from Brush	ブラシから新規レイヤー

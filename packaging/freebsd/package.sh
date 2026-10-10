@@ -15,7 +15,7 @@
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
-LINUX="$ROOT/packaging/linux"
+DESKTOP="$ROOT/packaging/freebsd"
 APP_ID=ai.storyteller.photocraft
 
 SKIP_BUILD=0
@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# FreeBSD's uname says amd64; release file names use x86_64 like the Linux and Windows ones.
+# FreeBSD's uname says amd64; release file names use x86_64 like the Windows ones.
 MACHINE="$(uname -m)"
 case "$MACHINE" in
   amd64 | x86_64) ARCH=x86_64 ;;
@@ -73,11 +73,11 @@ mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/mime/packages" \
   "$STAGE/share/metainfo" "$STAGE/share/icons" "$STAGE/share/doc/photocraft"
 install -m 755 "$BIN/photocraft" "$BIN/photocraft-cli" "$STAGE/bin/"
 strip "$STAGE/bin/photocraft" "$STAGE/bin/photocraft-cli" 2>/dev/null || true
-# The desktop entry, MIME type, metainfo and icons are the freedesktop files Linux ships.
-install -m 644 "$LINUX/$APP_ID.desktop" "$STAGE/share/applications/$APP_ID.desktop"
-install -m 644 "$LINUX/$APP_ID.mime.xml" "$STAGE/share/mime/packages/$APP_ID.xml"
+# The desktop entry, MIME type, metainfo and icons belong to the FreeBSD package.
+install -m 644 "$DESKTOP/$APP_ID.desktop" "$STAGE/share/applications/$APP_ID.desktop"
+install -m 644 "$DESKTOP/$APP_ID.mime.xml" "$STAGE/share/mime/packages/$APP_ID.xml"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$PHOTOCRAFT_BUILD_DATE/g" \
-  "$LINUX/$APP_ID.metainfo.xml.in" >"$STAGE/share/metainfo/$APP_ID.metainfo.xml"
+  "$DESKTOP/$APP_ID.metainfo.xml.in" >"$STAGE/share/metainfo/$APP_ID.metainfo.xml"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/share/icons/"
 copy_docs "$STAGE/share/doc/photocraft"
 for f in NOTICE ATTRIBUTION.md; do

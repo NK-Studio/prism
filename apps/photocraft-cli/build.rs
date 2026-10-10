@@ -1,7 +1,7 @@
 //! Windows only: embed the app icon and version info (VERSIONINFO) into `photocraft-cli.exe`.
 //!
 //! On every other target this does nothing, even when `PHOTOCRAFT_REQUIRE_WINRES` is set. A
-//! missing resource compiler is a warning, so a cross-compile from macOS or Linux still links,
+//! missing resource compiler is a warning, so a cross-compile from macOS still links,
 //! unless `PHOTOCRAFT_REQUIRE_WINRES=1` (set by the release packaging script) turns it into a
 //! build error.
 

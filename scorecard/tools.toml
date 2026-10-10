@@ -98,7 +98,7 @@ note = "Seam, hard-edge and zero-scatter tests in brush_tests.rs; ABR tip colour
 
 [[item]]
 id = "TOOL-213-14"
-target = "Tablet: no OS arrow cursor over the canvas on macOS, Windows and Linux"
+target = "Tablet: no OS arrow cursor over the canvas on macOS and Windows"
 status = "partial"
 issue = 213
 note = "Brush tools set CursorIcon::None (canvas.rs:1259-1275); not verified per OS"

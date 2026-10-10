@@ -983,15 +983,10 @@
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	按一下：選取錨點 · 拖曳：移動錨點、把手或線段 · {shift}-按一下：增加 · {alt}-按一下：整個子路徑
 	Draw with the Pen tool (P) or make a work path from a selection.	使用筆型工具 (P) 繪製，或從選取範圍建立工作路徑。
 	Drop an image or PSD anywhere to open it.	將影像或 PSD 拖放到任何位置即可開啟。
-	Native file drag-and-drop is unavailable	Wayland 不支援原生檔案拖放
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland 尚未支援原生檔案拖放。請使用「檔案 › 開啟」，或在檔案管理員中複製影像後使用 {paste} 貼上。
-	To drop files, start Prism under XWayland: `{command}`	若要拖放檔案，請在 XWayland 下啟動 Prism：`{command}`
-	Or set Preferences › Performance › Linux display server to X11: Prism then always starts under XWayland.	或將 偏好設定 › 效能 › Linux 顯示伺服器 設為 X11：Prism 之後一律在 XWayland 下啟動。
 	Edit › Paste	「編輯 › 貼上」
 	Duplicate Layers…	複製圖層…
 	Duplicate style	複製樣式
 	Edit Toolbar…	編輯工具列…
-	Use File › Open, or paste a copied image with {paste}.	請使用「檔案 › 開啟」，或使用 {paste} 貼上複製的影像。
 	Edit in Quick Mask Mode  (Q)	在快速遮色片模式下編輯 (Q)
 	Edit in Standard Mode  (Q)	在標準模式下編輯 (Q)
 	Effects	效果
@@ -2010,8 +2005,6 @@
 	CPU (no GPU acceleration)	CPU (無 GPU 加速)
 	DirectX 12	DirectX 12
 	GPU backend	GPU 後端
-	Linux display server	Linux 顯示伺服器
-	X11	X11
 	Metal	Metal
 	OpenGL	OpenGL
 	Use tablet pressure	使用繪圖板壓力

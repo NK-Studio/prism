@@ -1,4 +1,4 @@
-//! The app icon, everywhere Windows, macOS and Linux show one (#248).
+//! The app icon, everywhere Windows, macOS and FreeBSD show one (#248).
 //!
 //! - **Executable:** `build.rs` embeds `assets/app-icon/photocraft.ico` (16–256 px) as icon
 //!   resource 1, which Explorer, Alt+Tab and an unpinned taskbar button fall back to.

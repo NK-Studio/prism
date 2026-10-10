@@ -1,7 +1,7 @@
 //! Windows only: embed the app icon and version info (VERSIONINFO) into `photocraft.exe`.
 //!
 //! On every other target this does nothing. A missing resource compiler is a warning, so a
-//! cross-compile from macOS or Linux still links, unless `PHOTOCRAFT_REQUIRE_WINRES=1` (set by the
+//! cross-compile from macOS still links, unless `PHOTOCRAFT_REQUIRE_WINRES=1` (set by the
 //! release workflow) turns it into an error.
 
 fn main() {

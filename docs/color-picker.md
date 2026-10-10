@@ -16,8 +16,6 @@ Screen snapshots are held in memory, are never written or transmitted by the pic
 
 ## Platform behavior
 
-- **Linux/X11:** a native Rust X11 client captures the composed desktop. An advertised primary-display ICC profile is converted to sRGB through Prism's color-management library. Outputs with no published profile use an sRGB fallback.
-- **Linux/Wayland:** the desktop's XDG `PickColor` portal owns selection and permission UI and returns sRGB. Magnification and zoom controls depend on the portal implementation; Prism cannot capture other applications directly under Wayland.
 - **Windows:** native screen capture with monitor-specific fullscreen viewports. Captured pixels currently use an sRGB fallback; HDR and arbitrary monitor-profile accuracy are not guaranteed.
 - **macOS:** safe CoreGraphics bindings capture the composed screen and use the snapshot's own ICC profile when available. Screen Recording permission may be required. The existing macOS 11 deployment target is preserved. The window-list capture API is deprecated by Apple, so current macOS releases require explicit manual validation; migration to modern native sampling must also preserve older-app compatibility.
 - **Web:** browsers exposing the standard EyeDropper API use the browser's native sampling/magnification UI. Browser support and zoom controls vary. Unsupported browsers retain document sampling and color fields; external screen sampling is unavailable.
@@ -40,6 +38,6 @@ For reproducible native X11 capture verification, the explicitly ignored test di
 xvfb-run -a cargo test -p photocraft screen_capture_reads_a_known_x11_fixture_pixel -- --ignored --test-threads=1
 ```
 
-Windows, macOS, Wayland portals, browser activation and mixed-DPI monitor arrangements additionally need manual validation on those environments; mock UI tests do not substitute for it.
+Windows, macOS and mixed-DPI monitor arrangements additionally need manual validation on those environments; mock UI tests do not substitute for it.
 
 References: [Adobe color selection](https://helpx.adobe.com/photoshop/desktop/adjust-color/choose-colors/set-foreground-and-background-colors.html), [XDG color portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Screenshot.html), [Apple image color space](https://developer.apple.com/documentation/coregraphics/cgimage/colorspace), [EyeDropper specification](https://wicg.github.io/eyedropper-api/).

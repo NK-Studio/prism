@@ -56,7 +56,7 @@ The native-only, pinned `sys-locale` dependency provides safe Rust access to the
   languages rather than the Region setting for dates and numbers; they can differ.
 - **macOS:** `CFLocaleCopyPreferredLanguages`, in preferred order, without starting `defaults`
   or depending on a particular `.plist` representation.
-- **Linux/BSD:** the platform's standard locale environment, including `LANGUAGE` lists.
+- **FreeBSD:** the platform's standard locale environment, including `LANGUAGE` lists.
 
 `PHOTOCRAFT_LOCALE` is an optional single-tag override for reproducible launches; an unsupported
 override falls back to English. Empty overrides use the system. Unix locale variables do not

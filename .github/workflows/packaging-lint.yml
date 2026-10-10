@@ -1,5 +1,5 @@
 # Quick static checks for the release pipeline (seconds, no Rust build): workflow syntax,
-# packaging shell/PowerShell scripts, and the Linux desktop/AppStream/Flatpak metadata.
+# packaging shell/PowerShell scripts, and the FreeBSD desktop/AppStream metadata.
 name: Packaging lint
 
 on:
@@ -34,9 +34,7 @@ jobs:
         run: |
           "$RUNNER_TEMP/actionlint" -color
       - name: shellcheck
-        run: shellcheck packaging/*.sh packaging/*/*.sh packaging/linux/AppRun
-      - name: AppImage AppRun desktop integration
-        run: bash packaging/linux/apprun-test.sh
+        run: shellcheck packaging/*.sh packaging/*/*.sh
       - name: PowerShell
         shell: pwsh
         run: |
@@ -47,19 +45,9 @@ jobs:
             Write-Output "ok $($f.Name)"
           }
           ./packaging/windows/check-icons.ps1
-      - name: XML, desktop entry, AppStream, Flatpak manifest
+      - name: XML, desktop entry, AppStream
         run: |
-          xmllint --noout packaging/windows/photocraft.wxs packaging/macos/*.plist* packaging/linux/*.xml*
-          desktop-file-validate packaging/linux/ai.storyteller.photocraft.desktop
-          sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/linux/ai.storyteller.photocraft.metainfo.xml.in >"$RUNNER_TEMP/ai.storyteller.photocraft.metainfo.xml"
+          xmllint --noout packaging/windows/photocraft.wxs packaging/macos/*.plist* packaging/freebsd/*.xml*
+          desktop-file-validate packaging/freebsd/ai.storyteller.photocraft.desktop
+          sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/freebsd/ai.storyteller.photocraft.metainfo.xml.in >"$RUNNER_TEMP/ai.storyteller.photocraft.metainfo.xml"
           appstreamcli validate --no-net --explain "$RUNNER_TEMP/ai.storyteller.photocraft.metainfo.xml"
-          python3 - <<'EOF'
-          import yaml
-          src = yaml.safe_load(open("packaging/linux/flatpak/ai.storyteller.photocraft.yml"))
-          bundle = yaml.safe_load(open("packaging/linux/flatpak/ai.storyteller.photocraft.bundle.yml"))
-          for m in (src, bundle):
-              assert m["id"] == "ai.storyteller.photocraft" and m["command"] == "photocraft", m["id"]
-          for key in ("runtime", "runtime-version", "sdk", "finish-args"):
-              assert src[key] == bundle[key], f"Flatpak manifests disagree on {key}: {src[key]} vs {bundle[key]}"
-          print("Flatpak manifests ok")
-          EOF

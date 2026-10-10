@@ -1,4 +1,4 @@
-//! Photocraft desktop app.
+//! Prism desktop app.
 //!
 //! Usage: `photocraft [--control <port>] [--control-token <64-hex> |
 //! --control-token-file <path>] [--automation-read-root <dir>]
@@ -20,6 +20,9 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(target_os = "linux")]
+compile_error!("Prism no longer supports Linux desktop builds.");
+
 mod app_dirs;
 mod app_icon;
 #[cfg(target_os = "macos")]
@@ -28,36 +31,33 @@ mod control_server;
 mod crash_guard;
 mod cursor;
 mod gpu_startup;
+mod logging;
 #[cfg(target_os = "macos")]
 mod mac_menu;
 #[cfg(target_os = "macos")]
 mod mac_window;
-#[cfg(target_os = "windows")]
-mod window_opacity;
-// Pure logic is tested on every platform; only Linux runs the check.
-#[cfg(any(target_os = "linux", test))]
-mod linux_libs;
-mod logging;
 mod monitor_profile;
 mod screen_color;
 mod services;
+#[cfg(target_os = "windows")]
+mod window_opacity;
 // Windows gets pen pressure from winit (WM_POINTER); the web runner has its own listener.
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+#[cfg(any(target_os = "macos", test))]
 mod tablet;
 mod ui_state;
 
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
 
-/// Matches the `.desktop` file and hicolor icon name, so Wayland docks pick up the icon.
+/// Stable native application ID, also used by the FreeBSD desktop entry.
 const APP_ID: &str = "ai.storyteller.photocraft";
 
-/// Windows and Linux: no OS title bar; the app's top bar is the title bar, with its own caption
+/// Windows and FreeBSD: no OS title bar; the app's top bar is the title bar, with its own caption
 /// buttons and edge resizing (`photocraft_ui_egui::titlebar`), as Photoshop does on Windows. macOS
 /// keeps its traffic lights over the integrated title strip.
 const CUSTOM_TITLEBAR: bool = !cfg!(target_os = "macos");
 
-/// Whether this start draws its own title bar: Windows and Linux do, unless Preferences ›
+/// Whether this start draws its own title bar: Windows and FreeBSD do, unless Preferences ›
 /// Interface › System Title Bar asks for the system's (#1271, #1316). Read from the saved
 /// preferences before the window opens; a missing or unreadable file keeps the default.
 fn custom_titlebar(prefs_file: Option<&std::path::Path>) -> bool {
@@ -69,7 +69,7 @@ fn custom_titlebar(prefs_file: Option<&std::path::Path>) -> bool {
 /// The main window: 1440 × 900 (shrunk to fit the monitor, and maximized on the first frame
 /// when it still doesn't fit, `work_area::fit_window`), centred on the main monitor. Without
 /// `centered`, Windows cascades each new window from the top-left corner, so it opened at a
-/// different offset every launch (#419). Wayland compositors place windows themselves.
+/// different offset every launch (#419).
 fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -152,8 +152,8 @@ fn main() -> eframe::Result {
     let mut automation_read_root = std::env::var_os("PHOTOCRAFT_AUTOMATION_READ_ROOT").map(std::path::PathBuf::from);
     let mut automation_write_root = std::env::var_os("PHOTOCRAFT_AUTOMATION_WRITE_ROOT").map(std::path::PathBuf::from);
     let mut files = Vec::new();
-    // Arguments that are not valid Unicode (issue #1108): a file manager can hand over a Latin-1
-    // file name on Linux, and `std::env::args()` would panic before any window opened. Paths are
+    // Arguments that are not valid Unicode (issue #1108): a file manager can hand over a non-Unicode
+    // file name on Unix, and `std::env::args()` would panic before any window opened. Paths are
     // reported in a notice once the app is up; a control token is a usage error like a bad port.
     let mut unreadable_paths: Vec<String> = Vec::new();
     let mut safe_gpu = false;
@@ -209,33 +209,6 @@ fn main() -> eframe::Result {
         }
     }
 
-    // The display server to open the window on: Xwayland for a pen on Wayland, which gives this
-    // app no pen input (#639).
-    #[cfg(target_os = "linux")]
-    let session = tablet::display_session();
-    // Preferences › Performance › Linux display server = X11: Xwayland on a Wayland session too,
-    // where native file drops work (winit 0.30 has none on Wayland, #386). Only when Xwayland can
-    // run the window ($DISPLAY set, X11 libraries installed); otherwise the session's own.
-    #[cfg(target_os = "linux")]
-    let session = if session == linux_libs::DisplaySession::Wayland
-        && gpu_startup::read_display_server(services::prefs_file().as_deref()) == photocraft_engine::prefs::LinuxDisplayServer::X11
-        && std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty())
-        && linux_libs::available(linux_libs::DisplaySession::X11)
-    {
-        eprintln!("photocraft: opening the window through Xwayland (Preferences › Performance › Linux display server)");
-        linux_libs::DisplaySession::X11
-    } else {
-        session
-    };
-
-    // winit and wgpu dlopen the windowing and GPU libraries, and some of those crates panic when
-    // one is missing (issue #201). Name the package to install and exit instead.
-    #[cfg(target_os = "linux")]
-    if let Err(message) = linux_libs::preflight(session) {
-        eprint!("{message}");
-        std::process::exit(1);
-    }
-
     let control = if let Some(port) = control_port {
         let (supplied, token_file) = photocraft_automation::security::token_inputs(control_token, control_token_file);
         let token = match photocraft_automation::security::server_token(supplied.as_deref(), token_file.as_deref()) {
@@ -284,14 +257,6 @@ fn main() -> eframe::Result {
     let presets = services::presets_dir().map(photocraft_engine::preset_store::open_dir_async);
     let custom_titlebar = custom_titlebar(services::prefs_file().as_deref());
     let mut options = native_options(custom_titlebar);
-    // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; open on X11 when that was chosen.
-    #[cfg(target_os = "linux")]
-    if session == linux_libs::DisplaySession::X11 {
-        use winit::platform::x11::EventLoopBuilderExtX11 as _;
-        options.event_loop_builder = Some(Box::new(|builder| {
-            builder.with_x11();
-        }));
-    }
     // eframe restores the saved window layout before our code runs; drop values that would crash it.
     ui_state::sanitize(options.persistence_path.as_deref());
     // Crash-safe GPU startup (#4): pick the backend (a marker left by a start that died in the
@@ -337,17 +302,6 @@ fn main() -> eframe::Result {
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
             services.preset_store = presets;
-            #[cfg(target_os = "linux")]
-            let display = tablet::DisplayKind::of(cc);
-            #[cfg(target_os = "linux")]
-            {
-                services.is_wayland = display == Some(tablet::DisplayKind::Wayland);
-                if services.is_wayland {
-                    let var = |name| std::env::var(name).ok();
-                    services.xwayland_command =
-                        services::xwayland_command(var("FLATPAK_ID").as_deref(), var("APPIMAGE").as_deref(), std::env::var_os("DISPLAY").is_some());
-                }
-            }
             let mut app = PhotocraftApp::new(Session::new(), services);
             app.integrated_titlebar = cfg!(target_os = "macos");
             app.custom_titlebar = custom_titlebar;
@@ -454,17 +408,15 @@ fn main() -> eframe::Result {
             {
                 app.services.window_opacity = Some(window_opacity::service());
             }
-            app.services.screen_pick = screen_color::service(cc, app.services.is_wayland);
-            // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor and the X11 reader
+            app.services.screen_pick = screen_color::service(cc);
+            // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor
             // write into the stylus feed. The monitor goes in here, not before the event loop:
             // AppKit's shared application only exists once winit created it (#759).
             #[cfg(target_os = "macos")]
             if let Some(monitor) = tablet::install_macos(&app.stylus.feed) {
                 let _ = tablet_monitor.set(monitor);
             }
-            #[cfg(target_os = "linux")]
-            tablet::spawn_x11(&app.stylus.feed, display);
-            // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
+            // Paths on the command line (Windows/FreeBSD file associations, `photocraft a.psd`).
             app.open_paths(&files);
             if !unreadable_paths.is_empty() {
                 use photocraft_ui_egui::i18n;
@@ -574,7 +526,7 @@ mod tests {
     #[test]
     fn the_system_title_bar_preference_keeps_the_window_decorations() {
         // #1271, #1316: Preferences › Interface › System Title Bar gives the window back its
-        // system decorations on Windows and Linux; macOS always has them.
+        // system decorations on Windows and FreeBSD; macOS always has them.
         let dir = std::env::temp_dir().join(format!("pc-titlebar-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("prefs.json");
