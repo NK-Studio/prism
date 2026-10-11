@@ -2365,3 +2365,71 @@ fontWeight	Italic	Cursiva
 	Path Arrangement	Disposición de trazado
 	New Layer	Capa nueva
 	Settings	Ajustes
+# Save window (save_ui.rs)
+	256 colors	256 colores
+	32-bit HDR	HDR de 32 bits
+	A file with this name already exists and will be replaced.	Ya existe un archivo con este nombre y se reemplazará.
+	A name can't contain slashes	Un nombre no puede contener barras
+	All layers	Todas las capas
+	Almost no visible difference	Casi sin diferencia visible
+	Color detail	Detalle de color
+	Color profile	Perfil de color
+	Compression	Compresión
+	Custom quality	Calidad personalizada
+	Desktop	Escritorio
+	Direct settings	Ajustes directos
+	Downloads	Descargas
+	Each layer inside	Cada capa del grupo
+	Edges can look rough	Los bordes pueden verse ásperos
+	Enter a name	Escribe un nombre
+	Estimated size {size}	Tamaño estimado {size}
+	Fast	Rápido
+	File names	Nombres de archivo
+	File size	Tamaño de archivo
+	Folder	Carpeta
+	Full color resolution (4:4:4)	Resolución de color completa (4:4:4)
+	Groups	Grupos
+	Hard to tell from the original	Difícil de distinguir del original
+	Icon	Icono
+	Image (merged into one)	Imagen (combinada en una)
+	Include	Incluir
+	JPEG doesn't keep transparency.	JPEG no conserva la transparencia.
+	Keep canvas size	Mantener el tamaño del lienzo
+	Keep layers	Conservar capas
+	Keeps layers	Conserva las capas
+	Large document	Documento grande
+	Location	Ubicación
+	Lossless, keeps transparency	Sin pérdida, conserva la transparencia
+	Merge into one	Combinar en una
+	More formats	Más formatos
+	No matching format	Ningún formato coincide
+	One file per group	Un archivo por grupo
+	Original (editable)	Original (editable)
+	Original formats keep everything, so there is nothing to set.	Los formatos originales lo conservan todo; no hay nada que ajustar.
+	Other Folder…	Otra carpeta…
+	PNG is lossless: the image looks the same. Only the size and saving time change.	PNG no tiene pérdida: la imagen se ve igual. Solo cambian el tamaño y el tiempo de guardado.
+	Photos, small files	Fotos, archivos pequeños
+	Print, can keep layers	Impresión, puede conservar capas
+	Prism can't write this format	Prism no puede escribir este formato
+	Prism native file	Archivo nativo de Prism
+	Save each layer as a file	Guardar cada capa como archivo
+	Saved {count} files in {folder}	Se guardaron {count} archivos en {folder}
+	Saves {count} layers as separate files in this folder	Guarda {count} capas como archivos separados en esta carpeta
+	Search formats: png, jpg, layers…	Buscar formatos: png, jpg, capas…
+	Selected layers	Capas seleccionadas
+	Show {count} more formats	Mostrar {count} formatos más
+	Slightly soft up close	Ligeramente suave de cerca
+	Small web images	Imágenes web pequeñas
+	Smallest	Más pequeño
+	There are no layers to save with these settings	No hay capas que guardar con estos ajustes
+	This format saves 8 bits per channel.	Este formato guarda 8 bits por canal.
+	Trim to content	Recortar al contenido
+	Visible layers	Capas visibles
+	Web, keeps transparency	Web, conserva la transparencia
+	copy	copia
+	the file's folder	carpeta del archivo
+	{count} layers are merged into one image. The open document stays as it is.	{count} capas se combinan en una imagen. El documento abierto no cambia.
+	{layer}, {index} and {document} are replaced	{layer}, {index} y {document} se sustituyen
+	Highest	Máxima
+	For web	Para web
+	High	Alta

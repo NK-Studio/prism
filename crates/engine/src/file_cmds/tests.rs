@@ -315,6 +315,56 @@ fn layers_to_files_writes_each_visible_layer() {
 }
 
 #[test]
+fn layers_to_files_names_trims_and_picks_selected_or_grouped_layers() {
+    let dir = tmp("layers-options");
+    let mut s = session(20, 10, 8);
+    // Two layers with one name, a small fill on the top one, then both grouped.
+    s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
+    let a = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
+    let b = s.active().unwrap().active_layer.unwrap();
+    s.execute("select.rect", json!({"x": 2, "y": 3, "width": 4, "height": 5})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).ok();
+    let files = |r: Value| -> Vec<String> { r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect() };
+    let names = |f: &[String]| -> Vec<String> { f.iter().map(|p| file_name(p)).collect() };
+    let f = files(s.execute("file.export.layersToFiles", json!({"dir": dir, "name": "{layer}", "trim": true})).unwrap());
+    assert_eq!(names(&f), ["Ink.png", "Ink 2.png", "Background.png"], "same names get a number");
+    let top = prism_codecs::decode(&std::fs::read(&f[0]).unwrap()).unwrap();
+    assert_eq!((top.width(), top.height()), (4, 5), "trimmed to the fill");
+    let empty = prism_codecs::decode(&std::fs::read(&f[1]).unwrap()).unwrap();
+    assert_eq!((empty.width(), empty.height()), (20, 10), "an empty layer keeps the canvas");
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    let f = files(s.execute("file.export.layersToFiles", json!({"dir": dir, "layers": "selected", "name": "{index}-{document}"})).unwrap());
+    assert_eq!(f.len(), 1);
+    assert!(file_name(&f[0]).starts_with("01-"), "{f:?}");
+    s.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    let merged = files(s.execute("file.export.layersToFiles", json!({"dir": dir, "name": "{layer}"})).unwrap());
+    let each = files(s.execute("file.export.layersToFiles", json!({"dir": dir, "name": "{layer}", "groups": "each"})).unwrap());
+    assert_eq!((merged.len(), each.len()), (2, 3), "a group is one file unless each layer is asked for");
+    for bad in [json!({"dir": dir, "layers": "some"}), json!({"dir": dir, "groups": "flat"}), json!({"layers": "all"})] {
+        assert!(s.execute("file.export.layersToFiles", bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn exact_quality_and_png_effort_reach_the_encoder() {
+    let dir = tmp("save-opts");
+    let mut s = session(64, 64, 8);
+    s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+    let small = join(&dir, "q20.jpg");
+    let large = join(&dir, "q95.jpg");
+    save_doc(doc(&s), &small, SaveOpts::from_params(&json!({"jpegQuality": 20}))).unwrap();
+    save_doc(doc(&s), &large, SaveOpts::from_params(&json!({"jpegQuality": 95, "chroma444": true}))).unwrap();
+    let len = |p: &str| std::fs::metadata(p).unwrap().len();
+    assert!(len(&small) < len(&large), "{} vs {}", len(&small), len(&large));
+    let o = SaveOpts::from_params(&json!({"jpegQuality": 900, "webpQuality": -4, "pngCompression": "best"}));
+    assert_eq!((o.jpeg_quality, o.webp_quality, o.png_compression), (Some(100), Some(1), Some(prism_codecs::PngCompression::Best)));
+    assert_eq!(SaveOpts::from_params(&json!({"pngCompression": "weird"})).png_compression, None);
+}
+
+#[test]
 fn load_files_into_stack_and_image_processor_and_batch() {
     let dir = tmp("batch");
     let input = join(&dir, "in");

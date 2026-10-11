@@ -2567,3 +2567,68 @@ fontWeight	Italic	Курсив
 	Path Alignment	Выравнивание контура
 	Path Arrangement	Порядок контуров
 	New Layer	Новый слой
+# Save window (save_ui.rs)
+	256 colors	256 цветов
+	32-bit HDR	32-битный HDR
+	A file with this name already exists and will be replaced.	Файл с таким именем уже есть и будет заменён.
+	A name can't contain slashes	Имя не может содержать косую черту
+	All layers	Все слои
+	Almost no visible difference	Разница почти не видна
+	Color detail	Детализация цвета
+	Color profile	Цветовой профиль
+	Compression	Сжатие
+	Custom quality	Своё качество
+	Desktop	Рабочий стол
+	Direct settings	Точная настройка
+	Downloads	Загрузки
+	Each layer inside	Каждый слой внутри
+	Edges can look rough	Края могут выглядеть грубо
+	Enter a name	Введите имя
+	Estimated size {size}	Примерный размер {size}
+	File names	Имена файлов
+	File size	Размер файла
+	Folder	Папка
+	Full color resolution (4:4:4)	Полное цветовое разрешение (4:4:4)
+	Groups	Группы
+	Hard to tell from the original	Почти не отличить от оригинала
+	Icon	Значок
+	Image (merged into one)	Изображение (сведено в одно)
+	Include	Включить
+	JPEG doesn't keep transparency.	JPEG не сохраняет прозрачность.
+	Keep canvas size	Сохранить размер холста
+	Keep layers	Сохранить слои
+	Keeps layers	Сохраняет слои
+	Large document	Большой документ
+	Lossless, keeps transparency	Без потерь, с прозрачностью
+	Merge into one	Свести в одно
+	More formats	Другие форматы
+	No matching format	Нет подходящего формата
+	One file per group	Один файл на группу
+	Original (editable)	Оригинал (редактируемый)
+	Original formats keep everything, so there is nothing to set.	Исходные форматы сохраняют всё, настраивать нечего.
+	Other Folder…	Другая папка…
+	PNG is lossless: the image looks the same. Only the size and saving time change.	PNG сжимает без потерь: изображение не меняется. Меняются только размер и время сохранения.
+	Photos, small files	Фото, небольшие файлы
+	Print, can keep layers	Печать, можно сохранить слои
+	Prism can't write this format	Prism не может записать этот формат
+	Prism native file	Собственный файл Prism
+	Save each layer as a file	Сохранить каждый слой отдельным файлом
+	Saved {count} files in {folder}	Сохранено файлов: {count} в {folder}
+	Saves {count} layers as separate files in this folder	Слои ({count}) будут сохранены отдельными файлами в этой папке
+	Search formats: png, jpg, layers…	Поиск формата: png, jpg, слои…
+	Selected layers	Выбранные слои
+	Show {count} more formats	Показать ещё форматы ({count})
+	Slightly soft up close	Вблизи слегка размыто
+	Small web images	Небольшие веб-изображения
+	Smallest	Минимальный
+	There are no layers to save with these settings	При этих настройках нет слоёв для сохранения
+	This format saves 8 bits per channel.	Этот формат сохраняет 8 бит на канал.
+	Trim to content	Обрезать по содержимому
+	Visible layers	Видимые слои
+	Web, keeps transparency	Веб, с прозрачностью
+	copy	копия
+	the file's folder	папка файла
+	{count} layers are merged into one image. The open document stays as it is.	Слои ({count}) сводятся в одно изображение. Открытый документ не меняется.
+	{layer}, {index} and {document} are replaced	{layer}, {index} и {document} заменяются
+	Highest	Наивысшее
+	For web	Для веба

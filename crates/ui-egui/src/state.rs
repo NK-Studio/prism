@@ -842,12 +842,29 @@ pub struct ColorPanelState {
     pub mode: ColorPanelMode,
 }
 
+/// The Save window's memory: folders and formats used last, whether Advanced was open, and the
+/// options chosen per format.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavePrefs {
+    /// Folders saved to, most recent first (capped).
+    pub recent_dirs: Vec<String>,
+    /// Formats saved as, most recent first (capped).
+    pub recent_formats: Vec<String>,
+    pub advanced: bool,
+    /// Option fields per format key (`png`, `jpg`, …), as the window last had them.
+    pub options: std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiState {
     pub tool: Tool,
     /// Recently opened file paths, most-recent first (File › Open Recent). Capped; de-duplicated.
     #[serde(default)]
     pub recent_files: Vec<String>,
+    /// What the Save window remembers between uses (`save_ui.rs`).
+    #[serde(default)]
+    pub save: SavePrefs,
     /// Inline type editing session, if any.
     #[serde(default)]
     pub text_edit: Option<TextEdit>,
@@ -1019,6 +1036,7 @@ impl Default for UiState {
         Self {
             tool: Tool::Brush,
             recent_files: Vec::new(),
+            save: SavePrefs::default(),
             text_edit: None,
             type_transform: None,
             type_transform_pivot: None,

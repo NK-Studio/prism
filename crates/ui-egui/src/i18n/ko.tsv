@@ -2883,3 +2883,70 @@ fontWeight	Italic	기울임
 	Path Operations	패스 작업
 	Path Alignment	패스 정렬
 	Path Arrangement	패스 배열
+# Save window (save_ui.rs)
+	256 colors	256색
+	32-bit HDR	32비트 HDR
+	A file with this name already exists and will be replaced.	같은 이름의 파일이 있어 덮어씁니다.
+	A name can't contain slashes	이름에 슬래시를 넣을 수 없어요
+	All layers	모든 레이어
+	Almost no visible difference	눈으로 거의 차이 없음
+	Color detail	색 세부
+	Color profile	색상 프로필
+	Compression	압축
+	Custom quality	사용자 지정 화질
+	Desktop	데스크탑
+	Direct settings	직접 설정
+	Downloads	다운로드
+	Each layer inside	안의 레이어까지 각각
+	Edges can look rough	경계가 거칠어질 수 있음
+	Enter a name	이름을 입력하세요
+	Estimated size {size}	예상 크기 {size}
+	Fast	빠르게
+	File names	이름 규칙
+	File size	용량
+	Folder	폴더
+	Full color resolution (4:4:4)	색 해상도 유지 (4:4:4)
+	Groups	그룹
+	Hard to tell from the original	원본과 구분 어려움
+	Icon	아이콘
+	Image (merged into one)	이미지 (한 장으로 합쳐짐)
+	Include	포함
+	JPEG doesn't keep transparency.	JPEG는 투명도를 저장하지 않아요.
+	Keep canvas size	캔버스 크기 유지
+	Keep layers	레이어 유지
+	Keeps layers	레이어 유지
+	Large document	대용량 문서
+	Location	위치
+	Lossless, keeps transparency	무손실 · 투명도 유지
+	Merge into one	한 장으로
+	More formats	기타
+	No matching format	맞는 형식이 없어요
+	One file per group	그룹은 한 장으로
+	Original (editable)	원본 (편집 가능)
+	Original formats keep everything, so there is nothing to set.	원본 형식은 모든 정보를 보존해서 따로 정할 게 없어요.
+	Other Folder…	다른 폴더…
+	PNG is lossless: the image looks the same. Only the size and saving time change.	PNG는 무손실이라 화질은 같아요. 저장 속도와 크기만 달라집니다.
+	Photos, small files	사진 · 작은 용량
+	Print, can keep layers	인쇄 · 레이어 선택
+	Prism can't write this format	Prism은 이 형식으로 저장할 수 없어요
+	Prism native file	Prism 전용 파일
+	Save each layer as a file	레이어별로 저장 (폴더에 파일로)
+	Saved {count} files in {folder}	{folder}에 파일 {count}개를 저장했습니다
+	Saves {count} layers as separate files in this folder	레이어 {count}개를 이 폴더에 각각 파일로 저장합니다
+	Search formats: png, jpg, layers…	형식 검색: png, jpg, 원본…
+	Selected layers	선택한 레이어
+	Show {count} more formats	기타 {count}개 보기
+	Slightly soft up close	가까이 보면 약간 뭉개짐
+	Small web images	작은 웹 이미지
+	Smallest	가장 작게
+	There are no layers to save with these settings	이 설정으로 저장할 레이어가 없어요
+	This format saves 8 bits per channel.	이 형식은 채널당 8비트로 저장합니다.
+	Trim to content	내용만 잘라내기
+	Visible layers	보이는 레이어
+	Web, keeps transparency	웹 · 투명도 유지
+	copy	복사
+	the file's folder	원본 파일 폴더
+	{count} layers are merged into one image. The open document stays as it is.	레이어 {count}개가 한 장으로 합쳐집니다. 열려 있는 문서는 그대로예요.
+	{layer}, {index} and {document} are replaced	{layer}, {index}, {document}가 실제 값으로 바뀝니다
+	Highest	최고
+	For web	웹용

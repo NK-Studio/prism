@@ -35,7 +35,7 @@ fn answer(open: &Open, answer: Option<FileDialogAnswer>) {
 fn the_app_keeps_running_while_a_dialog_is_open() {
     let (mut app, open, written) = app();
     let ctx = egui::Context::default();
-    assert_eq!(menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap(), json!({"fileDialog": "save"}));
+    assert_eq!(app.save_as(None).unwrap(), json!({"fileDialog": "save"}));
     assert!(open.borrow().is_empty(), "shown at the end of the frame, which has the window to parent it to");
     app.poll_file_dialog(&ctx, None);
     assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested.ends_with(".psd")));
@@ -71,7 +71,7 @@ fn the_answer_goes_to_the_document_it_was_asked_for() {
     let ctx = egui::Context::default();
     app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
     app.session.set_active(0);
-    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.save_as(None).unwrap();
     app.poll_file_dialog(&ctx, None);
     app.session.set_active(1);
     answer(&open, Some(FileDialogAnswer::SaveTo("/pics/first.psd".into())));
@@ -80,7 +80,7 @@ fn the_answer_goes_to_the_document_it_was_asked_for() {
     assert_eq!(paths, [Some("/pics/first.psd".to_string()), None]);
     assert_eq!(app.session.active_index(), Some(0));
     // Once that document is closed, the answer has nothing to save.
-    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.save_as(None).unwrap();
     app.poll_file_dialog(&ctx, None);
     app.run("file.close", json!({"document": 0})).unwrap();
     answer(&open, Some(FileDialogAnswer::SaveTo("/pics/again.psd".into())));
@@ -93,13 +93,13 @@ fn the_answer_goes_to_the_document_it_was_asked_for() {
 fn cancel_and_a_dialog_that_could_not_show_end_quietly() {
     let (mut app, open, written) = app();
     let ctx = egui::Context::default();
-    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.save_as(None).unwrap();
     app.poll_file_dialog(&ctx, None);
     answer(&open, None);
     app.poll_file_dialog(&ctx, None);
     assert!(!app.file_dialog_open() && !app.ui.status_error);
     // A reply dropped unanswered (the dialog failed to show) is a Cancel, not a dialog left open forever.
-    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.save_as(None).unwrap();
     app.poll_file_dialog(&ctx, None);
     open.borrow_mut().clear();
     app.poll_file_dialog(&ctx, None);
@@ -115,7 +115,7 @@ fn cancel_and_a_dialog_that_could_not_show_end_quietly() {
 fn an_answer_of_the_wrong_kind_is_an_error_not_a_crash() {
     let (mut app, open, written) = app();
     let ctx = egui::Context::default();
-    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.save_as(None).unwrap();
     app.poll_file_dialog(&ctx, None);
     answer(&open, Some(FileDialogAnswer::Paths(vec!["/pics/a.psd".into()])));
     app.poll_file_dialog(&ctx, None);

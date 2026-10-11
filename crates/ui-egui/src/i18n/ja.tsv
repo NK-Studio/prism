@@ -3315,3 +3315,68 @@ fontWeight	Italic	斜体
 	Path Operations	パスの操作
 	Path Alignment	パスの整列
 	Path Arrangement	パスの配置
+# Save window (save_ui.rs)
+	256 colors	256色
+	32-bit HDR	32 ビット HDR
+	A file with this name already exists and will be replaced.	同じ名前のファイルがあるため置き換えます。
+	A name can't contain slashes	名前にスラッシュは使えません
+	All layers	すべてのレイヤー
+	Almost no visible difference	見た目はほぼ変わりません
+	Color detail	色の精細さ
+	Color profile	カラープロファイル
+	Compression	圧縮
+	Custom quality	カスタム画質
+	Desktop	デスクトップ
+	Direct settings	詳細設定
+	Downloads	ダウンロード
+	Each layer inside	中のレイヤーを個別に
+	Edges can look rough	輪郭が粗く見えることがあります
+	Enter a name	名前を入力してください
+	Estimated size {size}	推定サイズ {size}
+	File names	ファイル名
+	File size	ファイルサイズ
+	Folder	フォルダー
+	Full color resolution (4:4:4)	色解像度を保持 (4:4:4)
+	Groups	グループ
+	Hard to tell from the original	元画像とほぼ区別できません
+	Icon	アイコン
+	Image (merged into one)	画像 (1 枚に統合)
+	Include	含める
+	JPEG doesn't keep transparency.	JPEG は透明部分を保存しません。
+	Keep canvas size	カンバスサイズを維持
+	Keep layers	レイヤーを保持
+	Keeps layers	レイヤーを保持
+	Large document	大きなドキュメント
+	Lossless, keeps transparency	可逆・透明部分を保持
+	Merge into one	1 枚に統合
+	More formats	その他の形式
+	No matching format	一致する形式がありません
+	One file per group	グループごとに 1 ファイル
+	Original (editable)	オリジナル (編集可能)
+	Original formats keep everything, so there is nothing to set.	オリジナル形式はすべてを保持するため、設定は不要です。
+	Other Folder…	その他のフォルダー…
+	PNG is lossless: the image looks the same. Only the size and saving time change.	PNG は可逆圧縮なので画質は同じです。サイズと保存時間だけが変わります。
+	Photos, small files	写真・小さいファイル
+	Print, can keep layers	印刷・レイヤー保持可
+	Prism can't write this format	Prism はこの形式で書き出せません
+	Prism native file	Prism ネイティブファイル
+	Save each layer as a file	レイヤーごとにファイルとして保存
+	Saved {count} files in {folder}	{folder} に {count} 個のファイルを保存しました
+	Saves {count} layers as separate files in this folder	{count} 個のレイヤーをこのフォルダーに個別のファイルとして保存します
+	Search formats: png, jpg, layers…	形式を検索: png、jpg、レイヤー…
+	Selected layers	選択したレイヤー
+	Show {count} more formats	その他 {count} 個の形式を表示
+	Slightly soft up close	近くで見るとわずかにぼやけます
+	Small web images	小さな Web 画像
+	Smallest	最小
+	There are no layers to save with these settings	この設定で保存するレイヤーがありません
+	This format saves 8 bits per channel.	この形式はチャンネルあたり 8 ビットで保存します。
+	Trim to content	内容に合わせてトリミング
+	Visible layers	表示中のレイヤー
+	Web, keeps transparency	Web・透明部分を保持
+	copy	のコピー
+	the file's folder	ファイルのフォルダー
+	{count} layers are merged into one image. The open document stays as it is.	{count} 個のレイヤーが 1 枚の画像に統合されます。開いているドキュメントはそのままです。
+	{layer}, {index} and {document} are replaced	{layer}、{index}、{document} は実際の値に置き換わります
+	Highest	最高
+	For web	Web 用

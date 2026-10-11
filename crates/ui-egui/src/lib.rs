@@ -66,6 +66,7 @@ pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
 pub mod floating_window;
+pub mod save_ui;
 pub mod gallery_ui;
 pub mod gpu_canvas;
 pub mod gpu_status;
@@ -187,11 +188,26 @@ pub struct ExportSettings {
     /// Export As starts at Metadata: None, since the packet can carry the text of every type
     /// layer and one id per placed document (#647).
     pub xmp_all: bool,
+    /// PNG zlib effort (None = codec default).
+    pub png_compression: Option<prism_codecs::PngCompression>,
+    /// JPEG 4:4:4 (full-resolution colour) instead of 4:2:0.
+    pub jpeg_chroma_444: bool,
+    /// Embed the ICC profile where the format holds one.
+    pub embed_icc: bool,
 }
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        ExportSettings { jpeg_quality: None, webp_lossless: true, webp_quality: None, tiff_layers: true, xmp_all: true }
+        ExportSettings {
+            jpeg_quality: None,
+            webp_lossless: true,
+            webp_quality: None,
+            tiff_layers: true,
+            xmp_all: true,
+            png_compression: None,
+            jpeg_chroma_444: false,
+            embed_icc: true,
+        }
     }
 }
 

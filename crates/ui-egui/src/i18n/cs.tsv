@@ -2297,3 +2297,71 @@ fontWeight	Italic	Kurzíva
 	Path Arrangement	Uspořádání cesty
 	New Layer	Nová vrstva
 	Settings	Nastavení
+# Save window (save_ui.rs)
+	256 colors	256 barev
+	32-bit HDR	32bitové HDR
+	A file with this name already exists and will be replaced.	Soubor s tímto názvem již existuje a bude nahrazen.
+	A name can't contain slashes	Název nesmí obsahovat lomítka
+	All layers	Všechny vrstvy
+	Almost no visible difference	Téměř bez viditelného rozdílu
+	Color detail	Detail barev
+	Color profile	Barevný profil
+	Compression	Komprese
+	Custom quality	Vlastní kvalita
+	Desktop	Plocha
+	Direct settings	Přímé nastavení
+	Downloads	Stažené soubory
+	Each layer inside	Každá vrstva uvnitř
+	Edges can look rough	Okraje mohou vypadat hrubě
+	Enter a name	Zadejte název
+	Estimated size {size}	Odhadovaná velikost {size}
+	Fast	Rychle
+	File names	Názvy souborů
+	File size	Velikost souboru
+	Folder	Složka
+	Full color resolution (4:4:4)	Plné barevné rozlišení (4:4:4)
+	Groups	Skupiny
+	Hard to tell from the original	Těžko odlišitelné od originálu
+	Icon	Ikona
+	Image (merged into one)	Obrázek (sloučený do jednoho)
+	Include	Zahrnout
+	JPEG doesn't keep transparency.	JPEG neuchovává průhlednost.
+	Keep canvas size	Zachovat velikost plátna
+	Keep layers	Zachovat vrstvy
+	Keeps layers	Zachovává vrstvy
+	Large document	Velký dokument
+	Location	Umístění
+	Lossless, keeps transparency	Bezeztrátový, s průhledností
+	Merge into one	Sloučit do jednoho
+	More formats	Další formáty
+	No matching format	Žádný odpovídající formát
+	One file per group	Jeden soubor na skupinu
+	Original (editable)	Originál (upravitelný)
+	Original formats keep everything, so there is nothing to set.	Původní formáty uchovají vše, není co nastavovat.
+	Other Folder…	Jiná složka…
+	PNG is lossless: the image looks the same. Only the size and saving time change.	PNG je bezeztrátový: obraz vypadá stejně. Mění se jen velikost a doba ukládání.
+	Photos, small files	Fotografie, malé soubory
+	Print, can keep layers	Tisk, může zachovat vrstvy
+	Prism can't write this format	Prism tento formát nedokáže zapsat
+	Prism native file	Nativní soubor Prism
+	Save each layer as a file	Uložit každou vrstvu jako soubor
+	Saved {count} files in {folder}	Uloženo souborů: {count} do {folder}
+	Saves {count} layers as separate files in this folder	Uloží vrstvy ({count}) jako samostatné soubory do této složky
+	Search formats: png, jpg, layers…	Hledat formát: png, jpg, vrstvy…
+	Selected layers	Vybrané vrstvy
+	Show {count} more formats	Zobrazit další formáty ({count})
+	Slightly soft up close	Zblízka mírně neostré
+	Small web images	Malé webové obrázky
+	Smallest	Nejmenší
+	There are no layers to save with these settings	S tímto nastavením nejsou k uložení žádné vrstvy
+	This format saves 8 bits per channel.	Tento formát ukládá 8 bitů na kanál.
+	Trim to content	Oříznout na obsah
+	Visible layers	Viditelné vrstvy
+	Web, keeps transparency	Web, s průhledností
+	copy	kopie
+	the file's folder	složka souboru
+	{count} layers are merged into one image. The open document stays as it is.	Vrstvy ({count}) se sloučí do jednoho obrázku. Otevřený dokument zůstane beze změny.
+	{layer}, {index} and {document} are replaced	{layer}, {index} a {document} se nahradí
+	Highest	Nejvyšší
+	For web	Pro web
+	High	Vysoká

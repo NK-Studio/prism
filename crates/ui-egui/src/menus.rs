@@ -245,7 +245,14 @@ pub(crate) fn invoke_unguarded(app: &mut PrismApp, ctx: &egui::Context, id: &str
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .or_else(|| app.session.active().and_then(|d| d.path.clone()).filter(|p| prism_engine::file_cmds::saves_in_place(p)));
-            app.save_as(path)
+            // Nowhere to write back: the Save window, except while the unsaved-changes prompt
+            // saves (it waits on the system save panel).
+            match path {
+                None if app.discard.is_none() && app.services.export.is_some() && !app.session.is_enabled("layer.smartObjects.saveContents") => {
+                    crate::save_ui::open(app, false)
+                }
+                path => app.save_as(path),
+            }
         }
         "file.exit" => {
             ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
@@ -261,7 +268,11 @@ pub(crate) fn invoke_unguarded(app: &mut PrismApp, ctx: &egui::Context, id: &str
                 None => Err("no such recent file".to_string()),
             }
         }
-        "file.saveAs" => app.save_as(params.get("path").and_then(Value::as_str).map(str::to_string)),
+        "file.saveAs" => match params.get("path").and_then(Value::as_str) {
+            Some(path) => app.save_as(Some(path.to_string())),
+            None if app.discard.is_none() && !app.session.is_enabled("layer.smartObjects.saveContents") => crate::save_ui::open(app, false),
+            None => app.save_as(None),
+        },
         "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => app.run(id, params),
         "window.newWindowForDocument" => crate::doc_windows::additional(app, app.session.active_index().ok_or("no document")?),
         "window.theme.toggle" => {

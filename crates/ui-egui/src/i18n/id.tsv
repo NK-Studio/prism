@@ -2703,3 +2703,68 @@ fontWeight	Italic	Miring
 	Path Alignment	Perataan Path
 	Path Arrangement	Susunan Path
 	New Layer	Layer Baru
+# Save window (save_ui.rs)
+	256 colors	256 warna
+	32-bit HDR	HDR 32-bit
+	A file with this name already exists and will be replaced.	File dengan nama ini sudah ada dan akan diganti.
+	A name can't contain slashes	Nama tidak boleh berisi garis miring
+	All layers	Semua layer
+	Almost no visible difference	Hampir tidak ada perbedaan terlihat
+	Color detail	Detail warna
+	Color profile	Profil warna
+	Compression	Kompresi
+	Custom quality	Kualitas khusus
+	Desktop	Desktop
+	Direct settings	Pengaturan langsung
+	Downloads	Unduhan
+	Each layer inside	Setiap layer di dalamnya
+	Edges can look rough	Tepi bisa tampak kasar
+	Enter a name	Masukkan nama
+	Estimated size {size}	Perkiraan ukuran {size}
+	File names	Nama file
+	File size	Ukuran file
+	Folder	Folder
+	Full color resolution (4:4:4)	Resolusi warna penuh (4:4:4)
+	Groups	Grup
+	Hard to tell from the original	Sulit dibedakan dari aslinya
+	Icon	Ikon
+	Image (merged into one)	Gambar (digabung jadi satu)
+	Include	Sertakan
+	JPEG doesn't keep transparency.	JPEG tidak menyimpan transparansi.
+	Keep canvas size	Pertahankan ukuran kanvas
+	Keep layers	Pertahankan layer
+	Keeps layers	Menyimpan layer
+	Large document	Dokumen besar
+	Lossless, keeps transparency	Tanpa kehilangan, dengan transparansi
+	Merge into one	Gabung jadi satu
+	More formats	Format lain
+	No matching format	Tidak ada format yang cocok
+	One file per group	Satu file per grup
+	Original (editable)	Asli (dapat diedit)
+	Original formats keep everything, so there is nothing to set.	Format asli menyimpan semuanya, tidak ada yang perlu diatur.
+	Other Folder…	Folder lain…
+	PNG is lossless: the image looks the same. Only the size and saving time change.	PNG tanpa kehilangan: gambarnya tetap sama. Hanya ukuran dan waktu simpan yang berubah.
+	Photos, small files	Foto, file kecil
+	Print, can keep layers	Cetak, bisa menyimpan layer
+	Prism can't write this format	Prism tidak bisa menulis format ini
+	Prism native file	File asli Prism
+	Save each layer as a file	Simpan setiap layer sebagai file
+	Saved {count} files in {folder}	{count} file disimpan di {folder}
+	Saves {count} layers as separate files in this folder	Menyimpan {count} layer sebagai file terpisah di folder ini
+	Search formats: png, jpg, layers…	Cari format: png, jpg, layer…
+	Selected layers	Layer terpilih
+	Show {count} more formats	Tampilkan {count} format lain
+	Slightly soft up close	Sedikit lembut jika dilihat dekat
+	Small web images	Gambar web kecil
+	Smallest	Terkecil
+	There are no layers to save with these settings	Tidak ada layer untuk disimpan dengan pengaturan ini
+	This format saves 8 bits per channel.	Format ini menyimpan 8 bit per kanal.
+	Trim to content	Pangkas ke konten
+	Visible layers	Layer terlihat
+	Web, keeps transparency	Web, dengan transparansi
+	copy	salinan
+	the file's folder	folder file
+	{count} layers are merged into one image. The open document stays as it is.	{count} layer digabung menjadi satu gambar. Dokumen yang terbuka tetap seperti semula.
+	{layer}, {index} and {document} are replaced	{layer}, {index}, dan {document} akan diganti
+	Highest	Tertinggi
+	For web	Untuk web

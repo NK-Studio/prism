@@ -173,6 +173,10 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
             } else {
                 440.0
             }));
+            if crate::save_ui::owns(&d.fields) {
+                ui.set_min_width(crate::save_ui::WIDTH);
+                ui.set_max_width(crate::save_ui::WIDTH);
+            }
             if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
                 ui.set_min_width(w);
                 ui.set_max_width(w);
@@ -214,6 +218,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 DialogKind::Command if crate::rasterize_prompt::owns(&fields) => crate::rasterize_prompt::body(ui, &fields),
                 DialogKind::Command if crate::variables_ui::owns(&fields) => crate::variables_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::file_ui::owns(&fields) => crate::file_ui::body(app, ui, &mut fields),
+                DialogKind::Command if crate::save_ui::owns(&fields) => crate::save_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::color_picker_ui::owns(&fields) => {
                     outcome = crate::color_picker_ui::body(ui, &mut fields);
                     crate::color_picker_ui::take_add_swatch(app, &mut fields);
@@ -261,7 +266,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                         } else if d.fields.contains_key("__export") {
                             tl!("Export")
                         } else {
-                            crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
+                            crate::file_ui::ok_label(&d.fields).or_else(|| crate::save_ui::owns(&d.fields).then(|| tl!("Save"))).unwrap_or(tl!("OK"))
                         };
                         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0);
                         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
@@ -372,6 +377,15 @@ pub fn title(d: &Dialog) -> String {
 /// Confirm a dialog: run its action and close it. Used by the OK button and by automation.
 pub fn confirm(app: &mut PrismApp, id: u64) -> Result<Value, String> {
     let d = app.ui.dialogs.iter().find(|d| d.id == id).cloned().ok_or_else(|| format!("no dialog {id}"))?;
+    // The Save window stays open, showing why, until its fields can be saved.
+    if crate::save_ui::owns(&d.fields)
+        && let Err(e) = crate::save_ui::validate(&d.fields)
+    {
+        if let Some(dm) = app.ui.dialog_mut(id) {
+            dm.fields.insert("__error".into(), Value::String(e.clone()));
+        }
+        return Err(e);
+    }
     if d.source_document.is_none() && d.presentation != crate::state::DialogPresentation::Native {
         return confirm_inner(app, id);
     }
@@ -414,6 +428,7 @@ fn confirm_inner(app: &mut PrismApp, id: u64) -> Result<Value, String> {
         DialogKind::Command if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
         DialogKind::Command if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
+        DialogKind::Command if crate::save_ui::owns(&d.fields) => crate::save_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::color_picker_ui::owns(&d.fields) => crate::color_picker_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::prefs_ui::owns(&d.fields) => crate::prefs_ui::confirm(app, &d.fields),

@@ -2305,3 +2305,71 @@ fontWeight	Italic	斜体
 	Path Arrangement	路径排列方式
 	New Layer	新建图层
 	Settings	设置
+# Save window (save_ui.rs)
+	256 colors	256 色
+	32-bit HDR	32 位 HDR
+	A file with this name already exists and will be replaced.	已有同名文件，将被替换。
+	A name can't contain slashes	名称不能包含斜杠
+	All layers	所有图层
+	Almost no visible difference	肉眼几乎看不出差别
+	Color detail	颜色细节
+	Color profile	颜色配置文件
+	Compression	压缩
+	Custom quality	自定义质量
+	Desktop	桌面
+	Direct settings	直接设置
+	Downloads	下载
+	Each layer inside	组内每个图层
+	Edges can look rough	边缘可能显得粗糙
+	Enter a name	请输入名称
+	Estimated size {size}	预计大小 {size}
+	Fast	快速
+	File names	文件名
+	File size	文件大小
+	Folder	文件夹
+	Full color resolution (4:4:4)	完整色彩分辨率 (4:4:4)
+	Groups	组
+	Hard to tell from the original	与原图几乎无法区分
+	Icon	图标
+	Image (merged into one)	图像（合并为一张）
+	Include	包含
+	JPEG doesn't keep transparency.	JPEG 不保留透明度。
+	Keep canvas size	保持画布大小
+	Keep layers	保留图层
+	Keeps layers	保留图层
+	Large document	大型文档
+	Location	位置
+	Lossless, keeps transparency	无损，保留透明度
+	Merge into one	合并为一张
+	More formats	更多格式
+	No matching format	没有匹配的格式
+	One file per group	每组一个文件
+	Original (editable)	原始文件（可编辑）
+	Original formats keep everything, so there is nothing to set.	原始格式会保留全部内容，无需设置。
+	Other Folder…	其他文件夹…
+	PNG is lossless: the image looks the same. Only the size and saving time change.	PNG 为无损格式，画质不变，只有大小和保存时间不同。
+	Photos, small files	照片，文件小
+	Print, can keep layers	印刷，可保留图层
+	Prism can't write this format	Prism 无法写入此格式
+	Prism native file	Prism 原生文件
+	Save each layer as a file	将每个图层存储为文件
+	Saved {count} files in {folder}	已在 {folder} 中存储 {count} 个文件
+	Saves {count} layers as separate files in this folder	将 {count} 个图层分别存储为此文件夹中的文件
+	Search formats: png, jpg, layers…	搜索格式：png、jpg、图层…
+	Selected layers	所选图层
+	Show {count} more formats	显示其他 {count} 种格式
+	Slightly soft up close	近看略显模糊
+	Small web images	小型网页图像
+	Smallest	最小
+	There are no layers to save with these settings	此设置下没有可存储的图层
+	This format saves 8 bits per channel.	此格式以每通道 8 位存储。
+	Trim to content	裁切到内容
+	Visible layers	可见图层
+	Web, keeps transparency	网页，保留透明度
+	copy	副本
+	the file's folder	文件所在文件夹
+	{count} layers are merged into one image. The open document stays as it is.	{count} 个图层将合并为一张图像。打开的文档保持不变。
+	{layer}, {index} and {document} are replaced	{layer}、{index} 和 {document} 会被替换
+	Highest	最高
+	For web	网页用
+	High	高

@@ -2335,3 +2335,71 @@ fontWeight	Italic	Kursiv
 	Path Arrangement	Pfadanordnung
 	New Layer	Neue Ebene
 	Settings	Einstellungen
+# Save window (save_ui.rs)
+	256 colors	256 Farben
+	32-bit HDR	32-Bit-HDR
+	A file with this name already exists and will be replaced.	Eine Datei mit diesem Namen existiert bereits und wird ersetzt.
+	A name can't contain slashes	Ein Name darf keine Schrägstriche enthalten
+	All layers	Alle Ebenen
+	Almost no visible difference	Kaum sichtbarer Unterschied
+	Color detail	Farbdetails
+	Color profile	Farbprofil
+	Compression	Komprimierung
+	Custom quality	Eigene Qualität
+	Desktop	Schreibtisch
+	Direct settings	Direkte Einstellungen
+	Downloads	Downloads
+	Each layer inside	Jede Ebene darin
+	Edges can look rough	Kanten können rau wirken
+	Enter a name	Gib einen Namen ein
+	Estimated size {size}	Geschätzte Größe {size}
+	Fast	Schnell
+	File names	Dateinamen
+	File size	Dateigröße
+	Folder	Ordner
+	Full color resolution (4:4:4)	Volle Farbauflösung (4:4:4)
+	Groups	Gruppen
+	Hard to tell from the original	Kaum vom Original zu unterscheiden
+	Icon	Symbol
+	Image (merged into one)	Bild (zu einem zusammengefügt)
+	Include	Einschließen
+	JPEG doesn't keep transparency.	JPEG speichert keine Transparenz.
+	Keep canvas size	Arbeitsflächengröße behalten
+	Keep layers	Ebenen behalten
+	Keeps layers	Behält Ebenen
+	Large document	Großes Dokument
+	Location	Ort
+	Lossless, keeps transparency	Verlustfrei, mit Transparenz
+	Merge into one	Zu einem zusammenfügen
+	More formats	Weitere Formate
+	No matching format	Kein passendes Format
+	One file per group	Eine Datei pro Gruppe
+	Original (editable)	Original (bearbeitbar)
+	Original formats keep everything, so there is nothing to set.	Originalformate behalten alles, es gibt nichts einzustellen.
+	Other Folder…	Anderer Ordner…
+	PNG is lossless: the image looks the same. Only the size and saving time change.	PNG ist verlustfrei: Das Bild sieht gleich aus. Nur Größe und Speicherzeit ändern sich.
+	Photos, small files	Fotos, kleine Dateien
+	Print, can keep layers	Druck, kann Ebenen behalten
+	Prism can't write this format	Prism kann dieses Format nicht schreiben
+	Prism native file	Prism-Datei
+	Save each layer as a file	Jede Ebene als Datei speichern
+	Saved {count} files in {folder}	{count} Dateien in {folder} gespeichert
+	Saves {count} layers as separate files in this folder	Speichert {count} Ebenen als einzelne Dateien in diesem Ordner
+	Search formats: png, jpg, layers…	Formate suchen: png, jpg, Ebenen…
+	Selected layers	Ausgewählte Ebenen
+	Show {count} more formats	{count} weitere Formate zeigen
+	Slightly soft up close	Aus der Nähe etwas weich
+	Small web images	Kleine Webbilder
+	Smallest	Am kleinsten
+	There are no layers to save with these settings	Mit diesen Einstellungen gibt es keine Ebenen zu speichern
+	This format saves 8 bits per channel.	Dieses Format speichert 8 Bit pro Kanal.
+	Trim to content	Auf Inhalt zuschneiden
+	Visible layers	Sichtbare Ebenen
+	Web, keeps transparency	Web, mit Transparenz
+	copy	Kopie
+	the file's folder	Ordner der Datei
+	{count} layers are merged into one image. The open document stays as it is.	{count} Ebenen werden zu einem Bild zusammengefügt. Das geöffnete Dokument bleibt unverändert.
+	{layer}, {index} and {document} are replaced	{layer}, {index} und {document} werden ersetzt
+	Highest	Höchste
+	For web	Für das Web
+	High	Hoch

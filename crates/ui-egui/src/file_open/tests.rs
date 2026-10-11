@@ -1,5 +1,5 @@
 use super::*;
-use crate::file_dialog::{self, FileDialogAnswer, FileDialogRequest};
+use crate::file_dialog::{self, FileDialogAnswer};
 use crate::{Services, menus, notices};
 use prism_color::{ColorMode, SampleType};
 use prism_doc::Document;
@@ -95,9 +95,9 @@ fn affinity_preview_does_not_acquire_the_source_path_even_when_renamed() {
             assert!(app.session.active().unwrap().source_read_only);
             assert!(app.session.active().unwrap().path.is_none());
             assert_eq!(app.ui.recent_files.first().map(String::as_str), Some(path));
-            // Save asks for a new file (cancelled here) instead of writing over the source.
-            assert_eq!(menus::invoke(&mut app, &egui::Context::default(), "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
-            answer(&mut app);
+            // Save asks for a new file (the Save window) instead of writing over the source.
+            assert!(menus::invoke(&mut app, &egui::Context::default(), "file.save", json!({})).unwrap()["dialog"].is_u64());
+            assert!(app.ui.dialogs.iter().any(|d| crate::save_ui::owns(&d.fields)));
             assert!(written.borrow().is_empty());
         }
     }
@@ -169,10 +169,9 @@ fn prism_documents_save_in_place_but_flat_files_ask() {
     let r = menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
     assert_eq!(r["path"], "/pics/work.prism");
     assert_eq!(written.borrow().len(), 1);
-    // A PNG goes through Save As (cancelled here), not silently flattened over the original.
+    // A PNG goes through the Save window, not silently flattened over the original.
     app.open_file("/pics/flat.png", b"x").unwrap();
-    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
-    answer(&mut app);
+    assert!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap()["dialog"].is_u64());
     assert_eq!(written.borrow().len(), 1);
     assert!(!app.ui.status_error);
 }
@@ -187,12 +186,10 @@ fn templates_open_as_new_untitled_documents() {
     assert_eq!(names, ["Untitled-1", "Untitled-2"]);
     assert!(app.session.documents().iter().all(|d| d.path.is_none()));
     assert_eq!(app.ui.recent_files.first().map(String::as_str), Some("/pics/card.psdt"));
-    // File › Save asks for a new name (cancelled here) rather than suggesting the template.
-    let (show, asked) = file_dialog::fake(vec![None]);
-    app.services.file_dialog = Some(show);
+    // File › Save asks for a new name rather than suggesting the template.
     menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
-    answer(&mut app);
-    assert_eq!(*asked.borrow(), [FileDialogRequest::Save { suggested: "Untitled-2.psd".into() }]);
+    let d = app.ui.dialogs.iter().find(|d| crate::save_ui::owns(&d.fields)).expect("the Save window");
+    assert_eq!((d.fields["name"].as_str(), d.fields["format"].as_str()), (Some("Untitled-2"), Some("psd")));
     assert!(written.borrow().is_empty());
 }
 

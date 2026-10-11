@@ -176,19 +176,41 @@ pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
     Ok(r.document)
 }
 
-/// What a headless save writes beyond the format: JPEG quality and TIFF layers.
+/// What a headless save writes beyond the format: quality, PNG effort and TIFF layers.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct SaveOpts {
     /// Photoshop's 0–12 JPEG scale.
     pub quality: Option<f64>,
+    /// Exact 1–100 JPEG quality (wins over `quality`).
+    pub jpeg_quality: Option<u8>,
+    /// Exact 1–100 lossy WebP quality (wins over `quality`).
+    pub webp_quality: Option<u8>,
+    pub png_compression: Option<prism_codecs::PngCompression>,
+    /// JPEG 4:4:4 (full-resolution colour) instead of 4:2:0.
+    pub chroma444: bool,
     /// TIFF: keep the layers. Off unless a command's params ask (`"tiffLayers": true`).
     pub tiff_layers: bool,
 }
 
 impl SaveOpts {
-    /// `quality` and `tiffLayers` from a command's params.
+    /// `quality`, `jpegQuality`, `webpQuality`, `pngCompression`, `chroma444` and `tiffLayers`
+    /// from a command's params (out-of-range numbers are clamped, unknown names ignored).
     pub(crate) fn from_params(p: &Value) -> Self {
-        SaveOpts { quality: f64_param(p, "quality"), tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false) }
+        let percent = |k: &str| f64_param(p, k).map(|q| q.clamp(1.0, 100.0).round() as u8);
+        let png_compression = match p.get("pngCompression").and_then(Value::as_str) {
+            Some("fast") => Some(prism_codecs::PngCompression::Fast),
+            Some("default") => Some(prism_codecs::PngCompression::Default),
+            Some("best") => Some(prism_codecs::PngCompression::Best),
+            _ => None,
+        };
+        SaveOpts {
+            quality: f64_param(p, "quality"),
+            jpeg_quality: percent("jpegQuality"),
+            webp_quality: percent("webpQuality"),
+            png_compression,
+            chroma444: p.get("chroma444").and_then(Value::as_bool).unwrap_or(false),
+            tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false),
+        }
     }
 
     pub(crate) fn or_quality(mut self, q: f64) -> Self {
@@ -213,6 +235,19 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
         // A quality on a WebP save asks for the lossy encoder; the default WebP stays lossless.
         opts.encode.webp_quality = q;
         opts.encode.webp_lossless = false;
+    }
+    if let Some(q) = save.jpeg_quality {
+        opts.encode.jpeg_quality = q;
+    }
+    if let Some(q) = save.webp_quality {
+        opts.encode.webp_quality = q;
+        opts.encode.webp_lossless = false;
+    }
+    if let Some(c) = save.png_compression {
+        opts.encode.png_compression = c;
+    }
+    if save.chroma444 {
+        opts.encode.jpeg_chroma_subsampling = false;
     }
     prism_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }
@@ -892,23 +927,84 @@ fn layers_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.layersToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
-    let visible_only = p.get("visibleOnly").and_then(Value::as_bool).unwrap_or(true);
+    let which = match p.get("layers").and_then(Value::as_str) {
+        Some(w @ ("visible" | "selected" | "all")) => w,
+        Some(w) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("\"layers\" is visible, selected or all, not \"{w}\"") }),
+        None if p.get("visibleOnly").and_then(Value::as_bool) == Some(false) => "all",
+        None => "visible",
+    };
+    let each = match p.get("groups").and_then(Value::as_str) {
+        None | Some("merge") => false,
+        Some("each") => true,
+        Some(g) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("\"groups\" is merge or each, not \"{g}\"") }),
+    };
+    let trim = p.get("trim").and_then(Value::as_bool).unwrap_or(false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
+    // Without a pattern, Photoshop's numbering: prefix_0000_name.
+    let pattern = p.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).map(str::to_string);
+    let selected = d.selected_layers.clone();
     let doc = d.doc.clone();
-    let mut files = Vec::new();
-    // Top-level layers (groups export merged), top to bottom like Photoshop's numbering.
-    let layers: Vec<&Layer> = doc.layers.iter().rev().filter(|l| l.visible || !visible_only).collect();
-    for (i, l) in layers.iter().enumerate() {
-        if matches!(l.content, LayerContent::Adjustment(_)) {
-            continue;
+    let mut picked = Vec::new();
+    // Top to bottom like the Layers panel. Groups export merged unless `each` asks for the
+    // layers inside them (to a depth of 64; documents can be deep).
+    fn walk<'a>(layers: &'a [Layer], each: bool, shown: bool, depth: usize, out: &mut Vec<(&'a Layer, bool)>) {
+        for l in layers.iter().rev() {
+            match &l.content {
+                LayerContent::Adjustment(_) => {}
+                LayerContent::Group(g) if each && depth < 64 => walk(&g.children, each, shown && l.visible, depth + 1, out),
+                _ => out.push((l, shown && l.visible)),
+            }
         }
+    }
+    walk(&doc.layers, each, true, 0, &mut picked);
+    let picked: Vec<&Layer> = picked
+        .into_iter()
+        .filter(|(l, shown)| match which {
+            "visible" => *shown,
+            "selected" => selected.contains(&l.id),
+            _ => true,
+        })
+        .map(|(l, _)| l)
+        .collect();
+    if picked.is_empty() {
+        return Err(EngineError::Other(format!("no {which} layers to export")));
+    }
+    let mut files: Vec<String> = Vec::new();
+    for (i, l) in picked.iter().enumerate() {
         let mut one = (*doc).clone();
         let mut only = (*l).clone();
         only.visible = true;
         only.clipped = false;
         one.layers = vec![only];
-        let path = join(&dir, &format!("{}_{:04}_{}.{format}", sanitize(&prefix), i, sanitize(&l.name)));
+        if trim {
+            let canvas = one.bounds();
+            let buf = prism_compose::flatten(&one);
+            let w = canvas.width().max(1) as usize;
+            let mut b = Rect::EMPTY;
+            for (k, q) in buf.px.iter().enumerate() {
+                if q[3] > 0.0 {
+                    let (x, y) = ((k % w) as i32, (k / w) as i32);
+                    let px = Rect::new(x, y, x + 1, y + 1);
+                    b = if b.is_empty() { px } else { b.union(&px) };
+                }
+            }
+            // An empty layer keeps the canvas: there is nothing to trim to.
+            if !b.is_empty() {
+                crate::image_cmds::crop_doc(&mut one, cmd, b, true)?;
+            }
+        }
+        let base = match &pattern {
+            Some(n) => sanitize(&n.replace("{layer}", &l.name).replace("{index}", &format!("{:02}", i + 1)).replace("{document}", &prefix)),
+            None => format!("{}_{:04}_{}", sanitize(&prefix), i, sanitize(&l.name)),
+        };
+        // Two layers with one name don't overwrite each other: "Ink", "Ink 2", …
+        let mut path = join(&dir, &format!("{base}.{format}"));
+        let mut n = 2usize;
+        while files.contains(&path) && n < 10_000 {
+            path = join(&dir, &format!("{base} {n}.{format}"));
+            n += 1;
+        }
         save_doc(&one, &path, SaveOpts::from_params(p))?;
         files.push(path);
     }
@@ -1212,7 +1308,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Layers to Files…",
             &["File", "Export"],
             None,
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"visibleOnly":bool=true,"quality":0..12?,"tiffLayers":bool=false} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","layers":"visible|selected|all"="visible","groups":"merge|each"="merge","trim":bool=false,"name":pattern? ({layer} {index} {document}; default prefix_0000_name),"prefix":str=document name,"visibleOnly":bool=true (legacy),"quality":0..12?,"pngCompression":"fast|default|best"?,"chroma444":bool?,"tiffLayers":bool=false} → {files}"##,
             native_doc,
             layers_to_files
         ),

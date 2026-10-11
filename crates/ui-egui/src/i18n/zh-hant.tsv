@@ -2274,3 +2274,71 @@ fontWeight	Italic	斜體
 	Path Arrangement	路徑排列方式
 	New Layer	新增圖層
 	Settings	設定
+# Save window (save_ui.rs)
+	256 colors	256 色
+	32-bit HDR	32 位元 HDR
+	A file with this name already exists and will be replaced.	已有同名檔案，將被取代。
+	A name can't contain slashes	名稱不能包含斜線
+	All layers	所有圖層
+	Almost no visible difference	肉眼幾乎看不出差別
+	Color detail	顏色細節
+	Color profile	色彩描述檔
+	Compression	壓縮
+	Custom quality	自訂品質
+	Desktop	桌面
+	Direct settings	直接設定
+	Downloads	下載項目
+	Each layer inside	群組內每個圖層
+	Edges can look rough	邊緣可能顯得粗糙
+	Enter a name	請輸入名稱
+	Estimated size {size}	預估大小 {size}
+	Fast	快速
+	File names	檔名
+	File size	檔案大小
+	Folder	資料夾
+	Full color resolution (4:4:4)	完整色彩解析度 (4:4:4)
+	Groups	群組
+	Hard to tell from the original	與原圖幾乎無法區分
+	Icon	圖示
+	Image (merged into one)	影像（合併為一張）
+	Include	包含
+	JPEG doesn't keep transparency.	JPEG 不保留透明度。
+	Keep canvas size	保持畫布大小
+	Keep layers	保留圖層
+	Keeps layers	保留圖層
+	Large document	大型文件
+	Location	位置
+	Lossless, keeps transparency	無失真，保留透明度
+	Merge into one	合併為一張
+	More formats	更多格式
+	No matching format	沒有符合的格式
+	One file per group	每個群組一個檔案
+	Original (editable)	原始檔案（可編輯）
+	Original formats keep everything, so there is nothing to set.	原始格式會保留全部內容，無需設定。
+	Other Folder…	其他資料夾…
+	PNG is lossless: the image looks the same. Only the size and saving time change.	PNG 為無失真格式，畫質不變，只有大小和儲存時間不同。
+	Photos, small files	相片，檔案小
+	Print, can keep layers	印刷，可保留圖層
+	Prism can't write this format	Prism 無法寫入此格式
+	Prism native file	Prism 原生檔案
+	Save each layer as a file	將每個圖層儲存為檔案
+	Saved {count} files in {folder}	已在 {folder} 中儲存 {count} 個檔案
+	Saves {count} layers as separate files in this folder	將 {count} 個圖層分別儲存為此資料夾中的檔案
+	Search formats: png, jpg, layers…	搜尋格式：png、jpg、圖層…
+	Selected layers	所選圖層
+	Show {count} more formats	顯示其他 {count} 種格式
+	Slightly soft up close	近看略顯模糊
+	Small web images	小型網頁影像
+	Smallest	最小
+	There are no layers to save with these settings	此設定下沒有可儲存的圖層
+	This format saves 8 bits per channel.	此格式以每色版 8 位元儲存。
+	Trim to content	裁切到內容
+	Visible layers	可見圖層
+	Web, keeps transparency	網頁，保留透明度
+	copy	副本
+	the file's folder	檔案所在資料夾
+	{count} layers are merged into one image. The open document stays as it is.	{count} 個圖層將合併為一張影像。開啟的文件保持不變。
+	{layer}, {index} and {document} are replaced	{layer}、{index} 和 {document} 會被取代
+	Highest	最高
+	For web	網頁用
+	High	高

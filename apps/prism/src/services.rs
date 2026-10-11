@@ -87,6 +87,10 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&prism_ui_egui::F
                 Box::pin(async move { picked.await.map(|file| FileDialogAnswer::Paths(vec![path_of(&file)])) })
             }
         }
+        FileDialogRequest::Folder => {
+            let picked = dialog.pick_folder();
+            Box::pin(async move { picked.await.map(|dir| FileDialogAnswer::Paths(vec![path_of(&dir)])) })
+        }
         FileDialogRequest::Save { suggested } => {
             for (name, exts) in save_filters(&suggested) {
                 dialog = dialog.add_filter(name, &exts);
@@ -246,6 +250,13 @@ pub fn native(automation: Option<prism_automation::AuthorizedWorkspace>) -> Serv
                 opts.encode.webp_quality = q;
             }
             opts.tiff_layers = settings.tiff_layers;
+            if let Some(c) = settings.png_compression {
+                opts.encode.png_compression = c;
+            }
+            if settings.jpeg_chroma_444 {
+                opts.encode.jpeg_chroma_subsampling = false;
+            }
+            opts.encode.embed_icc = settings.embed_icc;
             opts.xmp = if settings.xmp_all { prism_io::XmpEmbed::All } else { prism_io::XmpEmbed::None };
             crate::crash_guard::guard("Export", || prism_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))
         })),
@@ -444,14 +455,11 @@ mod tests {
             app.poll_file_dialog(&ctx, None);
         };
         new_doc(&mut app, "#ff0000");
-        // Save As, Save a Copy.
-        // Files in a format Save As can't write, like .dng, should suggest .psd instead.
-        let _ = invoke(&mut app, "file.saveAs");
-        for name in ["cat.prism", "cat.jpeg", "cat.gif", "cat.bmp", "cat.dng"] {
-            app.session.active_mut().unwrap().path = Some(name.into());
-            let _ = invoke(&mut app, "file.saveAs");
+        // Save As and Save a Copy use Prism's own Save window (`save_ui`), not the system panel.
+        for id in ["file.saveAs", "file.saveACopy"] {
+            assert!(invoke(&mut app, id).unwrap()["dialog"].is_u64(), "{id}");
         }
-        let _ = invoke(&mut app, "file.saveACopy");
+        app.ui.dialogs.clear();
         // Export As, Quick Export, Save for Web (with and without slices).
         for format in ["png", "jpg", "webp", "tif", "tga"] {
             dialog(&mut app, "file.export.exportAs", json!({"format": format}));
@@ -473,9 +481,6 @@ mod tests {
         let exts: Vec<&str> = asked.iter().filter_map(|s| s.rsplit_once('.').map(|(_, e)| e)).collect();
         // The extension each save above should suggest, in order.
         let want = [
-            "psd",                       // Save As untitled
-            "prism jpeg gif bmp psd",    // Save As opened .prism .jpeg .gif .bmp .dng
-            "psd",                       // Save a Copy
             "png jpg webp tif tga",      // Export As
             "png jpg gif webp",          // Quick Export
             "gif png png jpg wbmp html", // Save for Web: gif png8 png24 jpeg wbmp, then with slices

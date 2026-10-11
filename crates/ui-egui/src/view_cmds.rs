@@ -836,7 +836,7 @@ fn front(app: &mut PrismApp, id: &str, params: &Value) -> Option<Result<Value, S
     let dialog = |app: &mut PrismApp, fields: Value, choices: Value| Some(Ok(json!({"dialog": form(app, id, label, fields, choices)})));
     match id {
         "file.openAs" => Some(app.open_dialog_file()),
-        "file.saveACopy" => Some(save_a_copy(app)),
+        "file.saveACopy" => Some(crate::save_ui::open(app, true)),
         "file.placeEmbedded" | "file.placeLinked" => {
             let doc = match app.active_doc_id() {
                 Ok(doc) => doc,
@@ -1017,23 +1017,6 @@ fn front(app: &mut PrismApp, id: &str, params: &Value) -> Option<Result<Value, S
 
 /// File › Save a Copy: pick a name, encode with the export service, write; the document's path
 /// and saved state are untouched.
-fn save_a_copy(app: &mut PrismApp) -> Result<Value, String> {
-    let doc = app.session.active().ok_or("no document")?.doc.clone();
-    let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a);
-    let suggested = format!("{stem} copy.psd");
-    // The copy is of the document as it was when asked.
-    app.pick_save(&suggested, move |app, path| {
-        let export = app.services.export.as_ref().ok_or("no exporter configured")?;
-        let (bytes, warnings) = export(&doc, &path, &crate::ExportSettings::default())?;
-        let write = app.services.write.as_mut().ok_or("no writer configured")?;
-        write(&path, &bytes)?;
-        app.ui.status = format!("Saved a copy as {path}");
-        app.ui.status_error = false;
-        crate::notices::io_warnings(app, &format!("Saved a copy as {}", crate::file_open::display_name(&path)), &warnings);
-        Ok(json!({"path": path, "warnings": warnings}))
-    })
-}
-
 #[cfg(test)]
 #[path = "view_cmds/tests.rs"]
 mod tests;

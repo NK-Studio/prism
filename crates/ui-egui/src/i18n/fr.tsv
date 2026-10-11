@@ -2716,3 +2716,68 @@ fontWeight	Italic	Italique
 	Path Alignment	Alignement du tracé
 	Path Arrangement	Disposition du tracé
 	New Layer	Nouveau calque
+# Save window (save_ui.rs)
+	256 colors	256 couleurs
+	32-bit HDR	HDR 32 bits
+	A file with this name already exists and will be replaced.	Un fichier portant ce nom existe déjà et sera remplacé.
+	A name can't contain slashes	Un nom ne peut pas contenir de barres obliques
+	All layers	Tous les calques
+	Almost no visible difference	Presque aucune différence visible
+	Color detail	Détail des couleurs
+	Color profile	Profil colorimétrique
+	Compression	Compression
+	Custom quality	Qualité personnalisée
+	Desktop	Bureau
+	Direct settings	Réglages directs
+	Downloads	Téléchargements
+	Each layer inside	Chaque calque du groupe
+	Edges can look rough	Les contours peuvent paraître grossiers
+	Enter a name	Saisissez un nom
+	Estimated size {size}	Taille estimée {size}
+	File names	Noms de fichier
+	File size	Taille du fichier
+	Folder	Dossier
+	Full color resolution (4:4:4)	Résolution couleur complète (4:4:4)
+	Groups	Groupes
+	Hard to tell from the original	Difficile à distinguer de l'original
+	Icon	Icône
+	Image (merged into one)	Image (fusionnée en une)
+	Include	Inclure
+	JPEG doesn't keep transparency.	Le JPEG ne conserve pas la transparence.
+	Keep canvas size	Conserver la taille de la zone de travail
+	Keep layers	Conserver les calques
+	Keeps layers	Conserve les calques
+	Large document	Document volumineux
+	Lossless, keeps transparency	Sans perte, conserve la transparence
+	Merge into one	Fusionner en une
+	More formats	Autres formats
+	No matching format	Aucun format correspondant
+	One file per group	Un fichier par groupe
+	Original (editable)	Original (modifiable)
+	Original formats keep everything, so there is nothing to set.	Les formats d'origine conservent tout : rien à régler.
+	Other Folder…	Autre dossier…
+	PNG is lossless: the image looks the same. Only the size and saving time change.	Le PNG est sans perte : l'image reste identique. Seuls la taille et le temps d'enregistrement changent.
+	Photos, small files	Photos, fichiers légers
+	Print, can keep layers	Impression, peut conserver les calques
+	Prism can't write this format	Prism ne peut pas écrire ce format
+	Prism native file	Fichier natif Prism
+	Save each layer as a file	Enregistrer chaque calque dans un fichier
+	Saved {count} files in {folder}	{count} fichiers enregistrés dans {folder}
+	Saves {count} layers as separate files in this folder	Enregistre {count} calques dans des fichiers séparés dans ce dossier
+	Search formats: png, jpg, layers…	Rechercher un format : png, jpg, calques…
+	Selected layers	Calques sélectionnés
+	Show {count} more formats	Afficher {count} autres formats
+	Slightly soft up close	Légèrement flou de près
+	Small web images	Petites images web
+	Smallest	Le plus petit
+	There are no layers to save with these settings	Aucun calque à enregistrer avec ces réglages
+	This format saves 8 bits per channel.	Ce format enregistre 8 bits par couche.
+	Trim to content	Rogner au contenu
+	Visible layers	Calques visibles
+	Web, keeps transparency	Web, conserve la transparence
+	copy	copie
+	the file's folder	dossier du fichier
+	{count} layers are merged into one image. The open document stays as it is.	{count} calques sont fusionnés en une image. Le document ouvert reste inchangé.
+	{layer}, {index} and {document} are replaced	{layer}, {index} et {document} sont remplacés
+	Highest	Maximale
+	For web	Pour le web

@@ -3400,3 +3400,65 @@ fontWeight	Thin	Πολύ λεπτά
 	Path Operations	Λειτουργίες διαδρομής
 	Path Alignment	Στοίχιση διαδρομής
 	Path Arrangement	Διάταξη διαδρομής
+# Save window (save_ui.rs)
+	256 colors	256 χρώματα
+	32-bit HDR	HDR 32 bit
+	A file with this name already exists and will be replaced.	Υπάρχει ήδη αρχείο με αυτό το όνομα και θα αντικατασταθεί.
+	A name can't contain slashes	Ένα όνομα δεν μπορεί να περιέχει καθέτους
+	All layers	Όλα τα επίπεδα
+	Almost no visible difference	Σχεδόν καμία ορατή διαφορά
+	Color detail	Λεπτομέρεια χρώματος
+	Color profile	Προφίλ χρώματος
+	Custom quality	Προσαρμοσμένη ποιότητα
+	Desktop	Επιφάνεια εργασίας
+	Direct settings	Άμεσες ρυθμίσεις
+	Downloads	Λήψεις
+	Each layer inside	Κάθε επίπεδο μέσα
+	Edges can look rough	Οι άκρες μπορεί να φαίνονται τραχιές
+	Enter a name	Εισαγάγετε όνομα
+	Estimated size {size}	Εκτιμώμενο μέγεθος {size}
+	File names	Ονόματα αρχείων
+	File size	Μέγεθος αρχείου
+	Full color resolution (4:4:4)	Πλήρης ανάλυση χρώματος (4:4:4)
+	Hard to tell from the original	Δύσκολα ξεχωρίζει από το πρωτότυπο
+	Icon	Εικονίδιο
+	Image (merged into one)	Εικόνα (συγχωνευμένη σε μία)
+	Include	Συμπερίληψη
+	JPEG doesn't keep transparency.	Το JPEG δεν διατηρεί τη διαφάνεια.
+	Keep canvas size	Διατήρηση μεγέθους καμβά
+	Keep layers	Διατήρηση επιπέδων
+	Keeps layers	Διατηρεί τα επίπεδα
+	Large document	Μεγάλο έγγραφο
+	Lossless, keeps transparency	Χωρίς απώλειες, με διαφάνεια
+	Merge into one	Συγχώνευση σε ένα
+	More formats	Περισσότερες μορφές
+	No matching format	Δεν βρέθηκε μορφή
+	One file per group	Ένα αρχείο ανά ομάδα
+	Original (editable)	Πρωτότυπο (επεξεργάσιμο)
+	Original formats keep everything, so there is nothing to set.	Οι αρχικές μορφές διατηρούν τα πάντα, δεν χρειάζεται ρύθμιση.
+	Other Folder…	Άλλος φάκελος…
+	PNG is lossless: the image looks the same. Only the size and saving time change.	Το PNG είναι χωρίς απώλειες: η εικόνα μένει ίδια. Αλλάζουν μόνο το μέγεθος και ο χρόνος αποθήκευσης.
+	Photos, small files	Φωτογραφίες, μικρά αρχεία
+	Print, can keep layers	Εκτύπωση, μπορεί να κρατήσει επίπεδα
+	Prism can't write this format	Το Prism δεν μπορεί να γράψει αυτή τη μορφή
+	Prism native file	Εγγενές αρχείο Prism
+	Save each layer as a file	Αποθήκευση κάθε επιπέδου ως αρχείο
+	Saved {count} files in {folder}	Αποθηκεύτηκαν {count} αρχεία στο {folder}
+	Saves {count} layers as separate files in this folder	Αποθηκεύει {count} επίπεδα ως ξεχωριστά αρχεία σε αυτόν τον φάκελο
+	Search formats: png, jpg, layers…	Αναζήτηση μορφής: png, jpg, επίπεδα…
+	Selected layers	Επιλεγμένα επίπεδα
+	Show {count} more formats	Εμφάνιση {count} ακόμη μορφών
+	Slightly soft up close	Ελαφρώς θολό από κοντά
+	Small web images	Μικρές εικόνες ιστού
+	Smallest	Μικρότερο
+	There are no layers to save with these settings	Δεν υπάρχουν επίπεδα για αποθήκευση με αυτές τις ρυθμίσεις
+	This format saves 8 bits per channel.	Αυτή η μορφή αποθηκεύει 8 bit ανά κανάλι.
+	Trim to content	Περικοπή στο περιεχόμενο
+	Visible layers	Ορατά επίπεδα
+	Web, keeps transparency	Ιστός, με διαφάνεια
+	copy	αντίγραφο
+	the file's folder	φάκελος αρχείου
+	{count} layers are merged into one image. The open document stays as it is.	{count} επίπεδα συγχωνεύονται σε μία εικόνα. Το ανοιχτό έγγραφο μένει ως έχει.
+	{layer}, {index} and {document} are replaced	Τα {layer}, {index} και {document} αντικαθίστανται
+	Highest	Μέγιστη
+	For web	Για ιστό

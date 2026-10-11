@@ -3312,3 +3312,68 @@ cameraRaw	Roughness	Chropowatość
 	Path Operations	Operacje na ścieżce
 	Path Alignment	Wyrównanie ścieżki
 	Path Arrangement	Kolejność ścieżki
+# Save window (save_ui.rs)
+	256 colors	256 kolorów
+	32-bit HDR	HDR 32-bitowy
+	A file with this name already exists and will be replaced.	Plik o tej nazwie już istnieje i zostanie zastąpiony.
+	A name can't contain slashes	Nazwa nie może zawierać ukośników
+	All layers	Wszystkie warstwy
+	Almost no visible difference	Prawie bez widocznej różnicy
+	Color detail	Szczegóły koloru
+	Color profile	Profil kolorów
+	Compression	Kompresja
+	Custom quality	Własna jakość
+	Desktop	Biurko
+	Direct settings	Ustawienia ręczne
+	Downloads	Pobrane
+	Each layer inside	Każda warstwa w środku
+	Edges can look rough	Krawędzie mogą wyglądać szorstko
+	Enter a name	Wpisz nazwę
+	Estimated size {size}	Szacowany rozmiar {size}
+	File names	Nazwy plików
+	File size	Rozmiar pliku
+	Folder	Folder
+	Full color resolution (4:4:4)	Pełna rozdzielczość koloru (4:4:4)
+	Groups	Grupy
+	Hard to tell from the original	Trudno odróżnić od oryginału
+	Icon	Ikona
+	Image (merged into one)	Obraz (scalony w jeden)
+	Include	Dołącz
+	JPEG doesn't keep transparency.	JPEG nie zachowuje przezroczystości.
+	Keep canvas size	Zachowaj rozmiar obszaru roboczego
+	Keep layers	Zachowaj warstwy
+	Keeps layers	Zachowuje warstwy
+	Large document	Duży dokument
+	Lossless, keeps transparency	Bezstratny, z przezroczystością
+	Merge into one	Scal w jeden
+	More formats	Więcej formatów
+	No matching format	Brak pasującego formatu
+	One file per group	Jeden plik na grupę
+	Original (editable)	Oryginał (edytowalny)
+	Original formats keep everything, so there is nothing to set.	Formaty oryginalne zachowują wszystko, nie ma czego ustawiać.
+	Other Folder…	Inny folder…
+	PNG is lossless: the image looks the same. Only the size and saving time change.	PNG jest bezstratny: obraz wygląda tak samo. Zmienia się tylko rozmiar i czas zapisu.
+	Photos, small files	Zdjęcia, małe pliki
+	Print, can keep layers	Druk, może zachować warstwy
+	Prism can't write this format	Prism nie może zapisać tego formatu
+	Prism native file	Natywny plik Prism
+	Save each layer as a file	Zapisz każdą warstwę jako plik
+	Saved {count} files in {folder}	Zapisano plików: {count} w {folder}
+	Saves {count} layers as separate files in this folder	Zapisuje warstwy ({count}) jako osobne pliki w tym folderze
+	Search formats: png, jpg, layers…	Szukaj formatu: png, jpg, warstwy…
+	Selected layers	Zaznaczone warstwy
+	Show {count} more formats	Pokaż więcej formatów ({count})
+	Slightly soft up close	Z bliska lekko miękki
+	Small web images	Małe obrazy internetowe
+	Smallest	Najmniejszy
+	There are no layers to save with these settings	Przy tych ustawieniach nie ma warstw do zapisania
+	This format saves 8 bits per channel.	Ten format zapisuje 8 bitów na kanał.
+	Trim to content	Przytnij do zawartości
+	Visible layers	Widoczne warstwy
+	Web, keeps transparency	Sieć, z przezroczystością
+	copy	kopia
+	the file's folder	folder pliku
+	{count} layers are merged into one image. The open document stays as it is.	Warstwy ({count}) zostaną scalone w jeden obraz. Otwarty dokument się nie zmieni.
+	{layer}, {index} and {document} are replaced	{layer}, {index} i {document} są zastępowane
+	Highest	Najwyższa
+	For web	Do sieci

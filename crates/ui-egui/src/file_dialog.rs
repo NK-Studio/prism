@@ -28,6 +28,8 @@ pub enum FileDialogRequest {
     Open { multiple: bool },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
     Save { suggested: String },
+    /// A folder to write into (the Save window's "Other Folder…").
+    Folder,
 }
 
 /// The user's choice (a cancelled dialog answers `None`).
@@ -100,6 +102,7 @@ impl PrismApp {
         let kind = match request {
             FileDialogRequest::Open { .. } => "open",
             FileDialogRequest::Save { .. } => "save",
+            FileDialogRequest::Folder => "folder",
         };
         let then: Then = Box::new(move |app, answer| answer.map_or_else(|| Err(CANCELLED.into()), |a| then(app, a)));
         self.file_dialog = Some(Pending { request: Some(request), answer: None, then, window: self.ui.active_window });
@@ -110,6 +113,14 @@ impl PrismApp {
     pub(crate) fn pick_save(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
         self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string() }, move |app, answer| match answer {
             FileDialogAnswer::SaveTo(path) => then(app, path),
+            _ => Err(UNEXPECTED.into()),
+        })
+    }
+
+    /// Ask for a folder: `then` gets its path.
+    pub(crate) fn pick_folder(&mut self, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        self.ask_file(FileDialogRequest::Folder, move |app, answer| match answer {
+            FileDialogAnswer::Paths(dirs) => then(app, dirs.into_iter().next().ok_or(UNEXPECTED)?),
             _ => Err(UNEXPECTED.into()),
         })
     }
