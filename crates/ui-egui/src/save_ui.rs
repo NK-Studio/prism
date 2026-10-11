@@ -69,6 +69,12 @@ fn writable(key: &str) -> bool {
     original(key) || prism_codecs::from_extension(key).is_some_and(|f| f.caps().write)
 }
 
+/// Whether the list offers `key`: writable, and an image format when saving each layer as a file
+/// (a layer on its own is an image; originals are for the whole document).
+fn offered(key: &str, per_layer: bool) -> bool {
+    writable(key) && !(per_layer && original(key))
+}
+
 /// The format key for a typed extension (`jpeg` → `jpg`, `tiff` → `tif`).
 fn key_for_extension(ext: &str) -> Option<&'static str> {
     let ext = ext.to_ascii_lowercase();
@@ -256,6 +262,8 @@ fn problem(f: &Map<String, Value>) -> Option<&'static str> {
         Some(tl!("A name can't contain slashes"))
     } else if !writable(s(f, "format", "")) {
         Some(tl!("Prism can't write this format"))
+    } else if b(f, "perLayer", false) && original(s(f, "format", "")) {
+        Some(tl!("Each layer is saved as an image: pick an image format"))
     } else {
         None
     }
@@ -333,21 +341,61 @@ fn size_text(bytes: u64) -> String {
     if mb >= 1.0 { format!("{mb:.1} MB") } else { format!("{:.0} KB", (bytes as f64 / 1024.0).max(1.0)) }
 }
 
-/// The row label, right-aligned in the label column.
+/// The row label, left-aligned in the label column: rows start on the same edge as the title
+/// and the options below them.
 fn label(ui: &mut egui::Ui, t: &Tokens, text: &str) {
-    ui.allocate_ui_with_layout(egui::vec2(LABEL_WIDTH, 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.add(egui::Label::new(egui::RichText::new(text).color(t.text_dim)).selectable(false).truncate());
-    });
+    // A fixed-width cell, so every row's control starts on the same line.
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(label_width(ui), 24.0), egui::Sense::hover());
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    ui.painter().text(rect.left_center(), egui::Align2::LEFT_CENTER, text, font, t.text_dim);
+}
+
+/// Every row label the window can show: the label column is as wide as the longest of them in
+/// the UI language, so it is snug but doesn't move when Advanced opens.
+const ROW_LABELS: [&str; 13] =
+    ["Name", "Folder", "Location", "Format", "File size", "Quality", "Layers", "Include", "Groups", "Size", "File names", "Compression", "Color detail"];
+
+fn label_key() -> egui::Id {
+    egui::Id::new("save-label-width")
+}
+
+/// Measures the label column for this frame (see [`ROW_LABELS`]).
+fn measure_labels(ui: &egui::Ui) {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let widest =
+        ROW_LABELS.iter().map(|l| ui.painter().layout_no_wrap(tl!(l).to_string(), font.clone(), egui::Color32::WHITE).size().x).fold(0.0_f32, f32::max);
+    let width = (widest.ceil() + 2.0).clamp(32.0, 140.0);
+    ui.data_mut(|d| d.insert_temp(label_key(), width));
 }
 
 /// Width of the label column (the controls line up after it).
-const LABEL_WIDTH: f32 = 72.0;
+fn label_width(ui: &egui::Ui) -> f32 {
+    ui.data(|d| d.get_temp::<f32>(label_key())).unwrap_or(72.0)
+}
+
+/// Where the controls start: past the label column and its gap.
+fn column(ui: &egui::Ui) -> f32 {
+    label_width(ui) + ui.spacing().item_spacing.x
+}
 /// The window's content width.
-pub const WIDTH: f32 = 480.0;
+pub const WIDTH: f32 = 420.0;
+
+fn footer_key() -> egui::Id {
+    egui::Id::new("save-footer")
+}
+
+/// The button row's left side: the estimated file size, beside Cancel and Save.
+pub fn footer(ui: &mut egui::Ui) {
+    let Some(text) = ui.data(|d| d.get_temp::<Option<String>>(footer_key())).flatten() else { return };
+    let t = Tokens::get(ui.ctx());
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.label(egui::RichText::new(text).size(11.5).color(t.text_faint));
+    });
+}
 
 fn note(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.horizontal(|ui| {
-        ui.add_space(LABEL_WIDTH + ui.spacing().item_spacing.x);
+        ui.add_space(column(ui));
         ui.add(egui::Label::new(egui::RichText::new(text).size(11.5).color(t.text_faint)).wrap());
     });
 }
@@ -397,6 +445,7 @@ fn fold(ui: &mut egui::Ui, t: &Tokens, open: &mut bool, text: &str) {
 /// folded away until searched for or asked for. Enter takes the first match.
 fn format_picker(app: &PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let current = s(f, "format", "psd").to_string();
+    let per_layer = b(f, "perLayer", false);
     let shown = fmt_of(&current).map_or(current.to_uppercase(), |m| m.label.to_string());
     let search_id = ui.id().with("save-format-search");
     let mut picked: Option<&'static str> = None;
@@ -424,7 +473,7 @@ fn format_picker(app: &PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             let mut refocus = pending && !focused;
             let ql = q.trim().to_lowercase();
             let matches = |m: &Fmt| {
-                writable(m.key)
+                offered(m.key, per_layer)
                     && (ql.is_empty()
                         || m.key.contains(&ql)
                         || m.label.to_lowercase().contains(&ql)
@@ -445,7 +494,8 @@ fn format_picker(app: &PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             };
             egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                 if ql.is_empty() {
-                    let recent: Vec<&'static Fmt> = app.ui.save.recent_formats.iter().filter_map(|k| fmt_of(k)).filter(|m| writable(m.key)).take(2).collect();
+                    let recent: Vec<&'static Fmt> =
+                        app.ui.save.recent_formats.iter().filter_map(|k| fmt_of(k)).filter(|m| offered(m.key, per_layer)).take(2).collect();
                     if !recent.is_empty() {
                         heading(ui, tl!("Recent"));
                         for m in recent {
@@ -504,8 +554,11 @@ fn format_picker(app: &PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
 fn location_picker(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let dir = s(f, "dir", ".").to_string();
     // Desktop and Downloads by their names in the UI language; any other folder by its own name.
-    let specials: Vec<(String, &str)> =
-        home().map(|h| vec![(h.join("Desktop").to_string_lossy().into_owned(), tl!("Desktop")), (h.join("Downloads").to_string_lossy().into_owned(), tl!("Downloads"))]).unwrap_or_default();
+    let specials: Vec<(String, &str)> = home()
+        .map(|h| {
+            vec![(h.join("Desktop").to_string_lossy().into_owned(), tl!("Desktop")), (h.join("Downloads").to_string_lossy().into_owned(), tl!("Downloads"))]
+        })
+        .unwrap_or_default();
     let name_of = |d: &str| {
         specials.iter().find(|(p, _)| p == d).map_or_else(|| d.rsplit(['/', '\\']).find(|p| !p.is_empty()).unwrap_or(d).to_string(), |(_, t)| t.to_string())
     };
@@ -528,17 +581,18 @@ fn location_picker(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
     let shown = options.iter().find(|(d, _)| *d == dir).map_or_else(|| name_of(&dir), |(_, t)| t.clone());
     let mut chosen = None;
     let mut other = false;
-    let r = egui::ComboBox::from_id_salt("save-location").selected_text(shown).width(ui.available_width()).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
-        for (d, text) in &options {
-            if ui.selectable_label(*d == dir, text).on_hover_text(d).clicked() {
-                chosen = Some(d.clone());
+    let r =
+        egui::ComboBox::from_id_salt("save-location").selected_text(shown).width(ui.available_width()).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
+            for (d, text) in &options {
+                if ui.selectable_label(*d == dir, text).on_hover_text(d).clicked() {
+                    chosen = Some(d.clone());
+                }
             }
-        }
-        ui.separator();
-        if ui.selectable_label(false, tl!("Other Folder…")).clicked() {
-            other = true;
-        }
-    });
+            ui.separator();
+            if ui.selectable_label(false, tl!("Other Folder…")).clicked() {
+                other = true;
+            }
+        });
     r.response.on_hover_text(&dir);
     if let Some(d) = chosen {
         f.insert("dir".into(), json!(d));
@@ -561,6 +615,7 @@ fn location_picker(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
 pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(WIDTH);
+    measure_labels(ui);
     ui.spacing_mut().item_spacing.y = 8.0;
     let per_layer = b(f, "perLayer", false);
     // Name (or, per layer, the folder to create) with the extension the format writes.
@@ -568,12 +623,20 @@ pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         label(ui, &t, if per_layer { tl!("Folder") } else { tl!("Name") });
         let mut name = s(f, "name", "").to_string();
         let ext = if per_layer { "/".to_string() } else { format!(".{}", s(f, "format", "psd")) };
-        let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width((ui.available_width() - 56.0).max(80.0)));
-        ui.add_sized([48.0, 24.0], egui::Label::new(egui::RichText::new(ext).color(t.text_dim)).selectable(false));
+        // The extension sits inside the field's right end, so this row ends where the dropdowns do.
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let ext_width = ui.painter().layout_no_wrap(ext.clone(), font.clone(), t.text_dim).size().x;
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut name)
+                .desired_width(ui.available_width())
+                .margin(egui::Margin { left: 10, right: (ext_width + 14.0).round() as i8, top: 4, bottom: 4 }),
+        );
+        let at = egui::pos2(r.rect.right() - 10.0, r.rect.center().y);
+        ui.painter().text(at, egui::Align2::RIGHT_CENTER, &ext, font, t.text_faint);
         if r.changed() {
             // Typing an extension picks its format: "logo.jpg" saves as JPEG.
             if let Some((stem, ext)) = name.rsplit_once('.')
-                && let Some(key) = key_for_extension(ext)
+                && let Some(key) = key_for_extension(ext).filter(|k| offered(k, per_layer))
                 && !stem.is_empty()
             {
                 f.insert("format".into(), json!(key));
@@ -594,16 +657,30 @@ pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if let Some(w) = warning(app, f) {
         note(ui, &t, &w);
     }
+    ui.add_space(2.0);
+    crate::widgets::hairline(ui);
     ui.horizontal(|ui| {
-        ui.add_space(LABEL_WIDTH + ui.spacing().item_spacing.x);
         let mut on = per_layer;
         if crate::widgets::checkbox(ui, &mut on, "Save each layer as a file").changed() {
             f.insert("perLayer".into(), json!(on));
+            // Layers are saved as images: an original format gives way to the last image format.
+            if on && original(s(f, "format", "psd")) {
+                let image = app.ui.save.recent_formats.iter().find(|k| offered(k, true)).cloned().unwrap_or_else(|| "png".into());
+                f.insert("format".into(), json!(image));
+            }
         }
     });
     // Open as it was last time; the field lets automation open it too.
     let mut advanced = b(f, "advanced", app.ui.save.advanced);
     let was = advanced;
+    // The size of the file this saves goes in the button row (`footer`); per layer, the warning
+    // line counts the files instead.
+    let size = if b(f, "perLayer", false) {
+        None
+    } else {
+        estimate(app, ui, f).map(|bytes| crate::i18n::fmt(tl!("Estimated size {size}"), &[("size", &size_text(bytes))]))
+    };
+    ui.data_mut(|d| d.insert_temp(footer_key(), size));
     fold(ui, &t, &mut advanced, tl!("Advanced"));
     if advanced != was {
         app.ui.save.advanced = advanced;
@@ -613,16 +690,10 @@ pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         advanced_body(app, ui, &t, f);
     }
     if let Some(e) = f.get("__error").and_then(Value::as_str) {
-        ui.colored_label(t.danger, e);
-    }
-    // Size (or file count) for the footer, left of the buttons.
-    let footer = if b(f, "perLayer", false) {
-        None
-    } else {
-        estimate(app, ui, f).map(|bytes| crate::i18n::fmt(tl!("Estimated size {size}"), &[("size", &size_text(bytes))]))
-    };
-    if let Some(text) = footer {
-        ui.label(egui::RichText::new(text).size(11.5).color(t.text_faint));
+        ui.horizontal(|ui| {
+            ui.add_space(column(ui));
+            ui.add(egui::Label::new(egui::RichText::new(e).color(t.danger)).wrap());
+        });
     }
 }
 
@@ -630,7 +701,7 @@ fn advanced_body(app: &PrismApp, ui: &mut egui::Ui, t: &Tokens, f: &mut Map<Stri
     let format = s(f, "format", "psd").to_string();
     let direct_id = ui.id().with("save-direct");
     let mut direct = ui.data(|d| d.get_temp::<bool>(direct_id)).unwrap_or(false);
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 12, ..Default::default() }).show(ui, |ui| {
+    egui::Frame::NONE.show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 6.0;
         match format.as_str() {
             "png" => {
@@ -690,7 +761,10 @@ fn advanced_body(app: &PrismApp, ui: &mut egui::Ui, t: &Tokens, f: &mut Map<Stri
             per_layer_options(app, ui, t, f);
         }
         if matches!(format.as_str(), "png" | "jpg" | "webp") {
-            fold(ui, t, &mut direct, tl!("Direct settings"));
+            ui.horizontal(|ui| {
+                ui.add_space(column(ui));
+                fold(ui, t, &mut direct, tl!("Direct settings"));
+            });
             if direct {
                 direct_settings(ui, t, f, &format);
             }
@@ -705,7 +779,7 @@ fn per_layer_options(app: &PrismApp, ui: &mut egui::Ui, t: &Tokens, f: &mut Map<
             label(ui, t, title);
             let mut v = s(f, key, options.first().map_or("", |o| o.0)).to_string();
             let opts: Vec<(String, &str)> = options.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-            if crate::widgets::dropdown(ui, id, &mut v, &opts, 220.0) {
+            if crate::widgets::dropdown(ui, id, &mut v, &opts, ui.available_width()) {
                 f.insert(key.into(), json!(v));
             }
         });
@@ -715,14 +789,14 @@ fn per_layer_options(app: &PrismApp, ui: &mut egui::Ui, t: &Tokens, f: &mut Map<
     ui.horizontal(|ui| {
         label(ui, t, tl!("Size"));
         let mut trim = b(f, "trim", false);
-        if crate::widgets::dropdown(ui, "save-trim", &mut trim, &[(false, "Keep canvas size"), (true, "Trim to content")], 220.0) {
+        if crate::widgets::dropdown(ui, "save-trim", &mut trim, &[(false, "Keep canvas size"), (true, "Trim to content")], ui.available_width()) {
             f.insert("trim".into(), json!(trim));
         }
     });
     ui.horizontal(|ui| {
         label(ui, t, tl!("File names"));
         let mut pattern = s(f, "pattern", "{layer}").to_string();
-        if ui.add(egui::TextEdit::singleline(&mut pattern).desired_width(220.0)).on_hover_text(tl!("{layer}, {index} and {document} are replaced")).changed() {
+        if ui.add(egui::TextEdit::singleline(&mut pattern).desired_width(ui.available_width()).margin(egui::Margin { left: 10, right: 10, top: 4, bottom: 4 })).on_hover_text(tl!("{layer}, {index} and {document} are replaced")).changed() {
             f.insert("pattern".into(), json!(pattern));
         }
     });

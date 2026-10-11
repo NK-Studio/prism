@@ -135,6 +135,12 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
             // The OS window is the frame's edge: no shadow or rounding to clip.
             modal = modal.frame(crate::floating_window::frame(ctx));
         }
+        // The Save window breathes: wider padding on every side, shared by title, body and buttons.
+        let padded = crate::save_ui::owns(&fields);
+        if padded {
+            let frame = if own_window { crate::floating_window::frame(ctx) } else { egui::Frame::popup(&ctx.global_style()) };
+            modal = modal.frame(frame.inner_margin(egui::Margin { left: 22, right: 22, top: 16, bottom: 18 }));
+        }
         if about_card {
             let t = crate::about_ui::palette();
             modal = modal.frame(
@@ -285,6 +291,9 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                         } else {
                             dialog_buttons(ui, &[ok, cancel])
                         };
+                        if crate::save_ui::owns(&fields) {
+                            crate::save_ui::footer(ui);
+                        }
                         match clicked {
                             Some(ButtonRole::Cancel) if reset => crate::adjust_dialog::reset(ui.ctx(), &mut fields),
                             Some(ButtonRole::Cancel) => outcome = Some(false),
@@ -300,7 +309,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
             ui.min_rect().expand(ui.spacing().menu_margin.sum().max_elem() + 2.0)
         });
         // The picker has a larger frame margin; include that whole frame in the canvas hit guard.
-        let covered = if color_picker || about_card || own_window { modal.response.rect } else { modal.inner };
+        let covered = if color_picker || about_card || own_window || padded { modal.response.rect } else { modal.inner };
         if own_window && drag_started {
             // The OS moves its own window (egui would see the pointer move with the window).
             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);

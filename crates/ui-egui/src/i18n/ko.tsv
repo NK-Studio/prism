@@ -2902,7 +2902,7 @@ fontWeight	Italic	기울임
 	Enter a name	이름을 입력하세요
 	Estimated size {size}	예상 크기 {size}
 	Fast	빠르게
-	File names	이름 규칙
+	File names	파일명
 	File size	용량
 	Folder	폴더
 	Full color resolution (4:4:4)	색 해상도 유지 (4:4:4)
@@ -2950,3 +2950,4 @@ fontWeight	Italic	기울임
 	{layer}, {index} and {document} are replaced	{layer}, {index}, {document}가 실제 값으로 바뀝니다
 	Highest	최고
 	For web	웹용
+	Each layer is saved as an image: pick an image format	레이어별 저장은 이미지로만 저장돼요. 이미지 형식을 고르세요

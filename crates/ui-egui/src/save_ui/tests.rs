@@ -217,3 +217,28 @@ fn the_format_list_searches_and_enter_takes_the_first_match() {
     let (_, f) = save_dialog(h.state());
     assert_eq!(s(&f, "format", ""), "jpg", "picked, and the window is still open: Enter didn't also save");
 }
+
+#[test]
+fn saving_each_layer_offers_only_image_formats() {
+    assert!(offered("psd", false) && !offered("psd", true) && !offered("prism", true) && offered("png", true) && offered("tif", true));
+    let (app, _) = app();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    crate::PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(2);
+    crate::save_ui::open(h.state_mut(), false).unwrap();
+    h.run_steps(3);
+    // Ticking the box while PSD is chosen moves to an image format.
+    use egui_kittest::kittest::Queryable;
+    h.get_by_label("Save each layer as a file").click();
+    h.run_steps(3);
+    let (id, f) = save_dialog(h.state());
+    assert_eq!((b(&f, "perLayer", false), s(&f, "format", "")), (true, "png"));
+    h.get_all_by_role(egui::accesskit::Role::ComboBox).nth(1).unwrap().click();
+    h.run_steps(3);
+    assert!(h.query_by_label("PSD   Keeps layers").is_none(), "originals aren't offered per layer");
+    assert!(h.query_by_label("PNG   Lossless, keeps transparency").is_some());
+    // An original set some other way (automation) is refused, with the reason shown.
+    set(h.state_mut(), id, json!({"format": "psd"}));
+    assert!(crate::dialogs::confirm(h.state_mut(), id).is_err());
+    assert!(save_dialog(h.state()).1.get("__error").is_some());
+}
