@@ -92,6 +92,10 @@ fn number(n: f64) -> Value {
     Value::Number(n)
 }
 fn fixture() -> Vec<u8> {
+    fixture_with(true, None)
+}
+/// `texture`: the reference blob for TextureImage (NULL when `None`).
+fn fixture_with(with_refs: bool, texture: Option<Vec<u8>>) -> Vec<u8> {
     let mut db = vec![0; 4 * 4096];
     db[..16].copy_from_slice(b"SQLite format 3\0");
     db[16..18].copy_from_slice(&4096u16.to_be_bytes());
@@ -106,7 +110,7 @@ fn fixture() -> Vec<u8> {
                 text("Variant"),
                 text("Variant"),
                 number(3.0),
-                text("CREATE TABLE Variant (VariantID INTEGER, BrushSize REAL, BrushUsePatternImage INTEGER, BrushPatternImageArray BLOB, BrushInterval REAL)"),
+                text("CREATE TABLE Variant (VariantID INTEGER, BrushSize REAL, BrushUsePatternImage INTEGER, BrushPatternImageArray BLOB, BrushInterval REAL, TextureImage BLOB, TextureScale2 REAL, TextureReverseDensity INTEGER, TextureForPlot INTEGER, TextureDensity INTEGER, TextureCompositeMode INTEGER)"),
             ],
             vec![text("table"), text("MaterialFile"), text("MaterialFile"), number(4.0), text("CREATE TABLE MaterialFile (OriginalPath TEXT, FileData BLOB)")],
         ],
@@ -117,7 +121,13 @@ fn fixture() -> Vec<u8> {
     for p in paths {
         refs.extend(p.encode_utf16().flat_map(u16::to_le_bytes));
     }
-    leaf(&mut db, 3, &[vec![number(818.0), number(17.0), number(1.0), Value::Blob(refs), number(10.0)]]);
+    let refs = if with_refs { Value::Blob(refs) } else { Value::Null };
+    let texture = texture.map_or(Value::Null, Value::Blob);
+    leaf(
+        &mut db,
+        3,
+        &[vec![number(818.0), number(17.0), number(1.0), refs, number(10.0), texture, number(50.0), number(1.0), number(1.0), number(40.0), number(2.0)]],
+    );
     let mut rows = Vec::new();
     for (i, p) in paths.iter().enumerate() {
         // Include black, white and transparent pixels; second tip is inverse of the first.
@@ -148,6 +158,37 @@ fn imports_referenced_tips_in_order_and_maps_masks() {
     let mut wrapped = b"SUT prefix".to_vec();
     wrapped.extend(&f);
     assert_eq!(read_sut(&wrapped, "SUT", &prism_raster::Interrupt::NONE).unwrap().presets, imp.presets);
+}
+#[test]
+fn tip_flag_without_references_falls_back_to_round() {
+    // Shipped brushes set BrushUsePatternImage with a NULL reference column; this was an error.
+    let imp = read_sut(&fixture_with(false, None), "SUT", &prism_raster::Interrupt::NONE).unwrap();
+    assert_eq!(imp.presets[0].brush.tip, TipShape::Round);
+    assert!(imp.warnings.iter().any(|w| w.contains("round tip")));
+}
+fn texture_refs(path: &str, count: u32) -> Vec<u8> {
+    let mut refs = vec![0, 0, 0, 8];
+    refs.extend(count.to_be_bytes());
+    refs.extend(path.encode_utf16().flat_map(u16::to_le_bytes));
+    refs
+}
+#[test]
+fn maps_texture_material_and_settings() {
+    let imp = read_sut(&fixture_with(true, Some(texture_refs("second.layer", 1))), "SUT", &prism_raster::Interrupt::NONE).unwrap();
+    let t = &imp.presets[0].brush.texture;
+    assert!(t.enabled);
+    // White, black, black, transparent (reads as white): luminance, not coverage.
+    assert_eq!(t.pattern, Pattern::Tile(GrayTile { width: 2, height: 2, data: vec![65535, 0, 0, 65535] }));
+    assert_eq!((t.scale, t.invert, t.each_tip, t.depth), (0.5, true, true, 0.4));
+    assert!(!imp.warnings.iter().any(|w| w.contains("texture could not be read")));
+}
+#[test]
+fn broken_texture_reference_keeps_the_brush() {
+    for refs in [texture_refs("absent.layer", 1), texture_refs("second.layer", 3), vec![1, 2]] {
+        let imp = read_sut(&fixture_with(true, Some(refs)), "SUT", &prism_raster::Interrupt::NONE).unwrap();
+        assert!(!imp.presets[0].brush.texture.enabled);
+        assert!(imp.warnings.iter().any(|w| w.contains("texture could not be read")));
+    }
 }
 #[test]
 fn truncated_corrupt_and_cyclic_databases_fail_without_panicking() {
