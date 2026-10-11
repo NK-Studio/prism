@@ -65,6 +65,13 @@ fn tip_shape_sig(h: &mut DefaultHasher, t: &TipShape) {
     match t {
         TipShape::Round => 0u8.hash(h),
         TipShape::Sampled(g) => tile_sig(h, g),
+        TipShape::Sequence(tips) => {
+            2u8.hash(h);
+            tips.len().hash(h);
+            for g in tips {
+                tile_sig(h, g);
+            }
+        }
     }
 }
 
@@ -158,6 +165,7 @@ pub fn tip_alpha(tip: &TipShape, hardness: f32, angle: f32, roundness: f32, flip
     let round = roundness.clamp(0.01, 1.0);
     let sampled = match tip {
         TipShape::Sampled(g) => Some(shrink(g, n * 2)),
+        TipShape::Sequence(tips) => tips.first().map(|g| shrink(g, n * 2)),
         TipShape::Round => None,
     };
     let mut out = vec![0.0f32; (n * n) as usize];

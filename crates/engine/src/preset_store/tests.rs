@@ -373,3 +373,17 @@ fn a_store_directory_that_does_not_exist_yet_opens_without_warnings() {
     let err = DirBackend::new(&dir).read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap_err();
     assert!(missing_file(&err), "{err}");
 }
+
+#[test]
+fn multi_tip_brush_survives_store_restart() {
+    let dir = TempDir::new("multi-tip");
+    let (mut s, warnings) = session(&dir);
+    assert!(warnings.is_empty());
+    let brush = BrushSettings { tip: TipShape::Sequence(vec![tip8(20, 16, 1), tip16(12, 12, 2)]), size: 17.0, ..Default::default() };
+    s.tools.brush = brush.clone();
+    s.execute("brush.presets.save", json!({"name":"Multi-tip"})).unwrap();
+    s.sync_preset_store();
+    let (t, warnings) = session(&dir);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(prism_paint::presets::find(&t.tools.presets, "Multi-tip").unwrap().brush.tip, brush.tip);
+}

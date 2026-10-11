@@ -259,7 +259,7 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
 
 fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
     match id {
-        "brush.presets.importAbr" | "gradient.presets.importGrd" | "plugin.install" | "swatches.import" => {
+        "brush.presets.importAbr" | "brush.presets.importSut" | "gradient.presets.importGrd" | "plugin.install" | "swatches.import" => {
             // `data` wins over `path` in these commands; any `path` without it reads the filesystem.
             params.get("data").is_none() && params.get("path").is_some()
         }
@@ -587,6 +587,7 @@ mod tests {
     fn automation_rejects_ambient_path_commands_and_preferences() {
         for (id, params) in [
             ("brush.presets.importAbr", serde_json::json!({"path": "/outside/set.abr"})),
+            ("brush.presets.importSut", serde_json::json!({"path": "/outside/set.sut"})),
             ("gradient.presets.importGrd", serde_json::json!({"path": "/outside/set.grd"})),
             ("plugin.install", serde_json::json!({"path": "/outside/plugin.wasm"})),
             ("plugin.reload", serde_json::json!({"path": "/outside/plugins"})),
@@ -599,6 +600,7 @@ mod tests {
         }
         for (id, params) in [
             ("brush.presets.importAbr", serde_json::json!({"data": "QUJD"})),
+            ("brush.presets.importSut", serde_json::json!({"data": "QUJD"})),
             ("gradient.presets.importGrd", serde_json::json!({"data": "QUJD"})),
             ("plugin.install", serde_json::json!({"data": "QUJD"})),
             ("swatches.import", serde_json::json!({"data": "QUJD"})),
@@ -656,6 +658,13 @@ mod tests {
         assert!(unclassified.is_empty(), "filesystem path parameters in the command registry need an automation policy: {unclassified:?}");
     }
 
+    #[test]
+    fn sut_file_reads_and_document_vector_paths_have_distinct_policies() {
+        assert!(documents_filesystem_path_params("brush.presets.importSut", r#"{"path":".sut file"?,"data":base64?}"#));
+        assert!(!documents_filesystem_path_params("path.makeShape", "{} → {name,path}"));
+        assert!(!documents_filesystem_path_params("path.addAnchor", "{} → {name,path}"));
+    }
+
     fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
         if matches!(id, "prefs.get" | "prefs.reset") {
             return false;
@@ -678,6 +687,14 @@ mod tests {
                 | "path.moveHandle"
                 | "path.bendSegment"
                 | "path.convertPoint"
+                | "path.makeShape"
+                | "path.addAnchor"
+                | "path.deleteAnchor"
+                | "path.setOperation"
+                | "path.alignComponents"
+                | "path.distributeComponents"
+                | "path.arrangeComponents"
+                | "path.mergeComponents"
                 | "path.clippingPath.set"
                 | "path.rename"
                 | "select.toWorkPath"
@@ -722,6 +739,7 @@ mod tests {
 
         for (id, params) in [
             ("brush.presets.importAbr", serde_json::json!({"path": "/outside/set.abr"})),
+            ("brush.presets.importSut", serde_json::json!({"path": "/outside/set.sut"})),
             ("gradient.presets.importGrd", serde_json::json!({"path": "/outside/set.grd"})),
             ("plugin.install", serde_json::json!({"path": "/outside/plugin.wasm"})),
             ("plugin.reload", serde_json::json!({"path": "/outside/plugins"})),

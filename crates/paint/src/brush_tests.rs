@@ -1007,3 +1007,22 @@ fn dab_rect_of_a_far_or_non_finite_centre_does_not_overflow() {
     let r = crate::retouch::dab_rect(&huge);
     assert!(r.x0 <= r.x1 && r.y0 <= r.y1, "{r:?}");
 }
+
+#[test]
+fn sequence_tips_alternate_by_dab_and_survive_json() {
+    use crate::{BrushContext, Dab};
+    let b = BrushSettings { tip: TipShape::Sequence(vec![GrayTile::from_fn(4, 4, |_, _| 1.0), GrayTile::from_fn(4, 4, |_, _| 0.0)]), ..brush() };
+    let cx = BrushContext::new(&b);
+    let mut dab = Dab::round(prism_geom::Point::new(10.0, 10.0), 4.0, 1.0);
+    let mut pixels = Vec::new();
+    for index in [0, 1, 2] {
+        dab.index = index;
+        cx.rasterize(&dab, false, cx.dab_rect(&dab, false), &mut pixels);
+        assert_eq!(pixels.iter().any(|v| *v > 0.5), index != 1);
+    }
+    let bytes = serde_json::to_vec(&b).unwrap();
+    assert_eq!(serde_json::from_slice::<BrushSettings>(&bytes).unwrap(), b);
+    let empty = BrushSettings { tip: TipShape::Sequence(vec![]), ..brush() };
+    let cx = BrushContext::new(&empty);
+    cx.rasterize(&dab, false, cx.dab_rect(&dab, false), &mut pixels);
+}

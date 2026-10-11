@@ -26,21 +26,35 @@ pub const MAX_FILE_BYTES: u64 = 512 << 20;
 
 /// File bytes from `data` (base64) or `path`, plus a default group name.
 pub(crate) fn file_bytes(p: &Value, cmd: &str, what: &str) -> Result<(Vec<u8>, String)> {
+    file_bytes_with_limit(p, cmd, what, MAX_FILE_BYTES)
+}
+
+/// A format-specific cap, applied before base64 decoding or file allocation.
+pub(crate) fn file_bytes_with_limit(p: &Value, cmd: &str, what: &str, limit: u64) -> Result<(Vec<u8>, String)> {
+    use std::io::Read;
     if let Some(d) = p.get("data") {
         let s = d.as_str().ok_or_else(|| bad(cmd, "`data` must be a base64 string"))?;
-        if s.len() as u64 > MAX_FILE_BYTES / 3 * 4 + 4 {
+        if s.len() as u64 > limit / 3 * 4 + 4 {
             return Err(bad(cmd, "`data` is too large"));
         }
         let bytes = prism_paint::tile::b64_decode(s).ok_or_else(|| bad(cmd, "`data` is not valid base64"))?;
+        if bytes.len() as u64 > limit {
+            return Err(bad(cmd, "`data` is too large"));
+        }
         return Ok((bytes, String::new()));
     }
     let path =
         p.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(cmd, format!("give `path` ({what}) or `data` (base64)")))?;
     let len = std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.len();
-    if len > MAX_FILE_BYTES {
+    if len > limit {
         return Err(bad(cmd, format!("{path}: file too large ({len} bytes)")));
     }
-    let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let file = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    if bytes.len() as u64 > limit {
+        return Err(bad(cmd, format!("{path}: file grew beyond the size limit")));
+    }
     let stem = std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     Ok((bytes, stem))
 }
@@ -84,7 +98,7 @@ fn import_abr(s: &mut Session, p: &Value) -> Result<Value> {
     )
 }
 
-fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: prism_io::abr_map::AbrImport) -> Result<Value> {
+pub(crate) fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: prism_io::abr_map::AbrImport) -> Result<Value> {
     // Re-importing a file replaces its group instead of duplicating it.
     if p.get("replace").and_then(Value::as_bool).unwrap_or(true) {
         s.tools.presets.retain(|x| x.builtin || x.group != group);
@@ -359,5 +373,18 @@ mod tests {
         let taken = vec!["A".to_string(), "a 2".to_string()];
         assert_eq!(unique("a", &taken), "a 3");
         assert_eq!(unique("B", &taken), "B");
+    }
+}
+
+#[cfg(test)]
+mod bounded_source_tests {
+    use super::*;
+    #[test]
+    fn format_specific_limit_checks_encoded_and_decoded_bytes() {
+        let p = json!({"data":prism_paint::tile::b64_encode(b"123456789")});
+        assert!(file_bytes_with_limit(&p, "test", "file", 8).is_err());
+        assert_eq!(file_bytes_with_limit(&p, "test", "file", 9).unwrap().0, b"123456789");
+        let p = json!({"data":prism_paint::tile::b64_encode(b"123456789012")});
+        assert!(file_bytes_with_limit(&p, "test", "file", 8).is_err());
     }
 }

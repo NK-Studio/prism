@@ -45,6 +45,7 @@ mod psd_import;
 pub mod raw;
 pub mod slices_map;
 pub mod smart_map;
+pub mod sut;
 pub mod svg;
 mod text_import;
 pub mod text_styles_map;

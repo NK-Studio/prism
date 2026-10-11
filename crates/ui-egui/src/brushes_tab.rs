@@ -476,7 +476,7 @@ pub fn show(app: &mut PrismApp, ui: &mut egui::Ui) {
                 let name = new_preset_name(&app.session.tools.presets);
                 run_or_status(app, "brush.presets.save", json!({ "name": name }));
             }
-            if icons::button(ui, "folder-open", 24.0, false, "Import Brushes… (.abr)").clicked() {
+            if icons::button(ui, "folder-open", 24.0, false, &format!("{} (.abr, .sut)", tl!("Import Brushes…"))).clicked() {
                 let _ = app.open_dialog_file();
             }
         });

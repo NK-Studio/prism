@@ -1356,7 +1356,7 @@ fn presets_body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value
             let _ = app.run("edit.presets.presetManager", json!({"action": "delete", "kind": kind, "index": selected}));
         }
         // Load Photoshop brushes (.abr) into the library.
-        if kind == "brushes" && ui.button(tl!("Load…")).on_hover_text(tl!("Import Photoshop brushes (.abr)")).clicked() {
+        if kind == "brushes" && ui.button(tl!("Load…")).on_hover_text(tl!("Import Brushes…")).clicked() {
             let _ = app.open_dialog_file();
         }
     });

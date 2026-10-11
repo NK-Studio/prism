@@ -348,11 +348,17 @@ pub fn group_file_name(group: &str) -> String {
 fn split_tips(mut b: BrushSettings) -> (BrushSettings, [Option<GrayTile>; 3]) {
     let tip = match std::mem::take(&mut b.tip) {
         TipShape::Sampled(t) => Some(t),
-        TipShape::Round => None,
+        other => {
+            b.tip = other;
+            None
+        }
     };
     let dual = match std::mem::take(&mut b.dual_brush.tip) {
         TipShape::Sampled(t) => Some(t),
-        TipShape::Round => None,
+        other => {
+            b.dual_brush.tip = other;
+            None
+        }
     };
     let texture = match std::mem::take(&mut b.texture.pattern) {
         Pattern::Tile(t) => Some(t),

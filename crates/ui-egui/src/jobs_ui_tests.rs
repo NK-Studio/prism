@@ -297,3 +297,23 @@ fn templates_open_untitled_in_the_background() {
     assert_eq!((st.doc.name.as_str(), st.path.as_deref()), ("Untitled-1", None));
     assert_eq!(h.state().ui.recent_files.first().map(String::as_str), Some("/tmp/prism-test/card.psdt"));
 }
+
+#[test]
+fn completed_sut_import_shows_brush_library_and_compatibility_notes() {
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+    super::on_event(
+        &mut app,
+        prism_engine::jobs::JobEvent {
+            id: JobId(1),
+            command: "brush.presets.importSut".into(),
+            label: "Import CSP Brush".into(),
+            document: None,
+            outcome: prism_engine::jobs::JobOutcome::Done(json!({"count":1,"group":"CSP","warnings":["Custom pressure curve approximated"]})),
+        },
+    );
+    assert!(app.ui.panels.brush_settings);
+    assert_eq!(app.ui.brush_tab, 1);
+    assert!(app.ui.status_error, "compatibility warnings use the existing import warning status");
+    assert!(app.ui.status.contains("Imported"));
+    assert!(!app.ui.notices.last().unwrap().error, "the import succeeded; its notice is informational");
+}

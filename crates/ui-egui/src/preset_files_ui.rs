@@ -10,7 +10,7 @@ use crate::PrismApp;
 
 /// Extensions handled here rather than by the document importer (`.aco`/`.ase` swatches go to
 /// the Swatches panel through [`crate::swatches_ui::import_bytes`]).
-pub const PRESET_EXTS: &[&str] = &["abr", "grd", "aco", "ase"];
+pub const PRESET_EXTS: &[&str] = &["abr", "sut", "grd", "aco", "ase"];
 
 fn ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
@@ -33,6 +33,7 @@ fn source(name: &str, bytes: &[u8]) -> Value {
 /// Import a preset file; `None` when `name` isn't one.
 pub fn open(app: &mut PrismApp, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
     let (cmd, what) = match ext(name).as_str() {
+        "sut" => ("brush.presets.importSut", "brushes"),
         "abr" => ("brush.presets.importAbr", "brushes"),
         "grd" => ("gradient.presets.importGrd", "gradients"),
         "aco" | "ase" => return Some(crate::swatches_ui::import_bytes(app, name, bytes, false).map(|_| ())),
@@ -73,6 +74,7 @@ mod tests {
     #[test]
     fn recognises_preset_files() {
         assert!(is_preset_file("/a/b/Set.ABR"));
+        assert!(is_preset_file("세모네모펜.SUT"));
         assert!(is_preset_file("sunsets.grd"));
         assert!(is_preset_file("Brand.ACO"));
         assert!(is_preset_file("exchange.ase"));

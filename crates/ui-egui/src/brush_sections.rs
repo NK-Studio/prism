@@ -293,6 +293,7 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset]) 
     }
     let orig = match &b.tip {
         TipShape::Sampled(g) => Some(g.width.max(g.height) as f32),
+        TipShape::Sequence(tips) => tips.iter().map(|g| g.width.max(g.height) as f32).max_by(f32::total_cmp),
         TipShape::Round => None,
     };
     size_row(ui, tl!("Size"), &mut b.size, MAX_BRUSH_SIZE, orig);
@@ -500,6 +501,7 @@ fn dual_brush(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset])
     }
     let orig = match &d.tip {
         TipShape::Sampled(g) => Some(g.width.max(g.height) as f32),
+        TipShape::Sequence(tips) => tips.iter().map(|g| g.width.max(g.height) as f32).max_by(f32::total_cmp),
         TipShape::Round => None,
     };
     size_row(ui, tl!("Size"), &mut d.size, 2500.0, orig);

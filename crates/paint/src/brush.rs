@@ -80,6 +80,8 @@ pub enum TipShape {
     Round,
     /// Sampled tip: grayscale bitmap where 1 = full paint. Scaled so its larger side equals `size`.
     Sampled(GrayTile),
+    /// Sampled tips used cyclically by dab index (CSP multi-tip brushes).
+    Sequence(Vec<GrayTile>),
 }
 
 /// Shape Dynamics.

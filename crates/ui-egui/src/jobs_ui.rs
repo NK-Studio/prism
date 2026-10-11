@@ -169,13 +169,17 @@ fn on_event(app: &mut PrismApp, e: JobEvent) {
         return;
     }
     match e.outcome {
-        JobOutcome::Done(v) if e.command == "brush.presets.importAbr" => {
+        JobOutcome::Done(v) if matches!(e.command.as_str(), "brush.presets.importAbr" | "brush.presets.importSut") => {
             let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);
             let group = v.get("group").and_then(Value::as_str).unwrap_or_default();
             app.ui.status = format!("Imported {n} brushes from {group}");
             app.ui.status_error = false;
             app.ui.panels.brush_settings = true;
             app.ui.brush_tab = 1;
+            if e.command == "brush.presets.importSut" {
+                let warnings: Vec<String> = v.get("warnings").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+                notices::io_warnings(app, "Imported CSP brush", &warnings);
+            }
         }
         JobOutcome::Done(_) => {
             app.sync_views();

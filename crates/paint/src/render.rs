@@ -86,7 +86,9 @@ pub fn mask_combine(mode: MaskMode, v: f32, t: f32, d: f32) -> f32 {
 pub struct BrushContext {
     pub brush: BrushSettings,
     tip: Option<Arc<Mips>>,
+    sequence: Vec<Arc<Mips>>,
     dual_tip: Option<Arc<Mips>>,
+    dual_sequence: Vec<Arc<Mips>>,
     texture: Option<Arc<PatternImage>>,
 }
 
@@ -125,9 +127,15 @@ impl BrushContext {
             TipShape::Sampled(g) if g.is_valid() => Some(Arc::new(Mips::new(g))),
             _ => None,
         };
+        let sequence = |t: &TipShape| match t {
+            TipShape::Sequence(tips) => tips.iter().take(64).filter(|g| g.is_valid()).map(|g| Arc::new(Mips::new(g))).collect(),
+            _ => Vec::new(),
+        };
         Self {
             tip: mips(&brush.tip),
+            sequence: sequence(&brush.tip),
             dual_tip: if brush.dual_brush.enabled { mips(&brush.dual_brush.tip) } else { None },
+            dual_sequence: if brush.dual_brush.enabled { sequence(&brush.dual_brush.tip) } else { Vec::new() },
             texture: prepare_pattern(&brush),
             brush,
         }
@@ -152,7 +160,7 @@ impl BrushContext {
 
     /// Bounding rectangle of a dab (rotated sampled tips need the corner reach).
     pub fn dab_rect(&self, d: &Dab, dual: bool) -> Rect {
-        let sampled = if dual { self.dual_tip.is_some() } else { self.tip.is_some() };
+        let sampled = if dual { self.dual_tip.is_some() || !self.dual_sequence.is_empty() } else { self.tip.is_some() || !self.sequence.is_empty() };
         let reach = if sampled { d.radius * std::f32::consts::SQRT_2 } else { d.radius };
         rect_around(d, reach)
     }
@@ -163,7 +171,9 @@ impl BrushContext {
         out.clear();
         out.resize(w * h, 0.0);
         let b = &self.brush;
-        let (hardness, mips) = if dual { (b.dual_brush.hardness, self.dual_tip.as_deref()) } else { (b.hardness, self.tip.as_deref()) };
+        let (hardness, single, sequence) =
+            if dual { (b.dual_brush.hardness, &self.dual_tip, &self.dual_sequence) } else { (b.hardness, &self.tip, &self.sequence) };
+        let mips = if sequence.is_empty() { single.as_deref() } else { sequence.get((d.index % sequence.len() as u64) as usize).map(Arc::as_ref) };
         let aliased = b.aliased && !dual;
         let wet = b.wet_edges && !dual;
         let noise = b.noise && !dual;

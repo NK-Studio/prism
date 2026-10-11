@@ -541,7 +541,7 @@ fn presets_list(s: &mut Session, p: &Value) -> Result<Value> {
                 "builtin": pr.builtin,
                 "size": pr.brush.size,
                 "hardness": pr.brush.hardness,
-                "tip": match &pr.brush.tip { TipShape::Round => "round", TipShape::Sampled(_) => "sampled" },
+                "tip": match &pr.brush.tip { TipShape::Round => "round", TipShape::Sampled(_) => "sampled", TipShape::Sequence(_) => "sequence" },
             });
             if full {
                 v["brush"] = brush_json(&pr.brush);
