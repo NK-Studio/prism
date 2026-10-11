@@ -14,7 +14,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using the
 # image-editing vocabulary in everyday use in Taiwan (圖層, 遮色片, 選取範圍, 濾鏡, 色階 ...). No
 # proprietary localisation resource, string table or product UI was consulted or copied; add
-# entries the same way. Product and technology names (Prism, ArtCraft, OpenType, CMYK, Lab ...)
+# entries the same way. Product and technology names (Prism, OpenType, CMYK, Lab ...)
 # and paper sizes (Legal, Tabloid) stay in Latin letters; the trailing "…" of dialog commands is
 # kept. Full-width punctuation (，。：) inside sentences; half-width parentheses and the " · "
 # separators as in the English.
@@ -708,8 +708,6 @@
 	About Prism	關於 Prism
 	Prism Website	Prism 網站
 	Prism on GitHub	GitHub 上的 Prism
-	ArtCraft Website	ArtCraft 網站
-	Join the ArtCraft Discord…	加入 ArtCraft Discord…
 	Report an Issue…	回報問題…
 	WIA Support…	WIA 支援…
 	Apply	套用
@@ -965,7 +963,6 @@
 	Diffusion	擴散
 	Discard the embedded profile (don't color manage)	捨棄嵌入的描述檔 (不進行色彩管理)
 	Discontiguous	不連續
-	Discord	Discord
 	Dismiss	關閉
 	Display P3	Display P3
 	Display Text	顯示文字
@@ -1092,7 +1089,6 @@
 	Invert All	全部反轉
 	Invert has no settings.	負片效果沒有設定。
 	Italic	斜體
-	Join us on Discord	加入我們的 Discord
 	Justify all	全部齊行
 	Justify last centered	最後一行置中齊行
 	Justify last left	最後一行靠左齊行
@@ -1482,7 +1478,6 @@
 	Apple Watch 45mm	Apple Watch 45mm
 	Aqua	水藍色
 	Art & Illustration	藝術與插畫
-	ArtCraft	ArtCraft
 	Background Eraser Tool	背景橡皮擦工具
 	Bevel & Emboss	斜角和浮雕
 	Blend Mode	混合模式
@@ -2230,3 +2225,52 @@ fontWeight	Italic	斜體
 	Preparing preview…	正在準備預覽…
 	Columns	欄
 	Duplicate	複製
+
+	Load Font File…	載入字型檔案…
+	Favorite	加入收藏
+	Unfavorite	取消收藏
+	TTF, OTF, TTC, OTC — available until Prism exits	TTF、OTF、TTC、OTC — 結束 Prism 前可用
+	Loaded font (this session)	已載入字型（目前工作階段）
+	Favorite fonts	收藏的字型
+
+	All fonts	所有字體
+	Korean only	僅韓文字體
+	No preview	無預覽
+
+# Prism About introduction and footer.
+	Turn ideas into images.	讓創意成為影像。
+	Prism is a desktop image editor by NK Studio.	Prism 是 NK Studio 打造的桌面影像編輯器。
+	Refine layers, color, and typography to bring your vision to life.	細緻調整圖層、色彩與文字，呈現心中所想。
+	All rights reserved.	保留所有權利。
+	Built for creative expression.	為自由創作而打造。
+
+	Arrow Tool	箭頭工具
+	Arrow	箭頭
+	Arrow color	箭頭顏色
+	Thickness	線條粗細
+	Arrowhead	箭頭大小
+	Corners	轉角
+	Angular	尖角
+	Rounded	圓角
+
+	Arrowhead length	箭頭長度
+
+	Arrowhead angle	箭頭角度
+
+	Line tips	線端
+
+	Square tips	方形端點
+
+	Round tips	圓形端點
+	Make:	製作：
+	Selection…	選取範圍…
+	Mask	遮色片
+	Align To:	對齊至：
+	Rubber Band	橡皮筋
+	Auto Add/Delete	自動增加/刪除
+	Align Edges	對齊邊緣
+	Path Operations	路徑操作
+	Path Alignment	路徑對齊方式
+	Path Arrangement	路徑排列方式
+	New Layer	新增圖層
+	Settings	設定

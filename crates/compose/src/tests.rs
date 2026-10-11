@@ -1,8 +1,8 @@
 use super::*;
-use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::adjust::{CurvePoint, LevelsChannel};
-use photocraft_doc::{Adjustment, Document, Fill, Layer, LayerContent, LayerMask};
-use photocraft_geom::Size;
+use prism_color::{Color, ColorMode, PixelFormat, SampleType};
+use prism_doc::adjust::{CurvePoint, LevelsChannel};
+use prism_doc::{Adjustment, Document, Fill, Layer, LayerContent, LayerMask};
+use prism_geom::Size;
 
 const E: f32 = 2.0 / 255.0;
 
@@ -295,14 +295,14 @@ fn hue_saturation_roundtrips_and_desaturates() {
     }
     let mut buf = Buffer::filled(Rect::new(0, 0, 1, 1), [0.8, 0.3, 0.1, 1.0]);
     adjust::apply(
-        &Adjustment::HueSaturation { hue: 0.0, saturation: -100.0, lightness: 0.0, colorize: false, ranges: photocraft_doc::adjust::HueRange::defaults() },
+        &Adjustment::HueSaturation { hue: 0.0, saturation: -100.0, lightness: 0.0, colorize: false, ranges: prism_doc::adjust::HueRange::defaults() },
         &mut buf,
     );
     let p = buf.px[0];
     assert!((p[0] - p[1]).abs() < 1e-5 && (p[1] - p[2]).abs() < 1e-5);
     let mut buf = Buffer::filled(Rect::new(0, 0, 1, 1), [1.0, 0.0, 0.0, 1.0]);
     adjust::apply(
-        &Adjustment::HueSaturation { hue: 120.0, saturation: 0.0, lightness: 0.0, colorize: false, ranges: photocraft_doc::adjust::HueRange::defaults() },
+        &Adjustment::HueSaturation { hue: 120.0, saturation: 0.0, lightness: 0.0, colorize: false, ranges: prism_doc::adjust::HueRange::defaults() },
         &mut buf,
     );
     assert!(close4(buf.px[0], [0.0, 1.0, 0.0, 1.0]));
@@ -314,7 +314,7 @@ fn solid_and_gradient_fill_layers() {
     d.layers.push(Layer::new("fill", LayerContent::Fill(Fill::Solid(Color::rgb(0.0, 0.0, 1.0)))));
     assert!(close4(px(&d, 5, 0), [0.0, 0.0, 1.0, 1.0]));
 
-    let g = Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, photocraft_doc::GradientStyle::Linear, false);
+    let g = Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, prism_doc::GradientStyle::Linear, false);
     let patterns = pattern::PreparedPatterns::new(&[], pattern::PREPARED_PATTERN_BYTES);
     let buf = render_fill(&g, Rect::new(0, 0, 10, 1), Rect::new(0, 0, 10, 1), &patterns);
     // tile independence: a 1px render of the right edge equals the full render
@@ -381,9 +381,9 @@ fn two_solid_layers(depth: SampleType, mode: BlendMode, bg: [f32; 3], top: [f32;
     let mut d = Document::new("hdr", Size::new(4, 4), ColorMode::Rgb, depth);
     let fmt = d.pixel_format();
     let mut b = Layer::raster("bg", fmt);
-    b.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &photocraft_raster::from_rgba(&fmt, [bg[0], bg[1], bg[2], 1.0]));
+    b.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &prism_raster::from_rgba(&fmt, [bg[0], bg[1], bg[2], 1.0]));
     let mut t = Layer::raster("top", fmt);
-    t.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &photocraft_raster::from_rgba(&fmt, [top[0], top[1], top[2], 1.0]));
+    t.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &prism_raster::from_rgba(&fmt, [top[0], top[1], top[2], 1.0]));
     t.blend = mode;
     d.layers.push(b);
     d.layers.push(t);
@@ -441,7 +441,7 @@ fn buffer_over_background() {
 
 // ---------- layer effects ----------
 
-use photocraft_doc::{Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Satin, Shadow, StrokeFx, StrokePosition};
+use prism_doc::{Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Satin, Shadow, StrokeFx, StrokePosition};
 
 fn fx_doc(effects: Vec<Effect>) -> Document {
     let mut d = doc_white(40, 40);
@@ -452,12 +452,7 @@ fn fx_doc(effects: Vec<Effect>) -> Document {
 }
 
 fn stroke(size: f32, position: StrokePosition) -> Effect {
-    Effect::Stroke(StrokeFx {
-        common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
-        size,
-        position,
-        paint: FxPaint::Color(Color::rgb(0.0, 0.0, 1.0)),
-    })
+    Effect::Stroke(StrokeFx { common: FxCommon::new(prism_color::BlendMode::Normal, 1.0), size, position, paint: FxPaint::Color(Color::rgb(0.0, 0.0, 1.0)) })
 }
 
 #[test]
@@ -519,7 +514,7 @@ fn master_switch_and_per_effect_enable() {
 
 #[test]
 fn color_overlay_ignores_fill_opacity_but_not_opacity() {
-    let mut d = fx_doc(vec![Effect::ColorOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0), color: Color::rgb(0.0, 1.0, 0.0) }]);
+    let mut d = fx_doc(vec![Effect::ColorOverlay { common: FxCommon::new(prism_color::BlendMode::Normal, 1.0), color: Color::rgb(0.0, 1.0, 0.0) }]);
     d.layers[1].fill_opacity = 0.0;
     assert!(close4(px(&d, 20, 20), [0.0, 1.0, 0.0, 1.0]), "overlay shows at fill 0");
     d.layers[1].opacity = 0.5;
@@ -528,14 +523,14 @@ fn color_overlay_ignores_fill_opacity_but_not_opacity() {
 
 fn shadow(distance: f32, angle: f32) -> Shadow {
     Shadow {
-        common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        common: FxCommon::new(prism_color::BlendMode::Normal, 1.0),
         color: Color::BLACK,
         angle,
         use_global_light: false,
         distance,
         spread: 1.0,
         size: 0.0,
-        contour: photocraft_doc::Contour::Linear,
+        contour: prism_doc::Contour::Linear,
         anti_alias: false,
         noise: 0.0,
         knocks_out: true,
@@ -589,12 +584,12 @@ fn inner_shadow_only_inside() {
 
 fn glow(technique: GlowTechnique, source: GlowSource) -> Glow {
     Glow {
-        common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        common: FxCommon::new(prism_color::BlendMode::Normal, 1.0),
         paint: FxPaint::Color(Color::rgb(0.0, 1.0, 0.0)),
         technique,
         spread: 0.0,
         size: 4.0,
-        contour: photocraft_doc::Contour::Linear,
+        contour: prism_doc::Contour::Linear,
         anti_alias: false,
         range: 0.5,
         jitter: 0.0,
@@ -652,11 +647,11 @@ fn glow_gradient_follows_the_shape() {
 #[test]
 fn gradient_overlay_follows_angle_and_reverse() {
     let g = Gradient { stops: vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], angle: 0.0, ..Gradient::default() };
-    let d = fx_doc(vec![Effect::GradientOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0), gradient: g.clone(), dither: false }]);
+    let d = fx_doc(vec![Effect::GradientOverlay { common: FxCommon::new(prism_color::BlendMode::Normal, 1.0), gradient: g.clone(), dither: false }]);
     let (l, r) = (px(&d, 10, 20), px(&d, 29, 20));
     assert!(l[0] < 0.1 && r[0] > 0.9, "{l:?} {r:?}");
     let d = fx_doc(vec![Effect::GradientOverlay {
-        common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        common: FxCommon::new(prism_color::BlendMode::Normal, 1.0),
         gradient: Gradient { reverse: true, style: GradientStyle::Linear, ..g },
         dither: false,
     }]);
@@ -666,21 +661,21 @@ fn gradient_overlay_follows_angle_and_reverse() {
 #[test]
 fn satin_and_bevel_stay_inside_shape() {
     let satin = Effect::Satin(Satin {
-        common: FxCommon::new(photocraft_color::BlendMode::Multiply, 1.0),
+        common: FxCommon::new(prism_color::BlendMode::Multiply, 1.0),
         color: Color::BLACK,
         angle: 19.0,
         distance: 4.0,
         size: 4.0,
-        contour: photocraft_doc::Contour::Linear,
+        contour: prism_doc::Contour::Linear,
         anti_alias: true,
         invert: false,
     });
     let d = fx_doc(vec![
         satin,
-        Effect::BevelEmboss(photocraft_doc::Bevel {
+        Effect::BevelEmboss(prism_doc::Bevel {
             enabled: true,
-            style: photocraft_doc::BevelStyle::InnerBevel,
-            technique: photocraft_doc::BevelTechnique::Smooth,
+            style: prism_doc::BevelStyle::InnerBevel,
+            technique: prism_doc::BevelTechnique::Smooth,
             depth: 1.0,
             up: true,
             size: 4.0,
@@ -688,10 +683,10 @@ fn satin_and_bevel_stay_inside_shape() {
             angle: 90.0,
             altitude: 30.0,
             use_global_light: false,
-            gloss_contour: photocraft_doc::Contour::Linear,
-            highlight: FxCommon::new(photocraft_color::BlendMode::Screen, 0.75),
+            gloss_contour: prism_doc::Contour::Linear,
+            highlight: FxCommon::new(prism_color::BlendMode::Screen, 0.75),
             highlight_color: Color::WHITE,
-            shadow: FxCommon::new(photocraft_color::BlendMode::Multiply, 0.75),
+            shadow: FxCommon::new(prism_color::BlendMode::Multiply, 0.75),
             shadow_color: Color::BLACK,
             contour: None,
             texture: None,
@@ -737,7 +732,7 @@ fn effects_render_identically_in_tiles() {
         d.depth = depth;
         for layer in &mut d.layers {
             if let Some(surface) = layer.surface_mut() {
-                *surface = surface.convert(photocraft_color::PixelFormat { sample: depth, ..surface.format() });
+                *surface = surface.convert(prism_color::PixelFormat { sample: depth, ..surface.format() });
             }
         }
         let full = flatten(&d);
@@ -761,7 +756,7 @@ fn parallel_tiles_match_single_pass() {
     d.layers.push(a);
     let mut clip = solid_layer("clip", Rect::new(30, 0, 97, 61), [0.0, 1.0, 0.0, 1.0]);
     clip.clipped = true;
-    clip.blend = photocraft_color::BlendMode::Multiply;
+    clip.blend = prism_color::BlendMode::Multiply;
     d.layers.push(clip);
     let mut g = Layer::group("g", vec![solid_layer("in", Rect::new(50, 20, 90, 60), [0.2, 0.3, 0.9, 1.0])]);
     g.opacity = 0.6;
@@ -780,7 +775,7 @@ fn parallel_tiles_match_single_pass() {
 
 #[test]
 fn vector_mask_combines_with_pixel_mask() {
-    use photocraft_doc::{Path, Subpath, VectorMask};
+    use prism_doc::{Path, Subpath, VectorMask};
     let mut d = doc_white(8, 8);
     let mut l = solid_layer("k", Rect::new(0, 0, 8, 8), [0.0, 0.0, 0.0, 1.0]);
     // Vector mask reveals x in 0..4 (and half of column 4); the pixel mask hides rows 0..2.
@@ -815,7 +810,7 @@ fn vector_mask_combines_with_pixel_mask() {
 fn effect_maps_are_cached_and_invalidated_by_pixel_changes() {
     let mut doc = doc_white(64, 64);
     let mut l = solid_layer("fx", Rect::new(16, 16, 48, 48), [1.0, 0.0, 0.0, 1.0]);
-    l.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    l.effects.items.push(prism_doc::Effect::default_drop_shadow());
     doc.layers.push(l);
     let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES);
     let cx = Ctx::for_doc(&doc, &patterns);
@@ -840,9 +835,9 @@ fn effect_maps_are_cached_and_invalidated_by_pixel_changes() {
 
     // Tileless masks differ only in their defaults; reusing their effect maps leaves a ghost shadow.
     let mut masked = fx_doc(vec![Effect::DropShadow(shadow(5.0, 90.0))]);
-    masked.layers[1].mask = Some(photocraft_doc::LayerMask::reveal_all());
+    masked.layers[1].mask = Some(prism_doc::LayerMask::reveal_all());
     assert!(close4(px(&masked, 20, 32), [0.0, 0.0, 0.0, 1.0]));
-    masked.layers[1].mask = Some(photocraft_doc::LayerMask::hide_all());
+    masked.layers[1].mask = Some(prism_doc::LayerMask::hide_all());
     let warm = flatten(&masked);
     let mut cold = masked.clone();
     cold.layers[1].id = Layer::raster("uncached", cold.pixel_format()).id;
@@ -884,10 +879,10 @@ fn emboss_shades_the_composited_layer() {
     // Emboss styles paint over the layer as composited (for type: mixed at the text gamma), so a
     // Normal white highlight `k` on an edge pixel keeps (1 − R) = (1 − k)(1 − C) whatever C is:
     // the ratio of type to raster results equals that of their plain composites.
-    let emboss = Effect::BevelEmboss(photocraft_doc::Bevel {
+    let emboss = Effect::BevelEmboss(prism_doc::Bevel {
         enabled: true,
-        style: photocraft_doc::BevelStyle::Emboss,
-        technique: photocraft_doc::BevelTechnique::Smooth,
+        style: prism_doc::BevelStyle::Emboss,
+        technique: prism_doc::BevelTechnique::Smooth,
         depth: 1.0,
         up: true,
         size: 6.0,
@@ -895,10 +890,10 @@ fn emboss_shades_the_composited_layer() {
         angle: 90.0,
         altitude: 30.0,
         use_global_light: false,
-        gloss_contour: photocraft_doc::Contour::Linear,
-        highlight: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        gloss_contour: prism_doc::Contour::Linear,
+        highlight: FxCommon::new(prism_color::BlendMode::Normal, 1.0),
         highlight_color: Color::WHITE,
-        shadow: FxCommon::new(photocraft_color::BlendMode::Multiply, 0.0),
+        shadow: FxCommon::new(prism_color::BlendMode::Multiply, 0.0),
         shadow_color: Color::BLACK,
         contour: None,
         texture: None,
@@ -908,7 +903,7 @@ fn emboss_shades_the_composited_layer() {
         let mut l = solid_layer("sq", Rect::new(10, 10, 30, 30), [0.2, 0.1, 0.6, 1.0]);
         l.surface_mut().unwrap().fill_rect(Rect::new(10, 10, 30, 11), &[0.2, 0.1, 0.6, 0.5]);
         if text {
-            let t = photocraft_doc::TextLayer { cache: l.surface().cloned(), ..Default::default() };
+            let t = prism_doc::TextLayer { cache: l.surface().cloned(), ..Default::default() };
             l = Layer::new("t", LayerContent::Text(t));
         }
         if fx {
@@ -931,7 +926,7 @@ fn interior_effects_keep_the_layer_alpha() {
     // A colour overlay replaces a half-transparent pixel's colour without adding coverage.
     let mut d = Document::new("t", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
     let mut l = solid_layer("sq", Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 0.5]);
-    l.effects.items = vec![Effect::ColorOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0), color: Color::rgb(0.0, 1.0, 0.0) }];
+    l.effects.items = vec![Effect::ColorOverlay { common: FxCommon::new(prism_color::BlendMode::Normal, 1.0), color: Color::rgb(0.0, 1.0, 0.0) }];
     d.layers.push(l);
     assert!(close4(px(&d, 20, 20), [0.0, 1.0, 0.0, 0.5]), "{:?}", px(&d, 20, 20));
 }
@@ -941,7 +936,7 @@ fn upper_stroke_blends_with_the_backdrop_not_the_lower_stroke() {
     // Multiply yellow (3 px) listed above a Normal blue (8 px): the inner ring multiplies the
     // white backdrop (stays yellow), the outer ring is blue.
     let yellow = Effect::Stroke(StrokeFx {
-        common: FxCommon::new(photocraft_color::BlendMode::Multiply, 1.0),
+        common: FxCommon::new(prism_color::BlendMode::Multiply, 1.0),
         size: 3.0,
         position: StrokePosition::Outside,
         paint: FxPaint::Color(Color::rgb(1.0, 1.0, 0.0)),
@@ -969,14 +964,14 @@ fn shadow_knockout_needs_see_through_fill() {
 
 #[test]
 fn linked_pattern_overlay_anchors_at_the_effects_reference_point() {
-    use photocraft_doc::pattern::Pattern;
+    use prism_doc::pattern::Pattern;
     // 2 × 1 tile: red, blue. Anchored at x = 11 (reference point), x = 11 is red, 12 blue.
-    let mut tile = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    let mut tile = prism_raster::Surface::new(PixelFormat::RGBA8);
     tile.fill_rect(Rect::new(0, 0, 1, 1), &[1.0, 0.0, 0.0, 1.0]);
     tile.fill_rect(Rect::new(1, 0, 2, 1), &[0.0, 0.0, 1.0, 1.0]);
     let pat = Pattern::new("rb", tile, 2, 1);
     let overlay = Effect::PatternOverlay {
-        common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        common: FxCommon::new(prism_color::BlendMode::Normal, 1.0),
         name: "rb".into(),
         id: pat.id.clone(),
         scale: 1.0,
@@ -1011,11 +1006,11 @@ fn channel_restrictions_keep_the_backdrop() {
     assert_eq!(channel_weights(&d.layers[1], ColorMode::Rgb), Some([1.0, 1.0, 0.0]));
 }
 
-fn range(black: [u8; 2], white: [u8; 2]) -> photocraft_doc::BlendRange {
-    photocraft_doc::BlendRange { black, white }
+fn range(black: [u8; 2], white: [u8; 2]) -> prism_doc::BlendRange {
+    prism_doc::BlendRange { black, white }
 }
 
-const FULL: photocraft_doc::BlendRange = photocraft_doc::BlendRange::FULL;
+const FULL: prism_doc::BlendRange = prism_doc::BlendRange::FULL;
 
 #[test]
 fn blend_if_this_layer_hides_by_the_layers_own_value() {
@@ -1132,8 +1127,8 @@ fn effect_maps_built_inside_parallel_tiles_do_not_deadlock() {
     // all wait on the same map (a rayon-parallel blur deadlocked here).
     let mut d = doc_white(900, 700);
     let mut l = solid_layer("fx", Rect::new(100, 100, 800, 600), [0.2, 0.4, 0.9, 1.0]);
-    l.effects.items = vec![photocraft_doc::Effect::default_drop_shadow()];
-    if let photocraft_doc::Effect::DropShadow(s) = &mut l.effects.items[0] {
+    l.effects.items = vec![prism_doc::Effect::default_drop_shadow()];
+    if let prism_doc::Effect::DropShadow(s) = &mut l.effects.items[0] {
         s.size = 30.0;
     }
     d.layers.push(l);
@@ -1308,7 +1303,7 @@ fn small_gradient_fill_matches_photoshop_at_all_depths() {
     let stops = vec![(0.0, Color::rgb(0.0, 0.0, 0.0)), (1.0, Color::rgb(1.0, 1.0, 1.0))];
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let mut d = Document::new("g", Size::new(4, 4), ColorMode::Rgb, depth);
-        let fill = Fill::gradient(stops.clone(), 30.0, 1.0, photocraft_doc::GradientStyle::Reflected, false);
+        let fill = Fill::gradient(stops.clone(), 30.0, 1.0, prism_doc::GradientStyle::Reflected, false);
         d.layers.push(Layer::new("g", LayerContent::Fill(fill)));
         let out = flatten(&d);
         for y in 0..4usize {
@@ -1324,16 +1319,16 @@ fn small_gradient_fill_matches_photoshop_at_all_depths() {
 /// A shape layer's gradient fill must render the same pixels as the compositor's gradient
 /// fill layers, for every non-default gradient field (midpoints, opacity stops, centre offset,
 /// dither, unsorted stops) and all five styles, in both frames: "Align with layer" on lays the
-/// gradient out over the shape's bounds, off over the canvas. `photocraft-vector` cannot
+/// gradient out over the shape's bounds, off over the canvas. `prism-vector` cannot
 /// depend on this crate, so it carries a copy of this ramp and geometry — this test is what
 /// keeps the two in step (only interior pixels, where the shape's coverage is exactly 1).
 #[test]
 fn shape_layer_gradients_match_fill_layers() {
-    use photocraft_doc::GradientStyle;
+    use prism_doc::GradientStyle;
     let canvas = Rect::new(0, 0, 64, 48);
     // rect(x, y, w, h): the shape spans (16, 8)–(64, 48), so its whole-pixel bounds sit strictly
     // inside the canvas — "Align with layer" then picks a different frame than the canvas.
-    let path = photocraft_vector::shapes::rect(16.0, 8.0, 48.0, 40.0);
+    let path = prism_vector::shapes::rect(16.0, 8.0, 48.0, 40.0);
     let layer_frame = Rect::new(16, 8, 64, 48);
     let grad = |style: GradientStyle, midpoints: Vec<f32>, opacity_stops: Vec<(f32, f32)>, offset: (f32, f32), dither: bool, unsorted: bool, align: bool| {
         let mut stops = vec![(0.0, Color::BLACK), (0.5, Color::rgb(1.0, 0.25, 0.5)), (1.0, Color::WHITE)];
@@ -1359,8 +1354,8 @@ fn shape_layer_gradients_match_fill_layers() {
                 let f = grad(style, mids.clone(), opac.clone(), *offset, *dither, *unsorted, align);
                 let frame = if align { layer_frame } else { canvas };
                 let want = gradient_fill::render(&f, canvas, frame);
-                let sh = photocraft_doc::vector::ShapeLayer { path: path.clone(), fill: Some(f), ..Default::default() };
-                let s = photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, canvas);
+                let sh = prism_doc::vector::ShapeLayer { path: path.clone(), fill: Some(f), ..Default::default() };
+                let s = prism_vector::render_shape(&sh, PixelFormat::RGBA8, canvas);
                 let mut worst = 0.0f32;
                 for y in 9..47 {
                     for x in 17..63 {
@@ -1547,16 +1542,16 @@ fn large_documents_thumbnail_from_a_proxy() {
     assert_eq!(at(90, 50), vec![255, 255, 255, 255]);
     // Effects don't scale with a proxy: such documents reduce the exact composite.
     assert!(proxy::proxy_faithful(&d));
-    d.layers[1].effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    d.layers[1].effects.items.push(prism_doc::Effect::default_drop_shadow());
     assert!(!proxy::proxy_faithful(&d));
 }
 
 /// Layers whose effect maps are built with nested Rayon work (a gradient fill's rows render in
 /// parallel), each carrying a different effect.
 fn nested_parallel_fx_doc() -> Document {
-    use photocraft_doc::{Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, StrokeFx, StrokePosition};
+    use prism_doc::{Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, StrokeFx, StrokePosition};
     let mut d = doc_white(512, 512);
-    let g = |a: f32| Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::rgb(0.2, 0.5, 0.9))], a, 1.0, photocraft_doc::GradientStyle::Linear, false);
+    let g = |a: f32| Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::rgb(0.2, 0.5, 0.9))], a, 1.0, prism_doc::GradientStyle::Linear, false);
     let mut shadow = Layer::new("shadow", LayerContent::Fill(g(0.0)));
     shadow.effects.items = vec![Effect::default_drop_shadow()];
     let mut stroke = Layer::new("stroke", LayerContent::Fill(g(45.0)));
@@ -1735,4 +1730,83 @@ fn clipped_brightness_and_desaturation_whiten_a_lighter_color_logo() {
     let p = px(&d, 0, 0);
     assert!(p[..3].iter().all(|v| *v * 255.0 >= 252.0), "logo whitened: {p:?}");
     assert!(close4(px(&d, 1, 0), yellow), "the yellow beside it is untouched");
+}
+
+/// The straightforward path `render_to_surface` replaces: one full composite, converted pixel
+/// by pixel, written, then pruned.
+fn surface_reference(doc: &Document, rect: Rect, fmt: PixelFormat, background: Option<[f32; 3]>) -> Surface {
+    let buf = render(doc, rect);
+    let buf = match background {
+        Some(bg) => buf.over_background(bg),
+        None => buf,
+    };
+    let data: Vec<f32> = buf.px.iter().flat_map(|p| prism_raster::from_rgba(&fmt, *p)).collect();
+    let mut s = Surface::new(fmt);
+    if !rect.is_empty() {
+        s.write_region(rect, &data);
+        s.prune();
+    }
+    s
+}
+
+fn gradient_doc(mode: ColorMode, sample: SampleType) -> Document {
+    let mut d = Document::new("t", Size::new(600, 520), mode, sample);
+    let fmt = d.pixel_format();
+    let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
+    let n = fmt.channels();
+    // A soft-edged blob away from the origin, leaving whole tiles empty around it.
+    let r = Rect::new(-40, 290, 430, 600);
+    let mut data = vec![0.0; r.width() as usize * r.height() as usize * n];
+    for (i, px) in data.chunks_exact_mut(n).enumerate() {
+        let (x, y) = ((i % r.width() as usize) as f32, (i / r.width() as usize) as f32);
+        for (c, v) in px.iter_mut().enumerate() {
+            *v = ((x * 0.013 + y * 0.007 + c as f32 * 0.21).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
+        }
+        px[n - 1] = (1.0 - x / r.width() as f32).clamp(0.0, 1.0);
+    }
+    let mut l = Layer::raster("blob", fmt);
+    l.surface_mut().unwrap().write_region(r, &data);
+    d.layers.push(l);
+    d
+}
+
+#[test]
+fn render_to_surface_matches_the_per_pixel_path() {
+    let modes = [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab];
+    let samples = [SampleType::U8, SampleType::U16, SampleType::F32];
+    // Tile-aligned, unaligned with a negative origin, and one row of pixels.
+    let rects = [Rect::new(0, 0, 600, 520), Rect::new(-37, -11, 590, 555), Rect::new(5, 300, 400, 301)];
+    for mode in modes {
+        for sample in samples {
+            let d = gradient_doc(mode, sample);
+            for alpha in [true, false] {
+                let fmt = PixelFormat::new(mode, sample, alpha);
+                let bg = (!alpha).then_some([1.0, 1.0, 1.0]);
+                for r in rects {
+                    let want = surface_reference(&d, r, fmt, bg);
+                    assert_eq!(render_to_surface(&d, r, fmt, bg), want, "{mode:?} {sample:?} alpha {alpha} {r:?}");
+                    // Bands of one tile row: raster tiles straddle bands when `r` is unaligned.
+                    assert_eq!(render_to_surface_in_bands(&d, r, fmt, bg, RENDER_TILE), want, "banded {mode:?} {sample:?} alpha {alpha} {r:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn render_to_surface_keeps_no_empty_tiles() {
+    let d = gradient_doc(ColorMode::Rgb, SampleType::U8);
+    let s = render_to_surface(&d, d.bounds(), PixelFormat::RGBA8, None);
+    assert!(s.tile_count() > 0);
+    let blank = s.default_bytes().to_vec();
+    assert!(s.tiles().all(|(_, t)| t.bytes().chunks_exact(blank.len()).any(|p| p != blank.as_slice())));
+    // The blob covers y ≥ 290 only: the top row of tiles stays absent.
+    assert!(s.tiles().all(|(c, _)| c.rect().y1 > 290));
+}
+
+#[test]
+fn render_to_surface_of_an_empty_rect_is_empty() {
+    let d = gradient_doc(ColorMode::Rgb, SampleType::U8);
+    assert_eq!(render_to_surface(&d, Rect::EMPTY, PixelFormat::RGBA8, None).tile_count(), 0);
+    assert_eq!(render_to_surface(&d, Rect::new(10, 10, 10, 50), PixelFormat::RGBA8, None).tile_count(), 0);
 }

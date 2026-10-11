@@ -1,9 +1,9 @@
 //! The command registry. Ids follow Photoshop's menu structure (see the parity checklist).
 
-use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
-use photocraft_doc::{Adjustment, Document, Fill, Layer, LayerContent, LayerId, LayerMask, Size};
-use photocraft_geom::Rect;
-use photocraft_raster::Surface;
+use prism_color::{BlendMode, Color, ColorMode, SampleType};
+use prism_doc::{Adjustment, Document, Fill, Layer, LayerContent, LayerId, LayerMask, Size};
+use prism_geom::Rect;
+use prism_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session, inspect, pixels};
@@ -66,7 +66,7 @@ pub(crate) fn has_paintable(s: &Session) -> std::result::Result<(), String> {
 }
 
 /// Surface a paint command writes to: the layer's pixels, or its mask with `"target":"mask"`.
-pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -> Result<&'a mut photocraft_raster::Surface> {
+pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -> Result<&'a mut prism_raster::Surface> {
     if !is_mask_target(p) {
         check_pixels_unlocked(doc, id)?;
     }
@@ -259,7 +259,7 @@ pub(crate) fn mask_new_layer(doc: &Document, l: &mut Layer, p: &Value, cmd: &str
         Some(v) => Some(crate::vector_cmds::parse_path(v).map_err(|e| bad(cmd, e))?),
     };
     match path {
-        Some(path) => l.vector_mask = Some(photocraft_doc::VectorMask::new(path)),
+        Some(path) => l.vector_mask = Some(prism_doc::VectorMask::new(path)),
         None => l.mask = selection_mask(doc),
     }
     Ok(())
@@ -408,7 +408,7 @@ fn build() -> Vec<CommandSpec> {
         // Select
         cmd!("select.all", "All", ["Select"], Some("Cmd+A"), "{}", has_doc, |s, _| {
             s.edit("Select All", |doc, _| {
-                let mut m = Surface::new(photocraft_color::PixelFormat::GRAY8);
+                let mut m = Surface::new(prism_color::PixelFormat::GRAY8);
                 m.fill_rect(doc.bounds(), &[1.0]);
                 doc.selection = Some(m);
                 Ok(())
@@ -424,10 +424,10 @@ fn build() -> Vec<CommandSpec> {
         }),
         cmd!("select.inverse", "Inverse", ["Select"], Some("Cmd+Shift+I"), "{}", has_selection, |s, _| {
             s.edit("Inverse", |doc, _| {
-                let old = doc.selection.take().unwrap_or_else(|| Surface::new(photocraft_color::PixelFormat::GRAY8));
+                let old = doc.selection.take().unwrap_or_else(|| Surface::new(prism_color::PixelFormat::GRAY8));
                 let b = doc.bounds();
                 let data: Vec<f32> = old.read_region(b).into_iter().map(|v| 1.0 - v).collect();
-                let mut m = Surface::new(photocraft_color::PixelFormat::GRAY8);
+                let mut m = Surface::new(prism_color::PixelFormat::GRAY8);
                 m.write_region(b, &data);
                 m.prune();
                 doc.selection = Some(m);
@@ -455,7 +455,7 @@ fn build() -> Vec<CommandSpec> {
                     // A marquee dragged past the canvas stops at its edge (Photoshop); the ellipse
                     // keeps the dragged shape and is only cut there.
                     let cut = r.intersect(&area);
-                    let mut shape = Surface::new(photocraft_color::PixelFormat::GRAY8);
+                    let mut shape = Surface::new(prism_color::PixelFormat::GRAY8);
                     if ellipse {
                         let (cx, cy) = ((r.x0 + r.x1) as f32 / 2.0, (r.y0 + r.y1) as f32 / 2.0);
                         let (rx, ry) = (r.width() as f32 / 2.0, r.height() as f32 / 2.0);
@@ -484,7 +484,7 @@ fn build() -> Vec<CommandSpec> {
                         shape.fill_rect(cut, &[1.0]);
                     }
                     if feather > 0.0 {
-                        use photocraft_algo::selection as sel;
+                        use prism_algo::selection as sel;
                         let m = sel::feather(&sel::mask_from_surface(Some(&shape), area), area.width() as usize, area.height() as usize, feather);
                         doc.selection = sel::combine(doc.selection.as_ref(), &m, area, sel::SelectionMode::parse(&mode));
                         return Ok(());
@@ -495,7 +495,7 @@ fn build() -> Vec<CommandSpec> {
                         ("subtract", Some(o)) => combine(&o, &shape, area, |a, b| a * (1.0 - b)),
                         ("intersect", Some(o)) => combine(&o, &shape, area, |a, b| a.min(b)),
                         // With no existing selection, neither operation can select new pixels.
-                        ("subtract" | "intersect", None) => Surface::new(photocraft_color::PixelFormat::GRAY8),
+                        ("subtract" | "intersect", None) => Surface::new(prism_color::PixelFormat::GRAY8),
                         _ => shape,
                     };
                     // Nothing selected on the canvas (e.g. dragged entirely outside it) deselects.
@@ -558,23 +558,32 @@ fn build() -> Vec<CommandSpec> {
                 Ok(json!({ "layer": nid.0 }))
             }
         ),
-        cmd!("layer.delete", "Delete Layer", ["Layer", "Delete"], None, r##"{"layer":id?} (no layer: every selected layer)"##, has_layer, |s, p| {
-            if crate::layer_multi_cmds::multi(s, p) {
-                return crate::layer_multi_cmds::delete_selected(s);
+        cmd!(
+            "layer.delete",
+            "Delete Layer",
+            ["Layer", "Delete"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer; cannot delete locked content; must leave at least one layer)"##,
+            crate::layer_multi_cmds::can_delete,
+            |s, p| {
+                crate::layer_multi_cmds::delete_enabled(s, p).map_err(EngineError::Other)?;
+                if crate::layer_multi_cmds::multi(s, p) {
+                    return crate::layer_multi_cmds::delete_selected(s);
+                }
+                let id = layer_param(s, p)?;
+                s.edit("Delete Layer", |doc, active| {
+                    doc.remove(id).ok_or(EngineError::NoLayer(id))?;
+                    if doc.layers.is_empty() {
+                        return Err(EngineError::Other("a document must keep at least one layer".into()));
+                    }
+                    if *active == Some(id) {
+                        *active = doc.top_layer();
+                    }
+                    Ok(())
+                })?;
+                Ok(Value::Null)
             }
-            let id = layer_param(s, p)?;
-            s.edit("Delete Layer", |doc, active| {
-                doc.remove(id).ok_or(EngineError::NoLayer(id))?;
-                if doc.layers.is_empty() {
-                    return Err(EngineError::Other("a document must keep at least one layer".into()));
-                }
-                if *active == Some(id) {
-                    *active = doc.top_layer();
-                }
-                Ok(())
-            })?;
-            Ok(Value::Null)
-        }),
+        ),
         cmd!(
             "layer.select",
             "Select Layer",
@@ -726,7 +735,7 @@ fn build() -> Vec<CommandSpec> {
                 let mut bg = Layer::raster("Background", fmt);
                 bg.locks.transparency = true;
                 bg.locks.position = true;
-                *crate::pixels_mut(&mut bg)? = photocraft_compose::flatten_to_surface(doc, fmt, Some([1.0, 1.0, 1.0]));
+                *crate::pixels_mut(&mut bg)? = prism_compose::flatten_to_surface(doc, fmt, Some([1.0, 1.0, 1.0]));
                 *active = Some(bg.id);
                 doc.layers = vec![bg];
                 Ok(())
@@ -840,13 +849,7 @@ fn build() -> Vec<CommandSpec> {
             destructive_adjust(
                 s,
                 "Desaturate",
-                Adjustment::HueSaturation {
-                    hue: 0.0,
-                    saturation: -100.0,
-                    lightness: 0.0,
-                    colorize: false,
-                    ranges: photocraft_doc::adjust::HueRange::defaults(),
-                },
+                Adjustment::HueSaturation { hue: 0.0, saturation: -100.0, lightness: 0.0, colorize: false, ranges: prism_doc::adjust::HueRange::defaults() },
                 &Value::Null,
             )
         }),
@@ -973,7 +976,7 @@ fn build() -> Vec<CommandSpec> {
                 let (x, y) = (coord("x")?, coord("y")?);
                 let d = s.active().ok_or(EngineError::NoDocument)?;
                 // At i32::MAX the 1x1 rect saturates to empty: a pixel that far out is transparent.
-                let px = photocraft_compose::render(&d.doc, Rect::from_xywh(x, y, 1, 1)).px.first().copied().unwrap_or_default();
+                let px = prism_compose::render(&d.doc, Rect::from_xywh(x, y, 1, 1)).px.first().copied().unwrap_or_default();
                 Ok(json!(px))
             },
             journal: false,
@@ -1092,6 +1095,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::gallery_cmds::specs());
     v.extend(crate::gradient_fill_cmds::specs());
     v.extend(crate::type_cmds::specs());
+    v.extend(crate::type_font_cmds::specs());
     v.extend(crate::transform_cmds::specs());
     v.extend(crate::float_cmds::specs());
     v.extend(crate::vector_cmds::specs());
@@ -1242,7 +1246,7 @@ fn combine(a: &Surface, b: &Surface, area: Rect, f: impl Fn(f32, f32) -> f32) ->
     let ra = a.read_region(area);
     let rb = b.read_region(area);
     let data: Vec<f32> = ra.iter().zip(&rb).map(|(x, y)| f(*x, *y)).collect();
-    let mut out = Surface::new(photocraft_color::PixelFormat::GRAY8);
+    let mut out = Surface::new(prism_color::PixelFormat::GRAY8);
     out.write_region(area, &data);
     out.prune();
     out
@@ -1264,7 +1268,7 @@ pub(crate) fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
     match &mut l.content {
         LayerContent::Raster(s) => *s = translate_surface(s, dx, dy),
         LayerContent::Text(t) => {
-            t.transform = photocraft_geom::Affine::translate(dx as f64, dy as f64).mul(&t.transform);
+            t.transform = prism_geom::Affine::translate(dx as f64, dy as f64).mul(&t.transform);
             crate::type_cmds::refresh(doc, t);
         }
         LayerContent::Group(g) => {

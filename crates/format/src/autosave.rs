@@ -2,7 +2,7 @@
 //! saves a document *snapshot* into a recovery directory on a background
 //! thread, so the UI never blocks.
 //!
-//! Layout: `<recovery_dir>/<key>.pcraft/` (directory bundles, so repeated
+//! Layout: `<recovery_dir>/<key>.prism/` (directory bundles, so repeated
 //! autosaves write only changed tiles) plus `<key>.json` with
 //! [`RecoveryInfo`]. Native targets only (threads and a filesystem).
 //!
@@ -16,11 +16,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use photocraft_doc::Document;
+use prism_doc::Document;
 use serde::{Deserialize, Serialize};
 
 use crate::store::write_atomic;
-use crate::{FormatError, PcraftWriter, Result, SaveOptions, SaveStats};
+use crate::{FormatError, PrismWriter, Result, SaveOptions, SaveStats};
 
 /// Sidecar describing an autosave.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -76,7 +76,7 @@ impl Autosaver {
         let (tx, rx) = mpsc::channel::<Job>();
         let last = Arc::new(Mutex::new(None));
         let completed = Arc::new(Mutex::new(Vec::new()));
-        let bundle = dir.join(format!("{key}.pcraft"));
+        let bundle = dir.join(format!("{key}.prism"));
         let sidecar = dir.join(format!("{key}.json"));
         let last2 = last.clone();
         let completed2 = completed.clone();
@@ -94,7 +94,7 @@ impl Autosaver {
     }
 
     pub fn bundle_path(&self) -> PathBuf {
-        self.dir.join(format!("{}.pcraft", self.key))
+        self.dir.join(format!("{}.prism", self.key))
     }
 
     /// Queue a snapshot for saving (returns immediately). Existing callers that only
@@ -158,7 +158,7 @@ impl Drop for Autosaver {
 }
 
 fn worker(rx: Receiver<Job>, bundle: PathBuf, sidecar: PathBuf, last: Arc<Mutex<Option<Result<SaveStats>>>>, completed: CompletedWrites) {
-    let mut writer = PcraftWriter::new();
+    let mut writer = PrismWriter::new();
     while let Ok(mut job) = rx.recv() {
         // Coalesce: skip to the newest queued snapshot.
         while let Ok(newer) = rx.try_recv() {
@@ -194,7 +194,9 @@ pub fn list_recovery(recovery_dir: &Path) -> Vec<RecoveryEntry> {
             && sanitize(&info.key) == info.key
             && p.file_stem().is_some_and(|stem| *stem == *info.key)
         {
-            let bundle = recovery_dir.join(format!("{}.pcraft", info.key));
+            let current = recovery_dir.join(format!("{}.prism", info.key));
+            let legacy = recovery_dir.join(format!("{}.pcraft", info.key));
+            let bundle = if current.join(crate::store::MANIFEST).is_file() { current } else { legacy };
             if bundle.join(crate::store::MANIFEST).is_file() {
                 out.push(RecoveryEntry { info, bundle });
             }
@@ -281,9 +283,14 @@ impl RecoveryStore {
 }
 
 fn remove_entry(dir: &Path, key: &str) -> Result<()> {
-    let bundle = dir.join(format!("{key}.pcraft"));
-    if bundle.exists() {
-        std::fs::remove_dir_all(bundle)?;
+    if sanitize(key) != key {
+        return Err(FormatError::Corrupt("invalid recovery key".into()));
+    }
+    for extension in [crate::EXTENSION, crate::LEGACY_EXTENSION] {
+        let bundle = dir.join(format!("{key}.{extension}"));
+        if bundle.exists() {
+            std::fs::remove_dir_all(bundle)?;
+        }
     }
     let sidecar = dir.join(format!("{key}.json"));
     if sidecar.exists() {
@@ -303,6 +310,15 @@ fn note(last: &Arc<Mutex<Option<Result<SaveStats>>>>, r: Result<SaveStats>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discard_rejects_keys_that_escape_the_recovery_directory() {
+        let root = std::env::temp_dir().join(format!("prism-recovery-key-{}", std::process::id()));
+        for key in ["../outside", "nested/name", "nested\\name", "", ".."] {
+            assert!(remove_entry(&root, key).is_err(), "{key}");
+        }
+        assert!(!root.exists());
+    }
 
     #[test]
     fn a_spawn_failure_is_reported_not_silent() {

@@ -15,7 +15,7 @@
   timestamp server, ...). Optional overrides: WINDOWS_TIMESTAMP_URL, SIGNTOOL (path to signtool.exe).
 
 .EXAMPLE
-  pwsh packaging/windows/sign.ps1 dist/photocraft.exe dist/Prism.msi
+  pwsh packaging/windows/sign.ps1 dist/prism.exe dist/Prism.msi
 #>
 param(
   [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]
@@ -56,7 +56,7 @@ if (-not $haveCert -and -not $haveAzure) {
 
 $script:SignTool = Find-SignTool
 $common = @('sign', '/v', '/fd', 'SHA256', '/td', 'SHA256', '/d', 'Prism', '/du', 'https://github.com/NK-Studio/prism')
-$tmp = Join-Path ([IO.Path]::GetTempPath()) "photocraft-sign-$PID"
+$tmp = Join-Path ([IO.Path]::GetTempPath()) "prism-sign-$PID"
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
 try {

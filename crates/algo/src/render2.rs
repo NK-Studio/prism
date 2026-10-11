@@ -11,8 +11,8 @@
 //! built from observation of what the options do, not from any reference
 //! implementation.
 
-use photocraft_geom::Rect;
-use photocraft_raster::{Surface, from_rgba_into, to_rgba};
+use prism_geom::Rect;
+use prism_raster::{Surface, from_rgba_into, to_rgba};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -1492,7 +1492,7 @@ pub fn picture_frame(spec: &FrameSpec, canvas: Rect) -> Vec<Prim> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use prism_color::{ColorMode, PixelFormat, SampleType};
 
     #[test]
     fn composite_draws_a_disc_and_respects_the_clip() {

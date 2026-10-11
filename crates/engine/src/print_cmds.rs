@@ -13,8 +13,8 @@
 
 use std::io::Write as _;
 
-use photocraft_color::ColorMode;
-use photocraft_doc::{Document, LayerContent, SmartSource};
+use prism_color::ColorMode;
+use prism_doc::{Document, LayerContent, SmartSource};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -214,8 +214,8 @@ fn print_image(doc: &Document, p: &Value, cmd: &str) -> Result<(PrintImage, Valu
         t.execute("image.mode.rgb", json!({}))?;
     }
     match handling {
-        "photocraftManages" | "photoshopManages" => {
-            let profile = p.get("printerProfile").and_then(Value::as_str).ok_or_else(|| bad(cmd, "\"photocraftManages\" needs a \"printerProfile\""))?;
+        "prismManages" | "photoshopManages" => {
+            let profile = p.get("printerProfile").and_then(Value::as_str).ok_or_else(|| bad(cmd, "\"prismManages\" needs a \"printerProfile\""))?;
             let intent = p.get("intent").and_then(Value::as_str).unwrap_or("relative");
             let bpc = p.get("bpc").and_then(Value::as_bool).unwrap_or(true);
             t.execute("edit.convertToProfile", json!({"profile": profile, "intent": intent, "bpc": bpc}))?;
@@ -224,15 +224,15 @@ fn print_image(doc: &Document, p: &Value, cmd: &str) -> Result<(PrintImage, Valu
             info["bpc"] = json!(bpc);
         }
         "printerManages" | "noColorManagement" => {}
-        "separations" => return Err(bad(cmd, "Separations printing is not supported; use photocraftManages with a CMYK printer profile")),
-        h => return Err(bad(cmd, format!("unknown colorHandling `{h}` (printerManages|photocraftManages|noColorManagement)"))),
+        "separations" => return Err(bad(cmd, "Separations printing is not supported; use prismManages with a CMYK printer profile")),
+        h => return Err(bad(cmd, format!("unknown colorHandling `{h}` (printerManages|prismManages|noColorManagement)"))),
     }
     let d = &t.active().ok_or(EngineError::NoDocument)?.doc;
     let icc = if handling == "noColorManagement" { None } else { d.icc_profile.as_ref().map(|v| v.to_vec()) };
     // RGB and Grayscale: the composite over white is the print image (no layer flatten).
     if matches!(d.mode, ColorMode::Rgb | ColorMode::Grayscale) {
         let gray = d.mode == ColorMode::Grayscale;
-        let buf = photocraft_compose::flatten(d).over_background([1.0, 1.0, 1.0]);
+        let buf = prism_compose::flatten(d).over_background([1.0, 1.0, 1.0]);
         let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         let data: Vec<u8> =
             if gray { buf.px.iter().map(|p| to8(p[0])).collect() } else { buf.px.iter().flat_map(|p| [to8(p[0]), to8(p[1]), to8(p[2])]).collect() };
@@ -402,15 +402,15 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     // The native format keeps external links; our PSD writer has no `lnkE` (external linked
     // file) support yet, so a PSD package would embed or flatten them.
     let ext = match p.get("format").and_then(Value::as_str) {
-        Some(f @ ("psd" | "psb" | "pcraft")) => f.to_string(),
-        Some(f) => return Err(bad(cmd, format!("unknown package format `{f}` (pcraft|psd|psb)"))),
-        None => "pcraft".into(),
+        Some(f @ ("psd" | "psb" | "prism")) => f.to_string(),
+        Some(f) => return Err(bad(cmd, format!("unknown package format `{f}` (prism|psd|psb)"))),
+        None => "prism".into(),
     };
     let folder = join(dir, &crate::file_cmds::sanitize(&name));
     let links_dir = join(&folder, "Links");
     // Copy every linked file once; relink the copy of the document to the copies.
     let mut copied: Vec<(String, String)> = Vec::new();
-    let mut relinks: Vec<(photocraft_doc::LayerId, String)> = Vec::new();
+    let mut relinks: Vec<(prism_doc::LayerId, String)> = Vec::new();
     let mut missing = Vec::new();
     for (_, _, l) in doc.walk() {
         let LayerContent::Smart(so) = &l.content else { continue };
@@ -457,7 +457,7 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let k = 72.0 / dpi;
     let (w, h) = (f64::from(doc.size.width) * k, f64::from(doc.size.height) * k);
-    let mut chosen: Vec<(String, &photocraft_doc::Path)> = Vec::new();
+    let mut chosen: Vec<(String, &prism_doc::Path)> = Vec::new();
     match which {
         "all" => {
             chosen.extend(doc.paths.iter().map(|p| (p.name.clone(), &p.path)));
@@ -544,7 +544,7 @@ pub fn specs() -> Vec<CommandSpec> {
             CommandSpec { id: $id, label: $label, menu: $menu, shortcut: $sc, params: $params, enabled: $enabled, journal: true, run: $run }
         };
     }
-    const PRINT_PARAMS: &str = r##"{"printer":name? (default printer),"copies":1..999=1,"paper":"letter|legal|tabloid|a3|a4|a5|4x6|5x7"|[w,h] pt="letter","orientation":"portrait|landscape"="portrait","center":bool=true,"top":in?,"left":in?,"scale":%=100,"scaleToFit":bool=false,"colorHandling":"printerManages|photocraftManages|noColorManagement"="printerManages","printerProfile":profile? (photocraftManages),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"cornerCropMarks":bool,"centerCropMarks":bool,"registrationMarks":bool,"description":bool,"labels":bool,"output":pdf path? (print to PDF; then "send" defaults to false),"send":bool?,"dryRun":bool=false (render the PDF, report the lp command, don't spool)} → {pdf, imageRect, command, sent}"##;
+    const PRINT_PARAMS: &str = r##"{"printer":name? (default printer),"copies":1..999=1,"paper":"letter|legal|tabloid|a3|a4|a5|4x6|5x7"|[w,h] pt="letter","orientation":"portrait|landscape"="portrait","center":bool=true,"top":in?,"left":in?,"scale":%=100,"scaleToFit":bool=false,"colorHandling":"printerManages|prismManages|noColorManagement"="printerManages","printerProfile":profile? (prismManages),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"cornerCropMarks":bool,"centerCropMarks":bool,"registrationMarks":bool,"description":bool,"labels":bool,"output":pdf path? (print to PDF; then "send" defaults to false),"send":bool?,"dryRun":bool=false (render the PDF, report the lp command, don't spool)} → {pdf, imageRect, command, sent}"##;
     vec![
         spec!("file.print", "Print…", &["File"], Some("Cmd+P"), PRINT_PARAMS, native_doc, print),
         spec!(
@@ -561,7 +561,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Package…",
             &["File"],
             None,
-            r##"{"dir":folder,"format":"pcraft|psd|psb"="pcraft"} → {folder, document, links, missing} (copies the document and its linked files into <dir>/<name>/, relinked to Links/)"##,
+            r##"{"dir":folder,"format":"prism|psd|psb"="prism"} → {folder, document, links, missing} (copies the document and its linked files into <dir>/<name>/, relinked to Links/)"##,
             native_doc,
             package
         ),

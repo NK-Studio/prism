@@ -46,7 +46,7 @@ impl Options {
 
     fn build_command(&self) -> Command {
         let mut cmd = crate::cargo();
-        cmd.args([if self.check { "check" } else { "build" }, "--profile", "fast", "-p", "photocraft", "--locked", "--message-format=json-render-diagnostics"]);
+        cmd.args([if self.check { "check" } else { "build" }, "--profile", "fast", "-p", "prism", "--locked", "--message-format=json-render-diagnostics"]);
         if let Some(features) = &self.features {
             cmd.args(["--features", features]);
         }
@@ -85,7 +85,7 @@ fn compiler_cache(cmd: &mut Command, options: &Options) {
 
 fn artifact(message: &str) -> Option<PathBuf> {
     let value: serde_json::Value = serde_json::from_str(message).ok()?;
-    if value.get("reason")?.as_str()? != "compiler-artifact" || value.get("target")?.get("name")?.as_str()? != "photocraft" {
+    if value.get("reason")?.as_str()? != "compiler-artifact" || value.get("target")?.get("name")?.as_str()? != "prism" {
         return None;
     }
     value.get("executable")?.as_str().map(PathBuf::from)
@@ -174,7 +174,7 @@ fn macos_bundle(executable: &Path) -> Result<PathBuf, String> {
     let plist = template.replace("@VERSION@", version).replace("@SHORT_VERSION@", short).replace("@BUILD_SHA@", &sha);
     let mut files = vec![
         (PathBuf::from("Contents/MacOS/Prism"), executable.to_path_buf()),
-        (PathBuf::from("Contents/Resources/Prism.icns"), root.join("assets/app-icon/photocraft.icns")),
+        (PathBuf::from("Contents/Resources/Prism.icns"), root.join("assets/app-icon/prism.icns")),
     ];
     if let Some(fonts) = std::env::var_os("CRAFT_FONTS_DIR").filter(|p| !p.is_empty()) {
         let families = PathBuf::from(fonts).join("fonts");
@@ -271,8 +271,8 @@ mod tests {
     #[test]
     fn cargo_artifact_handles_custom_target_directory_and_nonartifact_messages() {
         assert_eq!(
-            artifact(r#"{"reason":"compiler-artifact","target":{"name":"photocraft"},"executable":"/tmp/custom build/fast/photocraft"}"#),
-            Some(PathBuf::from("/tmp/custom build/fast/photocraft"))
+            artifact(r#"{"reason":"compiler-artifact","target":{"name":"prism"},"executable":"/tmp/custom build/fast/prism"}"#),
+            Some(PathBuf::from("/tmp/custom build/fast/prism"))
         );
         for line in ["not json", "{}", r#"{"reason":"compiler-artifact","target":{"name":"other"},"executable":"other"}"#] {
             assert!(artifact(line).is_none());

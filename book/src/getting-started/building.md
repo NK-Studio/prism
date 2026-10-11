@@ -4,8 +4,8 @@ Prism uses the Rust workspace at the repository root. Install the stable Rust to
 
 ```sh
 cargo build --workspace
-cargo run --release -p photocraft -- image.psd
-cargo run -p photocraft-cli -- --help
+cargo run --release -p prism -- image.psd
+cargo run -p prism-cli -- --help
 ```
 
 The standard repository gates are:

@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Prism MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
+
+    wix build prism.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+
+  Per-machine install into Program Files, a Start Menu shortcut, `.prism` owned by Prism,
+  and Prism offered under "Open with" for PSD/PSB and the image formats it reads (without
+  taking over the user's default app for them).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="Prism"
+      Manufacturer="NK Studio"
+      Version="$(var.Version)"
+      UpgradeCode="D9660F32-2D0A-4ABE-B73D-17BE25F1542C"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="Prism image editor" Manufacturer="NK Studio" />
+    <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
+         (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of Prism is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- MSI caches this icon using its Id as the filename. Advertised shortcuts to an
+         .exe need an .exe icon identifier (ICE50), even when the source is an ICO. -->
+    <Icon Id="PrismIcon.exe" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="PrismIcon.exe" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/NK-Studio/prism" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/NK-Studio/prism" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="Prism" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="Prism" Level="1">
+      <ComponentGroupRef Id="PrismFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="PrismFiles" Directory="INSTALLFOLDER">
+      <Component Id="PrismApp" Guid="A6DE41B7-A80F-4C59-A17E-BB68065BF67E">
+        <File Id="PrismExe" Source="$(var.BinDir)\prism.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="Prism"
+              Description="Prism image editor" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="PrismIcon.exe" IconIndex="0" />
+        </File>
+
+        <!-- .prism: Prism's own format; Prism is its default app. -->
+        <ProgId Id="Prism.Document" Description="Prism Document" Icon="PrismExe" IconIndex="0">
+          <Extension Id="prism" ContentType="application/x-prism">
+            <Verb Id="open" Command="Open" TargetFile="PrismExe" Argument="&quot;%1&quot;" />
+          </Extension>
+          <Extension Id="pcraft" ContentType="application/x-prism">
+            <Verb Id="open" Command="Open" TargetFile="PrismExe" Argument="&quot;%1&quot;" />
+          </Extension>
+        </ProgId>
+        <!-- PSD/PSB and images: offered under "Open with", never forced as the default. -->
+        <ProgId Id="Prism.PhotoshopDocument" Description="Photoshop Document" Icon="PrismExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Prism.PhotoshopDocument\shell\open\command" Value="&quot;[#PrismExe]&quot; &quot;%1&quot;" Type="string" />
+        <ProgId Id="Prism.Image" Description="Image" Icon="PrismExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Prism.Image\shell\open\command" Value="&quot;[#PrismExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.psd\OpenWithProgids" Name="Prism.PhotoshopDocument" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.psb\OpenWithProgids" Name="Prism.PhotoshopDocument" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.png\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.jpg\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.jpeg\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.tif\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.tiff\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.webp\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.gif\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.bmp\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.tga\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.exr\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.hdr\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.avif\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.qoi\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.ico\OpenWithProgids" Name="Prism.Image" Value="" Type="string" />
+
+        <!-- "Open with" app list and the Run dialog (Win+R "prism"). -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe" Name="FriendlyAppName" Value="Prism" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\shell\open\command" Value="&quot;[#PrismExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".prism" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".psd" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".psb" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".png" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".jpg" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".jpeg" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".tif" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".tiff" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".webp" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".gif" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".bmp" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".tga" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".exr" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".hdr" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".avif" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".qoi" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\prism.exe\SupportedTypes" Name=".ico" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\prism.exe" Value="[#PrismExe]" Type="string" />
+      </Component>
+
+      <Component Id="PrismCli">
+        <File Id="PrismCliExe" Source="$(var.BinDir)\prism-cli.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

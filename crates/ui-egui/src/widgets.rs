@@ -1,4 +1,4 @@
-//! Custom widgets for the Photocraft look: cards with pill tabs, thin sliders with round knobs,
+//! Custom widgets for the Prism look: cards with pill tabs, thin sliders with round knobs,
 //! monospace value fields with dimmed units, toggle switches, primary/secondary buttons.
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
@@ -664,6 +664,54 @@ pub fn dialog_buttons(ui: &mut Ui, buttons: &[DialogButton]) -> Option<ButtonRol
     .inner
 }
 
+/// A macOS alert's button column: every button `width` wide, stacked top to bottom with the
+/// default answer first, then the other answers, then Cancel (Save, Don't Save, Cancel).
+/// Tab walks them top to bottom. Returns the role of the button clicked this frame.
+pub fn dialog_buttons_stacked(ui: &mut Ui, buttons: &[DialogButton], width: f32) -> Option<ButtonRole> {
+    let order = |r: ButtonRole| match r {
+        ButtonRole::Default => 0,
+        ButtonRole::Alternate => 1,
+        ButtonRole::Apply => 2,
+        ButtonRole::Cancel => 3,
+    };
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 8.0;
+        let mut hit = None;
+        for slot in 0..4 {
+            for b in buttons.iter().filter(|b| order(b.role) == slot) {
+                let r = ui
+                    .add_enabled_ui(b.enabled, |ui| {
+                        if b.role == ButtonRole::Default { primary_button(ui, b.label, width) } else { secondary_button(ui, b.label, width) }
+                    })
+                    .inner;
+                if r.clicked() {
+                    hit = Some(b.role);
+                }
+            }
+        }
+        hit
+    })
+    .inner
+}
+
+/// The caution sign at the top of an alert: a `size`-square amber triangle with an exclamation mark.
+pub fn caution_icon(ui: &mut Ui, size: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+    // Inset by half the stroke, which rounds the corners, so the sign stays inside its square.
+    let inset = rect.shrink(size * 0.05);
+    let (top, left, right) =
+        (pos2(inset.center().x, inset.top()), pos2(inset.left(), inset.bottom() - size * 0.06), inset.right_bottom() - vec2(0.0, size * 0.06));
+    let p = ui.painter();
+    p.add(egui::Shape::convex_polygon(vec![top, right, left], t.warning, Stroke::new(size * 0.08, t.warning)));
+    // The glyph is a fixed sign, like an icon image: dark ink on amber in every theme.
+    let ink = Color32::from_rgb(0x2a, 0x22, 0x10);
+    let x = rect.center().x;
+    p.line_segment([pos2(x, rect.top() + size * 0.36), pos2(x, rect.top() + size * 0.66)], Stroke::new(size * 0.1, ink));
+    p.circle_filled(pos2(x, rect.top() + size * 0.79), size * 0.055, ink);
+    resp
+}
+
 /// The size of a primary or secondary button: its label plus padding, at least `min_width` wide.
 fn button_size(ui: &Ui, label: &str, min_width: f32) -> Vec2 {
     button_layout(ui, label, min_width, Tokens::get(ui.ctx()).text).1
@@ -727,7 +775,7 @@ fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color3
 }
 
 /// Cached RGB data; drawing work is bounded by the 256 display bins, never the image size.
-pub fn rgb_histogram(ui: &mut Ui, histogram: &photocraft_algo::histogram::RgbHistogram, height: f32) -> egui::Response {
+pub fn rgb_histogram(ui: &mut Ui, histogram: &prism_algo::histogram::RgbHistogram, height: f32) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), height.max(1.0)), egui::Sense::hover());
     ui.painter().rect_filled(rect, t.radius_sm, t.histogram_background());
@@ -1106,7 +1154,7 @@ mod tests {
             },
             false,
         );
-        crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        crate::PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         h.ctx.set_os(os);
         *h.state_mut() = true;
         h.run();
@@ -1353,9 +1401,9 @@ mod screen_color_tests {
             ..Default::default()
         };
         let original = [0.123456, 0.234567, 0.345678];
-        let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let app = crate::PrismApp::new(prism_engine::Session::new(), services);
         let mut h = Harness::builder().with_size(vec2(600.0, 500.0)).build_ui_state(
-            |ui, state: &mut (crate::PhotocraftApp, [f32; 3])| {
+            |ui, state: &mut (crate::PrismApp, [f32; 3])| {
                 crate::screen_picker::tick(&mut state.0, ui.ctx());
                 color_edit_button_rgb(ui, &mut state.1);
             },
@@ -1389,9 +1437,9 @@ mod screen_color_tests {
                 })),
                 ..Default::default()
             };
-            let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            let app = crate::PrismApp::new(prism_engine::Session::new(), services);
             let mut h = Harness::builder().with_size(vec2(600.0, 500.0)).build_ui_state(
-                |ui, state: &mut (crate::PhotocraftApp, Color32, bool)| {
+                |ui, state: &mut (crate::PrismApp, Color32, bool)| {
                     crate::screen_picker::tick(&mut state.0, ui.ctx());
                     state.2 = color_edit_button_srgba(ui, &mut state.1).changed();
                 },

@@ -5,7 +5,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
-use crate::{PhotocraftApp, dock::Group, theme::ThemeKind};
+use crate::{PrismApp, dock::Group, theme::ThemeKind};
 
 fn hover<T>(h: &mut Harness<'_, T>, at: Pos2) -> CursorIcon {
     h.hover_at(at);
@@ -16,15 +16,15 @@ fn hover<T>(h: &mut Harness<'_, T>, at: Pos2) -> CursorIcon {
 #[test]
 fn layer_rows_tabs_panel_menu_and_footer_have_click_cursors() {
     for kind in ThemeKind::ALL {
-        let mut session = photocraft_engine::Session::new();
+        let mut session = prism_engine::Session::new();
         session.execute("prefs.set", json!({"values":{"interface.theme":kind.id()}})).unwrap();
         session.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
         let layer = session.execute("layer.new.layer", json!({"name": "Paint"})).unwrap()["layer"].as_u64().unwrap();
         session.execute("layer.layerMask.revealAll", json!({})).unwrap();
         session.execute("layer.layerStyle.dropShadow", json!({})).unwrap();
         let mut h = Harness::builder().with_size(vec2(1440.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, kind);
-            let mut app = PhotocraftApp::new(session, crate::Services::default());
+            PrismApp::setup_context(&cc.egui_ctx, kind);
+            let mut app = PrismApp::new(session, crate::Services::default());
             app.ui.theme = kind;
             for group in [Group::Color, Group::Properties, Group::History, Group::Navigator] {
                 app.ui.dock.set_collapsed(group, true);
@@ -86,7 +86,7 @@ fn disabled_buttons_and_numeric_fields_keep_their_appropriate_cursors() {
 #[test]
 fn layer_hover_is_blue_over_name_and_thumbnail_and_selection_keeps_its_style() {
     for kind in ThemeKind::ALL {
-        let mut session = photocraft_engine::Session::new();
+        let mut session = prism_engine::Session::new();
         session.execute("prefs.set", json!({"values":{"interface.theme":kind.id()}})).unwrap();
         session.execute("file.new", json!({"width":64,"height":48})).unwrap();
         let background = session.active().unwrap().active_layer.unwrap().0;
@@ -96,8 +96,8 @@ fn layer_hover_is_blue_over_name_and_thumbnail_and_selection_keeps_its_style() {
         let builder = Harness::builder().with_size(vec2(1440.0, 1000.0)).with_pixels_per_point(scale).with_max_steps(64);
         let builder = if capture.is_some() { builder.wgpu() } else { builder };
         let mut h = builder.build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, kind);
-            let mut app = PhotocraftApp::new(session, Default::default());
+            PrismApp::setup_context(&cc.egui_ctx, kind);
+            let mut app = PrismApp::new(session, Default::default());
             app.ui.theme = kind;
             for group in [Group::Color, Group::Properties, Group::History, Group::Navigator] {
                 app.ui.dock.set_collapsed(group, true);
@@ -108,7 +108,7 @@ fn layer_hover_is_blue_over_name_and_thumbnail_and_selection_keeps_its_style() {
         assert_eq!(h.state().ui.theme, kind);
         let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == background).unwrap();
         let t = crate::theme::Tokens::for_kind(kind);
-        let painted_blue = |h: &Harness<'_, PhotocraftApp>| {
+        let painted_blue = |h: &Harness<'_, PrismApp>| {
             h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == t.layer_hover && r.rect.contains(row.row.center())))
         };
         let history = h.state().session.active().unwrap().history.past_len();

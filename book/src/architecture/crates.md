@@ -8,7 +8,7 @@ The layer numbers below describe allowed dependency direction, not runtime privi
 | L0 standalone | `psd`, `codecs`, `affinity` | PSD/PSB and flat raster format parsing/encoding; bounded Affinity preview extraction |
 | L1 | `doc` | Pure-data documents, layers, masks, effects, adjustments, text, vectors, and smart objects |
 | L2 | `ops`, `paint`, `algo`, `text`, `vector` | History operations, painting, imaging algorithms, type, paths, and shapes |
-| L3 | `compose`, `gpu`, `format` | CPU composition, wgpu composition, and `.pcraft` persistence |
+| L3 | `compose`, `gpu`, `format` | CPU composition, wgpu composition, and `.prism` persistence |
 | L4 | `io` | Import/export between the document model and external formats |
 | L5 | `engine` | `Session`, command registry, validation, history integration, and inspection |
 | L6 | `ui-egui`, `automation` | egui shell, headless automation, MCP, and the live bridge |
@@ -18,7 +18,7 @@ Workspace applications are:
 
 | Application | Path | Purpose |
 |---|---|---|
-| Prism desktop | `apps/photocraft` | eframe/wgpu application and loopback control server |
-| Prism CLI | `apps/photocraft-cli` | Convert, inspect, run, batch, JSON-lines serve, and MCP |
+| Prism desktop | `apps/prism` | eframe/wgpu application and loopback control server |
+| Prism CLI | `apps/prism-cli` | Convert, inspect, run, batch, JSON-lines serve, and MCP |
 
 New crates must be registered in `xtask/src/layers.rs`. Nothing below `ui-egui` may depend on egui, eframe, winit, or rfd. The `psd`, `codecs`, and `cms` crates have additional independence requirements documented in [`AGENTS.md`](https://github.com/NK-Studio/prism/blob/main/AGENTS.md).

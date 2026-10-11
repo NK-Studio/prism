@@ -3,12 +3,12 @@
 //! `edit.transform`, `layer.translate`, `layer.align.*` and selection commands.
 
 use egui::{Rect, Sense, Stroke, pos2, vec2};
-use photocraft_doc::{Layer, LayerContent};
+use prism_doc::{Layer, LayerContent};
 use serde_json::{Value, json};
 
 use crate::props_layout::{LABEL_GAP, LABEL_W, quick_actions_ui, section};
 use crate::theme::{ROW_GAP, Tokens};
-use crate::{PhotocraftApp, widgets};
+use crate::{PrismApp, widgets};
 
 /// `edit.transform` params that scale the content box `b` = [x0, y0, x1, y1] to `w` x `h`, keeping
 /// the top-left corner (Photoshop's Properties W/H fields), or `layer.translate` params for X/Y.
@@ -94,7 +94,11 @@ const LINK_W: f32 = 20.0;
 /// Pro Properties body for a non-adjustment layer: Transform, Align and Distribute, the kind's own
 /// sections (Character/Paragraph/Type Options for type, Appearance/Shape for shapes), then Quick
 /// Actions, all with the same collapsible headers (#155).
-pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
+pub fn properties(app: &mut PrismApp, ui: &mut egui::Ui, layer: &Layer) {
+    let arrow = matches!(&layer.content, LayerContent::Shape(sh) if matches!(sh.live, Some(prism_doc::LiveShape::Arrow { .. })));
+    if arrow {
+        crate::vector_ui::shape_properties(app, ui, layer.id);
+    }
     let t = Tokens::get(ui.ctx());
     let mut run: Vec<(String, Value)> = Vec::new();
     if let Some(s) = layer.surface() {
@@ -132,7 +136,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         }
     }
     // Gradient fills: their gradient first, as in Photoshop's Properties panel.
-    if matches!(layer.content, LayerContent::Fill(photocraft_doc::Fill::Gradient { .. })) {
+    if matches!(layer.content, LayerContent::Fill(prism_doc::Fill::Gradient { .. })) {
         crate::gradient_ui::properties(app, ui, layer);
     }
     if section(ui, "align", tl!("Align and Distribute")) {
@@ -144,7 +148,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
                 }
                 let id = format!("layer.align.{kind}");
                 let on = app.session.is_enabled(&id);
-                let label = photocraft_engine::commands::find(&id).map_or(kind, |c| c.label);
+                let label = prism_engine::commands::find(&id).map_or(kind, |c| c.label);
                 let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), if on { Sense::click() } else { Sense::hover() });
                 if resp.hovered() && on {
                     ui.painter().rect_filled(r, t.radius_sm, t.hover);
@@ -165,7 +169,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     }
     match &layer.content {
         LayerContent::Text(_) => crate::type_tool::type_properties(app, ui),
-        LayerContent::Shape(_) => crate::vector_ui::shape_properties(app, ui, layer.id),
+        LayerContent::Shape(_) if !arrow => crate::vector_ui::shape_properties(app, ui, layer.id),
         _ => {}
     }
     // Re-read: a section above may have changed the layer (e.g. point to paragraph type).
@@ -196,7 +200,7 @@ mod tests {
 
     #[test]
     fn transform_params_resize_a_layer_in_the_engine() {
-        let mut s = photocraft_engine::Session::new();
+        let mut s = prism_engine::Session::new();
         s.execute("file.new", json!({"width": 200, "height": 200, "background": "transparent"})).unwrap();
         s.execute("select.rect", json!({"x": 10, "y": 20, "width": 100, "height": 50})).unwrap();
         s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
-use photocraft_format::atomic::RenameRetry;
+use prism_format::atomic::RenameRetry;
 use serde_json::Value;
 
 use crate::AutomationError;
@@ -47,12 +47,12 @@ impl AuthorizedWorkspace {
             return Err(AutomationError::BadRequest(format!("automation read path is not a regular file: `{path}`")));
         }
         // Bounded reads, and a clear error for a file larger than memory (#375).
-        photocraft_format::read::read_all(&mut file, metadata.len()).map_err(|e| file_error("read", path, e))
+        prism_format::read::read_all(&mut file, metadata.len()).map_err(|e| file_error("read", path, e))
     }
 
     /// Create or replace one file below the configured write root, crash-safely: the bytes go to
     /// a temporary file beside the target, which is synced and renamed over it (the same steps
-    /// as [`photocraft_format::atomic_write`], through the directory capability). On failure
+    /// as [`prism_format::atomic_write`], through the directory capability). On failure
     /// the previous file is untouched and the temporary file is removed.
     ///
     /// The parent directory must already exist. `cap-std` performs path
@@ -63,15 +63,15 @@ impl AuthorizedWorkspace {
         let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
         let leaf = relative.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let parent = relative.parent().map(Path::to_path_buf).unwrap_or_default();
-        let tmp = parent.join(photocraft_format::atomic::temp_name(&leaf));
+        let tmp = parent.join(prism_format::atomic::temp_name(&leaf));
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         let written = root.dir.open_with(&tmp, &options).and_then(|mut file| {
             file.write_all(bytes)?;
             // Falls back to a plain fsync on shares that refuse a full flush (#1336).
-            photocraft_format::atomic::sync_file(&file.into_std())
+            prism_format::atomic::sync_file(&file.into_std())
         });
-        let renamed = written.and_then(|()| photocraft_format::atomic::retry_rename(RenameRetry::platform(), || root.dir.rename(&tmp, &root.dir, &relative)));
+        let renamed = written.and_then(|()| prism_format::atomic::retry_rename(RenameRetry::platform(), || root.dir.rename(&tmp, &root.dir, &relative)));
         if let Err(e) = renamed {
             let _ = root.dir.remove_file(&tmp);
             return Err(file_error("write", path, e));
@@ -81,7 +81,7 @@ impl AuthorizedWorkspace {
         {
             let dir = if parent.as_os_str().is_empty() { PathBuf::from(".") } else { parent };
             if let Ok(d) = root.dir.open(&dir) {
-                let _ = photocraft_format::atomic::sync_file(&d.into_std());
+                let _ = prism_format::atomic::sync_file(&d.into_std());
             }
         }
         Ok(())
@@ -202,15 +202,15 @@ pub fn authorize_desktop_engine_command(id: &str, params: &Value) -> Result<(), 
     Ok(())
 }
 
-/// [`authorize_engine_command`] as the function pointer [`photocraft_engine::Session::authorize`]
+/// [`authorize_engine_command`] as the function pointer [`prism_engine::Session::authorize`]
 /// stores. `actions.play` calls it for every nested step.
-pub fn authorize_engine_step(id: &str, params: &Value) -> photocraft_engine::Result<()> {
-    authorize_engine_command(id, params).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
+pub fn authorize_engine_step(id: &str, params: &Value) -> prism_engine::Result<()> {
+    authorize_engine_command(id, params).map_err(|e| prism_engine::EngineError::Other(e.to_string()))
 }
 
-/// [`authorize_desktop_engine_command`] as a [`photocraft_engine::Session::authorize`] hook.
-pub fn authorize_desktop_engine_step(id: &str, params: &Value) -> photocraft_engine::Result<()> {
-    authorize_desktop_engine_command(id, params).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
+/// [`authorize_desktop_engine_command`] as a [`prism_engine::Session::authorize`] hook.
+pub fn authorize_desktop_engine_step(id: &str, params: &Value) -> prism_engine::Result<()> {
+    authorize_desktop_engine_command(id, params).map_err(|e| prism_engine::EngineError::Other(e.to_string()))
 }
 
 fn params_contain_ambient_path(id: &str, params: &Value) -> bool {
@@ -343,7 +343,7 @@ mod tests {
     use super::*;
 
     fn roots(name: &str) -> (PathBuf, PathBuf, AuthorizedWorkspace) {
-        let base = std::env::temp_dir().join(format!("photocraft-workspace-{}-{name}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("prism-workspace-{}-{name}", std::process::id()));
         let inside = base.join("inside");
         let outside = base.join("outside");
         let _ = std::fs::remove_dir_all(&base);
@@ -547,13 +547,13 @@ mod tests {
         assert!(authorize_engine_step("file.open", &serde_json::json!({})).is_err());
         assert!(authorize_engine_step("actions.play", &serde_json::json!({})).is_ok());
         // An allowed command can't reach a denied one by running it on its own behalf.
-        let mut session = photocraft_engine::Session::new();
+        let mut session = prism_engine::Session::new();
         session.execute("file.new", serde_json::json!({"width": 4, "height": 4})).unwrap();
         session.authorize = Some(authorize_desktop_engine_step);
         let params = serde_json::json!({"to": "grayscale"});
         assert!(authorize_desktop_engine_command("file.automate.conditionalModeChange", &params).is_ok());
         assert!(session.execute("file.automate.conditionalModeChange", params).is_err());
-        assert_eq!(session.active().unwrap().doc.mode, photocraft_engine::doc::ColorMode::Rgb);
+        assert_eq!(session.active().unwrap().doc.mode, prism_engine::doc::ColorMode::Rgb);
         assert!(authorize_desktop_engine_step("file.saveACopy", &serde_json::json!({})).is_err());
     }
 
@@ -632,19 +632,19 @@ mod tests {
     #[test]
     fn registry_filesystem_path_params_are_classified() {
         let probe = serde_json::json!({
-            "path": "/outside/photocraft-probe",
-            "file": "/outside/photocraft-probe.icc",
-            "mapPath": "/outside/photocraft-probe.png",
-            "profile": "/outside/photocraft-probe.icc",
-            "workingRgb": "/outside/photocraft-probe.icc",
-            "workingCmyk": "/outside/photocraft-probe.icc",
-            "workingGray": "/outside/photocraft-probe.icc",
-            "input": "/outside/photocraft-input",
-            "output": "/outside/photocraft-output",
-            "paths": ["/outside/photocraft-probe.psd"],
+            "path": "/outside/prism-probe",
+            "file": "/outside/prism-probe.icc",
+            "mapPath": "/outside/prism-probe.png",
+            "profile": "/outside/prism-probe.icc",
+            "workingRgb": "/outside/prism-probe.icc",
+            "workingCmyk": "/outside/prism-probe.icc",
+            "workingGray": "/outside/prism-probe.icc",
+            "input": "/outside/prism-input",
+            "output": "/outside/prism-output",
+            "paths": ["/outside/prism-probe.psd"],
         });
         let preference_probe = serde_json::json!({"path": ".scriptEvents", "value": {}});
-        let unclassified: Vec<_> = photocraft_engine::command_specs()
+        let unclassified: Vec<_> = prism_engine::command_specs()
             .iter()
             .filter(|spec| documents_filesystem_path_params(spec.id, spec.params))
             .filter(|spec| {

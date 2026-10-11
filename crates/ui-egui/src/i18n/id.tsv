@@ -9,7 +9,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Indonesian computing vocabulary (layer, kuas, seleksi, kanvas ...). No proprietary localisation
 # resource, string table or product UI was consulted or copied; add entries the same way.
-# Product and technology names (Prism, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
+# Product and technology names (Prism, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing "…" of dialog commands is kept.
 	File	Berkas
 	Edit	Edit
@@ -685,8 +685,6 @@
 	About Prism	Tentang Prism
 	Prism Website	Situs Web Prism
 	Prism on GitHub	Prism di GitHub
-	ArtCraft Website	Situs Web ArtCraft
-	Join the ArtCraft Discord…	Gabung ke Discord ArtCraft…
 	Report an Issue…	Laporkan Masalah…
 	WIA Support…	Dukungan WIA…
 	Apply	Terapkan
@@ -943,7 +941,6 @@
 	Diffusion	Difusi
 	Discard the embedded profile (don't color manage)	Buang profil tertanam (tanpa manajemen warna)
 	Discontiguous	Tidak Berdekatan
-	Discord	Discord
 	Dismiss	Tutup
 	Display P3	Display P3
 	Display Text	Teks Tampilan
@@ -1069,7 +1066,6 @@
 	Invert All	Balikkan Semua
 	Invert has no settings.	Invert tidak punya pengaturan.
 	Italic	Miring
-	Join us on Discord	Gabung bareng kami di Discord
 	Justify all	Rata penuh semua
 	Justify last centered	Rata penuh, baris terakhir di tengah
 	Justify last left	Rata penuh, baris terakhir di kiri
@@ -1457,7 +1453,6 @@
 	Apple Watch 45mm	Apple Watch 45mm
 	Aqua	Aqua
 	Art & Illustration	Seni & Ilustrasi
-	ArtCraft	ArtCraft
 	Background Eraser Tool	Alat Background Eraser
 	Bevel & Emboss	Bevel & Emboss
 	Blend Mode	Mode Blend
@@ -2661,3 +2656,50 @@ fontWeight	Italic	Miring
 	{name} copy	{name} salinan
 	Duplicate Image	Duplikat Gambar
 	Preparing preview…	Menyiapkan pratinjau…
+
+	Load Font File…	Muat berkas font…
+	Favorite	Tambahkan ke favorit
+	Unfavorite	Hapus dari favorit
+	TTF, OTF, TTC, OTC — available until Prism exits	TTF, OTF, TTC, OTC — tersedia hingga Prism ditutup
+	Loaded font (this session)	Font dimuat (sesi ini)
+	Favorite fonts	Font favorit
+
+	All fonts	Semua font
+	Korean only	Hanya Korea
+	No preview	Tidak ada pratinjau
+
+# Prism About introduction and footer.
+	Turn ideas into images.	Ubah ide menjadi gambar.
+	Prism is a desktop image editor by NK Studio.	Prism adalah editor gambar desktop dari NK Studio.
+	Refine layers, color, and typography to bring your vision to life.	Sempurnakan lapisan, warna, dan tipografi untuk mewujudkan visi Anda.
+	All rights reserved.	Hak cipta dilindungi.
+	Built for creative expression.	Dibuat untuk ekspresi kreatif.
+
+	Arrow Tool	Alat Panah
+	Arrow	Panah
+	Arrow color	Warna panah
+	Thickness	Ketebalan
+	Arrowhead	Ukuran kepala panah
+	Corners	Sudut
+	Angular	Tajam
+	Rounded	Membulat
+
+	Arrowhead length	Panjang kepala panah
+
+	Arrowhead angle	Sudut kepala panah
+
+	Line tips	Ujung garis
+
+	Square tips	Ujung persegi
+
+	Round tips	Ujung bulat
+	Make:	Buat:
+	Selection…	Seleksi…
+	Align To:	Ratakan ke:
+	Rubber Band	Pita Karet
+	Auto Add/Delete	Tambah/Hapus Otomatis
+	Align Edges	Ratakan Tepi
+	Path Operations	Operasi Path
+	Path Alignment	Perataan Path
+	Path Arrangement	Susunan Path
+	New Layer	Layer Baru

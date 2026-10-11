@@ -14,9 +14,9 @@ readiness; treat it as an upper bound.
 |---|---|---|
 | M0 Skeleton | ✅ | workspace, xtask (layers / ci / stats / corpus / parity), CI workflow |
 | M1 Foundation | ✅ | geom, color (27 blend modes), raster (COW tiles, any depth), doc, ops, cms (ICC) |
-| M2 PSD v1 | ✅ | photocraft-psd: 134/135 real files byte-exact round trip |
+| M2 PSD v1 | ✅ | prism-psd: 134/135 real files byte-exact round trip |
 | M3 Viewer app | ✅ | egui shell (Pro / Pro Medium / Studio / Studio Light themes), 13+ codecs, native desktop builds |
-| M4 Native format + engine | ✅ | 500+ commands, `.pcraft` (incremental, autosave, crash recovery), CLI, persistent preferences |
+| M4 Native format + engine | ✅ | 500+ commands, `.prism` (incremental, autosave, crash recovery), CLI, persistent preferences |
 | M5 GPU compositor | 🟡 | wgpu compositor drives the canvas, layer effects, vector masks, artboards, pattern fills and every clip case included (≤1/255 vs CPU); Multichannel documents fall back to the CPU |
 | M6 Paint + select | 🟡 | brush engine, all selection tools, multi-layer selection, snapping + smart guides, free transform + warp; stylus pressure on Windows (WM_POINTER via winit), macOS (AppKit event monitor: pressure, tilt, rotation, eraser end) |
 | M7 Adjust + filters | 🟡 | 16 adjustment layers + destructive-only adjustments, 70+ filters incl. Blur Gallery, Actions record/replay, Fade |
@@ -89,7 +89,7 @@ Confidence: moderate — the next users of 0.2.x will move these numbers either 
 | UI / UX polish | Shortcut audit 214 → 0 failures; dock, Layers rows and menus reworked; first visual-QA sweep found 14 defects (#147–#157). 2026-10-07: the keyboard-only shortcuts with no menu item (⌥[ ⌥] ⌥, ⌥. layer navigation, ⇧⌥[ ⇧⌥] to extend the selection, 1–0 for opacity and ⇧ for flow or fill, ⇧[ ⇧] hardness, ⌥⌘T to transform a copy and ⌥⇧⌘T to step and repeat), ⌥-click colour sampling with painting tools, double-click a Layers row for Layer Style, File › New from Clipboard, a centred main window and remembered Liquify settings (#352, #417, #350, #368, #419, #418) | low–medium | Needs recurring visual QA with realistic documents. |
 | Tools | 2026-10-09: Pencil, Mixer Brush, Patch, Content-Aware Move, Vertical Type, Pattern Stamp and Rotate View are toolbar tools. Remaining missing tools include Red Eye, Art History Brush, Freeform/Curvature Pen, Add/Delete Anchor Point tools, single row/column marquee, Color Sampler, Perspective Crop, type masks and Frame | low–medium | Patch has a live healing preview. Content-Aware Move is partial: Move/Extend, Structure/Color and Sample All Layers exist; Transform On Drop and a live result preview remain missing (`TOOL-213-4` in the scorecard). Magic/Background Eraser added; live gradients in progress (#180). Magnetic Lasso added 2026-10-08 (live-wire edge tracing, Width/Contrast/Frequency, `select.magneticLasso`). Pattern Stamp added 2026-10-08 (S flyout, `paint.patternStamp`, Aligned / Impressionist). Rotate View (2026-10-09) turns the canvas camera around its centre without rewriting pixels; Reset View and Match Rotation copy the angle. |
 | Painting | Brush model and Brush Settings panel near Photoshop; .abr/.grd import; persistent presets; pen pressure/tilt on Windows and macOS | medium | macOS not yet verified on tablet hardware. |
-| Text / typography | Engine works; caret placement and size editing fixed; OpenType features, text-on-path editing, composer parity partial | medium-low | Measure with the Photoshop-authored set. |
+| Text / typography | Engine works; caret placement and size editing fixed. 2026-10-10: two canvas regressions cover Unicode select-all and field-to-canvas focus; local font file loading and persisted favorites available. 2026-10-11: macOS font assets, Korean metadata/coverage filter, and exact-face menu previews available. OpenType features, text-on-path editing, composer parity partial | medium-low | Measure with the Photoshop-authored set. |
 | Colour management | Colour-managed canvas (document → monitor), embedded CMYK profiles, linear EXR/HDR, 16-bit float canvas | medium-high | Monitor profile follows only at launch. |
 | Performance | 14k+ px on the GPU at ~⅓ the memory; adjustment preview 285 ms → 4–9 ms; font-size edits 297 ms → 4.6 ms; 2026-10-07: 30 MP TIFF open (banded, parallel strip/tile decode) Deflate 345 → 32 ms, LZW 428 → 43 ms, BigTIFF and every IFD readable | medium-high on rasters | Complex layout documents still laggy (#125/#128); >16384 px GPU tiling in progress (#49). |
 | Stability | Never-crash lint series, crash guard, `panic_hunt` fuzzing in the gate | medium-high | No field crash data yet. |
@@ -126,7 +126,7 @@ parametric and four point curves, HSL, Color Grading, sharpening/noise detail, g
 post-crop vignette controls. Two revisions of one supplied Photoshop ACR 18.4 PSD preserve their
 filter descriptors without edits. The updated revision stays opaque because of active manual
 Optics and unverified vignette style; a descriptor projection verifies its supported controls.
-Synthetic 8/16/32-bit PSD → edit → `.pcraft` → PSD tests preserve the filter stack, mask and
+Synthetic 8/16/32-bit PSD → edit → `.prism` → PSD tests preserve the filter stack, mask and
 undo/redo. Unmapped Camera Raw fields/versions remain opaque; Photoshop
 acceptance of generated exports and pixel parity are still unverified. Corpus floors above are
 unchanged.
@@ -145,7 +145,7 @@ unchanged.
    Perspective Crop; finish Content-Aware Move's Transform On Drop and live result preview.
    Pencil, Mixer Brush, Patch, Vertical Type, Pattern Stamp and Rotate View are already available on the toolbar.
 5. **Complex-document performance** (#125/#128) and GPU tiling beyond the texture limit (#49).
-6. **Recurring visual QA** (`cargo run -p photocraft-engine --example designer_psd`) and fast
+6. **Recurring visual QA** (`cargo run -p prism-engine --example designer_psd`) and fast
    turnaround on user reports (OS, document size, layer count, screenshot).
 7. Later / needs decisions: generative AI backend (#41), scripting compatibility (ExtendScript /
    UXP / .atn).
@@ -178,9 +178,9 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 |---|---|---|---|
 | **M0** | Skeleton | Workspace, all crate stubs, lints, `xtask` (layers check, ci), CI matrix, testkit | `cargo test --workspace` green; layering check passes |
 | **M1** | Foundation | geom, color (formats, blend math for all 27 modes, sRGB/linear), raster (sparse COW tiles, U8/U16/F32), doc (full type model incl. CMYK/Lab/adjust/smart), ops (history) | Property tests (proptest) on tile COW and history; blend-mode reference tests against published formulas |
-| **M2** | PSD v1 | `photocraft-psd`: header, resources, layer records, channel data (raw/RLE/ZIP/ZIP+pred), masks, groups (lsct), unicode names, unknown-block passthrough, merged image, PSB; writer | Round-trip byte-stability tests; synthetic PSD generator tests; fuzz target; ≥150 unit tests |
+| **M2** | PSD v1 | `prism-psd`: header, resources, layer records, channel data (raw/RLE/ZIP/ZIP+pred), masks, groups (lsct), unicode names, unknown-block passthrough, merged image, PSB; writer | Round-trip byte-stability tests; synthetic PSD generator tests; fuzz target; ≥150 unit tests |
 | **M3** | Viewer app | codecs (png/jpeg/tiff/webp/gif/bmp/tga/pnm/qoi/exr/hdr, all read+write), CPU compositor, egui shell (menu from registry, canvas pan/zoom, layers panel, history), open/save, native desktop build | Opens PNG/JPEG/PSD, shows layers, toggles visibility, undo/redo, saves PNG/PSD |
-| **M4** | Native format + engine | `.pcraft` bundle, command registry with schemas, jobs/cancellation, snapshots via arc-swap, CLI (`convert`, `run`, `inspect`) | CLI parity tests: every GUI command also runs headless |
+| **M4** | Native format + engine | `.prism` bundle, command registry with schemas, jobs/cancellation, snapshots via arc-swap, CLI (`convert`, `run`, `inspect`) | CLI parity tests: every GUI command also runs headless |
 | **M5** | GPU compositor | wgpu planner backend, tile residency, parity tests vs CPU (all blend modes), viewport on GPU, mips | GPU vs CPU ≤1/255; pan/zoom 60 fps on a 100 MP / 20-layer document |
 | **M6** | Paint + select | platform input (pen: macOS/Windows), brush engine v1, eraser, marquee/lasso/wand, move, free transform, crop | Brush latency <1 frame; selection-restricted paint tests |
 | **M7** | Adjust + filters | 16 adjustment layers, first 30 filters, schema-generated dialogs + live preview, actions record/replay | Golden tests at 8/16/32f; action replay determinism |

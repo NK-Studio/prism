@@ -3,11 +3,11 @@
 The desktop app listens on `127.0.0.1:<port>` (loopback only). Start it with a token file so the credential is not exposed in the process command line:
 
 ```sh
-photocraft --control 7878 --control-token-file /private/path/photocraft-control.token \
+prism --control 7878 --control-token-file /private/path/prism-control.token \
   --automation-read-root /work/project --automation-write-root /work/project
 ```
 
-If the file does not exist, Prism creates it with a fresh 256-bit token. On Unix the new file is mode `0600`; on Windows, protect it with an appropriate user-only ACL. An existing file is reused. If neither a token nor token file is configured, Prism generates a token for that launch and writes it to standard error. `PHOTOCRAFT_CONTROL_TOKEN` and `PHOTOCRAFT_CONTROL_TOKEN_FILE` are the environment-variable equivalents.
+If the file does not exist, Prism creates it with a fresh 256-bit token. On Unix the new file is mode `0600`; on Windows, protect it with an appropriate user-only ACL. An existing file is reused. If neither a token nor token file is configured, Prism generates a token for that launch and writes it to standard error. `PRISM_CONTROL_TOKEN` and `PRISM_CONTROL_TOKEN_FILE` are the environment-variable equivalents.
 
 The first request on every TCP connection must authenticate. No other method is dispatched before this succeeds:
 
@@ -30,7 +30,7 @@ Each reply is one JSON line with the same `id`:
 
 The desktop server waits up to 60 seconds for a reply. A request still queued at that deadline is rejected before dispatch; a timeout does not cancel work that has already started.
 
-The transport is `apps/photocraft/src/control_server.rs`, and the handlers are in `crates/ui-egui/src/control.rs`. The MCP server (`photocraft-cli mcp --bridge 127.0.0.1:<port>`, crate `photocraft-automation`) wraps this same protocol. See [MCP bridge](#mcp-bridge) below.
+The transport is `apps/prism/src/control_server.rs`, and the handlers are in `crates/ui-egui/src/control.rs`. The MCP server (`prism-cli mcp --bridge 127.0.0.1:<port>`, crate `prism-automation`) wraps this same protocol. See [MCP bridge](#mcp-bridge) below.
 
 ## Methods
 
@@ -46,7 +46,7 @@ from saved UI state. Numeric corner controls remain available in Properties.
 - `engine.execute {command, params}`: run any engine or UI command by id. Engine commands run directly with their default params and never open a dialog. Use `ui.menu.invoke` for menu-click behaviour, which opens a command's dialog when no params are given. `params` must be a JSON object (omit it or pass `null` for none); an array, string, number or boolean is an error naming the command, in every transport (control channel, `serve`, MCP and the CLI)
 - `engine.commands`: list commands with enablement
 - `ui.inspect`: full UI state (tool, panels, views, dialogs, windows, window size). The menu tree is not included; use `ui.menu.list`. `brushPicker` is `null` while closed and `{pos: [x, y], list: {collapsed, filter, view, renaming}}` while the Brush Preset picker is open (coordinates in screen points). `view` holds the View/Window/Type preferences: `screen_mode`, `extras`, `show` and `snap_to` flags, `flip_horizontal`, `arrange` (Window › Arrange layout), pixel aspect, font preview size, language options. `perf.timings.gpuInfo` holds the graphics adapter, backend, driver, the backend chosen at launch and why, the canvas renderer (`gpu`/`cpu`) and, after a device loss, `lost` (`help.systemInfo` returns the same as `info`)
-- `ui.set {tool?, panels?, dockTabs?, dock?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSize?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerView?, gradientBlendMode?, gradientClassic?}`: change UI state; any other field is an error, checked before anything changes (`theme` is `pro`, `proMedium`, `studio`, or `studioLight`; `selectionMode` is the selection tools' options-bar mode, 0 New, 1 Add, 2 Subtract, 3 Intersect; `brushSection` indexes the Brush Settings sections, `brushTab` 0 = Brush Settings, 1 = Brushes; `brushesView` and `brushPickerView` are `list` or `grid` for the Brushes panel and the Brush Preset picker; `brushPicker` is `[x, y]` in screen points to open the Brush Preset picker there (as a right-click with a painting tool does) or `null` to close it, and picking a preset in it is `tools.setBrush {"preset": name}`; `dock` is `{order: ["layers", …], heights: {"properties": 180}, collapsed: ["color"]}`, the right-dock groups top to bottom, their heights in points and the groups collapsed to their tab strip; `dockWidth` sets the right dock width in points, clamped to 250..520; `colorPanel` is `{background}`, whether the Color panel edits the background colour)
+- `ui.set {tool?, panels?, dockTabs?, dock?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSize?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerView?, gradientBlendMode?, gradientClassic?, typeFontFilter?, arrow?}`: change UI state; any other field is an error, checked before anything changes (`theme` is `pro`, `proMedium`, `studio`, or `studioLight`; `selectionMode` is the selection tools' options-bar mode, 0 New, 1 Add, 2 Subtract, 3 Intersect; `brushSection` indexes the Brush Settings sections, `brushTab` 0 = Brush Settings, 1 = Brushes; `brushesView` and `brushPickerView` are `list` or `grid` for the Brushes panel and the Brush Preset picker; `brushPicker` is `[x, y]` in screen points to open the Brush Preset picker there (as a right-click with a painting tool does) or `null` to close it, and picking a preset in it is `tools.setBrush {"preset": name}`; `dock` is `{order: ["layers", …], heights: {"properties": 180}, collapsed: ["color"]}`, the right-dock groups top to bottom, their heights in points and the groups collapsed to their tab strip; `dockWidth` sets the right dock width in points, clamped to 250..520; `colorPanel` is `{background, mode}`, whether the Color panel edits the background colour and its presentation (`hueCube` by default, `brightnessCube`, `colorWheel`, or `hsbSliders`); omitted members keep their defaults)
   - `typeTransform` is `null` outside a temporary Ctrl/Cmd Type-tool drag. During a drag it reports its source document/revision, original affine, oriented `frame` (layer, local bounds, document-space corners and pivot), and captured `gesture`. Drive it with `ui.pointer` and `command: true` at `down`; `move`/`up` may release the modifier. The document/history remain unchanged during preview, and `up` applies one `type.edit` within `textEdit`'s session. Pressing Escape during the drag cancels only the preview. This pointer state is never restored from saved UI state.
 - `ui.menu.invoke {id, params?, wait?}` / `ui.menu.list`: activate a menu item by id; list the menu tree. A menu item that starts a background job (a filter without a dialog, such as Blur More) replies with the job's result once it has been applied; with `"wait": false` the reply is `{job, pending: true}` at once
 - `ui.set` also accepts `gradientBlendMode` (a layer blend mode name, such as `Difference`) and `gradientClassic` (boolean) for the Gradient tool options bar.
@@ -109,7 +109,7 @@ regular Layer Style action; gradient/pattern shapes retain the Appearance contro
   base64 PNG data; a path is relative to the automation write root. Raises the window first
   (default) because occluded macOS windows stop rendering
 - `ui.focus`: bring the main window to the front
-- `app.open {path}` / `app.save {path?}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name`, `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file, like File › Save. Automation opens and saves never fire script events. Use these two rather than `file.open`, `file.save`, `file.saveAs` or `file.saveACopy`, which the control channel refuses (see [Engine commands](#engine-commands))
+- `app.open {path}` / `app.save {path?}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name`, `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.prism` file, like File › Save. Automation opens and saves never fire script events. Use these two rather than `file.open`, `file.save`, `file.saveAs` or `file.saveACopy`, which the control channel refuses (see [Engine commands](#engine-commands))
 - `app.quit`: quit after the save guard has asked about every dirty document.
 
 ## Engine commands
@@ -189,7 +189,7 @@ editing session; non-type layers return an error without changing the tool or do
 
 ### Background jobs (#210)
 
-Long commands (every `filter.*`, `edit.contentAwareFill`, `edit.contentAwareScale`, `file.automate.photomerge`, `brush.presets.importAbr`) and file opens run as background jobs in the desktop app: the window keeps drawing, the status bar shows progress with a Cancel button, and jobs that lock the active document show a modal progress dialog (Esc cancels). `engine.execute`, `ui.menu.invoke` and `ui.dialog.confirm` still wait for the result by default; pass `"wait": false` to get `{job, pending: true}` at once, then poll `jobs.list` (`state`: running, done, failed, cancelled; `progress` 0–1; the result or error) and stop it with `jobs.cancel {job}`. A cancelled or failed job leaves the document unchanged. While a job runs, commands that would edit its document fail with "… is still running on this document". `ui.inspect` reports `jobs` (running jobs, opening files). Set `PHOTOCRAFT_INLINE_JOBS=1` to run everything inline.
+Long commands (every `filter.*`, `edit.contentAwareFill`, `edit.contentAwareScale`, `file.automate.photomerge`, `brush.presets.importAbr`) and file opens run as background jobs in the desktop app: the window keeps drawing, the status bar shows progress with a Cancel button, and jobs that lock the active document show a modal progress dialog (Esc cancels). `engine.execute`, `ui.menu.invoke` and `ui.dialog.confirm` still wait for the result by default; pass `"wait": false` to get `{job, pending: true}` at once, then poll `jobs.list` (`state`: running, done, failed, cancelled; `progress` 0–1; the result or error) and stop it with `jobs.cancel {job}`. A cancelled or failed job leaves the document unchanged. While a job runs, commands that would edit its document fail with "… is still running on this document". `ui.inspect` reports `jobs` (running jobs, opening files). Set `PRISM_INLINE_JOBS=1` to run everything inline.
 
 ## Preferences
 
@@ -220,11 +220,11 @@ shortcuts, hidden and coloured menu items, autosave interval and crash recovery,
 log text file. GPU on/off and the GPU tile size apply at the next launch.
 
 The desktop app stores them in `preferences.json` in the platform config directory (macOS
-`~/Library/Application Support/Photocraft`, Windows `%APPDATA%\Photocraft`, FreeBSD
-`$XDG_CONFIG_HOME/photocraft`; override with `PHOTOCRAFT_CONFIG_DIR`); autosaves go to its
+`~/Library/Application Support/Prism`, Windows `%APPDATA%\Prism`, FreeBSD
+`$XDG_CONFIG_HOME/prism`; override with `PRISM_CONFIG_DIR`); autosaves go to its
 `Recovery` folder, and the window size and position, the dock width and floating-panel geometry
-to `ui.ron` beside it (a file holding values that would crash startup is discarded). In portable mode (a `portable.txt` or `PhotoCraft.portable` file beside the
-executable, as in the Windows portable zip) that directory is `PhotoCraftData` next to the
+to `ui.ron` beside it (a file holding values that would crash startup is discarded). In portable mode (a `portable.txt` or `Prism.portable` file beside the
+executable, as in the Windows portable zip) that directory is `PrismData` next to the
 executable instead. A save writes only the values
 this instance changed since it last loaded or saved them over what storage holds now, so a second
 browser tab (or app window) never reverts the other's changes; for a value changed in both, the
@@ -234,7 +234,7 @@ persistent one.
 
 User and imported (`.abr`) brush presets live in the config directory's `Presets` folder: one
 `.pcbrushes` JSON file per preset group, content-addressed tip bitmaps under `tips/`, and an
-`index.json` with the group order and deleted built-ins (see `photocraft_engine::preset_store`).
+`index.json` with the group order and deleted built-ins (see `prism_engine::preset_store`).
 The store loads in the background at launch and syncs after every brush preset change; built-ins
 are never written. The Actions list is `actions.json` in that same folder and survives a restart.
 Headless CLI/MCP sessions keep brush presets and the action list for the session
@@ -262,16 +262,16 @@ magenta alignment lines. `ui.pointer` drives the same code, so agents get identi
 
 ## MCP bridge
 
-`photocraft-automation` provides an MCP server built on the official Rust SDK (`rmcp`). It runs in one of two modes:
+`prism-automation` provides an MCP server built on the official Rust SDK (`rmcp`). It runs in one of two modes:
 
-- **Headless** (`photocraft-cli mcp`): an in-process `photocraft_engine::Session`. There is no window.
-- **Bridge** (`photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <path>`): every tool is forwarded to a running `photocraft --control 7878 --control-token-file <path>` over this protocol, so agents see and drive the live app.
+- **Headless** (`prism-cli mcp`): an in-process `prism_engine::Session`. There is no window.
+- **Bridge** (`prism-cli mcp --bridge 127.0.0.1:7878 --control-token-file <path>`): every tool is forwarded to a running `prism --control 7878 --control-token-file <path>` over this protocol, so agents see and drive the live app.
 
-The bridge keeps one authenticated TCP connection open. A transport failure while sending a request or waiting for its reply, including a reply timeout, drops the connection and reports that the operation may have completed; inspect the document before retrying an edit. It never automatically resends the failed request. The next separate call reconnects and authenticates, and reply lines whose `id` does not match the request are skipped. It only accepts loopback addresses, because the app only listens on loopback. Supply its bearer token with `--control-token-file`, `--control-token`, `PHOTOCRAFT_CONTROL_TOKEN_FILE`, or `PHOTOCRAFT_CONTROL_TOKEN`:
+The bridge keeps one authenticated TCP connection open. A transport failure while sending a request or waiting for its reply, including a reply timeout, drops the connection and reports that the operation may have completed; inspect the document before retrying an edit. It never automatically resends the failed request. The next separate call reconnects and authenticates, and reply lines whose `id` does not match the request are skipped. It only accepts loopback addresses, because the app only listens on loopback. Supply its bearer token with `--control-token-file`, `--control-token`, `PRISM_CONTROL_TOKEN_FILE`, or `PRISM_CONTROL_TOKEN`:
 
 ```sh
-photocraft-cli mcp --bridge 127.0.0.1:7878 \
-  --control-token-file /private/path/photocraft-control.token
+prism-cli mcp --bridge 127.0.0.1:7878 \
+  --control-token-file /private/path/prism-control.token
 ```
 
 How each MCP tool maps onto control methods in bridge mode:
@@ -306,8 +306,8 @@ it to an untrusted host.
 
 Filesystem access fails closed unless launch-time read and/or write roots are granted with
 `--automation-read-root` and `--automation-write-root`. The environment-variable equivalents
-(`PHOTOCRAFT_AUTOMATION_READ_ROOT` / `PHOTOCRAFT_AUTOMATION_WRITE_ROOT`) are supported by
-the desktop `photocraft` process, but not by headless `photocraft-cli mcp` or `serve`;
+(`PRISM_AUTOMATION_READ_ROOT` / `PRISM_AUTOMATION_WRITE_ROOT`) are supported by
+the desktop `prism` process, but not by headless `prism-cli mcp` or `serve`;
 for those CLI modes, supply the flags explicitly. In MCP bridge mode, configure roots on the
 desktop process rather than on the bridging CLI. Request paths must be
 non-empty, forward-slash relative paths beneath the applicable root. Absolute paths, parent
@@ -319,7 +319,7 @@ desktop file pickers retain normal user-selected access.
 
 ## Headless server
 
-`photocraft-cli serve` keeps one headless engine session (no window, no GPU) and answers the same
+`prism-cli serve` keeps one headless engine session (no window, no GPU) and answers the same
 JSON-lines envelope on stdio, or on `127.0.0.1:<port>` with `--port <port>` (loopback only; each
 authenticated connection shares the session). TCP uses the same first-frame `auth` exchange and
 token options as desktop control. Stdio does not require this TCP handshake because access is
@@ -335,7 +335,7 @@ no MCP framing, no app start-up per command. Configure its file access with the 
 | `engine.commands` | `{filter?}`: registry with params docs and enablement |
 | `session.list` | open documents and the active index |
 | `doc.open` / `doc.new` | `{path}` / `file.new` params |
-| `doc.save` | `{path?, format?, quality?, index?, tiffLayers?}` (`.pcraft` native, else export by extension; set `tiffLayers: true` to preserve TIFF layers rather than exporting a flattened TIFF). Without `path` only a PSD, PSB or `.pcraft` document is written back to its own file, in its own format; anything else is an error and the file is left unchanged. A successful layered save (PSD, PSB or `.pcraft`) records the current revision as saved and makes the file the document's path, so `session.list` reports `dirty: false`; a flat export is a copy and leaves the document dirty |
+| `doc.save` | `{path?, format?, quality?, index?, tiffLayers?}` (`.prism` native, else export by extension; set `tiffLayers: true` to preserve TIFF layers rather than exporting a flattened TIFF). Without `path` only a PSD, PSB or `.prism` document is written back to its own file, in its own format; anything else is an error and the file is left unchanged. A successful layered save (PSD, PSB or `.prism`) records the current revision as saved and makes the file the document's path, so `session.list` reports `dirty: false`; a flat export is a copy and leaves the document dirty |
 | `doc.inspect` | `{index?}`: same JSON as `document.inspect` |
 | `doc.render` | `{index?, maxSide? (1024; 0 = full), path?}`: PNG to `path`, else `{mime, base64}` |
 | `doc.select` / `doc.close` | `{index}` / `{index?}` |
@@ -347,7 +347,7 @@ printf '%s\n' \
   '{"id":1,"method":"doc.open","params":{"path":"in.jpg"}}' \
   '{"id":2,"method":"batch","params":{"steps":[{"command":"image.adjustments.invert"},{"command":"filter.blur.gaussianBlur","params":{"radius":3}}]}}' \
   '{"id":3,"method":"doc.save","params":{"path":"out.png"}}' | \
-  photocraft-cli serve --automation-read-root /work/project --automation-write-root /work/project
+  prism-cli serve --automation-read-root /work/project --automation-write-root /work/project
 ```
 
 The MCP server has the same batching as the `command_batch` tool (`{steps:[{id, params, wait?}], stop_on_error}`),
@@ -366,7 +366,7 @@ The desktop and headless TCP listeners currently enforce:
 
 An oversized line, excess connection, unauthenticated request, or unauthorized filesystem path is
 rejected before command dispatch or file effects. The headless JSON-lines stdio server also
-enforces the request and reply byte ceilings; MCP over stdio (`photocraft-cli mcp`) does not
+enforces the request and reply byte ceilings; MCP over stdio (`prism-cli mcp`) does not
 cap request bytes, because the MCP SDK reads its own request lines (only MCP tool results are
 checked). A TCP connection is closed after an oversized
 line; on stdio an oversized or non-UTF-8 line gets one error reply (`id: null`), the rest of that
@@ -413,7 +413,7 @@ On the desktop the dialog is a window of its own (title bar, moved and resized l
 
 **Screenshots:** `ui.screenshot` defaults to the main window, so while Camera Raw has its own window the PNG shows the dimmed main window. The optional `window` parameter selects document windows; Camera Raw is not a document window. Read the dialog's state through `ui.inspect` (`cameraRaw`: params, histogram,
 zoom, control rectangles) and drive it with the `ui` params below. To *see* it, render offscreen
-(`cargo run -p photocraft-ui-egui --example snapshot -- --script '[["ui.menu.invoke", {"id": "filter.cameraRaw"}]]'`
+(`cargo run -p prism-ui-egui --example snapshot -- --script '[["ui.menu.invoke", {"id": "filter.cameraRaw"}]]'`
 or an `egui_kittest` harness): those embed
 viewports, so the dialog is drawn over the main window and appears in the image.
 
@@ -529,3 +529,69 @@ Missing actions, recursive calls and nesting beyond 16 levels fail visibly; a ch
 the parent before its next step. Every nested command retains the normal automation permission check.
 Existing recordings containing expanded commands remain unchanged; remove those steps and record
 the named call again if desired.
+
+`ui.inspect.cursorResource` reports the optional local cursor resource from the current viewport's last completed pass, or `null` for original/dynamic/widget cursors. It does not report the operating system’s final pointer appearance.
+
+### Local fonts and favorites
+
+`type.fonts` lists bundled and OS-installed families. `type.importFont` takes
+`{"data":"<base64 TTF/OTF/TTC/OTC>"}` (64 MiB maximum) and returns
+`{"families":[...],"scope":"process"}`. It registers a local font until Prism exits,
+without installing it into the OS or embedding it in documents. The Type picker
+provides **Load Font File…** through the native file dialog.
+
+`type.favoriteFont` takes `{"family":"Inter","favorite":true}` (or `false` to
+remove it). Favorites persist in `type.favoriteFonts` through preferences and
+appear first in both the options-bar and Character-panel font pickers. Clicking
+the star keeps the menu open and leaves the document's current font unchanged.
+
+The Type font picker displays Korean family names from the font’s OpenType `name` table when available (typographic family first, legacy family second). It searches both Korean and original names. Commands, document styles, and favorite preferences continue to use the original family identifier; fonts without Korean metadata keep their original display name.
+
+### Installed font catalog and previews
+
+`type.fonts` preserves `families` (or `faces` with `family`) and accepts
+`details:true` to add `items` containing `family`, `displayName` and `supportsKorean`.
+The family identifier remains the document/favorite key; Korean display names come from
+font metadata. Korean support tests the normal face nearest weight 400 against
+`가나다라마바사아자차카타파하한글서체견본`.
+
+`ui.set {"typeFontFilter":"all"}` (default) or `"korean"` controls both font menus.
+The serialized value is `toolOptions.type_font_filter` in `ui.state`.
+Search/filter precede favorite → Korean-capable → remaining family ordering.
+Visible rows render exact-face samples without fallback; previews are cached and
+invalidated on font import or display-scale changes. macOS discovery includes versioned
+MobileAsset Font stores in AssetsV2 and PreinstalledAssetsV2/InstallWithOs.
+
+### Annotation arrow tool
+
+`ui.set {"tool":"arrow","arrow":{"width":3,"headSize":16,"headAngle":60,"rounded":true}}`
+selects the straight, open-head arrow in the U tool group. Arrow settings merge atomically;
+width is 0.1–1000 px, headSize (each wing’s length) is 0.1–10000 px, headAngle (included angle) is 10–160 degrees, and rounded is a boolean. Omitted headAngle defaults to 60 degrees, including older native files.
+The serialized state is `toolOptions.arrow`. Colour uses the current foreground
+(`tools.setColors`); drag from tail to head, Shift snaps to 45°, Escape cancels.
+
+`shape.create {"kind":"arrow","from":[20,80],"to":[180,40],"headSize":16}`
+defaults to no fill and a 3 px foreground round-cap/round-join stroke.
+`shape.edit {"headSize":24,"headAngle":90,"stroke":{"width":5,"cap":"butt","join":"miter"}}`
+changes the active arrow. Set both cap/join to `round` for rounded corners.
+`shape.info` returns the live arrow geometry and the existing stroke fields.
+Native `.prism` files retain live geometry; PSD retains the open vector paths and stroke
+as an ordinary editable vector shape. Similarity transforms preserve live arrows;
+nonuniform scale/shear and perspective distortion retain vector paths but remove parametric arrow metadata.
+
+Selected live arrows expose canvas handles with Arrow, Move, Path Selection or Direct Selection:
+squares move the tail/tip (Shift snaps 45°), circles at wing ends adjust both wing lengths,
+and a diamond beyond the first wing adjusts the included angle. Hidden/locked/mask-targeted
+layers expose no handles. A Move-tool translation temporarily hides handles until release; direct handle editing stays visible. Dragging previews without changing document history; release or
+Enter commits one `shape.edit`, Escape cancels. Viewport/document switches cancel the gesture.
+`ui.inspect.arrowHandles` returns document-coordinate handle positions, their ordered roles
+(`tail`, `tip`, `length`, `length`, `angle`), live preview geometry and gesture state.
+`ui.pointer` drives these same handles, preceding snap and path-node selection.
+
+### Line tips
+
+`ui.set` accepts `lineRoundTips` (boolean, default `false`) for the Line tool.
+`shape.create` with `kind: "line"` and `shape.edit` accept `roundTips` (boolean).
+`shape.info.live.roundTips` reports the saved setting. Square tips preserve the legacy filled bar;
+round tips extend each endpoint by half the line weight. Native documents retain editable tips.
+PSD exports rounded lines as ordinary vector paths to preserve their exact geometry.

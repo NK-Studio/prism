@@ -1,6 +1,6 @@
-//! Throughput check: `cargo test -p photocraft-cms --release --test bench -- --ignored --nocapture`.
+//! Throughput check: `cargo test -p prism-cms --release --test bench -- --ignored --nocapture`.
 
-use photocraft_cms::{Builtin, Intent, Transform};
+use prism_cms::{Builtin, Intent, Transform};
 
 #[test]
 #[ignore]

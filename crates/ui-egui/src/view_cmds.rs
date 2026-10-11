@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::PhotocraftApp;
+use crate::PrismApp;
 use crate::state::DialogKind;
 
 /// View › Show flags (Photoshop defaults).
@@ -207,7 +207,7 @@ fn snap_slot<'a>(s: &'a mut SnapTo, key: &str) -> Option<&'a mut bool> {
 }
 
 /// Window › <panel>: (panel, dock tab) for panels that live as tabs of a dock card.
-fn panel_tab(app: &PhotocraftApp, id: &str) -> Option<(&'static str, usize)> {
+fn panel_tab(app: &PrismApp, id: &str) -> Option<(&'static str, usize)> {
     let pro = matches!(app.ui.theme, crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
     Some(match id {
         "window.panel.info" => ("navigator", 2),
@@ -230,7 +230,7 @@ fn panel_tab(app: &PhotocraftApp, id: &str) -> Option<(&'static str, usize)> {
     })
 }
 
-fn panel_state<'a>(app: &'a mut PhotocraftApp, panel: &str) -> (&'a mut bool, &'a mut usize) {
+fn panel_state<'a>(app: &'a mut PrismApp, panel: &str) -> (&'a mut bool, &'a mut usize) {
     let (p, t) = (&mut app.ui.panels, &mut app.ui.dock_tabs);
     match panel {
         "navigator" => (&mut p.navigator, &mut t.navigator),
@@ -311,7 +311,7 @@ pub fn handles(id: &str) -> bool {
     )
 }
 
-pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
+pub fn is_enabled(app: &PrismApp, id: &str) -> Option<bool> {
     if !handles(id) && !wraps(id) {
         return None;
     }
@@ -335,7 +335,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
     })
 }
 
-pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
+pub fn checked(app: &PrismApp, id: &str) -> Option<bool> {
     let o = &app.ui.view;
     if let Some(k) = id.strip_prefix("view.show.") {
         let mut s = o.show;
@@ -392,15 +392,15 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
 }
 
 /// Checkmarks of the Type menu's anti-aliasing, orientation and OpenType items.
-fn type_checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
-    use photocraft_doc::LayerContent;
+fn type_checked(app: &PrismApp, id: &str) -> Option<bool> {
+    use prism_doc::LayerContent;
     let st = app.session.active()?;
     let LayerContent::Text(t) = &st.doc.layer(st.active_layer?)?.content else { return None };
     if let Some(k) = id.strip_prefix("type.antiAlias.") {
-        return Some(photocraft_engine::type_extra_cmds::aa_name(t.antialias) == k);
+        return Some(prism_engine::type_extra_cmds::aa_name(t.antialias) == k);
     }
     if let Some(k) = id.strip_prefix("type.orientation.") {
-        return Some((t.orientation == photocraft_doc::text::Orientation::Vertical) == (k == "vertical"));
+        return Some((t.orientation == prism_doc::text::Orientation::Vertical) == (k == "vertical"));
     }
     let tag = match id.strip_prefix("type.openType.")? {
         "standardLigatures" => "liga",
@@ -415,7 +415,7 @@ fn type_checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "fractions" => "frac",
         _ => return None,
     };
-    Some(t.char_runs().first().is_some_and(|r| photocraft_engine::type_extra_cmds::feature_on(&r.style, tag)))
+    Some(t.char_runs().first().is_some_and(|r| prism_engine::type_extra_cmds::feature_on(&r.style, tag)))
 }
 
 /// Engine commands that get a dialog or file picker here when invoked without parameters.
@@ -457,7 +457,7 @@ fn no_params(p: &Value) -> bool {
 
 /// Run a View/Window/Type shell command, or front an engine command with its dialog. `None` when
 /// `id` isn't ours.
-pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+pub fn invoke(app: &mut PrismApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if wraps(id) {
         return front(app, id, params);
     }
@@ -471,7 +471,7 @@ fn flag_param(p: &Value, cur: bool) -> bool {
     p.get("on").and_then(Value::as_bool).unwrap_or(!cur)
 }
 
-fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
+fn run(app: &mut PrismApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
     if let Some((panel, tab)) = panel_tab(app, id) {
         let group = crate::dock::Group::from_key(panel);
         let collapsed = group.is_some_and(|g| app.ui.dock.is_collapsed(g));
@@ -592,10 +592,10 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
 }
 
 /// View › Fit Layer(s) on Screen: zoom and centre on the selected layers' bounds.
-fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
+fn fit_layers(app: &mut PrismApp) -> Result<Value, String> {
     let i = app.session.active_index().ok_or("no document")?;
     let st = app.session.active().ok_or("no document")?;
-    let mut b = photocraft_geom::Rect::EMPTY;
+    let mut b = prism_geom::Rect::EMPTY;
     for id in st.selected_layers() {
         if let Some(r) = st.doc.layer(id).and_then(|l| l.surface()).map(|s| s.content_bounds()) {
             b = if b.is_empty() { r } else { b.union(&r) };
@@ -613,7 +613,7 @@ fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
     Ok(json!({"zoom": v.zoom, "bounds": [b.x0, b.y0, b.x1, b.y1]}))
 }
 
-fn arrange(app: &mut PhotocraftApp, ctx: &egui::Context, k: &str, p: &Value) -> Result<Value, String> {
+fn arrange(app: &mut PrismApp, ctx: &egui::Context, k: &str, p: &Value) -> Result<Value, String> {
     if LAYOUTS.contains(&k) {
         app.ui.view.arrange = k.to_string();
         // Each document fits its new cell.
@@ -709,7 +709,7 @@ pub fn cells(layout: &str, rect: egui::Rect, n: usize) -> Option<Vec<egui::Rect>
 // ---------- dialogs and pickers in front of engine commands ----------
 
 /// A generic form dialog that runs `command` with its fields on OK (rendered by [`form_body`]).
-fn form(app: &mut PhotocraftApp, command: &str, label: &str, fields: Value, choices: Value) -> u64 {
+fn form(app: &mut PrismApp, command: &str, label: &str, fields: Value, choices: Value) -> u64 {
     let mut f = Map::new();
     f.insert("__command".into(), json!(command));
     f.insert("__label".into(), json!(label));
@@ -805,11 +805,11 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 }
 
 /// Folder the batch dialogs start from: next to the active document, else the working directory.
-fn default_dir(app: &PhotocraftApp) -> String {
+fn default_dir(app: &PrismApp) -> String {
     app.session.active().and_then(|d| d.path.as_deref()).and_then(|p| p.rfind(['/', '\\']).map(|i| p[..i].to_string())).unwrap_or_else(|| ".".into())
 }
 
-fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+fn front(app: &mut PrismApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "file.closeAll" || id == "file.closeOthers" {
         return Some(app.run(id, params.clone()));
     }
@@ -832,8 +832,8 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
     }
     let doc = app.session.active().map(|d| (d.doc.size.width, d.doc.size.height, d.doc.name.clone()));
     let dir = default_dir(app);
-    let label = photocraft_engine::commands::find(id).map_or(id, |c| c.label);
-    let dialog = |app: &mut PhotocraftApp, fields: Value, choices: Value| Some(Ok(json!({"dialog": form(app, id, label, fields, choices)})));
+    let label = prism_engine::commands::find(id).map_or(id, |c| c.label);
+    let dialog = |app: &mut PrismApp, fields: Value, choices: Value| Some(Ok(json!({"dialog": form(app, id, label, fields, choices)})));
     match id {
         "file.openAs" => Some(app.open_dialog_file()),
         "file.saveACopy" => Some(save_a_copy(app)),
@@ -872,7 +872,7 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
             dialog(app, fields, json!({}))
         }
         "type.warpText" => {
-            let styles: Vec<&str> = std::iter::once("none").chain(photocraft_text::warp::STYLES.iter().map(|(_, s)| *s)).collect();
+            let styles: Vec<&str> = std::iter::once("none").chain(prism_text::warp::STYLES.iter().map(|(_, s)| *s)).collect();
             dialog(
                 app,
                 json!({"style": "arc", "orientation": "horizontal", "bend": 50.0, "horizontalDistortion": 0.0, "verticalDistortion": 0.0}),
@@ -904,7 +904,7 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
         }
         "layer.new.artboard" => {
             let (w, h, _) = doc?;
-            let presets: Vec<&str> = std::iter::once("").chain(photocraft_engine::artboard_cmds::PRESETS.iter().map(|p| p.0)).collect();
+            let presets: Vec<&str> = std::iter::once("").chain(prism_engine::artboard_cmds::PRESETS.iter().map(|p| p.0)).collect();
             dialog(
                 app,
                 json!({"name": "", "preset": "", "width": w, "height": h, "background": "white"}),
@@ -955,9 +955,9 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
             let st = app.session.active()?;
             let d = &st.doc;
             let mode = d.pixel_format().mode;
-            let mut chans: Vec<String> = vec![photocraft_engine::channel_cmds::composite_name(mode).to_string()];
+            let mut chans: Vec<String> = vec![prism_engine::channel_cmds::composite_name(mode).to_string()];
             if mode.color_channels() > 1 {
-                chans.extend(photocraft_engine::channel_cmds::color_names(mode).iter().map(|n| n.to_string()));
+                chans.extend(prism_engine::channel_cmds::color_names(mode).iter().map(|n| n.to_string()));
             }
             chans.extend(d.channels.iter().map(|c| c.name.clone()));
             let alphas: Vec<String> = std::iter::once("new".to_string()).chain(d.channels.iter().map(|c| c.name.clone())).collect();
@@ -1017,7 +1017,7 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
 
 /// File › Save a Copy: pick a name, encode with the export service, write; the document's path
 /// and saved state are untouched.
-fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
+fn save_a_copy(app: &mut PrismApp) -> Result<Value, String> {
     let doc = app.session.active().ok_or("no document")?.doc.clone();
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a);
     let suggested = format!("{stem} copy.psd");

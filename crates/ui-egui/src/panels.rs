@@ -1,13 +1,16 @@
 //! Chrome around the canvas: title bar, options bar, toolbar, status bar, dock cards, Properties.
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
-use photocraft_color::BlendMode;
-use photocraft_doc::{Layer, LayerContent, LayerId};
+use prism_color::BlendMode;
+use prism_doc::{Layer, LayerContent, LayerId};
 use serde_json::{Value, json};
 
 use crate::state::Tool;
 use crate::theme::{self, Tokens};
-use crate::{PhotocraftApp, icons, widgets};
+use crate::{PrismApp, icons, widgets};
+
+#[path = "color_panel_ui.rs"]
+pub(crate) mod color_panel_ui;
 
 // ----------------------------------------------------------------------------- toolbar
 
@@ -37,7 +40,7 @@ const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Pen],
         &[Tool::Type, Tool::VerticalType],
         &[Tool::PathSelection, Tool::DirectSelection],
-        &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::CustomShape],
+        &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::Arrow, Tool::CustomShape],
     ],
     &[&[Tool::Hand, Tool::RotateView], &[Tool::Zoom]],
 ];
@@ -76,7 +79,7 @@ fn visible_sections(hidden: &[String]) -> Vec<Vec<(usize, Vec<Tool>)>> {
     sections
 }
 
-pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub fn toolbar(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
     let sections = visible_sections(&app.session.prefs().toolbar.hidden);
@@ -92,6 +95,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.painter().line_segment([r.right_top() + vec2(m as f32, -8.0), r.right_bottom() + vec2(m as f32, 8.0)], Stroke::new(1.0, t.separator));
                 // Photoshop's toolbar header chevrons switch between one and two columns.
                 let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click());
+                let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                 icons::paint(ui, cr, if double { "chevrons-left" } else { "chevrons-right" }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Toolbar")));
                 if resp.clicked() {
@@ -295,7 +299,7 @@ fn c32(c: [f32; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, (c[3] * 255.0) as u8)
 }
 
-fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn color_chips(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(36.0, 38.0), Sense::hover());
     let bg = Rect::from_min_size(rect.min + vec2(13.0, 13.0), vec2(21.0, 21.0));
@@ -327,10 +331,10 @@ fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 // ----------------------------------------------------------------------------- title bar
 
-/// The app's top bar: menus, the document title and the workspace controls. With
-/// [`PhotocraftApp::custom_titlebar`] (Windows and Linux) it is also the window's title bar, as in
+/// The app's top bar: menus, the app name and the workspace controls. With
+/// [`PrismApp::custom_titlebar`] (Windows and Linux) it is also the window's title bar, as in
 /// Photoshop on Windows: the caption buttons take its right end (`titlebar`).
-pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub fn title_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let custom = app.custom_titlebar;
     let left = if cfg!(target_os = "macos") && app.integrated_titlebar { 78 } else { 10 };
@@ -354,7 +358,7 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
             }
-            let title = app.session.active().map(|d| format!("{}{}", d.doc.name, if d.is_dirty() { "  •" } else { "" })).unwrap_or_else(|| tl!("Prism").into());
+            let title = tl!("Prism").to_string();
             // The menus and the right-hand controls are laid out first; the title is centred in
             // whatever room is left between them, shortened or dropped rather than drawn over them.
             let (mut menus_right, mut controls_left) = (full.left(), full.right());
@@ -378,8 +382,8 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ("Painting".to_string(), tl!("Painting")),
                         ("Graphic and Web".to_string(), tl!("Graphic and Web")),
                     ];
-                    // A narrow bar drops what is also in a menu, Discord first (below), then
-                    // the theme toggle (Preferences), then search (Edit › Search), and narrows
+                    // A narrow bar drops the theme toggle (Preferences), then search
+                    // (Edit › Search), and narrows
                     // the switcher (Window › Workspace) before anything runs over.
                     let room = ui.available_width();
                     let icons_shown: u8 = if room >= WORKSPACE_MIN + 2.0 * ICON_SLOT {
@@ -404,26 +408,17 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         let next = app.ui.theme.next();
                         app.set_theme(ui.ctx(), next);
                     }
-                    // The community Discord, one click away while the bar has room for it
-                    // (narrow windows drop it first; it is also Help › Discord).
-                    if ui.available_width() >= DISCORD_ROOM {
-                        let discord = egui::Button::image_and_text(
-                            icons::image("message-square", 14.0, t.text_dim),
-                            egui::RichText::new(tl!("Discord")).color(t.text_dim).size(12.0),
-                        )
-                        .frame(false);
-                        if ui.add(discord).on_hover_text(format!("Join the ArtCraft Discord ({})", crate::links::DISCORD)).clicked() {
-                            crate::links::open(app, ui.ctx(), crate::links::DISCORD);
-                        }
-                    }
                     ui.min_rect().left()
                 };
             });
             ui.ctx().data_mut(|d| d.insert_temp(span_id, (menus_right, controls_left)));
             let font = theme::medium(13.0);
             let galley = ui.painter().layout_no_wrap(title.clone(), font.clone(), t.text_dim);
-            if let Some(x) = title_x(full.center().x, menus_right, controls_left, galley.size().x) {
-                ui.painter().galley(egui::pos2(x, full.center().y - galley.size().y / 2.0), galley, t.text_dim);
+            if let Some(x) = title_x(ui.ctx().content_rect().center().x, menus_right, controls_left, galley.size().x) {
+                let at = egui::pos2(x, full.center().y - galley.size().y / 2.0);
+                ui.interact(egui::Rect::from_min_size(at, galley.size()), ui.id().with("app-name"), Sense::hover())
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &title));
+                ui.painter().galley(at, galley, t.text_dim);
             } else if controls_left - menus_right > 80.0 {
                 // Too narrow for the whole name: show the start of it, elided, in the free gap.
                 let avail = controls_left - menus_right - 2.0 * TITLE_GAP;
@@ -440,8 +435,6 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// Minimum space kept between the window title and the menus or controls beside it.
 const TITLE_GAP: f32 = 16.0;
-/// Free room the title bar needs after its other controls to show the Discord button.
-const DISCORD_ROOM: f32 = 120.0;
 /// The workspace switcher's narrowest width, and one 28 pt title-bar icon with its spacing.
 const WORKSPACE_MIN: f32 = 90.0;
 const ICON_SLOT: f32 = 34.0;
@@ -481,7 +474,31 @@ mod title_tests {
 
 // ----------------------------------------------------------------------------- options bar
 
-pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+/// Native geometric icons: two unequal bars against an edge or centre guide.
+fn alignment_button(ui: &mut egui::Ui, vertical: bool, edge: i8, label: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    let tint = icons::button_chrome(ui, rect, false, response.hovered());
+    let origin = rect.center() - vec2(8.0, 8.0);
+    let point = |x: f32, y: f32| origin + if vertical { vec2(y, x) } else { vec2(x, y) };
+    let guide = match edge {
+        -1 => 0.0,
+        1 => 16.0,
+        _ => 8.0,
+    };
+    ui.painter().line_segment([point(guide, 0.0), point(guide, 16.0)], Stroke::new(1.5, tint));
+    for (y, width) in [(3.0, 10.0), (10.0, 6.0)] {
+        let x = match edge {
+            -1 => 2.0,
+            1 => 14.0 - width,
+            _ => 8.0 - width / 2.0,
+        };
+        ui.painter().rect_filled(egui::Rect::from_two_pos(point(x, y), point(x + width, y + 3.0)), 0.0, tint);
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(label)
+}
+
+pub fn options_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::top("options_bar")
         .exact_size(if t.pro { 36.0 } else { 42.0 })
@@ -565,7 +582,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         widgets::vline(ui, 22.0);
                         if !t.pro {
                             opt_label(ui, tl!("Size"));
-                            widgets::value_field(ui, &mut b.size, 1.0..=photocraft_engine::paint::MAX_BRUSH_SIZE, "px", 76.0);
+                            widgets::value_field(ui, &mut b.size, 1.0..=prism_engine::paint::MAX_BRUSH_SIZE, "px", 76.0);
                             widgets::vline(ui, 22.0);
                         }
                         opt_label(ui, tl!("Mode"));
@@ -812,7 +829,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                     // Every theme gets the font, style and size controls (#1387), as with Auto-Select (#1275).
                     Tool::Type | Tool::VerticalType => crate::type_tool::options_bar(app, ui),
-                    Tool::Move if t.pro => {
+                    Tool::Move => {
                         let o = &mut app.ui.tool_options;
                         widgets::checkbox(ui, &mut o.move_auto_select, tl!("Auto-Select:"));
                         widgets::dropdown(
@@ -826,13 +843,21 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         widgets::checkbox(ui, &mut o.move_show_transform, tl!("Show Transform Controls"));
                         widgets::vline(ui, 22.0);
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        for (icon, tip, cmd) in [
-                            ("panels-top-left", tl!("Align left edges"), "layer.align.leftEdges"),
-                            ("app-window", tl!("Align horizontal centers"), "layer.align.horizontalCenters"),
-                            ("panel-right", tl!("Align right edges"), "layer.align.rightEdges"),
+                        for (vertical, edge, tip, cmd) in [
+                            (false, -1, tl!("Align left edges"), "layer.align.leftEdges"),
+                            (false, 0, tl!("Align horizontal centers"), "layer.align.horizontalCenters"),
+                            (false, 1, tl!("Align right edges"), "layer.align.rightEdges"),
+                            (true, -1, tl!("Top Edges"), "layer.align.topEdges"),
+                            (true, 0, tl!("Vertical Centers"), "layer.align.verticalCenters"),
+                            (true, 1, tl!("Bottom Edges"), "layer.align.bottomEdges"),
                         ] {
+                            if vertical && edge == -1 {
+                                ui.add_space(6.0);
+                                widgets::vline(ui, 22.0);
+                                ui.add_space(6.0);
+                            }
                             let on = app.session.is_enabled(cmd);
-                            if ui.add_enabled_ui(on, |ui| icons::button(ui, icon, 24.0, false, tip)).inner.clicked() {
+                            if ui.add_enabled_ui(on, |ui| alignment_button(ui, vertical, edge, tip)).inner.clicked() {
                                 let _ = app.run(cmd, json!({}));
                             }
                         }
@@ -842,7 +867,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             ui.set_min_width(200.0);
                             let mut section = |ui: &mut egui::Ui, title: &str, prefix: &str| {
                                 ui.label(egui::RichText::new(tl!(&title)).small().color(t.text_dim));
-                                for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with(prefix)) {
+                                for c in prism_engine::command_specs().iter().filter(|c| c.id.starts_with(prefix)) {
                                     if ui.add_enabled(app.session.is_enabled(c.id), egui::Button::new(tl!(c.label))).clicked() {
                                         let _ = app.run(c.id, json!({}));
                                         ui.close();
@@ -863,11 +888,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             crate::shortcuts::pretty("Shift+Alt")
                         ),
                     ),
-                    Tool::Move => {
-                        // The Studio themes keep Photoshop's Auto-Select toggle too (#1275).
-                        widgets::checkbox(ui, &mut app.ui.tool_options.move_auto_select, tl!("Auto-Select:"));
-                        hint(ui, tl!("Drag to move the active layer"));
-                    }
                     Tool::Eyedropper => hint(
                         ui,
                         &crate::i18n::fmt(
@@ -1015,7 +1035,7 @@ fn hint(ui: &mut egui::Ui, s: &str) {
 
 // ----------------------------------------------------------------------------- status bar
 
-pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub fn status_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status_bar")
         .exact_size(if t.pro { 24.0 } else { 30.0 })
@@ -1071,7 +1091,7 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 // ----------------------------------------------------------------------------- dock
 
-pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub fn right_dock(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let p = app.ui.panels.clone();
     if t.pro {
@@ -1122,7 +1142,7 @@ pub fn request_dock_width(ctx: &egui::Context, w: f32) {
     ctx.data_mut(|d| d.insert_temp(dock_width_id(), w));
 }
 
-fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Panels, t: &Tokens) {
+fn dock_panels(app: &mut PrismApp, ui: &mut egui::Ui, p: &crate::state::Panels, t: &Tokens) {
     use crate::dock::Group;
     // Floating in Studio, Properties docks only in Pro (Photoshop).
     let shown: Vec<Group> = [
@@ -1151,7 +1171,7 @@ fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Pan
 }
 
 /// One dock group's tab content; `dock` bounds it and scrolls it when it's taller.
-fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate::dock::Group, tab: usize) {
+fn dock_body(app: &mut PrismApp, ui: &mut egui::Ui, group: crate::dock::Group, tab: usize) {
     use crate::dock::Group;
     let pro = Tokens::get(ui.ctx()).pro;
     match (group, tab) {
@@ -1160,7 +1180,7 @@ fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate::dock::Gro
         (Group::Color, 0) if pro => color_field(app, ui),
         (Group::Color, _) if pro => crate::swatches_ui::panel(app, ui),
         (Group::Color, 0) => crate::swatches_ui::panel(app, ui),
-        (Group::Color, _) => color_picker(app, ui),
+        (Group::Color, _) => color_field(app, ui),
         (Group::Properties, 0) => properties_body(app, ui),
         (Group::Properties, _) => adjustments_grid(app, ui),
         (Group::Character, tab) => crate::type_tool::character_panel(app, ui, tab == 1),
@@ -1177,7 +1197,7 @@ fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate::dock::Gro
 }
 
 /// Photoshop's Info panel: colour under the pointer (RGB and CMYK), position, selection size.
-fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn info_panel(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
         empty(ui, tl!("No document"));
@@ -1190,7 +1210,7 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let fx = move |px: f64| units.format(px, dpi, size.width as f64);
     let units_y = app.session.prefs().units_and_rulers.clone();
     let fy = move |px: f64| units_y.format(px, dpi, size.height as f64);
-    let sel = st.doc.selection.as_ref().map(photocraft_compose::bounds::content_bounds);
+    let sel = st.doc.selection.as_ref().map(prism_compose::bounds::content_bounds);
     let pos = app
         .hover_doc
         .map(|p| (p[0].floor() as i32, p[1].floor() as i32))
@@ -1245,7 +1265,7 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     );
 }
 
-fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn navigator(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(idx) = app.session.active_index() else {
         empty(ui, tl!("No document"));
@@ -1308,42 +1328,9 @@ fn empty(ui: &mut egui::Ui, s: &str) {
     ui.add_space(6.0);
 }
 
-fn color_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let fg = app.session.tools.foreground;
-    // Keep the last edited HSB while it still gives the foreground: black and greys have no hue or
-    // saturation of their own, so recomputing them from RGB would reset what was just typed to 0.
-    let key = egui::Id::new("color-picker-hsva");
-    let stored: Option<egui::ecolor::Hsva> = ui.data(|d| d.get_temp(key));
-    let hsva0 = stored.filter(|h| h.to_srgb() == srgb_bytes(fg)).unwrap_or_else(|| srgb_hsva(fg));
-    let mut h = hsva0.h * 360.0;
-    let mut s = hsva0.s * 100.0;
-    let mut v = hsva0.v * 100.0;
-    let hue = widgets::hue_stops();
-    let mut changed = widgets::slider_row(ui, tl!("Hue"), &mut h, 0.0..=360.0, "°", Some(&hue)).changed();
-    let sat_stops =
-        [egui::ecolor::Hsva::new(hsva0.h, 0.0, hsva0.v.max(0.2), 1.0), egui::ecolor::Hsva::new(hsva0.h, 1.0, hsva0.v.max(0.2), 1.0)].map(Color32::from);
-    changed |= widgets::slider_row(ui, tl!("Saturation"), &mut s, 0.0..=100.0, "%", Some(&sat_stops)).changed();
-    let val_stops = [Color32::BLACK, Color32::from(egui::ecolor::Hsva::new(hsva0.h, hsva0.s, 1.0, 1.0))];
-    changed |= widgets::slider_row(ui, tl!("Brightness"), &mut v, 0.0..=100.0, "%", Some(&val_stops)).changed();
-    let hsva = egui::ecolor::Hsva::new(h / 360.0, s / 100.0, v / 100.0, 1.0);
-    // Only an edit counts: the h/s/v round trip isn't exact, so comparing values would rewrite
-    // the foreground (and recolour selected type) every frame.
-    if changed {
-        app.session.tools.foreground = hsva_srgb(hsva);
-        ui.data_mut(|d| d.insert_temp(key, hsva));
-        crate::type_tool::foreground_changed(app);
-    }
-    let [r, g, b, _] = hsva.to_srgba_unmultiplied();
-    ui.horizontal(|ui| {
-        let (sw, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
-        ui.painter().rect_filled(sw, 6.0, Color32::from_rgb(r, g, b));
-        let mut c = app.session.tools.foreground;
-        if color_readout(ui, ui.id().with("color-panel"), &mut c) {
-            app.session.tools.foreground = c;
-            ui.data_mut(|d| d.insert_temp(key, srgb_hsva(c)));
-            crate::type_tool::foreground_changed(app);
-        }
-    });
+#[cfg(test)]
+fn color_picker(app: &mut PrismApp, ui: &mut egui::Ui) {
+    color_panel_ui::show_mode(app, ui, crate::state::ColorPanelMode::HsbSliders);
 }
 
 // ----------------------------------------------------------------------------- layers
@@ -1389,7 +1376,7 @@ fn layer_drag_edge_scroll(pointer: Option<Pos2>, viewport: Rect, dragging: bool,
     direction.signum() * velocity * dt.clamp(0.0, 0.05)
 }
 
-fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn layers(app: &mut PrismApp, ui: &mut egui::Ui) {
     // A new active layer opens its parent groups and is scrolled into view (#152).
     let reveal = crate::layer_reveal::track(app, ui.ctx());
     let Some(st) = app.session.active() else {
@@ -1533,7 +1520,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             crate::layer_row_ui::begin(ui.ctx());
             for &(depth, l) in &rows {
                 // Select › Isolate Layers.
-                if !photocraft_engine::select_extra_cmds::isolation_shows(&doc, &isolated, l.id) {
+                if !prism_engine::select_extra_cmds::isolation_shows(&doc, &isolated, l.id) {
                     continue;
                 }
                 if !filter.is_empty() {
@@ -1587,7 +1574,9 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let trash = icons::button(ui, "trash", 26.0, false, tl!("Delete layer"));
+            let delete_params = footer_drag.filter(|(_, in_selection)| !in_selection).map_or(json!({}), |(layer, _)| json!({"layer": layer}));
+            let can_delete = app.session.is_enabled_with("layer.delete", &delete_params);
+            let trash = ui.add_enabled_ui(can_delete, |ui| icons::button(ui, "trash", 26.0, false, tl!("Delete layer"))).inner;
             if trash.clicked() {
                 actions.push(("layer.delete".into(), json!({})));
             }
@@ -1605,7 +1594,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let adj = footer_menu_button(ui, "contrast", 26.0, tl!("Create new fill or adjustment layer"));
             egui::Popup::menu(&adj).open_memory(footer_menu_right_click(&adj)).show(|ui| {
                 ui.set_min_width(190.0);
-                for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("layer.newAdjustmentLayer.")) {
+                for c in prism_engine::command_specs().iter().filter(|c| c.id.starts_with("layer.newAdjustmentLayer.")) {
                     if ui.button(tl!(c.label).trim_end_matches('…')).clicked() {
                         actions.push((c.id.into(), json!({})));
                         ui.close();
@@ -1685,7 +1674,10 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// returns the command on release.
 fn footer_drop(ui: &egui::Ui, button: &egui::Response, drag: Option<(u64, bool)>, command: &str) -> Option<(String, Value)> {
     // Named for screen readers (and tests) after the command a drop runs.
-    button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, footer_label(command)));
+    button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, button.enabled(), footer_label(command)));
+    if !button.enabled() {
+        return None;
+    }
     let (layer, in_selection) = drag?;
     let p = ui.ctx().input(|i| i.pointer.interact_pos())?;
     if !button.rect.contains(p) {
@@ -1811,10 +1803,10 @@ fn eye_sweep(ctx: &egui::Context, l: &Layer, row: Rect, eye: &egui::Response, ac
 
 #[allow(clippy::too_many_arguments)]
 fn layer_row(
-    app: &mut PhotocraftApp,
+    app: &mut PrismApp,
     ctx: &egui::Context,
     ui: &mut egui::Ui,
-    doc: &photocraft_doc::Document,
+    doc: &prism_doc::Document,
     l: &Layer,
     depth: usize,
     row: RowSel,
@@ -1973,9 +1965,9 @@ fn layer_row(
         let on_thumb = pos.is_some_and(|p| thumb.expand(2.0).contains(p));
         let on_vector = pos.and_then(|p| masks.hit(p)) == Some(crate::mask_thumbs_ui::MaskKind::Vector);
         // Clicking the layer thumbnail leaves mask view (#196).
-        let viewing = app.session.active().and_then(photocraft_engine::mask_view_cmds::current).is_some_and(|v| v.layer == l.id);
+        let viewing = app.session.active().and_then(prism_engine::mask_view_cmds::current).is_some_and(|v| v.layer == l.id);
         if on_thumb && viewing {
-            actions.push((photocraft_engine::mask_view_cmds::ID.into(), json!({"layer": l.id.0, "mode": "off"})));
+            actions.push((prism_engine::mask_view_cmds::ID.into(), json!({"layer": l.id.0, "mode": "off"})));
         }
         let content_less = matches!(l.content, LayerContent::Adjustment(_) | LayerContent::Fill(_));
         if on_vector {
@@ -2033,7 +2025,7 @@ fn layer_row(
     });
 }
 
-fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui, doc: &photocraft_doc::Document, l: &Layer, rect: Rect, selected: bool) {
+fn draw_layer_thumb(app: &mut PrismApp, ctx: &egui::Context, ui: &egui::Ui, doc: &prism_doc::Document, l: &Layer, rect: Rect, selected: bool) {
     let t = Tokens::get(ctx);
     let p = ui.painter();
     match &l.content {
@@ -2051,7 +2043,7 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
         LayerContent::Fill(f) if crate::gradient_ui::paint_thumbnail(ui, l.id, f, rect) => {}
         LayerContent::Fill(f) => {
             let c = match f {
-                photocraft_doc::Fill::Solid(c) => c.to_rgba8(),
+                prism_doc::Fill::Solid(c) => c.to_rgba8(),
                 _ => [128, 128, 128, 255],
             };
             p.rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]));
@@ -2080,13 +2072,14 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
     };
     p.rect_stroke(rect, CornerRadius::same(if t.pro { 0 } else { 5 }), stroke, StrokeKind::Outside);
     crate::smart_ui::thumb_badge(ui, l, rect);
+    crate::layer_row_ui::shape_thumb_badge(ui, l, rect);
 }
 
-fn channels(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn channels(app: &mut PrismApp, ui: &mut egui::Ui) {
     crate::channels_panel::show(app, ui);
 }
 
-fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn history(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
         empty(ui, tl!("No document"));
@@ -2171,7 +2164,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 // ----------------------------------------------------------------------------- properties
 
 /// Floating Properties card anchored to the canvas' top-right corner.
-pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
+pub fn properties_window(app: &mut PrismApp, ctx: &egui::Context) {
     // Pro (Photoshop) docks Properties; Studio floats it over the canvas.
     if !app.ui.panels.properties || Tokens::get(ctx).pro {
         return;
@@ -2179,8 +2172,9 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(st) = app.session.active() else { return };
     let Some(id) = st.active_layer else { return };
     let Some(layer) = st.doc.layer(id) else { return };
-    // The floating card appears for adjustment and fill layers (their controls live here).
-    if !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
+    // Annotation arrows need their post-creation controls in Studio themes too.
+    let arrow = matches!(&layer.content, LayerContent::Shape(sh) if matches!(sh.live, Some(prism_doc::LiveShape::Arrow { .. })));
+    if !arrow && !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
         return;
     }
     let layer = layer.clone();
@@ -2221,6 +2215,7 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 LayerContent::Adjustment(_) => "sliders-horizontal",
                 LayerContent::Group(_) => "folder",
                 LayerContent::Fill(_) => "paint-bucket",
+                LayerContent::Shape(_) if arrow => "annotation-arrow",
                 _ => "image",
             };
             ui.horizontal(|ui| {
@@ -2244,6 +2239,8 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.push_id(id, |ui| {
                 if let LayerContent::Adjustment(adj) = &layer.content {
                     adjustment_controls(app, ui, id, adj);
+                } else if arrow {
+                    crate::vector_ui::shape_properties(app, ui, id);
                 } else {
                     layer_controls(app, ui, &layer);
                 }
@@ -2259,7 +2256,7 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &photocraft_doc::Adjustment) {
+fn adjustment_controls(app: &mut PrismApp, ui: &mut egui::Ui, id: LayerId, adj: &prism_doc::Adjustment) {
     crate::adjust_editors::layer_editor(app, ui, id, adj);
     ui.add_space(6.0);
     let layer = app.session.active().and_then(|s| s.doc.layer(id).cloned());
@@ -2285,7 +2282,7 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
     }
 }
 
-fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
+fn layer_controls(app: &mut PrismApp, ui: &mut egui::Ui, layer: &Layer) {
     let t = Tokens::get(ui.ctx());
     if let Some(s) = layer.surface() {
         let b = app.cached_bounds(layer.id.0, s);
@@ -2311,7 +2308,7 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
 }
 
 /// Docked Properties body (Pro theme).
-fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn properties_body(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
         empty(ui, tl!("No properties"));
@@ -2342,7 +2339,7 @@ fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // Transform, Align, the kind's sections and Quick Actions.
         crate::layer_props_ui::properties(app, ui, layer);
     } else {
-        if matches!(layer.content, LayerContent::Fill(photocraft_doc::Fill::Gradient { .. })) {
+        if matches!(layer.content, LayerContent::Fill(prism_doc::Fill::Gradient { .. })) {
             crate::gradient_ui::properties(app, ui, layer);
             ui.add_space(6.0);
         }
@@ -2357,7 +2354,7 @@ fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 /// Photoshop's Adjustments panel: a grid of one-click adjustment layers.
-fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn adjustments_grid(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Add an adjustment")).color(t.text_dim));
     ui.add_space(4.0);
@@ -2396,7 +2393,7 @@ fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The Color panel's foreground and background chips. A click picks the colour the field edits,
 /// framed; a double-click opens the Color Picker on it.
-fn field_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, chips: Rect) {
+fn field_chips(app: &mut PrismApp, ui: &mut egui::Ui, chips: Rect) {
     let t = Tokens::get(ui.ctx());
     let bgr = Rect::from_min_size(chips.min + vec2(13.0, 13.0), vec2(22.0, 22.0));
     let fgr = Rect::from_min_size(chips.min + vec2(3.0, 3.0), vec2(22.0, 22.0));
@@ -2423,123 +2420,26 @@ fn field_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, chips: Rect) {
     }
 }
 
-/// Photoshop Color panel: saturation/brightness field + hue strip, drawn as shaded meshes.
-fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    let bg_active = app.ui.color_panel.background;
-    let key = egui::Id::new(("color-field-hue", bg_active));
-    let mut hsva = srgb_hsva(if bg_active { app.session.tools.background } else { app.session.tools.foreground });
-    // Keep hue stable for greys (where RGB->HSV hue is undefined).
-    let remembered: f32 = ui.data(|d| d.get_temp(key)).unwrap_or(hsva.h);
-    if hsva.s < 0.01 || hsva.v < 0.01 {
-        hsva.h = remembered;
-    }
-    let w = ui.available_width();
-    let strip_w = 14.0;
-    let h = 120.0;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        let (chips, _) = ui.allocate_exact_size(vec2(38.0, h), Sense::hover());
-        field_chips(app, ui, chips);
-        // SV field.
-        let field_w = w - 38.0 - strip_w - 16.0;
-        let (field, fresp) = ui.allocate_exact_size(vec2(field_w, h), Sense::click_and_drag());
-        let mut mesh = egui::Mesh::default();
-        let n = 16;
-        for j in 0..=n {
-            for i in 0..=n {
-                let (sx, vy) = (i as f32 / n as f32, j as f32 / n as f32);
-                let c = Color32::from(egui::ecolor::Hsva::new(hsva.h, sx, 1.0 - vy, 1.0));
-                mesh.colored_vertex(pos2(field.left() + sx * field.width(), field.top() + vy * field.height()), c);
-            }
-        }
-        for j in 0..n {
-            for i in 0..n {
-                let a = (j * (n + 1) + i) as u32;
-                let b = a + 1;
-                let c = a + (n + 1) as u32;
-                let d = c + 1;
-                mesh.add_triangle(a, b, d);
-                mesh.add_triangle(a, d, c);
-            }
-        }
-        ui.painter().add(mesh);
-        ui.painter().rect_stroke(field, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Outside);
-        if (fresp.dragged() || fresp.clicked())
-            && let Some(p) = fresp.interact_pointer_pos()
-        {
-            hsva.s = ((p.x - field.left()) / field.width()).clamp(0.0, 1.0);
-            hsva.v = 1.0 - ((p.y - field.top()) / field.height()).clamp(0.0, 1.0);
-        }
-        let knob = pos2(field.left() + hsva.s * field.width(), field.top() + (1.0 - hsva.v) * field.height());
-        ui.painter().circle_stroke(knob, 5.0, Stroke::new(1.5, Color32::WHITE));
-        ui.painter().circle_stroke(knob, 6.5, Stroke::new(1.0, Color32::from_black_alpha(160)));
-        // Hue strip.
-        let (strip, sresp) = ui.allocate_exact_size(vec2(strip_w, h), Sense::click_and_drag());
-        let mut m2 = egui::Mesh::default();
-        let steps = 24;
-        for k in 0..=steps {
-            let f = k as f32 / steps as f32;
-            let c = Color32::from(egui::ecolor::Hsva::new(1.0 - f, 1.0, 1.0, 1.0));
-            m2.colored_vertex(pos2(strip.left(), strip.top() + f * strip.height()), c);
-            m2.colored_vertex(pos2(strip.right(), strip.top() + f * strip.height()), c);
-        }
-        for k in 0..steps {
-            let a = (k * 2) as u32;
-            m2.add_triangle(a, a + 1, a + 3);
-            m2.add_triangle(a, a + 3, a + 2);
-        }
-        ui.painter().add(m2);
-        if (sresp.dragged() || sresp.clicked())
-            && let Some(p) = sresp.interact_pointer_pos()
-        {
-            hsva.h = 1.0 - ((p.y - strip.top()) / strip.height()).clamp(0.0, 0.9999);
-        }
-        let y = strip.top() + (1.0 - hsva.h) * strip.height();
-        let tri = vec![pos2(strip.right() + 1.0, y), pos2(strip.right() + 6.0, y - 4.0), pos2(strip.right() + 6.0, y + 4.0)];
-        ui.painter().add(egui::Shape::convex_polygon(tri, t.text, Stroke::NONE));
-        if fresp.dragged() || fresp.clicked() || sresp.dragged() || sresp.clicked() {
-            if bg_active {
-                app.session.tools.background = hsva_srgb(hsva);
-            } else {
-                app.session.tools.foreground = hsva_srgb(hsva);
-                crate::type_tool::foreground_changed(app);
-            }
-            ui.data_mut(|d| d.insert_temp(key, hsva.h));
-        }
-    });
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        let mut c = if bg_active { app.session.tools.background } else { app.session.tools.foreground };
-        if color_readout(ui, ui.id().with(("color-field", bg_active)), &mut c) {
-            if bg_active {
-                app.session.tools.background = c;
-            } else {
-                app.session.tools.foreground = c;
-                crate::type_tool::foreground_changed(app);
-            }
-            // Keep the hue for greys, so the field marker doesn't jump to red.
-            let h = srgb_hsva(c);
-            if h.s >= 0.01 && h.v >= 0.01 {
-                ui.data_mut(|d| d.insert_temp(key, h.h));
-            }
-        }
-    });
+/// The Color panel shares its selected presentation across every theme.
+fn color_field(app: &mut PrismApp, ui: &mut egui::Ui) {
+    color_panel_ui::show_mode(app, ui, app.ui.color_panel.mode);
 }
 
-/// Tool colours are sRGB-encoded floats; egui's Hsva works on sRGB bytes via these helpers
-/// (its `from_rgba_unmultiplied` expects *linear* RGB, which gave wrong readouts).
+/// Tool colours and Photoshop's HSB readouts use encoded sRGB. Keep Hsva as a value
+/// container here: egui's `from_srgb`/`to_srgb` convert to linear RGB before computing HSV.
 fn srgb_bytes(c: [f32; 4]) -> [u8; 3] {
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
     [q(c[0]), q(c[1]), q(c[2])]
 }
 
 fn srgb_hsva(c: [f32; 4]) -> egui::ecolor::Hsva {
-    egui::ecolor::Hsva::from_srgb(srgb_bytes(c))
+    let [h, s, v] = crate::color_picker_ui::rgb_to_hsv([c[0], c[1], c[2]]);
+    egui::ecolor::Hsva::new(h / 360.0, s, v, 1.0)
 }
 
 fn hsva_srgb(h: egui::ecolor::Hsva) -> [f32; 4] {
-    let [r, g, b] = h.to_srgb();
+    let [r, g, b] = h.to_rgb();
+    let [r, g, b] = srgb_bytes([r, g, b, 1.0]);
     [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
 }
 
@@ -2616,7 +2516,7 @@ fn brush_tip(p: &egui::Painter, c: egui::Pos2, rad: f32, hardness: f32, color: C
 }
 
 /// Options-bar Smoothing % (the brush's stroke smoothing; the live stroke and the commit use it).
-fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) {
+fn smoothing_field(ui: &mut egui::Ui, b: &mut prism_engine::BrushSettings, width: f32) {
     let mut sm = (b.smoothing.amount * 100.0).round();
     if widgets::value_field(ui, &mut sm, 0.0..=100.0, "%", width).changed() {
         b.smoothing.amount = (sm / 100.0).clamp(0.0, 1.0);
@@ -2625,7 +2525,7 @@ fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, 
 
 /// Options-bar gear beside Smoothing: Photoshop's smoothing options popup, edited on the brush
 /// like the Smoothing % (so they stay per tool and reach the live stroke and the commit).
-fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) {
+fn smoothing_options(ui: &mut egui::Ui, b: &mut prism_engine::BrushSettings) {
     let resp = icons::button(ui, "settings", 24.0, false, tl!("Set additional smoothing options"));
     let resp = crate::brush_picker::named(resp, tl!("Set additional smoothing options"));
     egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
@@ -2639,7 +2539,7 @@ fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings
 
 /// The symmetry menu's rows: `paint.symmetryFromPath` name and label for each path the Paths
 /// panel lists (saved paths, the Work Path, the selected layer's shape path or vector mask).
-fn symmetry_choices(app: &PhotocraftApp) -> Vec<(String, String)> {
+fn symmetry_choices(app: &PrismApp) -> Vec<(String, String)> {
     use crate::vector_ui::PathRow;
     let Some(st) = app.session.active() else { return Vec::new() };
     crate::vector_ui::path_rows(&st.doc, st.active_layer)
@@ -2654,7 +2554,7 @@ fn symmetry_choices(app: &PhotocraftApp) -> Vec<(String, String)> {
 
 /// Options-bar painting symmetry: Symmetry Off, or mirror Brush and Eraser strokes across one of
 /// the document's paths (`paint.symmetryFromPath`). The button is lit while symmetry is on.
-fn symmetry_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn symmetry_menu(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let current = app.session.active().and_then(|st| st.symmetry_path.as_ref()).map(|axis| axis.source.clone());
     let choices = symmetry_choices(app);
@@ -2687,7 +2587,7 @@ fn symmetry_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// Options-bar brush chip: a click shows or hides Photoshop's Brush Preset picker below it (size,
 /// hardness, the preset library), the one a right-click on the canvas opens.
-fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushSettings, state: &mut crate::state::UiState) {
+fn brush_preset_chip(ui: &mut egui::Ui, b: &prism_engine::BrushSettings, state: &mut crate::state::UiState) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(44.0, 30.0), Sense::hover());
     let resp = ui.interact(r, crate::brush_picker::chip_id(), Sense::click());
@@ -2721,15 +2621,7 @@ fn layer_drop_payload(dragged: u64, target: LayerId, position: &str, selected: &
 /// Drag a layer row to reorder: drop above, below, or inside an existing group. With ⌥ held on
 /// release the layers stay put and copies land there instead (Photoshop).
 /// Multi-layer moves are atomic (one undo step), using the engine's stable document order.
-fn layer_drag_and_drop(
-    app: &PhotocraftApp,
-    ctx: &egui::Context,
-    ui: &egui::Ui,
-    l: &Layer,
-    rect: Rect,
-    resp: &egui::Response,
-    actions: &mut Vec<(String, Value)>,
-) {
+fn layer_drag_and_drop(app: &PrismApp, ctx: &egui::Context, ui: &egui::Ui, l: &Layer, rect: Rect, resp: &egui::Response, actions: &mut Vec<(String, Value)>) {
     let t = Tokens::get(ctx);
     let key = egui::Id::new("layer-drag");
     if resp.drag_started() {
@@ -2785,7 +2677,7 @@ fn layer_drag_and_drop(
 
 /// Photoshop shows a layer's effects as indented sub-rows ("Effects", then each effect). The eye
 /// on "Effects" shows or hides them all, the eye on an effect's row just that one (#1622).
-fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usize, actions: &mut Vec<(String, Value)>) {
+fn effect_rows(app: &mut PrismApp, ui: &mut egui::Ui, l: &Layer, depth: usize, actions: &mut Vec<(String, Value)>) {
     let t = Tokens::get(ui.ctx());
     let indent = 30.0 + depth as f32 * 14.0 + 34.0;
     let mut rows: Vec<(String, bool, Option<&'static str>)> = vec![("Effects".into(), l.effects.enabled, None)];
@@ -2841,7 +2733,7 @@ fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usi
 }
 
 /// New / add / subtract / intersect selection buttons (shared by selection tools).
-fn selection_mode_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn selection_mode_buttons(app: &mut PrismApp, ui: &mut egui::Ui) {
     ui.spacing_mut().item_spacing.x = 2.0;
     for (i, (icon, tip)) in [
         ("square", tl!("New selection").to_string()),
@@ -2874,7 +2766,7 @@ mod color_tests {
     }
 
     /// Click the hex field, select its text and type `text` one key per frame.
-    fn type_hex(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, text: &str) {
+    fn type_hex(h: &mut egui_kittest::Harness<'static, PrismApp>, text: &str) {
         use egui_kittest::kittest::Queryable;
         h.get_by_role(egui::accesskit::Role::TextInput).click();
         h.run_steps(1);
@@ -2889,17 +2781,17 @@ mod color_tests {
     /// The Color panel's hex readout is editable, with or without the leading `#`.
     #[test]
     fn color_panel_hex_field_takes_a_typed_hex() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.session.tools.foreground = [1.0, 1.0, 1.0, 1.0];
         let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 300.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+            |ui, app: &mut PrismApp| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     color_picker(app, ui);
                 }
             },
             app,
         );
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run_steps(2);
         type_hex(&mut h, "003300");
         assert_eq!(srgb_bytes(h.state().session.tools.foreground), [0x00, 0x33, 0x00]);
@@ -2912,17 +2804,17 @@ mod color_tests {
     #[test]
     fn color_panel_hex_field_ignores_partial_input() {
         use egui_kittest::kittest::Queryable;
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.session.tools.foreground = [0.2, 0.4, 0.6, 1.0];
         let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 300.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+            |ui, app: &mut PrismApp| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     color_picker(app, ui);
                 }
             },
             app,
         );
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run_steps(2);
         let fg = h.state().session.tools.foreground;
         h.get_by_role(egui::accesskit::Role::TextInput).click();
@@ -2943,11 +2835,12 @@ mod color_tests {
     #[test]
     fn color_readout_rgb_fields_take_values() {
         use egui_kittest::kittest::Queryable;
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+        app.ui.color_panel.mode = crate::state::ColorPanelMode::HsbSliders;
         let mut h = field_harness(app);
-        // The only spin buttons are R, G and B, in that order.
-        h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(1).unwrap().click();
+        // H, S, B precede the RGB readout in the sliders presentation.
+        h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(4).unwrap().click();
         h.run_steps(1);
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.run_steps(1);
@@ -2960,11 +2853,12 @@ mod color_tests {
         assert_eq!(srgb_bytes(h.state().session.tools.foreground), [0x00, 0x80, 0x00]);
     }
 
-    /// The pro Color panel's hex readout edits the foreground too.
+    /// The shared sliders presentation's hex readout edits the foreground too.
     #[test]
     fn color_field_hex_field_takes_a_typed_hex() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.session.tools.foreground = [1.0, 1.0, 1.0, 1.0];
+        app.ui.color_panel.mode = crate::state::ColorPanelMode::HsbSliders;
         let mut h = field_harness(app);
         type_hex(&mut h, "003300");
         assert_eq!(srgb_bytes(h.state().session.tools.foreground), [0x00, 0x33, 0x00]);
@@ -2973,17 +2867,17 @@ mod color_tests {
     #[test]
     fn hue_and_saturation_fields_take_values_on_black() {
         use egui_kittest::kittest::Queryable;
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
         let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 300.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+            |ui, app: &mut PrismApp| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     color_picker(app, ui);
                 }
             },
             app,
         );
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run_steps(2);
         // Hue, Saturation, Brightness, typed one key per frame. Black has no hue or saturation of its
         // own, so the first two used to reset to 0 and this ended on white.
@@ -3000,22 +2894,22 @@ mod color_tests {
         assert_eq!(srgb_bytes(h.state().session.tools.foreground), [0, 255, 0]);
     }
 
-    fn field_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+    fn field_harness(app: PrismApp) -> egui_kittest::Harness<'static, PrismApp> {
         // 60 fps steps, so two clicks a frame apart are a double-click.
         let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+            |ui, app: &mut PrismApp| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     color_field(app, ui);
                 }
             },
             app,
         );
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run_steps(2);
         h
     }
 
-    fn click(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, p: egui::Pos2) {
+    fn click(h: &mut egui_kittest::Harness<'_, PrismApp>, p: egui::Pos2) {
         h.hover_at(p);
         h.run_steps(1);
         for pressed in [true, false] {
@@ -3027,7 +2921,8 @@ mod color_tests {
     /// A click on the background chip makes the field edit the background, not the foreground.
     #[test]
     fn background_chip_retargets_the_color_field() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        use egui_kittest::kittest::Queryable;
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.session.tools.foreground = [0.2, 0.4, 0.6, 1.0];
         app.session.tools.background = [0.0, 0.0, 0.0, 1.0];
         let mut h = field_harness(app);
@@ -3035,7 +2930,8 @@ mod color_tests {
         // The background chip's corner that the foreground chip doesn't cover.
         click(&mut h, min + vec2(40.0, 40.0));
         // The field's top-left: no saturation, full brightness.
-        click(&mut h, min + vec2(60.0, 10.0));
+        let field = h.get_by_label("Hue cube field").rect();
+        click(&mut h, field.min + vec2(0.5, 0.5));
         assert!(h.state().ui.color_panel.background);
         let tools = &h.state().session.tools;
         assert_eq!(tools.foreground, [0.2, 0.4, 0.6, 1.0]);
@@ -3044,7 +2940,7 @@ mod color_tests {
 
     #[test]
     fn double_clicking_a_chip_opens_its_color_picker() {
-        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let mut h = field_harness(app);
         let min = h.ctx.input(|i| i.viewport_rect()).min;
         // The foreground point is where the chips overlap: the foreground is on top there.
@@ -3063,19 +2959,24 @@ mod color_tests {
     /// Black has no hue of its own, so each chip remembers the hue last picked for it.
     #[test]
     fn each_chip_keeps_its_own_hue_on_black() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        use egui_kittest::kittest::Queryable;
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
         app.session.tools.background = [0.0, 0.0, 0.0, 1.0];
         let mut h = field_harness(app);
         let min = h.ctx.input(|i| i.viewport_rect()).min;
         // The hue strip runs from red at the top through blue (a third down) and green (two thirds).
-        let (strip_x, green, blue) = (285.0, 88.0, 48.0);
-        click(&mut h, min + vec2(strip_x, green));
+        let strip = h.get_by_label("Hue cube slider").rect();
+        let strip_x = strip.center().x;
+        let green = strip.top() + strip.height() * (2.0 / 3.0);
+        let blue = strip.top() + strip.height() / 3.0;
+        click(&mut h, pos2(strip_x, green));
         click(&mut h, min + vec2(40.0, 40.0));
-        click(&mut h, min + vec2(strip_x, blue));
+        click(&mut h, pos2(strip_x, blue));
         click(&mut h, min + vec2(16.0, 16.0));
         // Near the field's top-right: high saturation and brightness.
-        click(&mut h, min + vec2(265.0, 10.0));
+        let field = h.get_by_label("Hue cube field").rect();
+        click(&mut h, field.right_top() + vec2(-0.5, 0.5));
         let [r, g, b] = srgb_bytes(h.state().session.tools.foreground);
         assert!(g > 200 && r < 64 && b < 64, "the foreground's green, not the background's blue: {:?}", [r, g, b]);
     }
@@ -3086,7 +2987,7 @@ mod history_transform_tests {
     use super::*;
     use egui_kittest::Harness;
 
-    fn click(h: &mut Harness<'static, PhotocraftApp>, p: egui::Pos2) {
+    fn click(h: &mut Harness<'static, PrismApp>, p: egui::Pos2) {
         h.hover_at(p);
         h.run_steps(1);
         for pressed in [true, false] {
@@ -3100,13 +3001,13 @@ mod history_transform_tests {
     #[test]
     fn history_rows_wait_for_an_open_transform() {
         for transforming in [true, false] {
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
             app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
             app.run("layer.new.layer", json!({})).unwrap();
             app.run("select.rect", json!({"x": 20, "y": 20, "width": 60, "height": 40})).unwrap();
             app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
             app.run("select.deselect", json!({})).unwrap();
-            let mut h = Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| history(app, ui), app);
+            let mut h = Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(|ui, app: &mut PrismApp| history(app, ui), app);
             h.run_steps(2);
             if transforming {
                 let ctx = h.ctx.clone();
@@ -3137,14 +3038,14 @@ mod lock_tests {
     use crate::canvas::{ToolEvent, tool_event};
     use egui::Modifiers;
 
-    fn click_lock(app: &mut PhotocraftApp) {
+    fn click_lock(app: &mut PrismApp) {
         let st = app.session.active().unwrap();
         let l = st.active_layer.and_then(|id| st.doc.layer(id)).unwrap();
         let (cmd, p) = simple_lock_toggle(crate::doc_props_ui::is_background(&st.doc, l), l);
         app.run(&cmd, p).unwrap();
     }
 
-    fn erase_line(app: &mut PhotocraftApp) {
+    fn erase_line(app: &mut PrismApp) {
         app.ui.tool = Tool::Eraser;
         let m = Modifiers::NONE;
         tool_event(app, ToolEvent::Down { x: 10.0, y: 40.0, pressure: 1.0 }, m);
@@ -3156,7 +3057,7 @@ mod lock_tests {
     fn simple_lock_button_never_locks_the_eraser_out_of_the_background() {
         // #76: the simple themes' lock button used to toggle "lock all" on the Background, which
         // kept showing as locked and then refused every paint tool.
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 120, "height": 80})).unwrap();
         app.run("tools.setColors", json!({"background": "#ff0000"})).unwrap();
         app.run("tools.setBrush", json!({"brush": {"size": 12, "hardness": 1.0}})).unwrap();
@@ -3191,7 +3092,7 @@ mod swatch_type_tests {
     /// would recolour selected type the moment it was selected.
     #[test]
     fn idle_hsb_sliders_leave_the_foreground_and_selected_type_alone() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
         let id = app.run("type.create", json!({"text": "Hello world", "size": 40, "x": 20, "y": 100, "color": "#ffffff"})).unwrap()["layer"].as_u64().unwrap();
         app.run("tools.setColors", json!({"foreground": "#d8452e"})).unwrap();
@@ -3199,11 +3100,11 @@ mod swatch_type_tests {
         app.ui.tool = Tool::Type;
         app.ui.text_edit =
             Some(crate::state::TextEdit { layer: id, caret: 0, anchor: 5, session: "s".into(), created: false, dragging: false, resize: None, preedit: None });
-        let mut h = Harness::builder().with_size(vec2(300.0, 300.0)).build_ui_state(|ui, app: &mut PhotocraftApp| color_picker(app, ui), app);
+        let mut h = Harness::builder().with_size(vec2(300.0, 300.0)).build_ui_state(|ui, app: &mut PrismApp| color_picker(app, ui), app);
         h.run_steps(4);
         assert_eq!(h.state().session.tools.foreground, fg);
         let st = h.state().session.active().unwrap();
-        let Some(photocraft_doc::LayerContent::Text(t)) = st.doc.layer(photocraft_doc::LayerId(id)).map(|l| &l.content) else { panic!("type layer") };
+        let Some(prism_doc::LayerContent::Text(t)) = st.doc.layer(prism_doc::LayerId(id)).map(|l| &l.content) else { panic!("type layer") };
         assert_eq!(t.char_runs().len(), 1, "still one white run");
     }
 }
@@ -3212,7 +3113,7 @@ mod swatch_type_tests {
 mod type_flyout_tests {
     use super::*;
 
-    fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, time: f64, events: Vec<egui::Event>) {
+    fn frame(app: &mut PrismApp, ctx: &egui::Context, time: f64, events: Vec<egui::Event>) {
         let mut out = ctx.run_ui(
             egui::RawInput { time: Some(time), events, screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 1800.0))), ..Default::default() },
             |ui| toolbar(app, ui),
@@ -3222,10 +3123,10 @@ mod type_flyout_tests {
 
     #[test]
     fn long_press_type_button_selects_vertical_without_selecting_on_release() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let initial = app.ui.tool;
         let ctx = egui::Context::default();
-        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        PrismApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         frame(&mut app, &ctx, 0.0, vec![]);
         frame(&mut app, &ctx, 0.1, vec![]);
         let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::Type)).unwrap();
@@ -3266,9 +3167,9 @@ mod type_flyout_tests {
 
     #[test]
     fn long_press_clone_stamp_selects_pattern_stamp() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
-        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        PrismApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         frame(&mut app, &ctx, 0.0, vec![]);
         frame(&mut app, &ctx, 0.1, vec![]);
         let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::CloneStamp)).unwrap();
@@ -3313,9 +3214,9 @@ mod toolbar_hidden_tests {
     use super::*;
 
     /// Clickable tool-sized buttons the toolbar drew in its last pass.
-    fn tool_buttons(app: &mut PhotocraftApp) -> usize {
+    fn tool_buttons(app: &mut PrismApp) -> usize {
         let ctx = egui::Context::default();
-        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        PrismApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         for time in [0.0, 0.1] {
             let mut out = ctx.run_ui(
                 egui::RawInput { time: Some(time), screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 1800.0))), ..Default::default() },
@@ -3327,14 +3228,14 @@ mod toolbar_hidden_tests {
         ctx.viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == size && w.sense.senses_click()).count())
     }
 
-    fn hide(app: &mut PhotocraftApp, tools: &[Tool]) {
+    fn hide(app: &mut PrismApp, tools: &[Tool]) {
         let names: Vec<String> = tools.iter().map(|tool| format!("{tool:?}")).collect();
         app.session.edit_prefs(|p| p.toolbar.hidden = names);
     }
 
     #[test]
     fn hidden_tools_leave_the_toolbar() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let all = tool_buttons(&mut app);
         let slots: usize = TOOL_SECTIONS.iter().map(|section| section.len()).sum();
         hide(&mut app, &Tool::ALL);
@@ -3367,7 +3268,7 @@ mod properties_card_tests {
     /// Arithmetic left uncommitted in one fill layer's card never lands on the layer selected next.
     #[test]
     fn uncommitted_arithmetic_stays_with_its_layer() {
-        let mut s = photocraft_engine::Session::new();
+        let mut s = prism_engine::Session::new();
         s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
         let mut ids = Vec::new();
         for color in ["#00ff00", "#0000ff"] {
@@ -3376,17 +3277,17 @@ mod properties_card_tests {
         }
         // The layer selected next already shows 25, the value the edited one has when `25*` stops it.
         s.execute("layer.setProps", json!({"layer": ids[0].0, "opacity": 0.25})).unwrap();
-        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        let mut app = PrismApp::new(s, crate::Services::default());
         app.ui.panels.properties = true;
         let mut h = Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+            |ui, app: &mut PrismApp| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
                     properties_window(app, ui.ctx());
                 }
             },
             app,
         );
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run_steps(2);
         h.query_all_by_role(egui::accesskit::Role::SpinButton).next().unwrap().click();
         h.run_steps(1);
@@ -3411,9 +3312,9 @@ mod toolbar_tests {
     /// #1197: the header chevron switches the toolbar between one and two columns.
     #[test]
     fn header_chevron_toggles_two_columns() {
-        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 1400.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+            |ui, app: &mut PrismApp| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     toolbar(app, ui);
                     let left = ui.available_rect_before_wrap().left();
@@ -3422,16 +3323,24 @@ mod toolbar_tests {
             },
             app,
         );
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
         h.run_steps(2);
-        let left = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.ctx.data(|d| d.get_temp::<f32>(egui::Id::new("toolbar-test-left"))).unwrap_or(0.0);
+        let left = |h: &egui_kittest::Harness<'_, PrismApp>| h.ctx.data(|d| d.get_temp::<f32>(egui::Id::new("toolbar-test-left"))).unwrap_or(0.0);
         let single = left(&h);
         assert!(!h.state().ui.panels.toolbar_double);
+
+        h.hover_at(h.get_by_label("Toolbar").rect().center());
+        h.run_steps(2);
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
 
         h.get_by_label("Toolbar").click();
         h.run_steps(2);
         assert!(h.state().ui.panels.toolbar_double);
         assert!(left(&h) > single + 20.0, "the toolbar did not widen: {single} -> {}", left(&h));
+
+        h.hover_at(h.get_by_label("Toolbar").rect().center());
+        h.run_steps(2);
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
 
         h.get_by_label("Toolbar").click();
         h.run_steps(2);

@@ -12,13 +12,13 @@
 
 use std::sync::{Arc, OnceLock};
 
-use photocraft_color::blend::BlendMode;
-use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::effects::GradientStyle;
-use photocraft_doc::vector::{FillRule, Knot, LineCap, LineJoin, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath};
-use photocraft_doc::{Document, Fill, Group, Layer, LayerContent, MAX_GROUP_DEPTH};
-use photocraft_geom::{Point, Rect, Size};
-use photocraft_raster::Surface;
+use prism_color::blend::BlendMode;
+use prism_color::{Color, ColorMode, PixelFormat, SampleType};
+use prism_doc::effects::GradientStyle;
+use prism_doc::vector::{FillRule, Knot, LineCap, LineJoin, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath};
+use prism_doc::{Document, Fill, Group, Layer, LayerContent, MAX_GROUP_DEPTH};
+use prism_geom::{Point, Rect, Size};
+use prism_raster::Surface;
 use resvg::tiny_skia;
 use resvg::usvg;
 
@@ -50,7 +50,7 @@ fn fonts() -> Arc<usvg::fontdb::Database> {
     static DB: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
     DB.get_or_init(|| {
         let mut db = usvg::fontdb::Database::new();
-        for f in photocraft_text::CRAFT_FONTS {
+        for f in prism_text::CRAFT_FONTS {
             db.load_font_data(f.bytes.to_vec());
         }
         db.load_system_fonts();
@@ -125,7 +125,7 @@ pub fn import_svg(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
 
 /// The whole drawing rendered at `scale` (1 = its own size), as a straight-alpha RGBA buffer at
 /// the origin. Smart objects use it to stay sharp at any placement.
-pub fn rasterize(bytes: &[u8], scale: f32) -> Result<photocraft_compose::Buffer, IoError> {
+pub fn rasterize(bytes: &[u8], scale: f32) -> Result<prism_compose::Buffer, IoError> {
     let tree = parse(bytes)?;
     let cv = canvas(&tree, &mut Vec::new());
     let k = cv.scale * scale.clamp(1.0 / 64.0, 64.0);
@@ -135,7 +135,7 @@ pub fn rasterize(bytes: &[u8], scale: f32) -> Result<photocraft_compose::Buffer,
     resvg::render(&tree, tiny_skia::Transform::from_scale(k, k), &mut pixmap.as_mut());
     let rect = Rect::new(0, 0, w as i32, h as i32);
     let px = pixmap.pixels().iter().map(|p| rgba(p.demultiply())).collect();
-    Ok(photocraft_compose::Buffer { rect, px })
+    Ok(prism_compose::Buffer { rect, px })
 }
 
 /// A transparent pixmap, or `None` past [`MAX_RASTER_PIXELS`].
@@ -155,7 +155,7 @@ fn surface(pixmap: &tiny_skia::Pixmap, rect: Rect, fmt: PixelFormat) -> Surface 
     let n = fmt.channels();
     let mut data = vec![0.0f32; pixmap.pixels().len() * n];
     for (p, out) in pixmap.pixels().iter().zip(data.chunks_exact_mut(n)) {
-        photocraft_raster::from_rgba_into(&fmt, rgba(p.demultiply()), out);
+        prism_raster::from_rgba_into(&fmt, rgba(p.demultiply()), out);
     }
     let mut s = Surface::new(fmt);
     if !rect.is_empty() {
@@ -347,7 +347,7 @@ impl Conv {
             _ => FillRule::NonZero,
         };
         let mut sh = ShapeLayer { path: Path { subpaths, fill_rule, inverted: false }, fill, stroke, ..Default::default() };
-        sh.cache = Some(photocraft_vector::render_shape(&sh, self.fmt, self.canvas));
+        sh.cache = Some(prism_vector::render_shape(&sh, self.fmt, self.canvas));
         Some(Layer::new(self.name(p.id(), 0), LayerContent::Shape(sh)))
     }
 

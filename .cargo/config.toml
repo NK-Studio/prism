@@ -1,5 +1,5 @@
 [alias]
 xtask = "run -p xtask --"
-build-fast = "build --profile fast -p photocraft"
-run-fast = "run --profile fast -p photocraft"
+build-fast = "build --profile fast -p prism"
+run-fast = "run --profile fast -p prism"
 dev = "run --quiet -p xtask -- dev"

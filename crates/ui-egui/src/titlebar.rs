@@ -1,5 +1,5 @@
 //! The window's own title bar on Windows and Linux, where the window has no OS decorations
-//! ([`PhotocraftApp::custom_titlebar`]): the app's top bar (`panels::title_bar`) is the title bar,
+//! ([`PrismApp::custom_titlebar`]): the app's top bar (`panels::title_bar`) is the title bar,
 //! as in Photoshop on Windows. The free gap between its menus and controls drags the window and a
 //! double-click there maximizes it (`panels::title_bar`, on every platform); caption buttons at
 //! the far right minimize, maximize/restore and close, and thin invisible zones along the window's
@@ -8,7 +8,7 @@
 use egui::{CursorIcon, Id, LayerId, Order, PointerButton, Rect, ResizeDirection, Sense, Stroke, Ui, ViewportCommand, pos2, vec2};
 use serde_json::json;
 
-use crate::PhotocraftApp;
+use crate::PrismApp;
 use crate::theme::Tokens;
 
 /// One caption button: as wide as the native Windows ones.
@@ -46,11 +46,11 @@ fn toggle_maximize(ctx: &egui::Context) {
 /// full bar height, flush with the window's edge (even if the bar's contents run wider) so a
 /// maximized window's corner hits Close. Close runs File › Exit, which asks about unsaved
 /// documents first.
-pub fn caption_buttons(app: &mut PhotocraftApp, ui: &mut Ui, bar: Rect) {
+pub fn caption_buttons(app: &mut PrismApp, ui: &mut Ui, bar: Rect) {
     caption_buttons_for(app, ui, bar, None);
 }
 
-pub(crate) fn caption_buttons_for(app: &mut PhotocraftApp, ui: &mut Ui, bar: Rect, window: Option<u64>) {
+pub(crate) fn caption_buttons_for(app: &mut PrismApp, ui: &mut Ui, bar: Rect, window: Option<u64>) {
     let t = Tokens::get(ui.ctx());
     let max = maximized(ui.ctx());
     let right = bar.right().min(ui.ctx().content_rect().right());
@@ -158,12 +158,12 @@ pub fn resize_zones(ui: &mut Ui) {
 mod tests {
     use super::*;
     use egui::{Event, Pos2, RawInput, ViewportId};
-    use photocraft_engine::Session;
+    use prism_engine::Session;
 
     /// A headless window `width` pt wide showing the title bar and the resize zones.
     struct Win {
         ctx: egui::Context,
-        app: PhotocraftApp,
+        app: PrismApp,
         width: f32,
         time: f64,
         maximized: bool,
@@ -172,8 +172,8 @@ mod tests {
     impl Win {
         fn new(width: f32) -> Self {
             let ctx = egui::Context::default();
-            PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
-            let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+            PrismApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+            let mut app = PrismApp::new(Session::new(), crate::Services::default());
             app.custom_titlebar = true;
             Self { ctx, app, width, time: 0.0, maximized: false }
         }
@@ -259,9 +259,9 @@ mod tests {
             for a in &widgets {
                 assert!(a.right() <= min.left(), "{a:?} runs into the caption buttons at {width}");
             }
-            // Wide windows show the whole group; the narrowest drops Discord (also Help › Discord).
+            // The studio app has no community promotion at any window width.
             let has_discord = texts(&out).iter().any(|(t, _)| t == "Discord");
-            assert_eq!(has_discord, width > 1000.0, "Discord at {width}");
+            assert!(!has_discord, "Discord removed at {width}");
         }
     }
 
@@ -272,7 +272,7 @@ mod tests {
         let out = w.frame(vec![]);
         let file = texts(&out).into_iter().find(|(t, _)| t == "File").map(|(_, r)| r).expect("the File menu title");
         assert!(file.left() < 30.0, "menus start at the bar's left margin: {file:?}");
-        assert!(w.ctx.data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::new("photocraft-brand-mark"))).is_none());
+        assert!(w.ctx.data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::new("prism-brand-mark"))).is_none());
     }
 
     #[test]

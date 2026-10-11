@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::PhotocraftApp;
+use crate::PrismApp;
 
 /// At most this many notices are kept; older ones drop off.
 pub const MAX_NOTICES: usize = 3;
@@ -40,14 +40,14 @@ impl Notice {
 }
 
 /// Show a notice (newest last); returns its id.
-pub fn post(app: &mut PhotocraftApp, title: impl Into<String>, lines: Vec<String>, error: bool, dismiss_pref: Option<&str>) -> u64 {
+pub fn post(app: &mut PrismApp, title: impl Into<String>, lines: Vec<String>, error: bool, dismiss_pref: Option<&str>) -> u64 {
     let id = app.ui.alloc_id();
     app.ui.notices.push(Notice { id, title: title.into(), lines, error, dismiss_pref: dismiss_pref.map(str::to_owned), args: Vec::new() });
     cap_notices(app);
     id
 }
 
-fn cap_notices(app: &mut PhotocraftApp) {
+fn cap_notices(app: &mut PrismApp) {
     while app.ui.notices.len() > MAX_NOTICES {
         let oldest_temporary = app.ui.notices.iter().position(|notice| notice.dismiss_pref.is_none()).unwrap_or(0);
         app.ui.notices.remove(oldest_temporary);
@@ -57,7 +57,7 @@ fn cap_notices(app: &mut PhotocraftApp) {
 /// A full refresh of document `doc` fell back to the CPU compositor (`reason`, the GPU's) and took
 /// `ms`. The canvas doesn't respond while it runs, so once per document say why it was slow and
 /// which edits will do it again (#1015).
-pub fn slow_cpu_refresh(app: &mut PhotocraftApp, doc: u64, ms: f64, reason: Option<&str>) {
+pub fn slow_cpu_refresh(app: &mut PrismApp, doc: u64, ms: f64, reason: Option<&str>) {
     if ms.is_nan() || ms < SLOW_CPU_REFRESH_MS || app.ui.slow_refresh_noticed.contains(&doc) {
         return;
     }
@@ -78,7 +78,7 @@ pub fn slow_cpu_refresh(app: &mut PhotocraftApp, doc: u64, ms: f64, reason: Opti
     post(app, tl!("Large document: redrawing on the CPU"), lines, false, None);
 }
 
-fn dismiss(app: &mut PhotocraftApp, id: u64) {
+fn dismiss(app: &mut PrismApp, id: u64) {
     let dismiss_pref = app.ui.notices.iter().find(|notice| notice.id == id).and_then(|notice| notice.dismiss_pref.clone());
     app.ui.notices.retain(|notice| notice.id != id);
     if let Some(key) = dismiss_pref {
@@ -90,7 +90,7 @@ fn dismiss(app: &mut PhotocraftApp, id: u64) {
 
 /// Report import/export `warnings` for the file operation `what` (e.g. "Opened a.psd"): the status
 /// bar says how many there were, and a notice lists them. Nothing happens when there are none.
-pub fn io_warnings(app: &mut PhotocraftApp, what: &str, warnings: &[String]) {
+pub fn io_warnings(app: &mut PrismApp, what: &str, warnings: &[String]) {
     let Some(first) = warnings.first() else { return };
     let n = warnings.len();
     app.ui.status = if n == 1 { format!("{what}: {first}") } else { format!("{what} with {n} warnings: {first} …") };
@@ -100,21 +100,21 @@ pub fn io_warnings(app: &mut PhotocraftApp, what: &str, warnings: &[String]) {
 
 /// Report a failed file operation: the status bar shows it as an error and a notice keeps it on
 /// screen until dismissed.
-pub fn error(app: &mut PhotocraftApp, message: String) {
+pub fn error(app: &mut PrismApp, message: String) {
     app.ui.status = message.clone();
     app.ui.status_error = true;
     post(app, message, Vec::new(), true, None);
 }
 
 /// Draw the notices; each has a close button.
-pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
     if app.ui.notices.is_empty() {
         return;
     }
     let t = crate::theme::Tokens::get(ctx);
     let mut dismiss_id = None;
     // Clear the status bar (~24 px) and leave the dock's edge some air.
-    egui::Area::new(egui::Id::new("photocraft-notices"))
+    egui::Area::new(egui::Id::new("prism-notices"))
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -36.0))
         .interactable(true)
@@ -158,12 +158,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PhotocraftApp, Services};
-    use photocraft_engine::Session;
+    use crate::{PrismApp, Services};
+    use prism_engine::Session;
 
     #[test]
     fn a_slow_cpu_refresh_is_explained_once_per_document() {
-        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        let mut app = PrismApp::new(Session::new(), Services::default());
         slow_cpu_refresh(&mut app, 1, 400.0, Some(crate::gpu_canvas::OVER_BUDGET));
         slow_cpu_refresh(&mut app, 1, f64::NAN, Some(crate::gpu_canvas::OVER_BUDGET));
         assert!(app.ui.notices.is_empty(), "a quick refresh needs no explanation");
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn dismissing_a_notice_writes_its_own_preference_key() {
-        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        let mut app = PrismApp::new(Session::new(), Services::default());
         post(&mut app, "Dismissible", Vec::new(), false, Some("ui.testNoticeDismissed"));
         let id = app.ui.notices[0].id;
         dismiss(&mut app, id);

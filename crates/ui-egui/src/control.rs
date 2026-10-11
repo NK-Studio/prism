@@ -38,7 +38,7 @@ use std::sync::mpsc::Sender;
 use base64::Engine as _;
 use serde_json::{Value, json};
 
-use crate::PhotocraftApp;
+use crate::PrismApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{DialogKind, Tool, UiState};
 
@@ -72,14 +72,14 @@ pub enum Outcome {
     AfterInput,
     /// A command started a background job and the caller waits for it: reply with its result
     /// once it has been applied (or with its error / "cancelled").
-    AfterJob(photocraft_engine::jobs::JobId),
+    AfterJob(prism_engine::jobs::JobId),
 }
 
 /// The fields `ui.set` reads. Anything else is rejected before a field is applied, and every
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 22] = [
+pub const UI_SET_FIELDS: [&str; 25] = [
     "tool",
     "panels",
     "dock",
@@ -102,6 +102,9 @@ pub const UI_SET_FIELDS: [&str; 22] = [
     "brushSize",
     "gradientBlendMode",
     "gradientClassic",
+    "typeFontFilter",
+    "arrow",
+    "lineRoundTips",
 ];
 
 /// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
@@ -186,7 +189,7 @@ fn wrap(r: Result<Value, String>) -> Outcome {
 /// Run a command the way automation does (script events off). Long commands may run as
 /// background jobs: by default the reply waits for the job's result (backward compatible); with
 /// `wait` false it is `{job, pending: true}` at once.
-fn run_waiting(app: &mut PhotocraftApp, wait: bool, run: impl FnOnce(&mut PhotocraftApp) -> Result<Value, String>) -> Outcome {
+fn run_waiting(app: &mut PrismApp, wait: bool, run: impl FnOnce(&mut PrismApp) -> Result<Value, String>) -> Outcome {
     let events_enabled = app.session.prefs().script_events.enabled;
     if events_enabled {
         app.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
@@ -204,7 +207,7 @@ fn run_waiting(app: &mut PhotocraftApp, wait: bool, run: impl FnOnce(&mut Photoc
 
 /// Screen position of document point (x, y) on the main canvas, where a `ui.pointer` right-click
 /// opens its menu (the mouse's opens at the pointer); the canvas centre when it can't be mapped.
-fn screen_point(app: &PhotocraftApp, x: f64, y: f64) -> [f32; 2] {
+fn screen_point(app: &PrismApp, x: f64, y: f64) -> [f32; 2] {
     let p = crate::canvas::ViewXform::active(app)
         .map(|xf| xf.to_screen(x as f32, y as f32))
         .filter(|p| p.is_finite())
@@ -212,7 +215,7 @@ fn screen_point(app: &PhotocraftApp, x: f64, y: f64) -> [f32; 2] {
     [p.x, p.y]
 }
 
-pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+pub fn handle(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let saved = app.session.authorize;
     if let Some(gate) = app.services.automation_authorize {
         app.session.authorize = Some(gate);
@@ -222,7 +225,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
     outcome
 }
 
-fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let u = |k: &str| p.get(k).and_then(Value::as_u64);
@@ -246,7 +249,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         match p.get("dialog") {
             Some(v) => {
                 let Some(id) = v.as_u64() else { return err("invalid dialog id") };
-                if !app.ui.dialogs.iter().any(|d| d.id == id && d.presentation == crate::state::DialogPresentation::Native) {
+                if !app.ui.dialogs.iter().any(|d| d.id == id && crate::native_dialogs::own_window(d)) {
                     return err("no native dialog");
                 }
                 Some(id)
@@ -309,7 +312,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             // `engine.execute` is programmatic: engine commands run directly with their default
             // params and never open a dialog (an agent would otherwise get a modal instead of a
             // result). `ui.menu.invoke` behaves like a menu click, so it may open the dialog.
-            if req.method == "engine.execute" && photocraft_engine::commands::find(id).is_some() {
+            if req.method == "engine.execute" && prism_engine::commands::find(id).is_some() {
                 return run_waiting(app, wait, |app| app.run(id, params));
             }
             run_waiting(app, wait, |app| crate::menus::invoke(app, ctx, id, params))
@@ -320,8 +323,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         "jobs.cancel" => {
             let all = p.get("job").is_none_or(Value::is_null);
             match p.get("job").and_then(Value::as_u64) {
-                Some(j) if app.session.job(photocraft_engine::jobs::JobId(j)).is_some() => {
-                    crate::jobs_ui::cancel(app, photocraft_engine::jobs::JobId(j));
+                Some(j) if app.session.job(prism_engine::jobs::JobId(j)).is_some() => {
+                    crate::jobs_ui::cancel(app, prism_engine::jobs::JobId(j));
                     ok(json!({"cancelled": 1}))
                 }
                 Some(j) => err(format!("no running job {j}")),
@@ -343,7 +346,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             }
             let gradient_blend = if let Some(value) = p.get("gradientBlendMode") {
                 let Some(name) = value.as_str() else { return err("gradientBlendMode must be a blend mode name") };
-                let Some(mode) = photocraft_engine::commands::blend_from_str(name).filter(|m| photocraft_color::BlendMode::LAYER_MODES.contains(m)) else {
+                let Some(mode) = prism_engine::commands::blend_from_str(name).filter(|m| prism_color::BlendMode::LAYER_MODES.contains(m)) else {
                     return err(format!("unknown gradient blend mode `{name}`"));
                 };
                 Some(mode)
@@ -358,6 +361,13 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     Some(t) => Tool::from_name(t).map(Some).ok_or_else(|| format!("unknown tool `{t}`"))?,
                     None => None,
                 };
+                let font_filter: Option<crate::state::TypeFontFilter> =
+                    p.get("typeFontFilter").map(|v| serde_json::from_value(v.clone()).map_err(|e| format!("typeFontFilter: {e}"))).transpose()?;
+                let arrow: Option<crate::state::ArrowOptions> = merged_object(&app.ui.tool_options.arrow, p.get("arrow"), "arrow")?;
+                if arrow.as_ref().is_some_and(|o| !o.valid()) {
+                    return Err("arrow width must be 0.1–1000 px, headSize 0.1–10000 px and headAngle 10–160 degrees".into());
+                }
+                let line_round_tips = bool_field(p, "lineRoundTips")?;
                 let gradient_classic = bool_field(p, "gradientClassic")?;
                 let panels = merged_object(&app.ui.panels, p.get("panels"), "panels")?;
                 let mask_target = bool_field(p, "maskTarget")?;
@@ -425,8 +435,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 // applied; non-numeric values keep the API's historical silent no-op.
                 let brush_size: Option<f64> = match p.get("brushSize").and_then(Value::as_f64) {
                     Some(size) => {
-                        if !size.is_finite() || size > f64::from(photocraft_paint::MAX_BRUSH_SIZE) {
-                            return Err(format!("brushSize must be finite and at most {} px", photocraft_paint::MAX_BRUSH_SIZE));
+                        if !size.is_finite() || size > f64::from(prism_paint::MAX_BRUSH_SIZE) {
+                            return Err(format!("brushSize must be finite and at most {} px", prism_paint::MAX_BRUSH_SIZE));
                         }
                         Some(size)
                     }
@@ -439,6 +449,15 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     // Each tool keeps its own brush (#218), so switch it in before `brushSize`
                     // below sets the new tool's size.
                     crate::paint_mouse::sync_tool_brush(app);
+                }
+                if let Some(rounded) = line_round_tips {
+                    app.ui.tool_options.line_round_tips = rounded;
+                }
+                if let Some(arrow) = arrow {
+                    app.ui.tool_options.arrow = arrow;
+                }
+                if let Some(filter) = font_filter {
+                    app.ui.tool_options.type_font_filter = filter;
                 }
                 let gradient_before = app.ui.tool_options.clone();
                 if let Some(mode) = gradient_blend {
@@ -546,7 +565,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 "command" | "Command" => {
                     let Some(cmd) = s("command") else { return err("command dialogs need `command`") };
-                    let label = photocraft_engine::commands::find(cmd).map(|c| c.label).unwrap_or(cmd);
+                    let label = prism_engine::commands::find(cmd).map(|c| c.label).unwrap_or(cmd);
                     return ok(json!({"dialog": crate::dialogs::open_command_dialog(app, cmd, label)}));
                 }
                 other => return err(format!("unknown dialog kind `{other}`")),
@@ -885,9 +904,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         "ui.gpu.simulateLoss" => {
             let error = p.get("error").and_then(Value::as_bool).unwrap_or(false);
             let fault = if error {
-                photocraft_gpu::Fault::Error("simulated error (ui.gpu.simulateLoss)".into())
+                prism_gpu::Fault::Error("simulated error (ui.gpu.simulateLoss)".into())
             } else {
-                photocraft_gpu::Fault::Lost("simulated (ui.gpu.simulateLoss)".into())
+                prism_gpu::Fault::Lost("simulated (ui.gpu.simulateLoss)".into())
             };
             let active = match app.gpu_health() {
                 Some(h) => {
@@ -912,7 +931,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             if p.get("focus").and_then(Value::as_bool).unwrap_or(true) {
                 ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
             }
-            // The capture itself is issued by `PhotocraftApp::issue_screenshots` once open/close
+            // The capture itself is issued by `PrismApp::issue_screenshots` once open/close
             // animations (modals, popups) have settled.
             let token = app.ui.alloc_id();
             ctx.request_repaint();
@@ -943,18 +962,21 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
 }
 
 /// Snapshot of everything on screen, addressable by id.
-pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
+pub fn inspect(app: &PrismApp, ctx: &egui::Context) -> Value {
     let screen = ctx.content_rect();
     let dialogs: Vec<Value> =
         app.ui.dialogs.iter().map(|d| json!({"id": d.id, "kind": d.kind, "title": crate::dialogs::title(d), "fields": d.fields, "window": d.window, "presentation":d.presentation,"sourceDocument":d.source_document,"sourceRevision":d.source_revision})).collect();
     json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
+        "cursorResource": crate::cursor_pack::last_drawn(ctx),
+        "cursorPackResources": crate::cursor_pack::resource_count(ctx),
         "toolOptions": app.ui.tool_options,
         "magnetic": app.ui.magnetic,
         "textEdit": app.ui.text_edit,
         "typeTransform": app.ui.type_transform,
         "shapeCorners": crate::shape_corners_ui::inspect(app),
+        "arrowHandles": crate::arrow_handles_ui::inspect(app),
         "layerMenu": app.ui.layer_menu,
         "brushPicker": app.ui.brush_picker.map(|pos| json!({
             "pos": pos,
@@ -971,6 +993,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             })
         }),
         "panels": app.ui.panels,
+        "colorPanel": app.ui.color_panel,
         "view": app.ui.view,
         "views": app.ui.views,
         "dialogs": dialogs,
@@ -986,8 +1009,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "notices": app.ui.notices,
         "gpuFallbackNotice": app.ui.gpu_fallback_notice,
         "frame": app.frame,
-        "session": photocraft_engine::inspect::session(&app.session),
-        "document": app.session.active().map(photocraft_engine::inspect::document),
+        "session": prism_engine::inspect::session(&app.session),
+        "document": app.session.active().map(prism_engine::inspect::document),
         "perf": {"fps": app.fps, "timings": app.perf},
         "brush": {"size": app.session.tools.brush.size, "hardness": app.session.tools.brush.hardness, "opacity": app.session.tools.brush.opacity},
         "distort": app.distort.describe(),
@@ -996,7 +1019,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     })
 }
 
-pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: Option<&str>) -> Value {
+pub fn save_screenshot(app: &mut PrismApp, image: &egui::ColorImage, path: Option<&str>) -> Value {
     let [w, h] = image.size;
     let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
     let png = match app.services.encode_png.as_ref() {
@@ -1031,7 +1054,7 @@ pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: 
 mod tests {
     use super::*;
 
-    fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
+    fn call(app: &mut PrismApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
         let (req, _rx) = ControlRequest::new(method, params);
         match handle(app, ctx, &req) {
             Outcome::Done(v) => v,
@@ -1042,7 +1065,7 @@ mod tests {
     #[test]
     fn expired_queued_edit_does_not_run_and_a_live_retry_runs_once() {
         use std::time::{Duration, Instant};
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
         let before = app.session.active().unwrap();
         let layers = before.doc.layers.len();
@@ -1065,7 +1088,7 @@ mod tests {
 
     #[test]
     fn deadline_free_requests_run_even_after_the_receiver_is_dropped() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
         let layers = app.session.active().unwrap().doc.layers.len();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1080,7 +1103,7 @@ mod tests {
 
     #[test]
     fn right_pointer_opens_agent_visible_selection_menu() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
         app.run("select.rect", json!({"x": 1, "y": 1, "width": 8, "height": 8})).unwrap();
@@ -1102,7 +1125,7 @@ mod tests {
 
     #[test]
     fn agent_can_inspect_and_choose_pen_make_selection_from_full_context_menu() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
         app.run("path.set", json!({"name":"work","path":{"subpaths":[{"closed":true,"knots":[[2,2],[20,2],[20,20]]}]}})).unwrap();
@@ -1131,7 +1154,7 @@ mod tests {
 
     #[test]
     fn ui_inspect_reports_the_view_preferences() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         let before = call(&mut app, &ctx, "ui.inspect", json!({}));
         assert_eq!(before.pointer("/result/view/show/selection_edges"), Some(&json!(true)));
@@ -1144,7 +1167,7 @@ mod tests {
 
     #[test]
     fn engine_execute_runs_with_defaults_but_menu_invoke_opens_the_dialog() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
         app.run("edit.fill", json!({"color": "#808080"})).unwrap();
@@ -1160,7 +1183,7 @@ mod tests {
 
     #[test]
     fn menu_invoke_cannot_edit_document_behind_an_open_dialog() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
 
@@ -1191,9 +1214,66 @@ mod tests {
     }
 
     #[test]
+    fn arrow_control_is_atomic_and_defaults_survive_old_settings() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool":"arrow","arrow":{"width":5,"rounded":false}}))["ok"], true);
+        assert_eq!(app.ui.tool, Tool::Arrow);
+        assert_eq!(app.ui.tool_options.arrow.head_size, 16.0);
+        assert_eq!(app.ui.tool_options.arrow.width, 5.0);
+        for arrow in [
+            json!({"width":0}),
+            json!({"headSize":-3}),
+            json!({"headAngle":0}),
+            json!({"headAngle":161}),
+            json!({"headAngle":"60"}),
+            json!({"width":1e300}),
+            json!({"rounded":"yes"}),
+            json!({"typo":true}),
+        ] {
+            assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool":"move","arrow":arrow}))["ok"], false);
+            assert_eq!(app.ui.tool, Tool::Arrow);
+            assert_eq!(app.ui.tool_options.arrow.width, 5.0);
+        }
+        let old: crate::state::ToolOptions = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(old.arrow, crate::state::ArrowOptions::default());
+        let copy: crate::state::ToolOptions = serde_json::from_value(serde_json::to_value(&app.ui.tool_options).unwrap()).unwrap();
+        assert_eq!(copy.arrow, app.ui.tool_options.arrow);
+    }
+
+    #[test]
+    fn line_tips_control_is_atomic_and_persisted() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool":"line","lineRoundTips":true}))["ok"], true);
+        assert!(app.ui.tool_options.line_round_tips);
+        for value in [json!("round"), json!(1), json!(null)] {
+            assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool":"move","lineRoundTips":value}))["ok"], false);
+            assert_eq!(app.ui.tool, Tool::Line);
+            assert!(app.ui.tool_options.line_round_tips);
+        }
+        let old: crate::state::ToolOptions = serde_json::from_value(json!({})).unwrap();
+        assert!(!old.line_round_tips);
+        let back: crate::state::ToolOptions = serde_json::from_value(serde_json::to_value(&app.ui.tool_options).unwrap()).unwrap();
+        assert!(back.line_round_tips);
+    }
+
+    #[test]
+    fn font_filter_control_is_validated_and_serialized() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"typeFontFilter":"korean"}))["ok"], true);
+        assert_eq!(app.ui.tool_options.type_font_filter, crate::state::TypeFontFilter::Korean);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"typeFontFilter":"bad"}))["ok"], false);
+        assert_eq!(app.ui.tool_options.type_font_filter, crate::state::TypeFontFilter::Korean);
+        let restored: crate::state::ToolOptions = serde_json::from_value(serde_json::to_value(&app.ui.tool_options).unwrap()).unwrap();
+        assert_eq!(restored.type_font_filter, crate::state::TypeFontFilter::Korean);
+    }
+
+    #[test]
     fn ui_set_rejects_unknown_fields_before_changing_anything() {
         use crate::theme::ThemeKind;
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         app.set_theme(&ctx, ThemeKind::StudioLight);
         // `dark` was advertised to MCP clients but never read; a typo looked like success too.
@@ -1214,11 +1294,11 @@ mod tests {
 
     #[test]
     fn ui_set_gradient_blend_mode_validates_and_updates_options() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         let good = call(&mut app, &ctx, "ui.set", json!({"tool": "gradient", "gradientBlendMode": "Difference", "gradientClassic": true}));
         assert_eq!(good["ok"], true, "{good}");
-        assert_eq!(app.ui.tool_options.gradient_blend_mode, photocraft_color::BlendMode::Difference);
+        assert_eq!(app.ui.tool_options.gradient_blend_mode, prism_color::BlendMode::Difference);
         assert!(app.ui.tool_options.gradient_classic);
         let bad = call(&mut app, &ctx, "ui.set", json!({"gradientBlendMode": "nonsense", "gradientClassic": false}));
         assert_eq!(bad["ok"], false, "{bad}");
@@ -1227,7 +1307,7 @@ mod tests {
 
     #[test]
     fn ui_set_opens_the_brush_preset_picker_and_sets_its_view() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         assert_eq!(app.ui.brush_picker_list.view, crate::brush_panel::BrushesView::Grid, "tip thumbnails by default");
         let r = call(&mut app, &ctx, "ui.set", json!({"tool": "brush", "brushPicker": [120, 80], "brushPickerView": "list"}));
@@ -1244,7 +1324,7 @@ mod tests {
 
     #[test]
     fn ui_inspect_tracks_brush_picker_open_and_closed() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         app.run("file.new", json!({"width": 128, "height": 128})).unwrap();
 
@@ -1278,7 +1358,7 @@ mod tests {
 
     #[test]
     fn ui_set_applies_all_fields_or_none() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         let before = app.ui.tool;
         let panels_before = serde_json::to_value(&app.ui.panels).unwrap_or_default();
@@ -1313,7 +1393,7 @@ mod tests {
 
     #[test]
     fn ui_set_color_panel_picks_the_edited_chip() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"background": true}}))["ok"], true);
         assert!(app.ui.color_panel.background);
@@ -1322,9 +1402,34 @@ mod tests {
     }
 
     #[test]
+    fn ui_set_color_panel_modes_validate_atomically_and_keep_legacy_defaults() {
+        use crate::state::ColorPanelMode;
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        for (name, mode) in [
+            ("hueCube", ColorPanelMode::HueCube),
+            ("brightnessCube", ColorPanelMode::BrightnessCube),
+            ("colorWheel", ColorPanelMode::ColorWheel),
+            ("hsbSliders", ColorPanelMode::HsbSliders),
+        ] {
+            assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel":{"mode":name,"background":true}}))["ok"], true);
+            assert_eq!(app.ui.color_panel.mode, mode);
+            assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["colorPanel"]["mode"], name);
+        }
+        let before = app.ui.color_panel;
+        for bad in [json!({"mode":"wheel"}), json!({"mode":3}), json!({"mode":null}), json!({"mode":[]}), json!({"unknown":true})] {
+            assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel":bad,"panels":{"color":false}}))["ok"], false);
+            assert_eq!(app.ui.color_panel, before);
+            assert!(app.ui.panels.color, "invalid mode must not partially apply panel changes");
+        }
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel":{"background":true}}))["ok"], true);
+        assert_eq!(app.ui.color_panel.mode, ColorPanelMode::HueCube, "old payloads keep the default hue cube");
+    }
+
+    #[test]
     fn ui_set_unknown_theme_error_names_every_theme_and_each_name_works() {
         use crate::theme::ThemeKind;
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         let r = call(&mut app, &ctx, "ui.set", json!({"theme": "nope"}));
         assert_eq!(r["ok"], false);
@@ -1339,7 +1444,7 @@ mod tests {
 
     #[test]
     fn ui_window_open_rejects_an_unknown_document_index() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
         // An out-of-range index must error instead of silently switching the active document
@@ -1355,7 +1460,7 @@ mod tests {
 
     #[test]
     fn ui_set_brush_size_dispatches_a_journaled_brush_command() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
 
         let r = call(&mut app, &ctx, "ui.set", json!({"brushSize": 42.5}));
@@ -1396,7 +1501,7 @@ mod tests {
 
     #[test]
     fn preferences_apply_is_available_over_control_without_closing() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         let r = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "edit.preferences.interface"}));
         let id = r["result"]["dialog"].as_u64().unwrap();
@@ -1404,10 +1509,10 @@ mod tests {
         values["interface"]["uiScale"] = json!("200");
         assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": "values", "value": values}))["ok"], true);
         assert_eq!(call(&mut app, &ctx, "ui.dialog.apply", json!({"dialog": id}))["ok"], true);
-        assert_eq!(app.session.prefs().interface.ui_scale, photocraft_engine::prefs::UiScale::P200);
+        assert_eq!(app.session.prefs().interface.ui_scale, prism_engine::prefs::UiScale::P200);
         assert!(app.ui.dialog_mut(id).is_some());
         assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": id}))["ok"], true);
-        assert_eq!(app.session.prefs().interface.ui_scale, photocraft_engine::prefs::UiScale::P200);
+        assert_eq!(app.session.prefs().interface.ui_scale, prism_engine::prefs::UiScale::P200);
         for params in [json!({}), json!({"dialog": "invalid"}), json!({"dialog": u64::MAX})] {
             assert_eq!(call(&mut app, &ctx, "ui.dialog.apply", params)["ok"], false);
         }
@@ -1419,7 +1524,7 @@ mod tests {
             automation_command: Some(Box::new(|id, _| if id == "prefs.set" { Err("preference changes denied".into()) } else { Ok(()) })),
             ..Default::default()
         };
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let mut app = PrismApp::new(prism_engine::Session::new(), services);
         let ctx = egui::Context::default();
         let before = app.session.prefs().to_json();
         let id = crate::prefs_ui::open_preferences(&mut app, "interface");
@@ -1433,7 +1538,7 @@ mod tests {
 
     #[test]
     fn shape_picker_confirmation_authorizes_the_actual_layer_and_fill_params() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width":40,"height":30})).unwrap();
         let layer = app.run("shape.create", json!({"rect":[2,2,20,20],"fill":"#0000ff"})).unwrap()["layer"].as_u64().unwrap();
         let original = app.session.active().unwrap().doc.clone();
@@ -1464,7 +1569,7 @@ mod tests {
             automation_command: Some(Box::new(|id, _| if id.starts_with("file.") { Err("filesystem command denied".into()) } else { Ok(()) })),
             ..Default::default()
         };
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let mut app = PrismApp::new(prism_engine::Session::new(), services);
         let ctx = egui::Context::default();
         app.automation_input = true;
         let error = crate::menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap_err();
@@ -1473,9 +1578,9 @@ mod tests {
 
     #[test]
     fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
-        use photocraft_color::{ColorMode, SampleType};
-        use photocraft_doc::Document;
-        use photocraft_geom::Size;
+        use prism_color::{ColorMode, SampleType};
+        use prism_doc::Document;
+        use prism_geom::Size;
         use std::cell::RefCell;
         use std::rc::Rc;
 
@@ -1485,7 +1590,7 @@ mod tests {
             write: Some(Box::new(|_p: &str, _b: &[u8]| Err("ambient writer used".into()))),
             ..Default::default()
         };
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let mut app = PrismApp::new(prism_engine::Session::new(), services);
         let ctx = egui::Context::default();
         let r = call(&mut app, &ctx, "app.open", json!({"path": "in/warn.psd"}));
         assert!(r.to_string().contains("automation read authority is not configured"), "{r}");
@@ -1507,7 +1612,7 @@ mod tests {
             })),
             ..Default::default()
         };
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let mut app = PrismApp::new(prism_engine::Session::new(), services);
         let r = call(&mut app, &ctx, "app.open", json!({"path": "in/warn.psd"}));
         assert_eq!(r["result"]["warnings"], json!(["Adjustment layer flattened"]), "{r}");
         assert_eq!(r["result"]["name"], "warn.psd");
@@ -1533,9 +1638,9 @@ mod tests {
         assert!(r["error"].as_str().unwrap().contains("pass `path`"), "{r}");
     }
 
-    fn deny_ambient_file(id: &str, _: &serde_json::Value) -> photocraft_engine::Result<()> {
+    fn deny_ambient_file(id: &str, _: &serde_json::Value) -> prism_engine::Result<()> {
         if id.starts_with("file.") && id != "file.new" {
-            Err(photocraft_engine::EngineError::Other(format!("automation command `{id}` is disabled")))
+            Err(prism_engine::EngineError::Other(format!("automation command `{id}` is disabled")))
         } else {
             Ok(())
         }
@@ -1544,8 +1649,8 @@ mod tests {
     #[test]
     fn actions_play_checks_each_step_over_control() {
         let services = crate::Services { automation_authorize: Some(deny_ambient_file), ..Default::default() };
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-        app.session.actions.list.push(photocraft_engine::actions_cmds::Action {
+        let mut app = PrismApp::new(prism_engine::Session::new(), services);
+        app.session.actions.list.push(prism_engine::actions_cmds::Action {
             name: "Open".into(),
             steps: vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))],
         });
@@ -1562,8 +1667,8 @@ mod tests {
     #[test]
     fn actions_play_checks_each_step_for_synthetic_input() {
         let services = crate::Services { automation_authorize: Some(deny_ambient_file), ..Default::default() };
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-        app.session.actions.list.push(photocraft_engine::actions_cmds::Action {
+        let mut app = PrismApp::new(prism_engine::Session::new(), services);
+        app.session.actions.list.push(prism_engine::actions_cmds::Action {
             name: "Open".into(),
             steps: vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))],
         });
@@ -1583,7 +1688,7 @@ mod tests {
 
     #[test]
     fn huge_click_count_is_rejected() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         // #982: a huge count used to queue a press and a release per click before replying.
         for count in [json!(MAX_CLICKS + 1), json!(1_000_000_000u64), json!(u64::MAX)] {

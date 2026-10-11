@@ -625,3 +625,7 @@ pub fn native_viewport_window(ctx: &egui::Context, id: egui::ViewportId) -> Opti
     ctx.data(|data| data.get_temp::<std::sync::Weak<winit::window::Window>>(egui::Id::new(("eframe-native-window", id))))
         .and_then(|window| window.upgrade())
 }
+
+/// PNG cursor representations with point geometry for native Retina cursors.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cursor_png;

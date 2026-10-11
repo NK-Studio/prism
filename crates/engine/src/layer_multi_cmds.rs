@@ -5,9 +5,9 @@
 //! The selection itself lives in [`DocState::selected_layers`] (UI state, like the active layer):
 //! changing it never adds a history step. Every structural change below is one history step.
 
-use photocraft_color::PixelFormat;
-use photocraft_doc::{Document, Layer, LayerContent, LayerId};
-use photocraft_geom::Rect;
+use prism_color::PixelFormat;
+use prism_doc::{Document, Layer, LayerContent, LayerId};
+use prism_geom::Rect;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, int_i32};
@@ -291,16 +291,16 @@ pub fn moved(doc: &Document, ids: &[LayerId], dx: i32, dy: i32) -> Result<Docume
     Ok(out)
 }
 
-/// `photocraft_algo::resample::translate_surface` with the content scan cached per tile (a Move
+/// `prism_algo::resample::translate_surface` with the content scan cached per tile (a Move
 /// drag shifts the same layers every frame; scanning them each time cost more than the copy).
-pub(crate) fn shift_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32) -> photocraft_raster::Surface {
-    s.translated(dx, dy, photocraft_compose::bounds::content_bounds(s))
+pub(crate) fn shift_surface(s: &prism_raster::Surface, dx: i32, dy: i32) -> prism_raster::Surface {
+    s.translated(dx, dy, prism_compose::bounds::content_bounds(s))
 }
 
 /// [`crate::commands::translate_layer`] plus the vector side, without re-rendering anything.
 fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
     use self::shift_surface as translate_surface;
-    let a = photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy));
+    let a = prism_geom::Affine::translate(f64::from(dx), f64::from(dy));
     if let Some(r) = &mut l.effects.reference {
         *r = (r.0 + f64::from(dx), r.1 + f64::from(dy));
     }
@@ -322,7 +322,7 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
             // The rendered shape is cut at the canvas: one that reaches past it renders again.
             let canvas = doc.bounds();
             let inside = sh.cache.as_ref().is_some_and(|c| {
-                let b = photocraft_compose::bounds::content_bounds(c);
+                let b = prism_compose::bounds::content_bounds(c);
                 b.is_empty() || (b.x0 > canvas.x0 && b.y0 > canvas.y0 && b.x1 < canvas.x1 && b.y1 < canvas.y1)
             });
             crate::vector_cmds::transform_shape(sh, &a);
@@ -350,7 +350,7 @@ pub fn layers_damage(before: &Document, after: &Document, ids: &[LayerId]) -> Op
         let canvas = d.bounds();
         for id in ids {
             // A layer gone from one side (never for a move) changes who knows what.
-            let b = photocraft_compose::change_bounds(d.layer(*id)?, canvas)?;
+            let b = prism_compose::change_bounds(d.layer(*id)?, canvas)?;
             if !b.is_empty() {
                 out = if out.is_empty() { b } else { out.union(&b) };
             }
@@ -372,7 +372,7 @@ pub(crate) fn note_damage(s: &mut Session, before: &Document, ids: &[LayerId]) {
 /// Whether two surfaces hold identical pixels: same format and default pixel, and the same
 /// copy-on-write tile pointers at the same coordinates. Both documents stay alive during the
 /// comparison, so tile addresses cannot be reused under it.
-fn surfaces_equal(a: &photocraft_raster::Surface, b: &photocraft_raster::Surface) -> bool {
+fn surfaces_equal(a: &prism_raster::Surface, b: &prism_raster::Surface) -> bool {
     a.format() == b.format()
         && a.default_pixel() == b.default_pixel()
         && a.tile_count() == b.tile_count()
@@ -394,7 +394,7 @@ fn blobs_equal(a: &Option<std::sync::Arc<Vec<u8>>>, b: &Option<std::sync::Arc<Ve
 }
 
 /// Layer masks (also the smart-filter mask): scalars plus tile-pointer surface identity.
-fn masks_equal(a: &Option<photocraft_doc::LayerMask>, b: &Option<photocraft_doc::LayerMask>) -> bool {
+fn masks_equal(a: &Option<prism_doc::LayerMask>, b: &Option<prism_doc::LayerMask>) -> bool {
     match (a, b) {
         (None, None) => true,
         (Some(x), Some(y)) => {
@@ -404,7 +404,7 @@ fn masks_equal(a: &Option<photocraft_doc::LayerMask>, b: &Option<photocraft_doc:
     }
 }
 
-fn texts_equal(a: &photocraft_doc::TextLayer, b: &photocraft_doc::TextLayer) -> bool {
+fn texts_equal(a: &prism_doc::TextLayer, b: &prism_doc::TextLayer) -> bool {
     a.text == b.text
         && a.font_family == b.font_family
         && a.size_pt == b.size_pt
@@ -424,7 +424,7 @@ fn texts_equal(a: &photocraft_doc::TextLayer, b: &photocraft_doc::TextLayer) -> 
         && blobs_equal(&a.psd_raw, &b.psd_raw)
 }
 
-fn smarts_equal(a: &photocraft_doc::SmartObject, b: &photocraft_doc::SmartObject) -> bool {
+fn smarts_equal(a: &prism_doc::SmartObject, b: &prism_doc::SmartObject) -> bool {
     a.filters_enabled == b.filters_enabled
         && a.transform == b.transform
         && a.smart_filters == b.smart_filters
@@ -432,10 +432,10 @@ fn smarts_equal(a: &photocraft_doc::SmartObject, b: &photocraft_doc::SmartObject
         && a.perspective == b.perspective
         && a.warp == b.warp
         && match (&a.source, &b.source) {
-            (photocraft_doc::SmartSource::Embedded { file_name: x, bytes: xb }, photocraft_doc::SmartSource::Embedded { file_name: y, bytes: yb }) => {
+            (prism_doc::SmartSource::Embedded { file_name: x, bytes: xb }, prism_doc::SmartSource::Embedded { file_name: y, bytes: yb }) => {
                 x == y && blob_equal(xb, yb)
             }
-            (photocraft_doc::SmartSource::Linked { path: x }, photocraft_doc::SmartSource::Linked { path: y }) => x == y,
+            (prism_doc::SmartSource::Linked { path: x }, prism_doc::SmartSource::Linked { path: y }) => x == y,
             _ => false,
         }
         && match (&a.cache, &b.cache) {
@@ -448,7 +448,7 @@ fn smarts_equal(a: &photocraft_doc::SmartObject, b: &photocraft_doc::SmartObject
 }
 
 /// Extra alpha/spot channels (the image itself in Multichannel mode).
-fn alpha_channels_equal(a: &photocraft_doc::AlphaChannel, b: &photocraft_doc::AlphaChannel) -> bool {
+fn alpha_channels_equal(a: &prism_doc::AlphaChannel, b: &prism_doc::AlphaChannel) -> bool {
     a.name == b.name && a.spot == b.spot && a.color == b.color && a.opacity == b.opacity && a.indicates == b.indicates && surfaces_equal(&a.surface, &b.surface)
 }
 
@@ -596,7 +596,7 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
             }
             if !layer_pixels_equal(x, y) {
                 // Both sides' extents: a move changes pixels where it left and where it landed.
-                let (Some(bx), Some(by)) = (photocraft_compose::change_bounds(x, a.bounds()), photocraft_compose::change_bounds(y, b.bounds())) else {
+                let (Some(bx), Some(by)) = (prism_compose::change_bounds(x, a.bounds()), prism_compose::change_bounds(y, b.bounds())) else {
                     return false;
                 };
                 *out = if out.is_empty() { bx.union(&by) } else { out.union(&bx).union(&by) };
@@ -974,12 +974,12 @@ fn reverse(s: &mut Session) -> Result<Value> {
     Ok(Value::Null)
 }
 
-/// Refuses an edit that left `doc` nested deeper than [`photocraft_doc::MAX_GROUP_DEPTH`]
+/// Refuses an edit that left `doc` nested deeper than [`prism_doc::MAX_GROUP_DEPTH`]
 /// groups. Called at the end of a `Session::edit` closure, so an `Err` leaves the document and
 /// history untouched.
 pub(crate) fn check_group_depth(doc: &Document, what: &str) -> Result<()> {
-    if doc.max_group_depth() > photocraft_doc::MAX_GROUP_DEPTH {
-        return Err(EngineError::Other(format!("{what} would nest layers deeper than {} groups", photocraft_doc::MAX_GROUP_DEPTH)));
+    if doc.max_group_depth() > prism_doc::MAX_GROUP_DEPTH {
+        return Err(EngineError::Other(format!("{what} would nest layers deeper than {} groups", prism_doc::MAX_GROUP_DEPTH)));
     }
     Ok(())
 }
@@ -1027,15 +1027,11 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
         if solo.layers.is_empty() {
             return Err(EngineError::Other("the selected layers are all hidden".into()));
         }
-        let buf = photocraft_compose::flatten(&solo);
         let fmt = doc.pixel_format();
         let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
-        let data: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
         let mut merged = Layer::raster(top.name.clone(), fmt);
         merged.locks = top.locks;
-        let surf = crate::pixels_mut(&mut merged)?;
-        surf.write_region(doc.bounds(), &data);
-        surf.prune();
+        *crate::pixels_mut(&mut merged)? = prism_compose::render_to_surface(&solo, doc.bounds(), fmt, None);
         let mid = merged.id;
         // Hidden selected layers are discarded, as in Photoshop.
         for id in &ids[..ids.len() - 1] {
@@ -1049,8 +1045,50 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
     Ok(json!({ "layer": mid.0 }))
 }
 
+/// Deleting the requested layer(s) must preserve locked content and a root layer.
+pub(crate) fn delete_enabled(s: &Session, p: &Value) -> std::result::Result<(), String> {
+    let st = s.active().ok_or("no document open")?;
+    let id = crate::commands::layer_param(s, p).map_err(|e| e.to_string())?;
+    if st.doc.layer(id).is_none() {
+        return Err(format!("no layer {}", id.0));
+    }
+    // Membership matches DocState::selected_layers, without walking and allocating the
+    // entire tree for each footer/menu frame. Order is irrelevant for this precondition.
+    let ids = if p.get("layer").is_none() && st.selected_layers.contains(&id) { st.selected_layers.as_slice() } else { std::slice::from_ref(&id) };
+    // Children may be deleted from the only group, but deleting every root removes the
+    // whole document tree. Match the existing transaction guard before enabling the action.
+    if !st.doc.layers.iter().any(|layer| !ids.contains(&layer.id)) {
+        return Err("a document must keep at least one layer".into());
+    }
+    delete_unlocked(&st.doc.layers, ids, prism_doc::Locks::default(), false, 0)
+}
+
+/// Inherited locks protect children; deleting a group must also protect its locked children.
+/// Walk once without allocating paths for each selected layer or each menu/footer frame.
+fn delete_unlocked(layers: &[Layer], ids: &[LayerId], inherited: prism_doc::Locks, removing: bool, depth: usize) -> std::result::Result<(), String> {
+    if depth > prism_doc::MAX_GROUP_DEPTH {
+        return Err("layer nesting exceeds the supported depth".into());
+    }
+    for layer in layers {
+        let locks = inherited.union(layer.locks);
+        let removing = removing || ids.contains(&layer.id);
+        if removing && (locks.all || locks.transparency || locks.pixels || locks.position || locks.artboard) {
+            return Err(format!("Could not complete your request because the layer \"{}\" is locked", layer.name));
+        }
+        if let Some(children) = layer.children() {
+            delete_unlocked(children, ids, locks, removing, depth + 1)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn can_delete(s: &Session) -> std::result::Result<(), String> {
+    delete_enabled(s, &Value::Null)
+}
+
 /// Delete Layer with several layers selected.
 pub fn delete_selected(s: &mut Session) -> Result<Value> {
+    can_delete(s).map_err(EngineError::Other)?;
     let sel = selected(s);
     s.edit("Delete Layers", |doc, active| {
         let ids = top_level(doc, &sel);
@@ -1578,17 +1616,17 @@ mod tests {
         let mut s = session(8);
         let a = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
         select_all(&mut s, &[a]);
-        for _ in 0..photocraft_doc::MAX_GROUP_DEPTH {
+        for _ in 0..prism_doc::MAX_GROUP_DEPTH {
             s.execute("layer.groupLayers", json!({})).unwrap();
         }
-        assert_eq!(doc(&s).max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH);
+        assert_eq!(doc(&s).max_group_depth(), prism_doc::MAX_GROUP_DEPTH);
         // One more wrapping group would pass the cap: rejected, document untouched.
         let err = s.execute("layer.groupLayers", json!({})).unwrap_err();
         assert!(err.to_string().contains("deeper than 100"), "{err}");
-        assert_eq!(doc(&s).max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH);
+        assert_eq!(doc(&s).max_group_depth(), prism_doc::MAX_GROUP_DEPTH);
         // The rejected call recorded no history step: undo still lands one grouping earlier.
         s.undo();
-        assert_eq!(doc(&s).max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH - 1);
+        assert_eq!(doc(&s).max_group_depth(), prism_doc::MAX_GROUP_DEPTH - 1);
     }
 
     #[test]
@@ -1729,7 +1767,7 @@ mod tests {
         let _ = rect_layer(&mut s, Rect::new(10, 10, 20, 20));
         // A canvas change has no bounded damage.
         s.execute("image.crop", json!({"x": 0, "y": 0, "width": 30, "height": 25})).unwrap();
-        assert_ne!(doc(&s).size, photocraft_doc::Size::new(100, 80));
+        assert_ne!(doc(&s).size, prism_doc::Size::new(100, 80));
         s.undo();
         assert_eq!(damage(&s), None, "a size change recomposites the whole canvas");
         // A structural change (a layer removed and restored) neither.
@@ -1805,7 +1843,7 @@ mod tests {
         }
     }
 
-    /// Plain layers carrying stored link groups, as a loaded `.pcraft` or PSD can hold (#961).
+    /// Plain layers carrying stored link groups, as a loaded `.prism` or PSD can hold (#961).
     fn stored_groups(s: &mut Session, groups: &[Option<u64>]) -> Vec<LayerId> {
         let ids: Vec<LayerId> = groups.iter().map(|_| rect_layer(s, Rect::new(0, 0, 4, 4))).collect();
         s.edit("load groups", |doc, _| {

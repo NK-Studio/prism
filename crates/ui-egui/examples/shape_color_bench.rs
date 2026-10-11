@@ -1,6 +1,6 @@
 //! Compare repeated committed fill edits with the live picker on a 24 MP CPU canvas.
-use photocraft_ui_egui::{
-    PhotocraftApp,
+use prism_ui_egui::{
+    PrismApp,
     canvas::ensure_texture,
     control::{ControlRequest, Outcome, handle},
 };
@@ -12,7 +12,7 @@ fn median(mut samples: Vec<f64>) -> f64 {
     samples.get(samples.len() / 2).copied().unwrap_or(0.0)
 }
 
-fn call(a: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> io::Result<Value> {
+fn call(a: &mut PrismApp, ctx: &egui::Context, method: &str, params: Value) -> io::Result<Value> {
     let (req, _rx) = ControlRequest::new(method, params);
     match handle(a, ctx, &req) {
         Outcome::Done(v) if v["ok"] == true => Ok(v["result"].clone()),
@@ -21,7 +21,7 @@ fn call(a: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut a = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let mut a = PrismApp::new(prism_engine::Session::new(), Default::default());
     a.run("file.new", json!({"width":6000,"height":4000,"background":"white"})).map_err(io::Error::other)?;
     a.run("shape.create", json!({"kind":"roundedRect","rect":[800,600,1600,1000],"radii":40,"fill":"#0000ff"})).map_err(io::Error::other)?;
     a.sync_views();

@@ -1,10 +1,10 @@
 //! Edit › Free Transform / Transform: projective transforms of layers (and the selection).
 
-use photocraft_algo::transform::{Homography, Interp, warp_surface};
-use photocraft_color::PixelFormat;
-use photocraft_doc::{Document, Layer, LayerContent, LayerId, Locks};
-use photocraft_geom::{Affine, Rect};
-use photocraft_raster::Surface;
+use prism_algo::transform::{Homography, Interp, warp_surface};
+use prism_color::PixelFormat;
+use prism_doc::{Document, Layer, LayerContent, LayerId, Locks};
+use prism_geom::{Affine, Rect};
+use prism_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -23,10 +23,9 @@ fn bad(msg: impl Into<String>) -> EngineError {
 pub fn transform_bounds(doc: &Document, layer: &Layer) -> Rect {
     let content = match &layer.content {
         LayerContent::Group(g) => g.children.iter().map(|l| transform_bounds(doc, l)).fold(Rect::EMPTY, |a, b| a.union(&b)),
-        _ => layer.surface().map_or(Rect::EMPTY, photocraft_compose::bounds::content_bounds),
+        _ => layer.surface().map_or(Rect::EMPTY, prism_compose::bounds::content_bounds),
     };
-    let content =
-        if content.is_empty() { layer.mask.as_ref().map_or(Rect::EMPTY, |m| photocraft_compose::bounds::content_bounds(&m.surface)) } else { content };
+    let content = if content.is_empty() { layer.mask.as_ref().map_or(Rect::EMPTY, |m| prism_compose::bounds::content_bounds(&m.surface)) } else { content };
     match &doc.selection {
         Some(sel) if !layer.is_group() => content.intersect(&sel.content_bounds()),
         _ => content,
@@ -193,10 +192,34 @@ pub(crate) fn transform_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut L
             t.transform = a.mul(&t.transform);
         }
         LayerContent::Shape(sh) => {
-            let Some(a) = affine else {
+            if let Some(a) = affine {
+                crate::vector_cmds::transform_shape(sh, &a);
+            } else if matches!(sh.live, Some(prism_doc::LiveShape::Arrow { .. })) {
+                // Projective maps keep the arrow's straight segments straight. Drop only
+                // its parametric identity; the resulting vector remains editable.
+                let mut path = sh.path.clone();
+                for subpath in &mut path.subpaths {
+                    let mut side = None;
+                    for knot in &mut subpath.knots {
+                        let p = knot.anchor;
+                        let denominator = h.0[6] * p.x + h.0[7] * p.y + h.0[8];
+                        if !denominator.is_finite() || denominator.abs() < 1e-9 || side.is_some_and(|sign: f64| sign != denominator.signum()) {
+                            return Err(bad("arrow crosses the perspective horizon"));
+                        }
+                        side = Some(denominator.signum());
+                        let (x, y) = h.apply(p.x, p.y);
+                        if !x.is_finite() || !y.is_finite() || x.abs() > 1_000_000.0 || y.abs() > 1_000_000.0 {
+                            return Err(bad("transformed arrow is outside the supported coordinate range"));
+                        }
+                        *knot = prism_doc::Knot::corner(x, y);
+                    }
+                }
+                sh.path = path;
+                sh.live = None;
+                sh.psd_raw = None;
+            } else {
                 return Err(EngineError::Other("Distort and Perspective need a rasterized shape (Layer › Rasterize › Shape)".into()));
-            };
-            crate::vector_cmds::transform_shape(sh, &a);
+            }
         }
         LayerContent::Smart(sm) => {
             // Smart objects keep the transform and re-render from their source afterwards

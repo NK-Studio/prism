@@ -28,7 +28,7 @@ pub enum Backend {
 }
 
 #[derive(Clone)]
-pub struct PhotocraftMcp {
+pub struct PrismMcp {
     backend: Arc<Backend>,
     tool_router: ToolRouter<Self>,
 }
@@ -77,11 +77,11 @@ pub struct NewParams {
 pub struct SaveParams {
     /// Forward-slash relative target beneath the configured automation write root.
     /// The extension selects the format. Omit to write back to the document's own file, which
-    /// works only for a PSD, PSB or .pcraft file kept in its own format; any other save needs
+    /// works only for a PSD, PSB or .prism file kept in its own format; any other save needs
     /// `path`, so a flattened or converted copy never replaces the opened file.
     #[serde(default)]
     pub path: Option<String>,
-    /// Format override as an extension (pcraft, psd, png, jpg, tif, webp, exr, …).
+    /// Format override as an extension (prism, psd, png, jpg, tif, webp, exr, …).
     #[serde(default)]
     pub format: Option<String>,
     /// JPEG or WebP quality 1..100. A WebP saved with a quality is lossy; without one it is lossless.
@@ -212,7 +212,8 @@ pub struct UiSetParams {
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight), brushSection, brushTab, brushesView, brushPicker ([x, y] opens the
     /// Brush Preset picker there, null closes it), brushPickerView, brushSize, gradientBlendMode
-    /// (a blend mode name, for the Gradient tool), gradientClassic (bool). Other fields are an
+    /// (a blend mode name, for the Gradient tool), gradientClassic (bool),
+    /// typeFontFilter (all or korean, for both type font pickers). Other fields are an
     /// error.
     pub fields: Value,
 }
@@ -277,12 +278,12 @@ fn to_result(r: Result<Value, AutomationError>) -> Result<CallToolResult, McpErr
 fn bridge_only(name: &str) -> Result<CallToolResult, McpError> {
     Ok(fail(format!(
         "`{name}` drives the live GUI and needs bridge mode: start the app with \
-         `photocraft --control <port> --control-token-file <path>`, then run \
-         `photocraft-cli mcp --bridge 127.0.0.1:<port> --control-token-file <path>`"
+         `prism --control <port> --control-token-file <path>`, then run \
+         `prism-cli mcp --bridge 127.0.0.1:<port> --control-token-file <path>`"
     )))
 }
 
-impl PhotocraftMcp {
+impl PrismMcp {
     pub fn headless() -> Self {
         Self::with_backend(Backend::Headless(Arc::new(Mutex::new(Headless::new()))))
     }
@@ -296,7 +297,7 @@ impl PhotocraftMcp {
     }
 
     pub fn with_backend(backend: Backend) -> Self {
-        PhotocraftMcp { backend: Arc::new(backend), tool_router: Self::tool_router() }
+        PrismMcp { backend: Arc::new(backend), tool_router: Self::tool_router() }
     }
 
     /// Serve MCP over stdin/stdout until the client disconnects.
@@ -370,11 +371,11 @@ impl PhotocraftMcp {
 
 fn downscale_png(png: &[u8], max_side: u32) -> Result<Option<Vec<u8>>, AutomationError> {
     // A compressed reply's byte limit does not bound its decoded pixel allocation.
-    let opts = photocraft_codecs::DecodeOptions {
-        limits: photocraft_codecs::Limits { max_width: 8192, max_height: 8192, max_pixels: 16 << 20, max_alloc: 64 << 20 },
+    let opts = prism_codecs::DecodeOptions {
+        limits: prism_codecs::Limits { max_width: 8192, max_height: 8192, max_pixels: 16 << 20, max_alloc: 64 << 20 },
         ..Default::default()
     };
-    let img = photocraft_codecs::decode_as_with(photocraft_codecs::Format::Png, png, &opts).map_err(|error| AutomationError::Other(error.to_string()))?;
+    let img = prism_codecs::decode_as_with(prism_codecs::Format::Png, png, &opts).map_err(|error| AutomationError::Other(error.to_string()))?;
     let (w, h) = img.dimensions();
     if max_side == 0 || w.max(h) <= max_side {
         return Ok(None);
@@ -392,10 +393,8 @@ fn downscale_png(png: &[u8], max_side: u32) -> Result<Option<Vec<u8>>, Automatio
             out[di..di + 4].copy_from_slice(&src[si..si + 4]);
         }
     }
-    let small =
-        photocraft_codecs::Image::from_u8(nw, nh, photocraft_codecs::ChannelLayout::Rgba, out).map_err(|error| AutomationError::Other(error.to_string()))?;
-    let bytes =
-        photocraft_codecs::encode(&small, photocraft_codecs::Format::Png, &Default::default()).map_err(|error| AutomationError::Other(error.to_string()))?;
+    let small = prism_codecs::Image::from_u8(nw, nh, prism_codecs::ChannelLayout::Rgba, out).map_err(|error| AutomationError::Other(error.to_string()))?;
+    let bytes = prism_codecs::encode(&small, prism_codecs::Format::Png, &Default::default()).map_err(|error| AutomationError::Other(error.to_string()))?;
     Ok(Some(bytes))
 }
 
@@ -404,7 +403,7 @@ fn downscale_png(png: &[u8], max_side: u32) -> Result<Option<Vec<u8>>, Automatio
 // ---------------------------------------------------------------------------
 
 #[tool_router]
-impl PhotocraftMcp {
+impl PrismMcp {
     #[tool(description = "List open documents (index, name, size, dirty) and the active index.")]
     async fn session_list(&self) -> Result<CallToolResult, McpError> {
         if let Some(r) = self.headless_op(|h| Ok(h.session_list())).await {
@@ -452,8 +451,8 @@ impl PhotocraftMcp {
         self.run_command("file.new".into(), Value::Object(params), true).await
     }
 
-    #[tool(description = "Save the document. `.pcraft` is the lossless native format (incremental); other extensions \
-        (psd, png, jpg, tif, webp, exr, …) export. Without `path` only a PSD, PSB or .pcraft document is written back to its own         file. Returns warnings about anything the format cannot hold.")]
+    #[tool(description = "Save the document. `.prism` is the lossless native format (incremental); other extensions \
+        (psd, png, jpg, tif, webp, exr, …) export. Without `path` only a PSD, PSB or .prism document is written back to its own         file. Returns warnings about anything the format cannot hold.")]
     async fn doc_save(&self, Parameters(p): Parameters<SaveParams>) -> Result<CallToolResult, McpError> {
         self.save_impl(p).await
     }
@@ -694,7 +693,7 @@ fn bridge_only_headless(name: &str) -> Result<CallToolResult, McpError> {
     Ok(fail(format!("`{name}` is only available in headless mode (in the GUI use the window/tab UI or control_call)")))
 }
 
-impl PhotocraftMcp {
+impl PrismMcp {
     async fn run_command(&self, id: String, params: Value, wait: bool) -> Result<CallToolResult, McpError> {
         let (id2, params2) = (id.clone(), params.clone());
         if let Some(r) = self.headless_op(move |h| h.command_start(&id2, params2, wait)).await {
@@ -744,7 +743,7 @@ impl PhotocraftMcp {
         }
         let Some(r) = self
             .headless_op(move |h| {
-                let mut opts = photocraft_io::ExportOptions { tiff_layers: p.tiff_layers, ..Default::default() };
+                let mut opts = prism_io::ExportOptions { tiff_layers: p.tiff_layers, ..Default::default() };
                 if let Some(q) = p.quality {
                     opts.encode.jpeg_quality = q.clamp(1, 100);
                     opts.encode.webp_quality = q.clamp(1, 100);
@@ -766,7 +765,7 @@ mod progress;
 mod transport;
 
 /// Used by the render helper in tests and the CLI.
-pub fn render_document_png(doc: &photocraft_doc::Document, max_side: u32) -> Result<Vec<u8>, AutomationError> {
+pub fn render_document_png(doc: &prism_doc::Document, max_side: u32) -> Result<Vec<u8>, AutomationError> {
     files::render_png(doc, max_side)
 }
 
@@ -797,8 +796,8 @@ mod tests {
 
     #[test]
     fn bridge_screenshot_decode_limits_apply_even_without_downscaling() {
-        let image = photocraft_codecs::Image::from_u8(8193, 1, photocraft_codecs::ChannelLayout::Rgba, vec![0; 8193 * 4]).unwrap();
-        let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        let image = prism_codecs::Image::from_u8(8193, 1, prism_codecs::ChannelLayout::Rgba, vec![0; 8193 * 4]).unwrap();
+        let png = prism_codecs::encode(&image, prism_codecs::Format::Png, &Default::default()).unwrap();
         assert!(downscale_png(b"not a png", 32).is_err());
         assert!(downscale_png(&png, 0).is_err());
         assert!(downscale_png(&png, 1024).is_err());
@@ -806,7 +805,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_panicking_command_does_not_wedge_the_session() {
-        let mcp = PhotocraftMcp::headless();
+        let mcp = PrismMcp::headless();
         let r = mcp.headless_op(|_| -> Result<(), AutomationError> { panic!("boom") }).await.unwrap();
         assert!(r.is_err());
         let r = mcp.headless_op(|h| h.command_run("file.new", json!({"width": 8, "height": 8}))).await.unwrap();
@@ -818,7 +817,7 @@ mod tests {
     /// client lost every step result.
     #[tokio::test(flavor = "multi_thread")]
     async fn mcp_command_batch_stopped_by_the_budget_keeps_its_step_results() {
-        let mcp = PhotocraftMcp::headless();
+        let mcp = PrismMcp::headless();
         let step = |id: &str, params: Value| RunParams { id: id.into(), params: Some(params), wait: None };
         let mut steps: Vec<RunParams> = (0..MAX_BATCH_STEPS - 1).map(|_| step("command.list", json!({}))).collect();
         steps.push(step("file.new", json!({"width": 8, "height": 8})));
@@ -837,7 +836,7 @@ mod tests {
     /// The MCP server applies finished jobs before every tool call too (#503).
     #[tokio::test(flavor = "multi_thread")]
     async fn mcp_tools_see_a_finished_background_job() {
-        let mcp = PhotocraftMcp::headless();
+        let mcp = PrismMcp::headless();
         mcp.headless_op(|h| {
             h.command_run("file.new", json!({"width": 64, "height": 48}))?;
             h.command_run("filter.noise.addNoise", json!({"amount": 50}))?;

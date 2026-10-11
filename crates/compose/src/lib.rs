@@ -29,10 +29,10 @@ pub mod proxy;
 pub mod psblend;
 pub mod shape_split;
 
-use photocraft_color::blend::BlendMode;
-use photocraft_doc::{Document, Fill, Layer, LayerContent, Pattern};
-use photocraft_geom::Rect;
-use photocraft_raster::{Rgba8Image, Surface};
+use prism_color::blend::BlendMode;
+use prism_doc::{Document, Fill, Layer, LayerContent, Pattern};
+use prism_geom::Rect;
+use prism_raster::{Rgba8Image, Surface};
 use psblend as blend;
 
 pub use advanced::advanced_active;
@@ -98,8 +98,8 @@ fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx) -> Buffer 
     let tile = tile.max(1);
     // Lab documents mix Normal blending in CIELAB, as Photoshop does (psblend::LAB_MIX); 32-bit
     // documents don't clip Add / Divide at 1 (psblend::HDR).
-    let lab = doc.mode == photocraft_color::ColorMode::Lab;
-    let hdr = doc.depth == photocraft_color::SampleType::F32;
+    let lab = doc.mode == prism_color::ColorMode::Lab;
+    let hdr = doc.depth == prism_color::SampleType::F32;
     // CMYK layers are read through the document's own CMYK profile (thread-local scope).
     let cmyk = cmyk_space(doc);
     let cmyk = cmyk.as_ref();
@@ -107,7 +107,7 @@ fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx) -> Buffer 
         return Buffer::transparent(rect);
     }
     if rect.width() as i32 <= tile && rect.height() as i32 <= tile {
-        return photocraft_color::convert::with_cmyk_space(cmyk, || {
+        return prism_color::convert::with_cmyk_space(cmyk, || {
             let mut buf = multichannel::backdrop(doc, rect);
             in_blend_space(lab, hdr, || composite_stack_at(&doc.layers, &mut buf, cx, advanced::Scope::ROOT));
             buf
@@ -115,10 +115,10 @@ fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx) -> Buffer 
     }
     // Effect maps are built once, here, before any tile needs them (#276).
     prepare_effects(&doc.layers, rect, cx, |f| {
-        photocraft_color::convert::with_cmyk_space(cmyk, || in_blend_space(lab, hdr, f));
+        prism_color::convert::with_cmyk_space(cmyk, || in_blend_space(lab, hdr, f));
     });
     let run = |t: Rect| {
-        photocraft_color::convert::with_cmyk_space(cmyk, || {
+        prism_color::convert::with_cmyk_space(cmyk, || {
             let mut b = multichannel::backdrop(doc, t);
             in_blend_space(lab, hdr, || composite_stack_at(&doc.layers, &mut b, cx, advanced::Scope::ROOT));
             b
@@ -185,13 +185,13 @@ fn in_blend_space<R>(lab: bool, hdr: bool, f: impl FnOnce() -> R) -> R {
 }
 
 /// The document's own CMYK profile for reading its CMYK pixels (`None`: not a CMYK document,
-/// untagged, or the built-in coated CMYK). Enter it with `photocraft_color::convert::with_cmyk_space`
+/// untagged, or the built-in coated CMYK). Enter it with `prism_color::convert::with_cmyk_space`
 /// around code that converts the document's CMYK pixels or colours to RGB.
-pub fn cmyk_space(doc: &Document) -> Option<std::sync::Arc<photocraft_color::convert::CmykSpace>> {
-    if doc.mode != photocraft_color::ColorMode::Cmyk {
+pub fn cmyk_space(doc: &Document) -> Option<std::sync::Arc<prism_color::convert::CmykSpace>> {
+    if doc.mode != prism_color::ColorMode::Cmyk {
         return None;
     }
-    photocraft_color::convert::CmykSpace::for_profile(doc.icc_profile.as_ref())
+    prism_color::convert::CmykSpace::for_profile(doc.icc_profile.as_ref())
 }
 
 /// Pixels per band of [`render_bands`] (a 14000 px wide band is ~600 rows, ~130 MB of f32).
@@ -228,25 +228,84 @@ pub fn band_rows_for(width: u32, requested: i32) -> i32 {
 /// The document's composite as a pixel surface in `fmt` (straight RGBA converted to its model
 /// and depth), optionally flattened over an opaque `background`; rendered and written in bands,
 /// so no full-size float composite is held. Tiles equal to the default pixel are pruned.
-pub fn flatten_to_surface(doc: &Document, fmt: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> Surface {
+pub fn flatten_to_surface(doc: &Document, fmt: prism_color::PixelFormat, background: Option<[f32; 3]>) -> Surface {
+    render_to_surface(doc, doc.bounds(), fmt, background)
+}
+
+/// The composite of `rect` as a pixel surface in `fmt`, optionally over an opaque `background`
+/// (what Merge Down / Merge Layers / Merge Visible / Flatten Image store). Rendered in bands;
+/// each band is converted and encoded straight into its tiles, the tiles in parallel, and tiles
+/// left equal to the default pixel are dropped as they are made (no separate prune pass).
+pub fn render_to_surface(doc: &Document, rect: Rect, fmt: prism_color::PixelFormat, background: Option<[f32; 3]>) -> Surface {
+    render_to_surface_in_bands(doc, rect, fmt, background, 0)
+}
+
+/// [`render_to_surface`] with an explicit band height (tests: tiles that straddle bands).
+fn render_to_surface_in_bands(doc: &Document, rect: Rect, fmt: prism_color::PixelFormat, background: Option<[f32; 3]>, band_rows: i32) -> Surface {
+    use rayon::prelude::*;
     let mut s = Surface::new(fmt);
-    let n = fmt.channels();
-    let mut data = Vec::new();
-    let _ = render_bands(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
+    let _ = render_bands(doc, rect, band_rows, |band| -> Result<(), ()> {
         let band = match background {
             Some(bg) => band.over_background(bg),
             None => band,
         };
-        data.clear();
-        data.resize(band.px.len() * n, 0.0);
-        for (p, out) in band.px.iter().zip(data.chunks_exact_mut(n)) {
-            photocraft_raster::from_rgba_into(&fmt, *p, out);
-        }
-        s.write_region(band.rect, &data);
+        let mut tiles = s.take_tiles(band.rect);
+        tiles.par_iter_mut().for_each(|(tc, tile)| encode_band_into_tile(&band, &fmt, tc.rect(), std::sync::Arc::make_mut(tile).bytes_mut()));
+        let blank = s.default_bytes().to_vec();
+        s.put_tiles(tiles.into_iter().filter(|(_, t)| t.bytes().chunks_exact(blank.len().max(1)).any(|px| px != blank.as_slice())));
         Ok(())
     });
-    s.prune();
     s
+}
+
+/// The composite of just the tiles `coords` (each clipped to `clip`), converted to `fmt` and
+/// encoded, rendered in parallel. Tiles left equal to the transparent default pixel are left out.
+/// For edits that recomposite scattered tiles and keep the rest (Merge Down shares untouched
+/// tiles of the layer below).
+pub fn render_tiles(doc: &Document, coords: &[prism_geom::TileCoord], clip: Rect, fmt: prism_color::PixelFormat) -> Vec<(prism_geom::TileCoord, std::sync::Arc<prism_raster::Tile>)> {
+    use rayon::prelude::*;
+    let mut blank = Surface::new(fmt);
+    let mut tiles: Vec<_> = coords.iter().flat_map(|c| blank.take_tiles(c.rect())).collect();
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES);
+    let cx = Ctx::for_doc(doc, &patterns);
+    // Effect maps once, up front (as `render_tiled_with` does), then one tile per task; each
+    // render is a single tile, so it doesn't fan out again.
+    let (lab, hdr) = (doc.mode == prism_color::ColorMode::Lab, doc.depth == prism_color::SampleType::F32);
+    let cmyk = cmyk_space(doc);
+    prepare_effects(&doc.layers, clip, &cx, |f| {
+        prism_color::convert::with_cmyk_space(cmyk.as_ref(), || in_blend_space(lab, hdr, f));
+    });
+    tiles.par_iter_mut().for_each(|(c, tile)| {
+        let r = c.rect().intersect(&clip);
+        if !r.is_empty() {
+            let band = render_tiled_with(doc, r, RENDER_TILE, &cx);
+            encode_band_into_tile(&band, &fmt, c.rect(), std::sync::Arc::make_mut(tile).bytes_mut());
+        }
+    });
+    tiles.retain(|(_, t)| t.bytes().iter().any(|&b| b != 0));
+    tiles
+}
+
+/// Convert the part of `band` inside `tile_rect` from straight RGBA to `fmt` and encode it into
+/// the tile's bytes (row-major, `TILE_SIZE` wide). Pixels outside `band` keep their bytes.
+fn encode_band_into_tile(band: &Buffer, fmt: &prism_color::PixelFormat, tile_rect: Rect, bytes: &mut [u8]) {
+    let r = tile_rect.intersect(&band.rect);
+    if r.is_empty() {
+        return;
+    }
+    let bpp = fmt.bytes_per_pixel();
+    let (bw, tw) = (band.rect.width() as usize, tile_rect.width() as usize);
+    let cols = r.width() as usize;
+    let mut f = [0.0f32; 8];
+    for y in r.y0..r.y1 {
+        let src = ((y - band.rect.y0) as usize) * bw + (r.x0 - band.rect.x0) as usize;
+        let dst = (((y - tile_rect.y0) as usize) * tw + (r.x0 - tile_rect.x0) as usize) * bpp;
+        let (Some(src), Some(dst)) = (band.px.get(src..src + cols), bytes.get_mut(dst..dst + cols * bpp)) else { continue };
+        for (p, out) in src.iter().zip(dst.chunks_exact_mut(bpp)) {
+            let n = prism_raster::from_rgba_into(fmt, *p, &mut f);
+            prism_raster::encode_pixel(fmt, &f[..n], out);
+        }
+    }
 }
 
 /// Composite the full canvas.
@@ -264,10 +323,10 @@ pub fn render_layer(layer: &Layer, rect: Rect) -> Buffer {
         &Ctx {
             canvas: rect,
             transfer: adjust::Transfer::Srgb,
-            light: photocraft_doc::GlobalLight::default(),
+            light: prism_doc::GlobalLight::default(),
             patterns: &patterns,
-            mode: photocraft_color::ColorMode::Rgb,
-            depth: photocraft_color::SampleType::F32,
+            mode: prism_color::ColorMode::Rgb,
+            depth: prism_color::SampleType::F32,
             vector_masks: RenderVectorMasks::default(),
             fx_maps: Default::default(),
             doc: None,
@@ -409,11 +468,11 @@ fn render_reduced_in_bands(doc: &Document, b: Rect, w: u32, h: u32, damage: Opti
 
 #[derive(Default)]
 struct RenderVectorMasks {
-    masks: std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<std::sync::OnceLock<photocraft_vector::CompiledVectorMask>>>>,
+    masks: std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<std::sync::OnceLock<prism_vector::CompiledVectorMask>>>>,
 }
 
 impl RenderVectorMasks {
-    fn values(&self, mask: &photocraft_doc::VectorMask, rect: Rect) -> Vec<f32> {
+    fn values(&self, mask: &prism_doc::VectorMask, rect: Rect) -> Vec<f32> {
         // Addresses identify immutable mask instances only for this render's lifetime.
         let key = std::ptr::from_ref(mask) as usize;
         let slot = {
@@ -422,7 +481,7 @@ impl RenderVectorMasks {
         };
         // Compilation is sequential. Rendering can enter Rayon and must happen after
         // initialization, so waiting tiles cannot re-enter a slot still being built.
-        let compiled = slot.get_or_init(|| photocraft_vector::CompiledVectorMask::new(mask));
+        let compiled = slot.get_or_init(|| prism_vector::CompiledVectorMask::new(mask));
         compiled.render(rect)
     }
 }
@@ -434,12 +493,12 @@ struct Ctx<'a> {
     /// Tone transfer used by adjustments that work in linear light.
     transfer: adjust::Transfer,
     /// Global light for layer effects.
-    light: photocraft_doc::GlobalLight,
+    light: prism_doc::GlobalLight,
     /// Prepared document patterns, shared across all tiles and bands of this render call.
     patterns: &'a pattern::PreparedPatterns<'a>,
     /// The document's colour mode (channel restrictions name its channels).
-    mode: photocraft_color::ColorMode,
-    depth: photocraft_color::SampleType,
+    mode: prism_color::ColorMode,
+    depth: prism_color::SampleType,
     vector_masks: RenderVectorMasks,
     /// Effect maps used by this render, by cache key: built before the parallel tiles (see
     /// [`prepare_effects`]) and held for the whole render, so eviction can't force a rebuild.
@@ -547,11 +606,11 @@ fn composite_stack_at(layers: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: 
 /// Photoshop (psd-tools adjustment_nested_composition_4: 9.6 → 5.1 % of pixels off;
 /// exposure_grayscale passes). Blends stay in float (quantising them too made other files
 /// worse).
-pub fn adjustment_quantum(depth: photocraft_color::SampleType) -> Option<f32> {
+pub fn adjustment_quantum(depth: prism_color::SampleType) -> Option<f32> {
     match depth {
-        photocraft_color::SampleType::U8 => Some(255.0),
-        photocraft_color::SampleType::U16 => Some(32768.0),
-        photocraft_color::SampleType::F32 => None,
+        prism_color::SampleType::U8 => Some(255.0),
+        prism_color::SampleType::U16 => Some(32768.0),
+        prism_color::SampleType::F32 => None,
     }
 }
 
@@ -610,9 +669,9 @@ pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
 /// whole path even where a gradient fill fades out (psd-tools stroke-effects). `None` for other
 /// layers, shapes without fill, empty and inverted paths, and shapes whose vector stroke reaches
 /// past the path (their pixels give the outline: psd-tools double-stroke-effects).
-pub fn effect_outline(layer: &Layer) -> Option<&photocraft_doc::vector::Path> {
+pub fn effect_outline(layer: &Layer) -> Option<&prism_doc::vector::Path> {
     let LayerContent::Shape(sh) = &layer.content else { return None };
-    let stroke_inside = sh.stroke.as_ref().is_none_or(|s| s.width <= 0.0 || s.align == photocraft_doc::vector::StrokeAlign::Inside);
+    let stroke_inside = sh.stroke.as_ref().is_none_or(|s| s.width <= 0.0 || s.align == prism_doc::vector::StrokeAlign::Inside);
     (sh.fill.is_some() && stroke_inside && !sh.path.is_empty() && !sh.path.inverted).then_some(&sh.path)
 }
 
@@ -634,7 +693,7 @@ fn effect_shape(layer: &Layer, rect: Rect, cx: &Ctx) -> Vec<f32> {
     };
     // Unmasked: the masks scale the shape, they aren't the fill's transparency.
     let a: Vec<f32> = layer.surface().map(|s| surface_to_buffer(s, rect).px.iter().map(|p| p[3]).collect()).unwrap_or_else(|| vec![0.0; n]);
-    let cov = photocraft_vector::path_coverage(path, rect);
+    let cov = prism_vector::path_coverage(path, rect);
     let mv = mask_vals(layer, rect, cx);
     let (w, h) = (rect.width() as usize, rect.height() as usize);
     let mut out = vec![0.0; n];
@@ -741,8 +800,8 @@ pub fn layer_shape(doc: &Document, layer: &Layer, rect: Rect) -> Vec<f32> {
 /// The frame a gradient stroke `st` of `layer` is laid out in (`effects::FxMaps::stroke_frame`),
 /// from the layer's cached effect maps; `None` when `st` isn't a gradient stroke of the layer.
 /// For the GPU compositor.
-pub fn stroke_frame(doc: &Document, layer: &Layer, st: &photocraft_doc::StrokeFx) -> Option<Rect> {
-    if !matches!(st.paint, photocraft_doc::FxPaint::Gradient(_)) || !effects::has_effects(layer) {
+pub fn stroke_frame(doc: &Document, layer: &Layer, st: &prism_doc::StrokeFx) -> Option<Rect> {
+    if !matches!(st.paint, prism_doc::FxPaint::Gradient(_)) || !effects::has_effects(layer) {
         return None;
     }
     let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES);
@@ -835,8 +894,8 @@ fn empty_in(layer: &Layer, rect: Rect) -> bool {
 /// directly and a grayscale document's single channel covers all three; other modes composite in
 /// display RGB, where a restriction to their own channels has no exact equivalent, so it is
 /// ignored there.
-pub fn channel_weights(layer: &Layer, mode: photocraft_color::ColorMode) -> Option<[f32; 3]> {
-    use photocraft_color::ColorMode as M;
+pub fn channel_weights(layer: &Layer, mode: prism_color::ColorMode) -> Option<[f32; 3]> {
+    use prism_color::ColorMode as M;
     let x = layer.excluded_channels;
     if x == 0 {
         return None;
@@ -927,7 +986,7 @@ pub fn transparent_outside(layer: &Layer) -> bool {
 /// stops are all opaque). Normal blending at alpha 1 returns the layer's colour exactly, so the
 /// layers below can be skipped (the live Gradient tool's preview recomposites the whole canvas on
 /// every pointer move).
-pub fn occludes_below(layer: &Layer, mode: photocraft_color::ColorMode) -> bool {
+pub fn occludes_below(layer: &Layer, mode: prism_color::ColorMode) -> bool {
     let LayerContent::Fill(f) = &layer.content else { return false };
     let opaque = match f {
         Fill::Solid(c) => c.alpha >= 1.0,
@@ -942,7 +1001,7 @@ pub fn occludes_below(layer: &Layer, mode: photocraft_color::ColorMode) -> bool 
         && !cached
         && layer.visible
         && !layer.clipped
-        && layer.blend == photocraft_color::BlendMode::Normal
+        && layer.blend == prism_color::BlendMode::Normal
         && layer.opacity >= 1.0
         && layer.fill_opacity >= 1.0
         && !layer.mask.as_ref().is_some_and(|m| m.enabled)
@@ -956,16 +1015,16 @@ pub fn occludes_below(layer: &Layer, mode: photocraft_color::ColorMode) -> bool 
 /// RGB documents test Gray and R, G, B; grayscale (and duotone) documents their one channel.
 /// Other modes composite in display RGB, where ranges over their own channels have no exact
 /// equivalent, so (like channel restrictions) the setting round-trips but isn't applied there.
-pub fn blend_if_active(layer: &Layer, mode: photocraft_color::ColorMode) -> bool {
-    use photocraft_color::ColorMode as M;
+pub fn blend_if_active(layer: &Layer, mode: prism_color::ColorMode) -> bool {
+    use prism_color::ColorMode as M;
     matches!(mode, M::Rgb | M::Grayscale | M::Duotone) && !layer.blend_if.is_default()
 }
 
 /// How much of a pixel shows through `layer`'s Blend If ranges, given the layer's own colour
 /// (`this`, `None` where the layer has no content of its own there) and the colour beneath it
 /// (`under`, `None` where nothing is beneath). Every range multiplies in.
-fn blend_if_weight(layer: &Layer, mode: photocraft_color::ColorMode, this: Option<[f32; 4]>, under: Option<[f32; 4]>) -> f32 {
-    use photocraft_color::ColorMode as M;
+fn blend_if_weight(layer: &Layer, mode: prism_color::ColorMode, this: Option<[f32; 4]>, under: Option<[f32; 4]>) -> f32 {
+    use prism_color::ColorMode as M;
     let bi = &layer.blend_if;
     let mut k = 1.0;
     for (side, px) in [this, under].into_iter().enumerate() {
@@ -1056,7 +1115,7 @@ fn composite_layer_any(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer, 
 
 /// An artboard: its background and the group, composited only inside the board (contents and
 /// effects outside it are clipped away; the backdrop there is untouched).
-fn composite_artboard(layer: &Layer, ab: &photocraft_doc::Artboard, clipped: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: advanced::Scope) {
+fn composite_artboard(layer: &Layer, ab: &prism_doc::Artboard, clipped: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: advanced::Scope) {
     let board = ab.rect.intersect(&backdrop.rect);
     if board.is_empty() {
         return;
@@ -1368,7 +1427,7 @@ fn effect_maps(layer: &Layer, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
     use std::hash::{Hash, Hasher};
     let m = effects::margin(layer);
     let region = layer_bounds(layer, cx.canvas).inflate(m).intersect(&cx.canvas.inflate(m));
-    if std::env::var_os("PHOTOCRAFT_FX_NOCACHE").is_some() {
+    if std::env::var_os("PRISM_FX_NOCACHE").is_some() {
         let shape = if region.is_empty() { Vec::new() } else { effect_shape(layer, region, cx) };
         return std::sync::Arc::new(effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns));
     }

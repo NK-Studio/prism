@@ -1,6 +1,6 @@
-use crate::{PhotocraftApp, state::DialogKind};
+use crate::{PrismApp, state::DialogKind};
 use serde_json::{Value, json};
-pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
+pub fn open(app: &mut PrismApp) -> Result<u64, String> {
     let st = app.session.active().ok_or("no document")?;
     let fields = json!({"__command":"image.duplicate","__label":"Duplicate Image","__duplicate":true,
         "__sourceName":st.doc.name,"name":crate::i18n::fmt(tl!("{name} copy"), &[("name", &st.doc.name)]),
@@ -33,7 +33,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut serde_json::Map<String, Value>) {
     });
 }
 
-pub fn finish(app: &mut PhotocraftApp, source: &crate::state::Dialog, mut result: Value) -> Value {
+pub fn finish(app: &mut PrismApp, source: &crate::state::Dialog, mut result: Value) -> Value {
     let Some(document) = app.session.active_index() else { return result };
     app.sync_views();
     if let Some(w) = source.window.and_then(|id| app.ui.windows.iter().find(|w| w.id == id)).cloned() {

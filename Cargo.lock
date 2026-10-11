@@ -1078,6 +1078,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "core_detect"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
+
+[[package]]
 name = "core_maths"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1531,6 +1537,20 @@ checksum = "52c8d4141cf0f60fb2f7aefaf352d3ffa5171ef0ab09731c64391801e95e48f1"
 dependencies = [
  "bytemuck",
  "serde",
+]
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e985e0451871ad22fb8d2b6b076e2028a502a0d3950998c2c5c0a4f9b5d9679"
+dependencies = [
+ "cfg-if",
+ "core_detect",
+ "multiversion_no_op",
+ "rustversion",
+ "scopeguard",
+ "simdutf8",
 ]
 
 [[package]]
@@ -3073,6 +3093,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "multiversion_no_op"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
+
+[[package]]
 name = "naga"
 version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3939,419 +3965,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "photocraft"
-version = "0.5.0"
-dependencies = [
- "arboard",
- "core-graphics2",
- "dispatch2",
- "eframe",
- "egui",
- "fmv-macos-events",
- "log",
- "muda",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "open",
- "photocraft-automation",
- "photocraft-codecs",
- "photocraft-color",
- "photocraft-compose",
- "photocraft-doc",
- "photocraft-engine",
- "photocraft-format",
- "photocraft-geom",
- "photocraft-io",
- "photocraft-raster",
- "photocraft-tablet",
- "photocraft-ui-egui",
- "rfd",
- "ron",
- "serde_json",
- "winresource",
- "winsafe",
- "xcap",
-]
-
-[[package]]
-name = "photocraft-affinity"
-version = "0.5.0"
-dependencies = [
- "crc32fast",
- "flate2",
- "proptest",
- "ruzstd",
-]
-
-[[package]]
-name = "photocraft-algo"
-version = "0.5.0"
-dependencies = [
- "photocraft-color",
- "photocraft-geom",
- "photocraft-raster",
- "rayon",
- "rustfft",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "photocraft-automation"
-version = "0.5.0"
-dependencies = [
- "base64",
- "cap-std",
- "getrandom 0.3.4",
- "photocraft-codecs",
- "photocraft-compose",
- "photocraft-doc",
- "photocraft-engine",
- "photocraft-format",
- "photocraft-geom",
- "photocraft-io",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "photocraft-cli"
-version = "0.5.0"
-dependencies = [
- "photocraft-automation",
- "photocraft-codecs",
- "photocraft-engine",
- "photocraft-format",
- "photocraft-io",
- "serde_json",
- "tokio",
- "winresource",
-]
-
-[[package]]
-name = "photocraft-cms"
-version = "0.5.0"
-dependencies = [
- "moxcms",
- "rayon",
-]
-
-[[package]]
-name = "photocraft-codecs"
-version = "0.5.0"
-dependencies = [
- "exr",
- "flate2",
- "half",
- "image",
- "image-webp",
- "jpeg-encoder",
- "photocraft-heif",
- "png 0.18.1",
- "proptest",
- "rayon",
- "thiserror 2.0.21",
- "tiff",
- "zune-core 0.5.3",
- "zune-jpeg 0.5.15",
-]
-
-[[package]]
-name = "photocraft-color"
-version = "0.5.0"
-dependencies = [
- "photocraft-cms",
- "serde",
-]
-
-[[package]]
-name = "photocraft-compose"
-version = "0.5.0"
-dependencies = [
- "criterion",
- "photocraft-color",
- "photocraft-doc",
- "photocraft-geom",
- "photocraft-paint",
- "photocraft-raster",
- "photocraft-vector",
- "proptest",
- "rayon",
-]
-
-[[package]]
-name = "photocraft-doc"
-version = "0.5.0"
-dependencies = [
- "photocraft-color",
- "photocraft-geom",
- "photocraft-raster",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "photocraft-engine"
-version = "0.5.0"
-dependencies = [
- "blake3",
- "flate2",
- "photocraft-affinity",
- "photocraft-algo",
- "photocraft-cms",
- "photocraft-codecs",
- "photocraft-color",
- "photocraft-compose",
- "photocraft-doc",
- "photocraft-format",
- "photocraft-geom",
- "photocraft-io",
- "photocraft-ops",
- "photocraft-paint",
- "photocraft-plugins",
- "photocraft-psd",
- "photocraft-raster",
- "photocraft-raw",
- "photocraft-text",
- "photocraft-vector",
- "rayon",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "wat",
-]
-
-[[package]]
-name = "photocraft-format"
-version = "0.5.0"
-dependencies = [
- "blake3",
- "flate2",
- "photocraft-codecs",
- "photocraft-color",
- "photocraft-doc",
- "photocraft-geom",
- "photocraft-raster",
- "proptest",
- "rustix 1.1.5",
- "ruzstd",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "photocraft-geom"
-version = "0.5.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "photocraft-gpu"
-version = "0.5.0"
-dependencies = [
- "half",
- "log",
- "photocraft-color",
- "photocraft-compose",
- "photocraft-doc",
- "photocraft-geom",
- "photocraft-raster",
- "photocraft-vector",
- "pollster 1.0.1",
- "rayon",
- "wgpu",
-]
-
-[[package]]
-name = "photocraft-heif"
-version = "0.5.0"
-dependencies = [
- "heic-rs",
-]
-
-[[package]]
-name = "photocraft-io"
-version = "0.5.0"
-dependencies = [
- "blake3",
- "crc32fast",
- "flate2",
- "photocraft-affinity",
- "photocraft-algo",
- "photocraft-cms",
- "photocraft-codecs",
- "photocraft-color",
- "photocraft-compose",
- "photocraft-doc",
- "photocraft-format",
- "photocraft-geom",
- "photocraft-paint",
- "photocraft-psd",
- "photocraft-raster",
- "photocraft-raw",
- "photocraft-text",
- "photocraft-vector",
- "proptest",
- "resvg",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "photocraft-ops"
-version = "0.5.0"
-dependencies = [
- "photocraft-doc",
-]
-
-[[package]]
-name = "photocraft-paint"
-version = "0.5.0"
-dependencies = [
- "photocraft-color",
- "photocraft-geom",
- "photocraft-raster",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "photocraft-plugins"
-version = "0.5.0"
-dependencies = [
- "photocraft-color",
- "photocraft-geom",
- "photocraft-raster",
- "rayon",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "wasmi",
- "wat",
-]
-
-[[package]]
-name = "photocraft-psd"
-version = "0.5.0"
-dependencies = [
- "flate2",
- "photocraft-psd",
- "proptest",
- "serde",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "photocraft-raster"
-version = "0.5.0"
-dependencies = [
- "photocraft-color",
- "photocraft-geom",
- "proptest",
- "serde",
-]
-
-[[package]]
-name = "photocraft-raw"
-version = "0.5.0"
-dependencies = [
- "photocraft-raw",
- "png 0.18.1",
- "rayon",
-]
-
-[[package]]
-name = "photocraft-tablet"
-version = "0.5.0"
-dependencies = [
- "block2 0.6.2",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-core-graphics",
- "objc2-foundation 0.3.2",
-]
-
-[[package]]
-name = "photocraft-testkit"
-version = "0.5.0"
-dependencies = [
- "memory-stats",
- "photocraft-color",
- "photocraft-geom",
- "photocraft-raster",
- "serde_json",
-]
-
-[[package]]
-name = "photocraft-text"
-version = "0.5.0"
-dependencies = [
- "flate2",
- "parley",
- "photocraft-color",
- "photocraft-doc",
- "photocraft-geom",
- "photocraft-psd",
- "photocraft-raster",
- "skrifa",
-]
-
-[[package]]
-name = "photocraft-ui-egui"
-version = "0.5.0"
-dependencies = [
- "base64",
- "eframe",
- "egui",
- "egui_extras",
- "egui_kittest",
- "log",
- "photocraft-algo",
- "photocraft-cms",
- "photocraft-codecs",
- "photocraft-color",
- "photocraft-compose",
- "photocraft-doc",
- "photocraft-engine",
- "photocraft-format",
- "photocraft-geom",
- "photocraft-gpu",
- "photocraft-io",
- "photocraft-paint",
- "photocraft-plugins",
- "photocraft-psd",
- "photocraft-raster",
- "photocraft-raw",
- "photocraft-testkit",
- "photocraft-text",
- "photocraft-vector",
- "rayon",
- "serde",
- "serde_json",
- "sys-locale",
- "toml",
- "winit",
-]
-
-[[package]]
-name = "photocraft-vector"
-version = "0.5.0"
-dependencies = [
- "photocraft-color",
- "photocraft-doc",
- "photocraft-geom",
- "photocraft-raster",
- "rayon",
-]
-
-[[package]]
 name = "pico-args"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4540,6 +4153,420 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc0d895b311e3af9902528fbb8f928688abbd95872819320517cc24ca6b2bd08"
 dependencies = [
  "num-integer",
+]
+
+[[package]]
+name = "prism"
+version = "1.0.0"
+dependencies = [
+ "arboard",
+ "core-graphics2",
+ "dispatch2",
+ "eframe",
+ "egui",
+ "fmv-macos-events",
+ "log",
+ "muda",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "open",
+ "prism-automation",
+ "prism-codecs",
+ "prism-color",
+ "prism-compose",
+ "prism-doc",
+ "prism-engine",
+ "prism-format",
+ "prism-geom",
+ "prism-io",
+ "prism-raster",
+ "prism-tablet",
+ "prism-ui-egui",
+ "rfd",
+ "ron",
+ "serde_json",
+ "winresource",
+ "winsafe",
+ "xcap",
+]
+
+[[package]]
+name = "prism-affinity"
+version = "1.0.0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "proptest",
+ "ruzstd",
+]
+
+[[package]]
+name = "prism-algo"
+version = "1.0.0"
+dependencies = [
+ "prism-color",
+ "prism-geom",
+ "prism-raster",
+ "rayon",
+ "rustfft",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "prism-automation"
+version = "1.0.0"
+dependencies = [
+ "base64",
+ "cap-std",
+ "getrandom 0.3.4",
+ "prism-codecs",
+ "prism-compose",
+ "prism-doc",
+ "prism-engine",
+ "prism-format",
+ "prism-geom",
+ "prism-io",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "prism-cli"
+version = "1.0.0"
+dependencies = [
+ "prism-automation",
+ "prism-codecs",
+ "prism-engine",
+ "prism-format",
+ "prism-io",
+ "serde_json",
+ "tokio",
+ "winresource",
+]
+
+[[package]]
+name = "prism-cms"
+version = "1.0.0"
+dependencies = [
+ "moxcms",
+ "rayon",
+]
+
+[[package]]
+name = "prism-codecs"
+version = "1.0.0"
+dependencies = [
+ "exr",
+ "flate2",
+ "half",
+ "image",
+ "image-webp",
+ "jpeg-encoder",
+ "png 0.18.1",
+ "prism-heif",
+ "proptest",
+ "rayon",
+ "thiserror 2.0.21",
+ "tiff",
+ "zune-core 0.5.3",
+ "zune-jpeg 0.5.15",
+]
+
+[[package]]
+name = "prism-color"
+version = "1.0.0"
+dependencies = [
+ "prism-cms",
+ "serde",
+]
+
+[[package]]
+name = "prism-compose"
+version = "1.0.0"
+dependencies = [
+ "criterion",
+ "prism-color",
+ "prism-doc",
+ "prism-geom",
+ "prism-paint",
+ "prism-raster",
+ "prism-vector",
+ "proptest",
+ "rayon",
+]
+
+[[package]]
+name = "prism-doc"
+version = "1.0.0"
+dependencies = [
+ "prism-color",
+ "prism-geom",
+ "prism-raster",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "prism-engine"
+version = "1.0.0"
+dependencies = [
+ "blake3",
+ "flate2",
+ "prism-affinity",
+ "prism-algo",
+ "prism-cms",
+ "prism-codecs",
+ "prism-color",
+ "prism-compose",
+ "prism-doc",
+ "prism-format",
+ "prism-geom",
+ "prism-io",
+ "prism-ops",
+ "prism-paint",
+ "prism-plugins",
+ "prism-psd",
+ "prism-raster",
+ "prism-raw",
+ "prism-text",
+ "prism-vector",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wat",
+]
+
+[[package]]
+name = "prism-format"
+version = "1.0.0"
+dependencies = [
+ "blake3",
+ "flate2",
+ "prism-codecs",
+ "prism-color",
+ "prism-doc",
+ "prism-geom",
+ "prism-raster",
+ "proptest",
+ "rustix 1.1.5",
+ "ruzstd",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "prism-geom"
+version = "1.0.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "prism-gpu"
+version = "1.0.0"
+dependencies = [
+ "half",
+ "log",
+ "pollster 1.0.1",
+ "prism-color",
+ "prism-compose",
+ "prism-doc",
+ "prism-geom",
+ "prism-raster",
+ "prism-vector",
+ "rayon",
+ "wgpu",
+]
+
+[[package]]
+name = "prism-heif"
+version = "1.0.0"
+dependencies = [
+ "heic-rs",
+]
+
+[[package]]
+name = "prism-io"
+version = "1.0.0"
+dependencies = [
+ "blake3",
+ "crc32fast",
+ "flate2",
+ "prism-affinity",
+ "prism-algo",
+ "prism-cms",
+ "prism-codecs",
+ "prism-color",
+ "prism-compose",
+ "prism-doc",
+ "prism-format",
+ "prism-geom",
+ "prism-paint",
+ "prism-psd",
+ "prism-raster",
+ "prism-raw",
+ "prism-text",
+ "prism-vector",
+ "proptest",
+ "resvg",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "prism-ops"
+version = "1.0.0"
+dependencies = [
+ "prism-doc",
+]
+
+[[package]]
+name = "prism-paint"
+version = "1.0.0"
+dependencies = [
+ "prism-color",
+ "prism-geom",
+ "prism-raster",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "prism-plugins"
+version = "1.0.0"
+dependencies = [
+ "prism-color",
+ "prism-geom",
+ "prism-raster",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wasmi",
+ "wat",
+]
+
+[[package]]
+name = "prism-psd"
+version = "1.0.0"
+dependencies = [
+ "flate2",
+ "prism-psd",
+ "proptest",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "prism-raster"
+version = "1.0.0"
+dependencies = [
+ "prism-color",
+ "prism-geom",
+ "proptest",
+ "serde",
+]
+
+[[package]]
+name = "prism-raw"
+version = "1.0.0"
+dependencies = [
+ "png 0.18.1",
+ "prism-raw",
+ "rayon",
+]
+
+[[package]]
+name = "prism-tablet"
+version = "1.0.0"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "prism-testkit"
+version = "1.0.0"
+dependencies = [
+ "memory-stats",
+ "prism-color",
+ "prism-geom",
+ "prism-raster",
+ "serde_json",
+]
+
+[[package]]
+name = "prism-text"
+version = "1.0.0"
+dependencies = [
+ "encoding_rs",
+ "flate2",
+ "parley",
+ "prism-color",
+ "prism-doc",
+ "prism-geom",
+ "prism-psd",
+ "prism-raster",
+ "skrifa",
+]
+
+[[package]]
+name = "prism-ui-egui"
+version = "1.0.0"
+dependencies = [
+ "base64",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "egui_kittest",
+ "log",
+ "prism-algo",
+ "prism-cms",
+ "prism-codecs",
+ "prism-color",
+ "prism-compose",
+ "prism-doc",
+ "prism-engine",
+ "prism-format",
+ "prism-geom",
+ "prism-gpu",
+ "prism-io",
+ "prism-paint",
+ "prism-plugins",
+ "prism-psd",
+ "prism-raster",
+ "prism-raw",
+ "prism-testkit",
+ "prism-text",
+ "prism-vector",
+ "rayon",
+ "serde",
+ "serde_json",
+ "sys-locale",
+ "toml",
+ "winit",
+]
+
+[[package]]
+name = "prism-vector"
+version = "1.0.0"
+dependencies = [
+ "prism-color",
+ "prism-doc",
+ "prism-geom",
+ "prism-raster",
+ "rayon",
 ]
 
 [[package]]
@@ -7135,7 +7162,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.5.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",

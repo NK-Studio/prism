@@ -2,17 +2,17 @@
 //! visible layer with pixels under the pointer (or its outermost group in Group mode) and the drag
 //! then moves it; ⌘/Ctrl held at the press inverts the option for that click.
 
-use photocraft_doc::LayerId;
-use photocraft_geom::Rect;
+use prism_doc::LayerId;
+use prism_geom::Rect;
 use serde_json::json;
 
-use crate::PhotocraftApp;
+use crate::PrismApp;
 use crate::canvas::ToolEvent;
 use crate::state::{Tool, ToolOptions};
 
 /// A 64×64 document with two painted layers: A covers (8..24)², B covers (40..56)². B is active.
-fn app() -> (PhotocraftApp, LayerId, LayerId) {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+fn app() -> (PrismApp, LayerId, LayerId) {
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.sync_views();
     let mut ids = Vec::new();
@@ -33,15 +33,15 @@ fn app() -> (PhotocraftApp, LayerId, LayerId) {
     (app, ids[0], ids[1])
 }
 
-fn bounds(app: &PhotocraftApp, id: LayerId) -> Rect {
+fn bounds(app: &PrismApp, id: LayerId) -> Rect {
     app.session.active().unwrap().doc.layer(id).unwrap().surface().unwrap().content_bounds()
 }
 
-fn active(app: &PhotocraftApp) -> Option<LayerId> {
+fn active(app: &PrismApp) -> Option<LayerId> {
     app.session.active().unwrap().active_layer
 }
 
-fn drag(app: &mut PhotocraftApp, from: [f64; 2], by: [f64; 2], mods: egui::Modifiers) {
+fn drag(app: &mut PrismApp, from: [f64; 2], by: [f64; 2], mods: egui::Modifiers) {
     crate::canvas::tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
     let mid = [from[0] + by[0] / 2.0, from[1] + by[1] / 2.0];
     crate::canvas::tool_event(app, ToolEvent::Move { x: mid[0], y: mid[1], pressure: 1.0 }, mods);
@@ -135,7 +135,7 @@ fn every_theme_shows_the_auto_select_toggle() {
     for theme in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::Studio] {
         let (app, _, _) = app();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 60.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+            |ui, app: &mut PrismApp| {
                 if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     return;
                 }
@@ -143,7 +143,7 @@ fn every_theme_shows_the_auto_select_toggle() {
             },
             app,
         );
-        PhotocraftApp::setup_context(&h.ctx, theme);
+        PrismApp::setup_context(&h.ctx, theme);
         h.run_steps(4);
         assert!(h.state().ui.tool_options.move_auto_select);
         h.get_by_label("Auto-Select:").click();
@@ -162,7 +162,7 @@ fn every_theme_shows_the_type_options() {
         let (mut app, _, _) = app();
         app.ui.tool = Tool::Type;
         let mut h = Harness::builder().with_size(egui::vec2(1600.0, 60.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+            |ui, app: &mut PrismApp| {
                 if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     return;
                 }
@@ -170,7 +170,7 @@ fn every_theme_shows_the_type_options() {
             },
             app,
         );
-        PhotocraftApp::setup_context(&h.ctx, theme);
+        PrismApp::setup_context(&h.ctx, theme);
         h.run_steps(4);
         let combos: Vec<String> = h
             .query_all_by_role(egui::accesskit::Role::ComboBox)
@@ -178,5 +178,74 @@ fn every_theme_shows_the_type_options() {
             .collect();
         let font = h.state().ui.tool_options.type_font.clone();
         assert!(combos.iter().any(|c| c.contains(&font)), "{theme:?}: the font picker shows {font:?}; combo boxes: {combos:?}");
+    }
+}
+
+#[test]
+fn move_command_a_then_toolbar_aligns_to_canvas_in_every_theme() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    for theme in crate::theme::ThemeKind::ALL {
+        let (app, a, b) = app();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 300.0)).build_ui_state(
+            |ui, app: &mut PrismApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::shortcuts::handle(app, ui.ctx());
+                crate::panels::options_bar(app, ui);
+                egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            },
+            app,
+        );
+        PrismApp::setup_context(&h.ctx, theme);
+        h.run_steps(4);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), Rect::new(0, 0, 64, 64));
+        for (label, expected) in [
+            ("Align left edges", Rect::new(0, 40, 16, 56)),
+            ("Align horizontal centers", Rect::new(24, 40, 40, 56)),
+            ("Align right edges", Rect::new(48, 40, 64, 56)),
+            ("Top Edges", Rect::new(40, 0, 56, 16)),
+            ("Vertical Centers", Rect::new(40, 24, 56, 40)),
+            ("Bottom Edges", Rect::new(40, 48, 56, 64)),
+        ] {
+            h.get_by_label(label).click();
+            h.run_steps(2);
+            assert_eq!(bounds(h.state(), b), expected, "{label} in {theme:?}");
+            assert_eq!(bounds(h.state(), a), Rect::new(8, 8, 24, 24));
+            assert!(h.state().session.active().unwrap().doc.selection.is_some());
+            assert!(h.state_mut().session.undo());
+            h.run_steps(2);
+            assert_eq!(bounds(h.state(), b), Rect::new(40, 40, 56, 56));
+        }
+    }
+}
+
+#[test]
+#[ignore = "writes Move-toolbar visual evidence using a GPU"]
+fn move_toolbar_visual_evidence() {
+    use egui_kittest::Harness;
+    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/move-toolbar");
+    std::fs::create_dir_all(&out).unwrap();
+    for theme in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::StudioLight] {
+        for ppp in [1.0, 2.0] {
+            let (mut app, _, _) = app();
+            app.run("select.all", json!({})).unwrap();
+            let mut h = Harness::builder().with_size(egui::vec2(1400.0, 450.0)).with_pixels_per_point(ppp).wgpu().build_ui_state(
+                |ui, app: &mut PrismApp| {
+                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        return;
+                    }
+                    crate::panels::options_bar(app, ui);
+                    egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+                },
+                app,
+            );
+            PrismApp::setup_context(&h.ctx, theme);
+            h.run_steps(4);
+            h.render().unwrap().save(out.join(format!("{theme:?}-{ppp}x.png"))).unwrap();
+        }
     }
 }

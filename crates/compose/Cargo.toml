@@ -1,5 +1,5 @@
 [package]
-name = "photocraft-compose"
+name = "prism-compose"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,16 +10,16 @@ workspace = true
 [dependencies]
 rayon = { workspace = true }
 
-photocraft-geom = { workspace = true }
-photocraft-color = { workspace = true }
-photocraft-raster = { workspace = true }
-photocraft-doc = { workspace = true }
-photocraft-vector = { workspace = true }
+prism-geom = { workspace = true }
+prism-color = { workspace = true }
+prism-raster = { workspace = true }
+prism-doc = { workspace = true }
+prism-vector = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
 criterion = { workspace = true }
-photocraft-paint = { workspace = true }
+prism-paint = { workspace = true }
 
 [[bench]]
 name = "compose"

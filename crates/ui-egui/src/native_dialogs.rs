@@ -1,6 +1,6 @@
 //! Native modal command windows; document identity is independent of OS focus.
 use crate::{
-    PhotocraftApp,
+    PrismApp,
     state::{Dialog, DialogPresentation},
 };
 use egui::{Context, ViewportId, vec2};
@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 pub fn viewport(id: u64) -> ViewportId {
     ViewportId::from_hash_of(("command-dialog", id))
 }
-pub fn bind_unbound(app: &mut PhotocraftApp) {
+pub fn bind_unbound(app: &mut PrismApp) {
     let source = app.session.active().map(|s| (s.doc.id, s.revision));
     for d in &mut app.ui.dialogs {
         if d.source_document.is_none()
@@ -21,17 +21,22 @@ pub fn bind_unbound(app: &mut PhotocraftApp) {
         }
     }
 }
-pub fn make_native(app: &mut PhotocraftApp, id: u64) {
+pub fn make_native(app: &mut PrismApp, id: u64) {
     bind_unbound(app);
     if let Some(d) = app.ui.dialog_mut(id) {
         d.presentation = DialogPresentation::Native;
     }
 }
-pub fn is_open(app: &PhotocraftApp) -> bool {
+/// The dialog has an OS window of its own (`viewport(id)`): native, or floating over a detached
+/// document window ([`crate::dialogs::floats`]).
+pub fn own_window(d: &Dialog) -> bool {
+    d.presentation == DialogPresentation::Native || crate::dialogs::floats(d)
+}
+pub fn is_open(app: &PrismApp) -> bool {
     app.ui.dialogs.iter().any(|d| d.presentation == DialogPresentation::Native)
 }
-pub fn focus(app: &PhotocraftApp, ctx: &Context, id: u64) -> Result<Value, String> {
-    if !app.ui.dialogs.iter().any(|d| d.id == id && d.presentation == DialogPresentation::Native) {
+pub fn focus(app: &PrismApp, ctx: &Context, id: u64) -> Result<Value, String> {
+    if !app.ui.dialogs.iter().any(|d| d.id == id && own_window(d)) {
         return Err(format!("no native dialog {id}"));
     }
     ctx.send_viewport_cmd_to(viewport(id), egui::ViewportCommand::Visible(true));
@@ -39,7 +44,7 @@ pub fn focus(app: &PhotocraftApp, ctx: &Context, id: u64) -> Result<Value, Strin
     ctx.request_repaint();
     Ok(json!({"dialog":id}))
 }
-pub fn source(app: &mut PhotocraftApp, d: &Dialog) -> Result<usize, String> {
+pub fn source(app: &mut PrismApp, d: &Dialog) -> Result<usize, String> {
     let index = if let Some(id) = d.source_document {
         app.session.documents().iter().position(|s| s.doc.id == id).ok_or("source document is closed")?
     } else {
@@ -57,7 +62,7 @@ pub fn source(app: &mut PhotocraftApp, d: &Dialog) -> Result<usize, String> {
     crate::doc_windows::activate(app, index, d.window);
     Ok(index)
 }
-pub fn cancel(app: &mut PhotocraftApp, ctx: &Context, id: u64) -> Result<Value, String> {
+pub fn cancel(app: &mut PrismApp, ctx: &Context, id: u64) -> Result<Value, String> {
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     if d.presentation == DialogPresentation::Native {
         ctx.send_viewport_cmd_to(crate::doc_windows::viewport(d.window), egui::ViewportCommand::Focus);
@@ -89,7 +94,7 @@ fn fitted_geometry(wanted: egui::Vec2, source: Option<egui::Rect>, screen: egui:
     );
     (wanted, position)
 }
-pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
+pub fn show(app: &mut PrismApp, ctx: &Context) {
     let dialogs: Vec<_> = app
         .ui
         .dialogs
@@ -206,8 +211,8 @@ mod tests {
             assert!(position.y + size.y <= screen.bottom() - 48.0);
         }
     }
-    fn app() -> PhotocraftApp {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    fn app() -> PrismApp {
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
         app.session.execute("file.new", json!({"width":12,"height":10})).unwrap();
         app.sync_views();
         app

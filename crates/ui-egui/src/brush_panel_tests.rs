@@ -1,14 +1,14 @@
 use egui::vec2;
 use egui_kittest::Harness;
-use photocraft_engine::paint::{Control, GrayTile, MaskMode, Pattern, PatternStyle, TipShape};
+use prism_engine::paint::{Control, GrayTile, MaskMode, Pattern, PatternStyle, TipShape};
 
 use super::*;
 
-fn app() -> PhotocraftApp {
-    PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
+fn app() -> PrismApp {
+    PrismApp::new(prism_engine::Session::new(), crate::Services::default())
 }
 
-fn last_journal(app: &PhotocraftApp) -> Option<(String, Value)> {
+fn last_journal(app: &PrismApp) -> Option<(String, Value)> {
     app.session.journal.last().cloned()
 }
 
@@ -147,7 +147,7 @@ fn every_section_round_trips_through_set_brush() {
         let got = app.session.execute("brush.get", json!({})).unwrap();
         assert_eq!(serde_json::from_value::<BrushSettings>(got).unwrap(), after, "section {i}");
         // Replaying the journaled call onto a fresh session gives the same brush (drivable).
-        let mut s = photocraft_engine::Session::new();
+        let mut s = prism_engine::Session::new();
         s.execute(&id, p).unwrap();
         assert_eq!(s.tools.brush, after, "replay of section {i}");
     }
@@ -221,11 +221,11 @@ fn section_locks_round_trip_and_survive_preset_picks() {
 }
 
 /// A harness that shows the options bar with `tool` in the Studio (non-pro) theme.
-fn options_bar_harness(tool: crate::state::Tool) -> Harness<'static, PhotocraftApp> {
+fn options_bar_harness(tool: crate::state::Tool) -> Harness<'static, PrismApp> {
     let mut app = app();
     app.ui.tool = tool;
     let mut h = Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut PrismApp| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
@@ -233,7 +233,7 @@ fn options_bar_harness(tool: crate::state::Tool) -> Harness<'static, PhotocraftA
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
     h.run_steps(4);
     h
 }
@@ -279,7 +279,7 @@ fn options_bar_edits_are_one_set_brush_per_gesture() {
     assert_eq!(h.state().session.journal.len(), n + 2);
     assert_eq!(h.state().session.journal.last().unwrap().1["brush"], json!({"pressureSize": !was}));
     // Replaying the journal gives the same brush.
-    let mut s = photocraft_engine::Session::new();
+    let mut s = prism_engine::Session::new();
     for (id, p) in &h.state().session.journal {
         s.execute(id, p.clone()).unwrap();
     }
@@ -291,7 +291,7 @@ fn airbrush_smoothing_options_and_symmetry_buttons_work() {
     // #1177: in the default (Photoshop) theme these options-bar buttons did nothing.
     use egui_kittest::kittest::Queryable;
     let mut h = app_harness();
-    let brush = |h: &Harness<'static, PhotocraftApp>| h.state().session.tools.brush.clone();
+    let brush = |h: &Harness<'static, PrismApp>| h.state().session.tools.brush.clone();
 
     // The airbrush toggles Build-up, one setBrush each click.
     let was = brush(&h).build_up;
@@ -325,7 +325,7 @@ fn airbrush_smoothing_options_and_symmetry_buttons_work() {
     h.run_steps(3);
     h.get_by_label("Work Path").click();
     h.run_steps(3);
-    let source = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().symmetry_path.as_ref().map(|a| a.source.clone());
+    let source = |h: &Harness<'static, PrismApp>| h.state().session.active().unwrap().symmetry_path.as_ref().map(|a| a.source.clone());
     assert_eq!(source(&h).as_deref(), Some("work"));
     assert_eq!(last_journal(h.state()).unwrap(), ("paint.symmetryFromPath".to_string(), json!({"name": "work"})));
     h.get_by_label("Set painting symmetry options").click();
@@ -377,12 +377,12 @@ fn drop_targets_and_actions_reorder_presets() {
     assert_eq!(group_key(p, UNGROUPED), "");
     let (group, index) = drop_target(p, "A1", "A3", true).unwrap();
     apply(&mut app, vec![Action::Move { name: "A1".into(), group, index: Some(index) }]);
-    let names = |app: &PhotocraftApp, g: &str| app.session.tools.presets.iter().filter(|x| x.group == g).map(|x| x.name.clone()).collect::<Vec<_>>();
+    let names = |app: &PrismApp, g: &str| app.session.tools.presets.iter().filter(|x| x.group == g).map(|x| x.name.clone()).collect::<Vec<_>>();
     assert_eq!(names(&app, "Alpha"), ["A2", "A3", "A1"]);
     apply(&mut app, vec![Action::Move { name: "A2".into(), group: "Beta".into(), index: None }]);
     assert_eq!(names(&app, "Beta"), ["B1", "A2"]);
     apply(&mut app, vec![Action::MoveGroup { group: "Beta".into(), before: Some("Alpha".into()) }]);
-    let order = photocraft_engine::brush_preset_cmds::group_order(&app.session.tools.presets);
+    let order = prism_engine::brush_preset_cmds::group_order(&app.session.tools.presets);
     assert!(order.iter().position(|g| g == "Beta") < order.iter().position(|g| g == "Alpha"));
     // Rename and delete from the context menu.
     apply(&mut app, vec![Action::Rename(Renaming { group: false, name: "A3".into(), text: "Third".into() })]);
@@ -407,13 +407,13 @@ fn drop_targets_and_actions_reorder_presets() {
     }
 }
 
-fn harness(tab: usize, section: usize) -> Harness<'static, PhotocraftApp> {
+fn harness(tab: usize, section: usize) -> Harness<'static, PrismApp> {
     let mut app = app();
     app.ui.panels.brush_settings = true;
     app.ui.brush_tab = tab;
     app.ui.brush_section = section;
     let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut PrismApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -422,7 +422,7 @@ fn harness(tab: usize, section: usize) -> Harness<'static, PhotocraftApp> {
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(4);
     h
 }
@@ -476,7 +476,7 @@ fn brushes_panel_groups_collapse_and_filter() {
     let groups = grouped_presets(&h.state().session.tools.presets);
     assert!(groups.len() >= 2, "{groups:?}");
     let ctx = h.ctx.clone();
-    let shown = |h: &mut Harness<'static, PhotocraftApp>| {
+    let shown = |h: &mut Harness<'static, PrismApp>| {
         h.run_steps(2);
         brush_preview::with_cache(&ctx, |c| c.len())
     };
@@ -495,15 +495,15 @@ fn brushes_panel_groups_collapse_and_filter() {
 
 /// A fresh session with the Brush tool: shortcuts, the options bar and the Brush Settings window,
 /// in the default theme (#258).
-fn app_harness() -> Harness<'static, PhotocraftApp> {
+fn app_harness() -> Harness<'static, PrismApp> {
     app_harness_with_language(crate::i18n::Lang::EN)
 }
 
-fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, PhotocraftApp> {
+fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, PrismApp> {
     let mut app = app();
     app.ui.tool = crate::state::Tool::Brush;
     let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut PrismApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -518,7 +518,7 @@ fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, Photoc
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+    PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
     h.run_steps(4);
     h
 }
@@ -665,14 +665,14 @@ fn hand_tool_offers_scale_buttons_and_requests_the_right_view() {
     app.ui.tool = crate::state::Tool::Hand;
     app.ui.views[0].zoom = 2.0;
     let mut h = Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut PrismApp| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 crate::panels::options_bar(app, ui);
             }
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
     h.run_steps(4);
 
     h.get_by_label("100%").click();

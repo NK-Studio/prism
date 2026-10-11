@@ -6,14 +6,14 @@ use egui::{Key, Modifiers, Pos2, pos2, vec2};
 use egui_kittest::Harness;
 use serde_json::json;
 
-use crate::PhotocraftApp;
+use crate::PrismApp;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+fn harness() -> Harness<'static, PrismApp> {
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
     let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut PrismApp| {
             let ctx = ui.ctx().clone();
             // Fonts set up after the first frame only apply from the next one.
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -25,23 +25,23 @@ fn harness() -> Harness<'static, PhotocraftApp> {
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(4);
     h
 }
 
-fn zoom(h: &Harness<'static, PhotocraftApp>) -> f32 {
+fn zoom(h: &Harness<'static, PrismApp>) -> f32 {
     h.state().current_zoom()
 }
 
-fn open_dialog(h: &mut Harness<'static, PhotocraftApp>) {
+fn open_dialog(h: &mut Harness<'static, PrismApp>) {
     crate::dialogs::open_command_dialog(h.state_mut(), "image.adjustments.brightnessContrast", "Brightness/Contrast…");
     h.run_steps(3);
     assert_eq!(h.state().ui.dialogs.len(), 1);
 }
 
 /// A point on the canvas well away from the centred dialog.
-fn free_canvas(h: &Harness<'static, PhotocraftApp>) -> Pos2 {
+fn free_canvas(h: &Harness<'static, PrismApp>) -> Pos2 {
     let r = h.state().last_canvas_rect;
     pos2(r.left() + 60.0, r.bottom() - 60.0)
 }
@@ -97,11 +97,11 @@ fn color_range_eyedropper_picks_on_the_canvas() {
     let mut h = harness();
     crate::color_range_ui::open(h.state_mut());
     h.run_steps(4);
-    let points = |h: &Harness<'static, PhotocraftApp>| {
+    let points = |h: &Harness<'static, PrismApp>| {
         let f = &h.state().ui.dialogs.last().unwrap().fields;
         (f["points"].as_array().unwrap().len(), f["points"].clone())
     };
-    let click = |h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers| {
+    let click = |h: &mut Harness<'static, PrismApp>, p: Pos2, modifiers: Modifiers| {
         h.hover_at(p);
         h.run_steps(1);
         h.event_modifiers(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers }, modifiers);
@@ -194,12 +194,12 @@ fn clicking_outside_a_dialog_keeps_it_open_and_the_canvas_pans_and_zooms() {
     assert!(h.state().ui.dialogs.is_empty());
 }
 
-fn press(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, pressed: bool) {
+fn press(h: &mut Harness<'static, PrismApp>, p: Pos2, pressed: bool) {
     h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
 
-fn picker_color(h: &Harness<'static, PhotocraftApp>) -> String {
+fn picker_color(h: &Harness<'static, PrismApp>) -> String {
     let d = h.state().ui.dialogs.last().unwrap();
     d.fields.get("color").and_then(serde_json::Value::as_str).unwrap().to_string()
 }
@@ -320,12 +320,12 @@ fn curves_picker_samples_document_coordinates_through_the_view_transform() {
 /// Type tool (#206): Alt+←/→ at a collapsed caret kerns the pair before it by 20/1000 em (100
 /// with ⌘/Ctrl), one history step per press; ⌘/Ctrl+←/→ moves by word; Alt+Shift+→ extends
 /// the selection by a word.
-fn wheel(h: &Harness<'static, PhotocraftApp>, dy: f32, modifiers: Modifiers) {
+fn wheel(h: &Harness<'static, PrismApp>, dy: f32, modifiers: Modifiers) {
     h.event_modifiers(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, dy), phase: egui::TouchPhase::Move, modifiers }, modifiers);
 }
 
 /// The document point under screen point `p` (no flip).
-fn doc_at(h: &Harness<'static, PhotocraftApp>, p: Pos2) -> [f32; 2] {
+fn doc_at(h: &Harness<'static, PrismApp>, p: Pos2) -> [f32; 2] {
     let v = &h.state().ui.views[0];
     let c = h.state().last_canvas_rect.center();
     [v.center[0] + (p.x - c.x) / v.zoom, v.center[1] + (p.y - c.y) / v.zoom]
@@ -393,23 +393,23 @@ fn alt_scroll_zooms_while_a_temporary_tool_is_held() {
 
 #[test]
 fn type_tool_alt_arrows_kern_the_pair() {
-    use photocraft_doc::text::Kerning;
+    use prism_doc::text::Kerning;
     let mut h = harness();
     let id = h.state_mut().run("type.create", json!({"x": 20, "y": 80, "text": "AVA To", "size": 40, "font": "Inter"})).unwrap()["layer"].as_u64().unwrap();
-    let text = |h: &Harness<'static, PhotocraftApp>| {
+    let text = |h: &Harness<'static, PrismApp>| {
         let st = h.state().session.active().unwrap();
-        match &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
-            photocraft_doc::LayerContent::Text(t) => t.clone(),
+        match &st.doc.layer(prism_doc::LayerId(id)).unwrap().content {
+            prism_doc::LayerContent::Text(t) => t.clone(),
             _ => panic!("not text"),
         }
     };
-    let kern = |h: &Harness<'static, PhotocraftApp>| {
+    let kern = |h: &Harness<'static, PrismApp>| {
         let t = text(h);
         let r = t.char_runs();
         (r[0].style.kerning, r[0].style.kern, r.len())
     };
-    let steps = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.entries().len();
-    let metric = photocraft_text::shared().lock().unwrap().pair_kerning(&text(&h), 72.0, 0).unwrap().round();
+    let steps = |h: &Harness<'static, PrismApp>| h.state().session.active().unwrap().history.entries().len();
+    let metric = prism_text::shared().lock().unwrap().pair_kerning(&text(&h), 72.0, 0).unwrap().round();
     h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
         layer: id,
         caret: 1,
@@ -458,7 +458,7 @@ fn type_tool_alt_arrows_kern_the_pair() {
 /// The Character panel's kerning field reads and parses Photoshop's values.
 #[test]
 fn kerning_field_values() {
-    use photocraft_doc::text::Kerning;
+    use prism_doc::text::Kerning;
     assert_eq!(crate::type_tool::kerning_label((Kerning::Metrics, 0.0)), "Metrics");
     assert_eq!(crate::type_tool::kerning_label((Kerning::Optical, 0.0)), "Optical");
     assert_eq!(crate::type_tool::kerning_label((Kerning::Off, 0.0)), "0");
@@ -477,7 +477,7 @@ fn kerning_field_values() {
 fn eyedropper_and_alt_sampling_show_a_pipette() {
     let mut h = harness();
     let p = h.state().last_canvas_rect.center();
-    let cursor = |h: &mut Harness<'static, PhotocraftApp>| {
+    let cursor = |h: &mut Harness<'static, PrismApp>| {
         h.hover_at(p);
         h.run_steps(2);
         h.output().platform_output.cursor_icon
@@ -490,7 +490,7 @@ fn eyedropper_and_alt_sampling_show_a_pipette() {
     h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
     // Every platform reports the crosshair. Windows also hands the OS a black-and-white bitmap
     // for it (`tool_cursor`, #1160), with `Crosshair` underneath as the fallback.
-    let precise = |h: &mut Harness<'static, PhotocraftApp>| {
+    let precise = |h: &mut Harness<'static, PrismApp>| {
         let icon = cursor(h);
         (icon, h.output().platform_output.cursor_image.is_some())
     };

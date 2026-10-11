@@ -6,23 +6,27 @@
 use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use photocraft_doc::{LayerContent, LayerId, TextLayer};
-use photocraft_geom::{Affine, Point};
+use prism_doc::{LayerContent, LayerId, TextLayer};
+use prism_geom::{Affine, Point};
 use serde_json::json;
 
 use super::{layout, text_layer};
-use crate::PhotocraftApp;
+use crate::PrismApp;
 use crate::canvas::ViewXform;
 
-fn harness(ppp: f32, app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn harness(ppp: f32, app: PrismApp) -> Harness<'static, PrismApp> {
     make_harness(ppp, app, false)
 }
 
-fn make_harness(ppp: f32, app: PhotocraftApp, render: bool) -> Harness<'static, PhotocraftApp> {
-    let builder = Harness::builder().with_size(vec2(1200.0, 800.0)).with_pixels_per_point(ppp);
+fn make_harness(ppp: f32, app: PrismApp, render: bool) -> Harness<'static, PrismApp> {
+    make_harness_with_dt(ppp, app, render, 0.25)
+}
+
+fn make_harness_with_dt(ppp: f32, app: PrismApp, render: bool, dt: f32) -> Harness<'static, PrismApp> {
+    let builder = Harness::builder().with_size(vec2(1200.0, 800.0)).with_pixels_per_point(ppp).with_step_dt(dt);
     let builder = if render { builder.wgpu() } else { builder };
     let mut h = builder.build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut PrismApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -32,13 +36,13 @@ fn make_harness(ppp: f32, app: PhotocraftApp, render: bool) -> Harness<'static, 
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(4);
     h
 }
 
-fn new_app() -> PhotocraftApp {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+fn new_app() -> PrismApp {
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 1600, "height": 900})).unwrap();
     app.sync_views();
     app.ui.extras.rulers = false;
@@ -46,7 +50,7 @@ fn new_app() -> PhotocraftApp {
     app
 }
 
-fn xf(app: &PhotocraftApp) -> ViewXform {
+fn xf(app: &PrismApp) -> ViewXform {
     let v = &app.ui.views[0];
     ViewXform {
         rect: crate::rulers::content_rect(app, app.last_canvas_rect),
@@ -58,16 +62,82 @@ fn xf(app: &PhotocraftApp) -> ViewXform {
 }
 
 /// Screen position of a text-space point of layer `id`.
-fn screen(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, x: f32, y: f32) -> Pos2 {
+fn screen(h: &mut Harness<'static, PrismApp>, id: LayerId, x: f32, y: f32) -> Pos2 {
     let app = h.state_mut();
     let (_, aff, _) = layout(app, id).unwrap();
     let p = aff.apply(Point::new(f64::from(x), f64::from(y)));
     xf(app).to_screen(p.x as f32, p.y as f32)
 }
 
+#[test]
+fn character_size_icon_preserves_selection_and_uses_transformed_size() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    app.run("type.edit", json!({"layer": id.0, "transform": [2.0, 0.0, 0.0, 2.0, 300.0, 420.0]})).unwrap();
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        caret: 2,
+        anchor: 0,
+        session: "icon-selection".into(),
+        created: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    let mut h = Harness::builder().with_size(vec2(420.0, 650.0)).build_ui_state(
+        |ui, app: &mut PrismApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                super::character_panel(app, ui, false);
+            }
+        },
+        app,
+    );
+    PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    let start = h.get_by_label("Font size").rect().center();
+    let steps = h.state().session.active().unwrap().history.entries().len();
+    h.hover_at(start);
+    h.run_steps(1);
+    press(&mut h, start, true);
+    for k in 1..=5 {
+        h.hover_at(start + vec2(8.0 * k as f32, 0.0));
+        h.run_steps(1);
+    }
+    press(&mut h, start + vec2(40.0, 0.0), false);
+    h.run_steps(2);
+    assert_eq!(selection(&h), (0, 2));
+    assert_eq!(size_at(h.state(), id, 0), 30.0, "40 screen points + 20 from the icon = 30 layer points at 200% scale");
+    assert_eq!(size_at(h.state(), id, 4), 20.0, "unselected text keeps its size");
+    assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 1);
+    assert!(h.state_mut().session.undo());
+    assert_eq!(size_at(h.state(), id, 0), 20.0);
+}
+
+#[test]
+fn size_icon_scrub_clamps_at_both_limits() {
+    let mut h = Harness::builder().with_size(vec2(180.0, 80.0)).build_ui_state(
+        |ui, value: &mut f32| {
+            super::font_size_icon(ui, value, 22.0, 1.0..=1296.0);
+        },
+        1295.0,
+    );
+    h.run();
+    let start = h.get_by_label("Font size").rect().center();
+    h.hover_at(start);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.hover_at(start + vec2(20.0, 0.0));
+    h.run_steps(1);
+    assert_eq!(*h.state(), 1296.0);
+    h.hover_at(start - vec2(3000.0, 0.0));
+    h.run_steps(1);
+    assert_eq!(*h.state(), 1.0);
+}
+
 /// A point inside glyph `i` (character index): `f` of the way along its advance, in the upper
 /// half of its line.
-fn glyph(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, i: usize, f: f32) -> Pos2 {
+fn glyph(h: &mut Harness<'static, PrismApp>, id: LayerId, i: usize, f: f32) -> Pos2 {
     let (l, _, text) = layout(h.state_mut(), id).unwrap();
     let b = text.char_indices().nth(i).unwrap().0;
     let c = l.clusters.iter().find(|c| c.range.start == b).unwrap().clone();
@@ -75,12 +145,12 @@ fn glyph(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, i: usize, f: f32)
     screen(h, id, c.x + c.advance * f, ln.baseline - ln.ascent * 0.35)
 }
 
-fn press(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, down: bool) {
+fn press(h: &mut Harness<'static, PrismApp>, p: Pos2, down: bool) {
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
 
-fn click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
+fn click(h: &mut Harness<'static, PrismApp>, p: Pos2) {
     h.hover_at(p);
     h.run_steps(1);
     press(h, p, true);
@@ -88,7 +158,7 @@ fn click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
     h.run_steps(1);
 }
 
-fn drag(h: &mut Harness<'static, PhotocraftApp>, a: Pos2, b: Pos2) {
+fn drag(h: &mut Harness<'static, PrismApp>, a: Pos2, b: Pos2) {
     h.hover_at(a);
     h.run_steps(1);
     press(h, a, true);
@@ -100,7 +170,7 @@ fn drag(h: &mut Harness<'static, PhotocraftApp>, a: Pos2, b: Pos2) {
     h.run_steps(1);
 }
 
-fn selection(h: &Harness<'static, PhotocraftApp>) -> (usize, usize) {
+fn selection(h: &Harness<'static, PrismApp>) -> (usize, usize) {
     let Some(e) = h.state().ui.text_edit.clone() else { return (usize::MAX, usize::MAX) };
     (e.anchor, e.caret)
 }
@@ -162,7 +232,7 @@ fn clicks_and_drags_land_on_the_glyph_under_the_pointer() {
     }
 }
 
-fn text(app: &PhotocraftApp, id: LayerId) -> TextLayer {
+fn text(app: &PrismApp, id: LayerId) -> TextLayer {
     text_layer(&app.session.active().unwrap().doc, id).unwrap().clone()
 }
 
@@ -177,7 +247,7 @@ fn editing_psd_type_shows_our_layout_and_cancel_restores_it() {
     let moved = {
         let mut t = text(&app, id);
         t.transform = Affine::translate(330.0, 380.0);
-        photocraft_text::shared().lock().unwrap().render(&t, 72.0, photocraft_color::PixelFormat::RGBA8).1.surface
+        prism_text::shared().lock().unwrap().render(&t, 72.0, prism_color::PixelFormat::RGBA8).1.surface
     };
     let st = app.session.active_mut().unwrap();
     let mut doc = (*st.doc).clone();
@@ -210,7 +280,7 @@ fn editing_psd_type_shows_our_layout_and_cancel_restores_it() {
     assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps);
 }
 
-fn size_at(app: &PhotocraftApp, id: LayerId, ci: usize) -> f32 {
+fn size_at(app: &PrismApp, id: LayerId, ci: usize) -> f32 {
     let t = text(app, id);
     let b = t.text.char_indices().nth(ci).map_or(t.text.len(), |(b, _)| b);
     let mut at = 0;
@@ -234,8 +304,8 @@ fn size_applies_at_layer_and_selection_scope() {
         app.run("type.edit", json!({"layer": id.0, "transform": [2.0, 0.0, 0.0, 2.0, 300.0, 420.0]})).unwrap();
         let id = if psd {
             let doc = (*app.session.active().unwrap().doc).clone();
-            let out = photocraft_io::export(&doc, "t.psd", &Default::default()).unwrap();
-            let back = photocraft_io::import("t.psd", &out.bytes).unwrap().document;
+            let out = prism_io::export(&doc, "t.psd", &Default::default()).unwrap();
+            let back = prism_io::import("t.psd", &out.bytes).unwrap().document;
             app.session.add_document(back, None);
             app.sync_views();
             let d = &app.session.active().unwrap().doc;
@@ -274,20 +344,33 @@ fn size_applies_at_layer_and_selection_scope() {
 /// one undo step per drag; each step only damages the type layer's area, not the whole canvas.
 #[test]
 fn size_drag_is_live_and_one_history_step_per_drag() {
+    size_scrub_history(false);
+}
+
+#[test]
+fn size_icon_drag_is_live_and_one_history_step_per_drag() {
+    size_scrub_history(true);
+}
+
+fn size_scrub_history(icon: bool) {
     let mut app = new_app();
     let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
     let mut h = Harness::builder().with_size(vec2(900.0, 60.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut PrismApp| {
             ui.horizontal(|ui| super::options_bar(app, ui));
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(3);
     let steps = h.state().session.active().unwrap().history.entries().len();
     let mut last = 20.0;
     for d in 0..2 {
-        let field = h.get_all_by_role(egui::accesskit::Role::SpinButton).next().expect("size field").rect().center();
+        let field = if icon {
+            h.get_by_label("Font size").rect().center()
+        } else {
+            h.get_all_by_role(egui::accesskit::Role::SpinButton).next().expect("size field").rect().center()
+        };
         h.hover_at(field);
         h.run_steps(1);
         press(&mut h, field, true);
@@ -311,7 +394,7 @@ fn size_drag_is_live_and_one_history_step_per_drag() {
 
 /// A point inside glyph `i` of vertical type: `f` of the way down its advance, right of the
 /// column's centre line.
-fn vglyph(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, i: usize, f: f32) -> Pos2 {
+fn vglyph(h: &mut Harness<'static, PrismApp>, id: LayerId, i: usize, f: f32) -> Pos2 {
     let (l, _, text) = layout(h.state_mut(), id).unwrap();
     assert!(l.vertical);
     let b = text.char_indices().nth(i).unwrap().0;
@@ -321,7 +404,7 @@ fn vglyph(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, i: usize, f: f32
     screen(h, id, x, y)
 }
 
-fn key(h: &mut Harness<'static, PhotocraftApp>, k: egui::Key) {
+fn key(h: &mut Harness<'static, PrismApp>, k: egui::Key) {
     h.event(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
@@ -378,7 +461,7 @@ fn vertical_type_caret_selection_and_arrows_follow_the_columns() {
     assert_eq!(super::flow_key(egui::Key::ArrowUp, false), egui::Key::ArrowUp);
 }
 
-fn rgb_at(app: &PhotocraftApp, id: LayerId, ci: usize) -> [u8; 4] {
+fn rgb_at(app: &PrismApp, id: LayerId, ci: usize) -> [u8; 4] {
     let t = text(app, id);
     let b = t.text.char_indices().nth(ci).map_or(t.text.len(), |(b, _)| b);
     let mut at = 0;
@@ -427,7 +510,7 @@ fn foreground_colour_recolours_only_selected_type() {
 #[test]
 fn vertical_type_tool_creates_point_and_paragraph_text_with_one_undo() {
     use crate::canvas::{ToolEvent, tool_event};
-    use photocraft_doc::text::{Orientation, TextShape};
+    use prism_doc::text::{Orientation, TextShape};
     for end in [[100.0, 100.0], [240.0, 230.0]] {
         let mut app = new_app();
         app.ui.tool = crate::state::Tool::VerticalType;
@@ -527,7 +610,7 @@ fn empty_ime_events_never_delete_the_selection() {
     app.ui.text_edit =
         Some(crate::state::TextEdit { layer: id.0, caret: 5, anchor: 0, session: "s".into(), created: false, dragging: false, resize: None, preedit: None });
     let mut h = harness(1.0, app);
-    let ime = |h: &mut Harness<'static, PhotocraftApp>, e: egui::ImeEvent| {
+    let ime = |h: &mut Harness<'static, PrismApp>, e: egui::ImeEvent| {
         h.event(egui::Event::Ime(e));
         h.run_steps(1);
     };
@@ -546,17 +629,17 @@ fn type_command() -> Modifiers {
     Modifiers { command: true, ctrl: true, ..Modifiers::NONE }
 }
 
-fn hold(h: &mut Harness<'static, PhotocraftApp>, mods: Modifiers) {
+fn hold(h: &mut Harness<'static, PrismApp>, mods: Modifiers) {
     h.event(egui::Event::ModifiersChanged(mods));
     h.run_steps(1);
 }
 
-fn transform_press(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, down: bool, mods: Modifiers) {
+fn transform_press(h: &mut Harness<'static, PrismApp>, p: Pos2, down: bool, mods: Modifiers) {
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: mods });
     h.run_steps(1);
 }
 
-fn transform_drag(h: &mut Harness<'static, PhotocraftApp>, a: Pos2, b: Pos2, mods: Modifiers, release_command: bool) {
+fn transform_drag(h: &mut Harness<'static, PrismApp>, a: Pos2, b: Pos2, mods: Modifiers, release_command: bool) {
     hold(h, mods);
     h.hover_at(a);
     h.run_steps(1);
@@ -572,7 +655,7 @@ fn transform_drag(h: &mut Harness<'static, PhotocraftApp>, a: Pos2, b: Pos2, mod
     hold(h, Modifiers::NONE);
 }
 
-fn transform_app(paragraph: bool, vertical: bool, transform: Affine) -> (PhotocraftApp, LayerId) {
+fn transform_app(paragraph: bool, vertical: bool, transform: Affine) -> (PrismApp, LayerId) {
     let mut app = new_app();
     let mut p = json!({"text": "Hello é世界\nSecond line", "size": 32, "x": 300, "y": 420});
     if paragraph {
@@ -590,7 +673,7 @@ fn transform_app(paragraph: bool, vertical: bool, transform: Affine) -> (Photocr
     (app, id)
 }
 
-fn frame_point(app: &PhotocraftApp, p: [f64; 2]) -> Pos2 {
+fn frame_point(app: &PrismApp, p: [f64; 2]) -> Pos2 {
     xf(app).to_screen(p[0] as f32, p[1] as f32)
 }
 
@@ -836,7 +919,7 @@ fn temporary_type_transform_control_roundtrip_and_input_safety() {
     let frame = crate::type_transform::frame(&mut app).unwrap();
     let a = frame.quad[2];
     let ctx = egui::Context::default();
-    let call = |app: &mut PhotocraftApp, params| {
+    let call = |app: &mut PrismApp, params| {
         let (req, _) = ControlRequest::new("ui.pointer", params);
         let Outcome::Done(result) = crate::control::handle(app, &ctx, &req) else { panic!("expected immediate pointer reply") };
         assert_eq!(result["ok"], true, "{result}");
@@ -848,9 +931,9 @@ fn temporary_type_transform_control_roundtrip_and_input_safety() {
     call(&mut app, json!({"events": [{"kind": "up", "x": a[0]+60.0, "y": a[1]+30.0}]}));
     assert_ne!(text(&app, id).transform, initial);
     let doc = &app.session.active().unwrap().doc;
-    for name in ["type.pcraft", "type.psd"] {
-        let out = photocraft_io::export(doc, name, &Default::default()).unwrap();
-        let back = photocraft_io::import(name, &out.bytes).unwrap().document;
+    for name in ["type.prism", "type.psd"] {
+        let out = prism_io::export(doc, name, &Default::default()).unwrap();
+        let back = prism_io::import(name, &out.bytes).unwrap().document;
         let t = back.walk().into_iter().find_map(|(_, _, l)| if let LayerContent::Text(t) = &l.content { Some(t) } else { None }).unwrap();
         assert_affine(t.transform, text(&app, id).transform);
         assert_eq!(t.text, text(&app, id).text);
@@ -874,7 +957,7 @@ fn temporary_type_transform_control_roundtrip_and_input_safety() {
 fn temporary_type_transform_preserves_depth_and_color_model() {
     use crate::canvas::{ToolEvent, tool_event};
     for (depth, mode) in [(8, "rgb"), (16, "rgb"), (32, "rgb"), (16, "gray"), (8, "cmyk"), (16, "lab")] {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 1200, "height": 900, "depth": depth, "mode": mode})).unwrap();
         let id = LayerId(app.run("type.create", json!({"text": "Prism é世界", "size": 32, "x": 300, "y": 350})).unwrap()["layer"].as_u64().unwrap());
         super::edit_active(&mut app).unwrap();
@@ -1038,8 +1121,8 @@ fn temporary_type_transform_imported_psd_retains_editability_and_styles() {
         .unwrap();
     app.run("layer.renameLayer", json!({"layer": original_id.0, "name": "Styled caption"})).unwrap();
     app.run("layer.layerStyle.dropShadow", json!({"layer": original_id.0, "distance": 8, "size": 4})).unwrap();
-    let exported = photocraft_io::export(&app.session.active().unwrap().doc, "type.psd", &Default::default()).unwrap();
-    let imported = photocraft_io::import("type.psd", &exported.bytes).unwrap().document;
+    let exported = prism_io::export(&app.session.active().unwrap().doc, "type.psd", &Default::default()).unwrap();
+    let imported = prism_io::import("type.psd", &exported.bytes).unwrap().document;
     let mut app = new_app();
     app.session.add_document(imported, None);
     app.sync_views();
@@ -1071,7 +1154,7 @@ fn temporary_type_transform_imported_psd_retains_editability_and_styles() {
 #[ignore = "release benchmark for issue #1091: 24 MP, eight text layers, 60 preview updates"]
 fn temporary_type_transform_large_document_preview() {
     use crate::canvas::{ToolEvent, tool_event};
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 6000, "height": 4000})).unwrap();
     for i in 0..8 {
         app.run("type.create", json!({"text": "Prism transform preview", "size": 60, "x": 300, "y": 300 + i * 200})).unwrap();
@@ -1109,7 +1192,7 @@ fn temporary_type_transform_large_document_preview() {
         times[29], times[56], times[59]
     );
     // Compare the same matrices with the existing live-command path on the same document.
-    let mut commands = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let mut commands = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
     commands.session.add_document(source, None);
     let mut command_times = Vec::new();
     for transform in transforms {
@@ -1123,4 +1206,223 @@ fn temporary_type_transform_large_document_preview() {
         command_times[29], command_times[56], command_times[59]
     );
     crate::type_transform::cancel_drag(&mut app);
+}
+
+#[test]
+fn command_a_selects_unicode_text_and_respects_the_logical_keyboard_layout() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"x":200,"y":300,"text":"한글 é🙂\nPrism","size":48})).unwrap()["layer"].as_u64().unwrap());
+    super::edit_active(&mut app).unwrap();
+    let mut h = harness(1.0, app);
+    let ed = h.state_mut().ui.text_edit.as_mut().unwrap();
+    ed.anchor = 2;
+    ed.caret = 2;
+    // A layout's logical letter wins: the physical A position can be a different letter.
+    h.event(egui::Event::Key { key: egui::Key::B, physical_key: Some(egui::Key::A), pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+    h.run_steps(2);
+    assert_eq!(selection(&h), (2, 2));
+    // egui-winit already maps an unrecognized IME letter to its physical key.
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    assert_eq!(selection(&h), (0, text(h.state(), id).text.chars().count()));
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "select text rather than document pixels");
+    h.event(egui::Event::Paste("교체".into()));
+    h.run_steps(2);
+    assert_eq!(text(h.state(), id).text, "교체");
+}
+
+#[test]
+fn clicking_type_returns_keyboard_focus_from_a_font_search_field() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"x":200,"y":300,"text":"Prism é世界","size":48})).unwrap()["layer"].as_u64().unwrap());
+    let mut query = String::new();
+    let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+        move |ui, app: &mut PrismApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            crate::shortcuts::handle(app, &ctx);
+            egui::Panel::top("font-test-search").show(ui, |ui| {
+                ui.add(egui::TextEdit::singleline(&mut query).hint_text("Font search test"));
+            });
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    h.get_by_role(egui::accesskit::Role::TextInput).click();
+    h.run();
+    assert!(h.ctx.text_edit_focused());
+    let p = glyph(&mut h, id, 2, 0.5);
+    click(&mut h, p);
+    assert!(h.state().ui.text_edit.is_some());
+    assert!(!h.ctx.text_edit_focused(), "the canvas click releases the stale field focus");
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    assert_eq!(selection(&h), (0, text(h.state(), id).text.chars().count()));
+}
+
+#[test]
+#[ignore = "writes offscreen text select-all visual evidence"]
+fn text_select_all_visual_evidence() {
+    let mut app = new_app();
+    app.run("type.create", json!({"x":350,"y":450,"text":"Prism 한글 text","size":64})).unwrap();
+    super::edit_active(&mut app).unwrap();
+    let mut h = make_harness(2.0, app, true);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/type-font-picker");
+    std::fs::create_dir_all(&out).unwrap();
+    h.render().unwrap().save(out.join("text-select-all.png")).unwrap();
+}
+
+#[test]
+#[ignore = "writes offscreen font-size icon drag evidence"]
+fn size_icon_visual_evidence() {
+    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/type-size-icon");
+    std::fs::create_dir_all(&out).unwrap();
+    for theme in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::StudioLight] {
+        let mut app = new_app();
+        let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+        let mut h = Harness::builder().with_size(vec2(1050.0, 65.0)).with_pixels_per_point(2.0).wgpu().build_ui_state(
+            |ui, app: &mut PrismApp| {
+                ui.horizontal(|ui| super::options_bar(app, ui));
+            },
+            app,
+        );
+        PrismApp::setup_context(&h.ctx, theme);
+        h.run_steps(3);
+        let start = h.get_by_label("Font size").rect().center();
+        h.hover_at(start);
+        h.run_steps(1);
+        press(&mut h, start, true);
+        for k in 1..=3 {
+            h.hover_at(start + vec2(10.0 * k as f32, 0.0));
+            h.run_steps(1);
+        }
+        assert_eq!(size_at(h.state(), id, 0), 35.0);
+        h.render().unwrap().save(out.join(format!("{theme:?}.png"))).unwrap();
+    }
+}
+
+#[test]
+fn font_selection_in_both_panels_applies_the_canonical_family_to_text() {
+    for character_panel in [false, true] {
+        let mut app = new_app();
+        let id = LayerId(app.run("type.create", json!({"text":"Sample", "font":"Inter", "size":24})).unwrap()["layer"].as_u64().unwrap());
+        let mut h = Harness::builder().with_size(vec2(1200.0, 650.0)).build_ui_state(
+            move |ui, app: &mut PrismApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    if character_panel {
+                        super::character_panel(app, ui, false);
+                    } else {
+                        ui.horizontal(|ui| super::options_bar(app, ui));
+                    }
+                }
+            },
+            app,
+        );
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        h.run_steps(4);
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Inter")).unwrap().click();
+        h.run();
+        h.event(egui::Event::Text("JetBrains Mono".into()));
+        h.run();
+        h.get_by_label("JetBrains Mono").click();
+        h.run();
+        let layer = text_layer(&h.state().session.active().unwrap().doc, id).unwrap();
+        assert_eq!(layer.font_family, "JetBrains Mono");
+        assert!(layer.cache.is_some(), "selection also renders the text");
+        assert_eq!(h.state().ui.tool_options.type_font, "JetBrains Mono");
+    }
+}
+
+#[test]
+fn move_double_click_edits_clicked_type_with_all_characters_selected() {
+    for ppp in [1.0, 2.0] {
+        for auto in [false, true] {
+            let mut app = new_app();
+            let text = "Hello 한글 🌟";
+            let id = LayerId(app.run("type.create", json!({"text": text, "size": 60, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+            app.run("type.edit", json!({"layer": id.0, "transform": [1.2, 0.2, -0.2, 1.2, 300.0, 420.0]})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.ui.tool = crate::state::Tool::Move;
+            app.ui.tool_options.move_auto_select = auto;
+            app.ui.tool_options.move_show_transform = true;
+            let mut h = make_harness_with_dt(ppp, app, false, 1.0 / 60.0);
+            let p = glyph(&mut h, id, 1, 0.5);
+            h.hover_at(p);
+            h.run_steps(1);
+            press(&mut h, p, true);
+            h.run_steps(1);
+            press(&mut h, p, false);
+            h.run_steps(1);
+            assert!(h.state().ui.text_edit.is_none(), "single click remains Move");
+            h.hover_at(p);
+            h.run_steps(1);
+            press(&mut h, p, true);
+            h.run_steps(1);
+            press(&mut h, p, false);
+            h.run_steps(1);
+            assert_eq!(h.state().ui.tool, crate::state::Tool::Type, "{ppp}x Auto-Select {auto}");
+            assert_eq!(h.state().session.active().unwrap().active_layer, Some(id));
+            assert_eq!(selection(&h), (0, text.chars().count()), "full character selection at {ppp}x, Auto-Select {auto}");
+            assert!(h.state().drag.is_none());
+            assert!(h.state().ui.transform.is_none());
+            h.event(egui::Event::Text("Replacement".into()));
+            h.run_steps(2);
+            assert_eq!(text_layer(&h.state().session.active().unwrap().doc, id).unwrap().text, "Replacement");
+            super::cancel(h.state_mut());
+            assert_eq!(text_layer(&h.state().session.active().unwrap().doc, id).unwrap().text, text);
+        }
+    }
+}
+
+#[test]
+fn move_double_click_ignores_empty_canvas_and_opaque_covering_layers() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 60, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    app.ui.tool = crate::state::Tool::Move;
+    let mut h = harness(1.0, app);
+    let p = glyph(&mut h, id, 1, 0.5);
+    let d = xf(h.state()).to_doc(p);
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.state_mut()
+        .session
+        .edit("cover", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(prism_geom::Rect::new(0, 0, 1600, 900), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    assert!(!super::edit_from_move(h.state_mut(), d[0], d[1]));
+    assert!(!super::edit_from_move(h.state_mut(), 1500.0, 850.0));
+    assert!(h.state().ui.text_edit.is_none());
+}
+
+#[test]
+#[ignore = "writes Move-double-click type selection visual evidence using a GPU"]
+fn move_type_selection_visual_evidence() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "Hello 한글", "size": 60, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    app.ui.tool = crate::state::Tool::Move;
+    let mut h = make_harness_with_dt(2.0, app, true, 1.0 / 60.0);
+    let p = glyph(&mut h, id, 1, 0.5);
+    h.hover_at(p);
+    h.run_steps(1);
+    press(&mut h, p, true);
+    h.run_steps(1);
+    press(&mut h, p, false);
+    h.run_steps(1);
+    h.hover_at(p);
+    h.run_steps(1);
+    press(&mut h, p, true);
+    h.run_steps(1);
+    press(&mut h, p, false);
+    h.run_steps(1);
+    assert_eq!(selection(&h), (0, 8));
+    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/move-toolbar");
+    std::fs::create_dir_all(&out).unwrap();
+    h.render().unwrap().save(out.join("type-selected-2x.png")).unwrap();
 }

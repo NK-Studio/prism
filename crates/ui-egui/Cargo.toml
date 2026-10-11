@@ -1,5 +1,5 @@
 [package]
-name = "photocraft-ui-egui"
+name = "prism-ui-egui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,25 +12,25 @@ rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
 
-photocraft-geom = { workspace = true }
-photocraft-color = { workspace = true }
-photocraft-cms = { workspace = true }
-photocraft-raster = { workspace = true }
-photocraft-doc = { workspace = true }
-photocraft-compose = { workspace = true }
-photocraft-gpu = { workspace = true }
-photocraft-engine = { workspace = true }
-photocraft-io = { workspace = true }
-photocraft-plugins = { workspace = true }
-photocraft-algo = { workspace = true }
-photocraft-text = { workspace = true }
-photocraft-vector = { workspace = true }
+prism-geom = { workspace = true }
+prism-color = { workspace = true }
+prism-cms = { workspace = true }
+prism-raster = { workspace = true }
+prism-doc = { workspace = true }
+prism-compose = { workspace = true }
+prism-gpu = { workspace = true }
+prism-engine = { workspace = true }
+prism-io = { workspace = true }
+prism-plugins = { workspace = true }
+prism-algo = { workspace = true }
+prism-text = { workspace = true }
+prism-vector = { workspace = true }
 # Only MAX_BRUSH_SIZE: `ui.set brushSize` validates against the Brush Settings range up front.
-photocraft-paint = { workspace = true }
+prism-paint = { workspace = true }
 # Reading files to open them (bounded reads, a clear error for files larger than memory).
-photocraft-format = { workspace = true }
-# Image formats used by preview/export examples; already linked through photocraft-io.
-photocraft-codecs = { workspace = true }
+prism-format = { workspace = true }
+# Image formats used by preview/export examples; already linked through prism-io.
+prism-codecs = { workspace = true }
 egui = { workspace = true }
 # Native window references for parenting file dialogs to the originating viewport.
 winit = { version = "=0.30.13", default-features = false }
@@ -43,12 +43,12 @@ base64 = "0.22"
 
 [dev-dependencies]
 # Synthetic raw files for the open-time Camera Raw dialog tests.
-photocraft-raw = { workspace = true, features = ["testgen"] }
+prism-raw = { workspace = true, features = ["testgen"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }
 # Benchmark helpers for the `--json` benches `cargo xtask perf` runs (in-process RSS, percentiles).
-photocraft-testkit = { workspace = true }
+prism-testkit = { workspace = true }
 # Only for examples/perf_scenarios.rs (a 500-brush .abr for the #210 import row).
-photocraft-psd = { workspace = true }
+prism-psd = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }

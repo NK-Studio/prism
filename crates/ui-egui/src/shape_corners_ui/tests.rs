@@ -1,11 +1,11 @@
 use super::*;
 use crate::canvas::tool_event;
-use photocraft_doc::{Color, ColorMode, SampleType, Size};
+use prism_doc::{Color, ColorMode, SampleType, Size};
 
-fn app(depth: SampleType) -> PhotocraftApp {
-    let mut session = photocraft_engine::Session::new();
+fn app(depth: SampleType) -> PrismApp {
+    let mut session = prism_engine::Session::new();
     session.add_document(Document::with_background("corners", Size::new(300, 200), ColorMode::Rgb, depth, Color::WHITE), None);
-    let mut a = PhotocraftApp::new(session, Default::default());
+    let mut a = PrismApp::new(session, Default::default());
     a.run("shape.create", json!({"kind":"roundedRect", "rect":[20,30,200,100], "radii":20, "fill":"#0000ff"})).unwrap();
     a.ui.tool = Tool::Rectangle;
     a.ui.extras.snap = false;
@@ -23,7 +23,7 @@ fn live(doc: &Document, id: LayerId) -> [f64; 4] {
     radii
 }
 
-fn event(a: &mut PhotocraftApp, kind: &str, p: [f64; 2], mods: Modifiers) {
+fn event(a: &mut PrismApp, kind: &str, p: [f64; 2], mods: Modifiers) {
     let [x, y] = p;
     tool_event(
         a,
@@ -65,8 +65,8 @@ fn linked_preview_preserves_the_document_then_commits_one_undoable_edit_at_every
             assert!(damage(&a, original.id.0, rev + 1, key, 0).is_none());
             // A real pixel changes during preview, rather than only its path outline.
             let sample = Rect::new(28, 38, 29, 39);
-            let before = photocraft_compose::render(&original, sample).px[0];
-            let preview = photocraft_compose::render(&shown, sample).px[0];
+            let before = prism_compose::render(&original, sample).px[0];
+            let preview = prism_compose::render(&shown, sample).px[0];
             assert!(before[2] > 0.9 && before[0] < 0.1, "blue: {before:?}");
             assert!(preview[0] > 0.9 && preview[1] > 0.9, "white: {preview:?}");
             event(&mut a, "up", [60.0, 70.0], Modifiers::NONE);
@@ -214,11 +214,11 @@ fn saved_ui_state_does_not_restore_a_held_corner_gesture() {
     assert!(restored.shape_corners.is_none());
 }
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, PrismApp>;
 
 fn harness(zoom: f32, rotation: f32, flip: bool) -> Harness {
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PrismApp::setup_context(&cc.egui_ctx, Default::default());
         let mut a = app(SampleType::U8);
         a.ui.views[0].zoom = zoom;
         a.ui.views[0].rotation = rotation;

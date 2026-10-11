@@ -3,11 +3,11 @@
 
 use std::sync::Arc;
 
-use photocraft_doc::{Color, Document, Fill, LayerContent, LayerId};
-use photocraft_geom::Rect;
+use prism_doc::{Color, Document, Fill, LayerContent, LayerId};
+use prism_geom::Rect;
 use serde_json::{Map, Value, json};
 
-use crate::{PhotocraftApp, color_picker_ui};
+use crate::{PrismApp, color_picker_ui};
 
 const TAG: u64 = 1 << 56;
 
@@ -37,7 +37,7 @@ pub(crate) struct Runtime {
     serial: u64,
 }
 
-pub(crate) fn cancel_stale(app: &mut PhotocraftApp) {
+pub(crate) fn cancel_stale(app: &mut PrismApp) {
     let current = app.session.active().map(|st| (st.doc.id.0, st.revision));
     let runtime = &mut app.shape_color_runtime;
     if runtime.edit.as_ref().is_some_and(|edit| current != Some((edit.document.id.0, edit.revision)) || !app.ui.dialogs.iter().any(|d| d.id == edit.dialog)) {
@@ -55,7 +55,7 @@ pub(crate) fn owns(fields: &Map<String, Value>) -> bool {
 }
 
 /// Gradients and patterns retain their existing Appearance controls.
-pub(crate) fn solid_shape(app: &PhotocraftApp) -> bool {
+pub(crate) fn solid_shape(app: &PrismApp) -> bool {
     app.session
         .active()
         .and_then(|st| st.doc.layer(st.active_layer?))
@@ -74,7 +74,7 @@ fn editable(doc: &Document, layer: LayerId) -> Result<(), String> {
     }
 }
 
-pub(crate) fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
+pub(crate) fn open(app: &mut PrismApp) -> Result<u64, String> {
     let st = app.session.active().ok_or("no document")?;
     let layer = st.active_layer.ok_or("no active layer")?;
     editable(&st.doc, layer)?;
@@ -106,7 +106,7 @@ pub(crate) fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     Ok(dialog)
 }
 
-fn validate<'a>(app: &'a PhotocraftApp, fields: &Map<String, Value>) -> Result<(&'a Edit, [f32; 3]), String> {
+fn validate<'a>(app: &'a PrismApp, fields: &Map<String, Value>) -> Result<(&'a Edit, [f32; 3]), String> {
     let edit = app.shape_color_runtime.edit.as_ref().ok_or("reopen the shape colour picker")?;
     if !owns(fields) || fields.get("__shapeDialog").and_then(Value::as_u64) != Some(edit.dialog) {
         return Err("reopen the shape colour picker".into());
@@ -121,12 +121,12 @@ fn validate<'a>(app: &'a PhotocraftApp, fields: &Map<String, Value>) -> Result<(
 }
 
 /// Also used by the control channel's authorization check, with the actual command params.
-pub(crate) fn params(app: &PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+pub(crate) fn params(app: &PrismApp, fields: &Map<String, Value>) -> Result<Value, String> {
     let (edit, rgb) = validate(app, fields)?;
     Ok(json!({"layer": edit.layer.0, "fill": [rgb[0], rgb[1], rgb[2], edit.alpha]}))
 }
 
-pub(crate) fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+pub(crate) fn confirm(app: &mut PrismApp, fields: &Map<String, Value>) -> Result<Value, String> {
     let result = (|| {
         let (edit, rgb) = validate(app, fields)?;
         if rgb == edit.original {
@@ -142,7 +142,7 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> R
     result
 }
 
-pub(crate) fn display_doc(app: &mut PhotocraftApp, index: usize) -> Option<(Arc<Document>, u64)> {
+pub(crate) fn display_doc(app: &mut PrismApp, index: usize) -> Option<(Arc<Document>, u64)> {
     if app.session.active_index() != Some(index) {
         return None;
     }
@@ -160,10 +160,10 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, index: usize) -> Option<(Arc<
     let mut shown = (*edit.document).clone();
     let LayerContent::Shape(mut shape) = shown.layer(edit.layer)?.content.clone() else { return None };
     shape.fill = Some(Fill::Solid(Color::rgba(rgb[0], rgb[1], rgb[2], edit.alpha)));
-    photocraft_engine::vector_cmds::refresh_shape(&shown, &mut shape);
+    prism_engine::vector_cmds::refresh_shape(&shown, &mut shape);
     shown.layer_mut(edit.layer)?.content = LayerContent::Shape(shape);
-    let before = photocraft_compose::change_bounds(edit.document.layer(edit.layer)?, shown.bounds()).unwrap_or(shown.bounds());
-    let after = photocraft_compose::change_bounds(shown.layer(edit.layer)?, shown.bounds()).unwrap_or(shown.bounds());
+    let before = prism_compose::change_bounds(edit.document.layer(edit.layer)?, shown.bounds()).unwrap_or(shown.bounds());
+    let after = prism_compose::change_bounds(shown.layer(edit.layer)?, shown.bounds()).unwrap_or(shown.bounds());
     let mut area = before.union(&after);
     // Automation may replace a picker before a frame restores the preceding preview. Keep
     // that footprint too, so a different shape cannot leave the old preview on the canvas.
@@ -181,7 +181,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, index: usize) -> Option<(Arc<
     Some((shown, key))
 }
 
-pub(crate) fn damage(app: &PhotocraftApp, document: u64, revision: u64, from: u64, to: u64) -> Option<Rect> {
+pub(crate) fn damage(app: &PrismApp, document: u64, revision: u64, from: u64, to: u64) -> Option<Rect> {
     let p = app.shape_color_runtime.preview.as_ref()?;
     let ours = |key| (TAG..TAG * 2).contains(&key);
     (p.document == document && p.revision == revision && (ours(from) || ours(to)) && (from == 0 || ours(from)) && (to == 0 || ours(to))).then_some(p.area)

@@ -1,5 +1,5 @@
 //! Product labels change without changing stable profile ids or legacy preference lookup.
-use photocraft_cms::{Builtin, Profile};
+use prism_cms::{Builtin, Profile};
 
 #[test]
 fn builtin_profiles_use_prism_and_keep_legacy_lookup() {

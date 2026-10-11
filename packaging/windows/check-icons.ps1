@@ -8,7 +8,7 @@
   can display a generic document icon even when the ICO data and application are valid.
 #>
 param(
-  [string] $WxsPath = (Join-Path $PSScriptRoot 'photocraft.wxs')
+  [string] $WxsPath = (Join-Path $PSScriptRoot 'prism.wxs')
 )
 $ErrorActionPreference = 'Stop'
 [xml] $Wxs = Get-Content -LiteralPath $WxsPath -Raw

@@ -1,7 +1,7 @@
 //! Headless JSON-lines server: the control protocol's envelope
 //! (`{"id","method","params"}` → `{"id","ok","result"|"error"}`) over a
 //! [`Headless`] session, so scripts and agents can keep one editing session
-//! open without MCP or the GUI. `photocraft-cli serve` runs it on stdio or a
+//! open without MCP or the GUI. `prism-cli serve` runs it on stdio or a
 //! loopback TCP port.
 //!
 //! Methods (camelCase params):
@@ -97,8 +97,7 @@ impl Headless {
             }
             "doc.new" => self.command_run("file.new", p),
             "doc.save" => {
-                let mut opts =
-                    photocraft_io::ExportOptions { tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false), ..Default::default() };
+                let mut opts = prism_io::ExportOptions { tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false), ..Default::default() };
                 if let Some(q) = p.get("quality").and_then(Value::as_u64) {
                     opts.encode.jpeg_quality = q.clamp(1, 100) as u8;
                     opts.encode.webp_quality = q.clamp(1, 100) as u8;
@@ -387,12 +386,12 @@ mod tests {
         g.handle("doc.new", json!({"width": 40, "height": 20, "background": "black"})).unwrap();
         let b = g.handle("doc.render", json!({"maxSide": 10})).unwrap();
         let png = base64::engine::general_purpose::STANDARD.decode(b["base64"].as_str().unwrap()).unwrap();
-        let img = photocraft_codecs::decode(&png).unwrap();
+        let img = prism_codecs::decode(&png).unwrap();
         assert_eq!(img.dimensions(), (10, 5));
         let path = std::env::temp_dir().join(format!("pc-rpc-{}.png", std::process::id()));
         let r = g.handle("doc.render", json!({"path": path.to_string_lossy(), "maxSide": 0})).unwrap();
         assert!(r["bytes"].as_u64().unwrap() > 0);
-        assert_eq!(photocraft_codecs::decode(&std::fs::read(&path).unwrap()).unwrap().dimensions(), (40, 20));
+        assert_eq!(prism_codecs::decode(&std::fs::read(&path).unwrap()).unwrap().dimensions(), (40, 20));
         let _ = std::fs::remove_file(path);
     }
 
@@ -480,7 +479,7 @@ mod tests {
         let history = h.handle("doc.inspect", json!({})).unwrap()["history"].clone();
         assert_eq!(history.as_array().unwrap().last().unwrap(), "Gaussian Blur", "{history}");
         h.handle("doc.save", json!({"path": after.to_string_lossy()})).unwrap();
-        let decode = |p: &std::path::Path| photocraft_codecs::decode(&std::fs::read(p).unwrap()).unwrap().to_rgba8();
+        let decode = |p: &std::path::Path| prism_codecs::decode(&std::fs::read(p).unwrap()).unwrap().to_rgba8();
         assert_ne!(decode(&before), decode(&after), "the export holds the blur");
         assert_ne!(render(&mut h), unblurred, "the preview holds the blur");
         std::fs::remove_dir_all(dir).unwrap();
@@ -496,7 +495,7 @@ mod tests {
         // A smaller preview still works, and rejection leaves the source document intact.
         let rendered = h.handle("doc.render", json!({"maxSide": 32})).unwrap();
         let png = base64::engine::general_purpose::STANDARD.decode(rendered["base64"].as_str().unwrap()).unwrap();
-        assert_eq!(photocraft_codecs::decode(&png).unwrap().dimensions(), (32, 1));
+        assert_eq!(prism_codecs::decode(&png).unwrap().dimensions(), (32, 1));
         assert_eq!(h.session.active().unwrap().doc.size.width, 2049);
     }
 
@@ -558,7 +557,7 @@ mod tests {
         h.handle("doc.new", json!({"width": 2049, "height": 1})).unwrap();
         let rendered = h.handle("doc.render", json!({"maxSide": 0})).unwrap();
         let png = base64::engine::general_purpose::STANDARD.decode(rendered["base64"].as_str().unwrap()).unwrap();
-        assert_eq!(photocraft_codecs::decode(&png).unwrap().dimensions(), (2049, 1));
+        assert_eq!(prism_codecs::decode(&png).unwrap().dimensions(), (2049, 1));
     }
 
     #[test]

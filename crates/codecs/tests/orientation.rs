@@ -3,7 +3,7 @@
 
 mod common;
 use common::*;
-use photocraft_codecs::*;
+use prism_codecs::*;
 use proptest::prelude::{any, prop_assert, prop_assert_eq, proptest};
 
 /// A minimal EXIF (TIFF-structured) block: a filler tag, then Orientation.
@@ -371,7 +371,7 @@ fn every_layout_and_depth_orients_and_inverts() {
 }
 
 /// #285 performance budget: turning a 24 MP photo upright on open adds ≤ 50 ms
-/// (release build: `cargo test --release -p photocraft-codecs --test orientation -- --ignored`).
+/// (release build: `cargo test --release -p prism-codecs --test orientation -- --ignored`).
 #[test]
 #[ignore = "timing; run in release"]
 fn rotating_24_mp_is_fast() {
@@ -478,12 +478,13 @@ fn strict_ifd_parsing_ignores_the_tag() {
 fn upright_exif_keeps_every_other_byte() {
     for big in [false, true] {
         let u32b = |v: u32| if big { v.to_be_bytes() } else { v.to_le_bytes() };
-        // IFD0: Make (12-byte ASCII stored after the IFD), Orientation 6, Software (inline ASCII),
+        // IFD0: Make (ASCII stored after the IFD), Orientation 6, Software (inline ASCII),
         // ExifIFD pointer to a sub-IFD with its own entries.
         let ifd_end = 8 + 2 + 4 * 12 + 4;
         let make_at = ifd_end as u32;
-        let sub_at = make_at + 12;
-        let mut tail = b"PhotoCraftCo".to_vec();
+        const MAKE: &[u8] = b"NK Studio\0";
+        let sub_at = make_at + MAKE.len() as u32;
+        let mut tail = MAKE.to_vec();
         // Sub-IFD: one DateTimeOriginal-ish SHORT entry, then next-IFD 0.
         tail.extend_from_slice(&if big { 1u16.to_be_bytes() } else { 1u16.to_le_bytes() });
         tail.extend_from_slice(&if big { 0x9000u16.to_be_bytes() } else { 0x9000u16.to_le_bytes() });
@@ -491,7 +492,11 @@ fn upright_exif_keeps_every_other_byte() {
         tail.extend_from_slice(&u32b(4));
         tail.extend_from_slice(b"0232");
         tail.extend_from_slice(&u32b(0));
-        let e = ifd(big, &[(0x010F, 2, 12, u32b(make_at)), (0x0112, 3, 1, short(6, big)), (0x0131, 2, 4, *b"PC1\0"), (0x8769, 4, 1, u32b(sub_at))], &tail);
+        let e = ifd(
+            big,
+            &[(0x010F, 2, MAKE.len() as u32, u32b(make_at)), (0x0112, 3, 1, short(6, big)), (0x0131, 2, 4, *b"PR1\0"), (0x8769, 4, 1, u32b(sub_at))],
+            &tail,
+        );
         let mut prefixed = b"Exif\0\0".to_vec();
         prefixed.extend_from_slice(&e);
         let fixed = upright_exif(&prefixed).into_owned();
@@ -504,8 +509,8 @@ fn upright_exif_keeps_every_other_byte() {
         assert_eq!(&fixed[..value], &prefixed[..value]);
         assert_eq!(&fixed[value + 2..], &prefixed[value + 2..]);
         // The offset-based Make string and the inline Software tag are intact.
-        assert_eq!(&fixed[6 + make_at as usize..][..12], b"PhotoCraftCo");
-        assert!(fixed.windows(4).any(|w| w == b"PC1\0"));
+        assert_eq!(&fixed[6 + make_at as usize..][..MAKE.len()], MAKE);
+        assert!(fixed.windows(4).any(|w| w == b"PR1\0"));
     }
 }
 

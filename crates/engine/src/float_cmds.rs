@@ -15,9 +15,9 @@
 
 use std::sync::Arc;
 
-use photocraft_color::PixelFormat;
-use photocraft_doc::{Document, LayerContent, LayerId};
-use photocraft_raster::Surface;
+use prism_color::PixelFormat;
+use prism_doc::{Document, LayerContent, LayerId};
+use prism_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -87,7 +87,7 @@ impl CutParts {
             .surface_mut()
             .ok_or_else(|| EngineError::Other("the layer has no pixels to move".into()))?;
         let mut out = self.rest.clone();
-        crate::transform_cmds::composite_over(&mut out, &photocraft_algo::resample::translate_surface(&self.piece, dx, dy));
+        crate::transform_cmds::composite_over(&mut out, &prism_algo::resample::translate_surface(&self.piece, dx, dy));
         *surf = out;
         Ok(d)
     }
@@ -169,7 +169,7 @@ pub fn drop_floating(s: &mut Session) -> Result<Value> {
         let moved = f.parts.moved(doc, dx, dy)?;
         let surf = moved.layer(f.layer).and_then(|l| l.surface()).cloned().ok_or(EngineError::NoLayer(f.layer))?;
         *doc.layer_mut(f.layer).ok_or(EngineError::NoLayer(f.layer))?.surface_mut().ok_or(EngineError::NoLayer(f.layer))? = surf;
-        doc.selection = doc.selection.as_ref().map(|sel| photocraft_algo::resample::translate_surface(sel, dx, dy));
+        doc.selection = doc.selection.as_ref().map(|sel| prism_algo::resample::translate_surface(sel, dx, dy));
         Ok(())
     })?;
     Ok(json!({"dropped": true, "offset": [dx, dy]}))

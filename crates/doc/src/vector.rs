@@ -1,5 +1,5 @@
 //! Vector data: paths (Pen tool), shape layers, saved/work paths and vector masks. Pure data;
-//! rasterization lives in `photocraft-vector`, PSD mapping in `photocraft-io`.
+//! rasterization lives in `prism-vector`, PSD mapping in `prism-io`.
 //!
 //! Coordinates are **document pixels** (f64, y down), cubic Bézier. A subpath is a list of knots;
 //! segment `i` runs from `knots[i].anchor` via `knots[i].out_ctrl` and `knots[i+1].in_ctrl` to
@@ -15,8 +15,8 @@
 
 use std::sync::Arc;
 
-use photocraft_color::Color;
-use photocraft_geom::{Affine, Point};
+use prism_color::Color;
+use prism_geom::{Affine, Point};
 use serde::{Deserialize, Serialize};
 
 use crate::{Fill, Surface};
@@ -281,12 +281,27 @@ pub enum LiveShape {
         sides: u32,
         star_ratio: f64,
     },
+    /// Open, stroked annotation arrow. Head size is the length of each wing in pixels; head angle is the included angle in degrees.
+    Arrow {
+        from: [f64; 2],
+        to: [f64; 2],
+        #[serde(rename = "headSize")]
+        head_size: f64,
+        #[serde(rename = "headAngle", default = "default_arrow_angle")]
+        head_angle: f64,
+    },
     /// Line from `from` to `to` drawn as a filled bar `weight` px thick.
     Line {
         from: [f64; 2],
         to: [f64; 2],
         weight: f64,
+        #[serde(default, rename = "roundTips")]
+        round_tips: bool,
     },
+}
+
+fn default_arrow_angle() -> f64 {
+    60.0
 }
 
 /// A shape layer: a filled and/or stroked path.
@@ -297,7 +312,7 @@ pub struct ShapeLayer {
     pub fill: Option<Fill>,
     pub stroke: Option<ShapeStroke>,
     pub live: Option<LiveShape>,
-    /// Rasterized appearance (from PSD or `photocraft-vector`).
+    /// Rasterized appearance (from PSD or `prism-vector`).
     pub cache: Option<Surface>,
     /// Data of the PSD vector mask block (`vsms`, else `vmsk`). On export it replaces that entry
     /// in [`crate::Layer::psd_blocks`] while it still decodes to `path`.

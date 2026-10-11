@@ -19,8 +19,8 @@ a member of the Prism workspace.
 
 ```sh
 # Into a running app (control channel) or the CLI, as a command:
-plugin.install {"path": "examples/plugins/invert-rs/target/wasm32-unknown-unknown/release/photocraft_plugin_invert.wasm"}
-plugin.run {"id": "org.photocraft.example.invert"}
+plugin.install {"path": "examples/plugins/invert-rs/target/wasm32-unknown-unknown/release/prism_plugin_invert.wasm"}
+plugin.run {"id": "com.nkstudio.prism.example.invert"}
 ```
 
 Or copy the `.wasm` into the folder set in Edit › Preferences › Plug-ins (with *Use Additional

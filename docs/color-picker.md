@@ -29,13 +29,13 @@ Unit and UI integration tests cover selected text versus whole-layer color chang
 Generate screenshots using synthetic artwork without exposing your desktop:
 
 ```sh
-cargo run -p photocraft-ui-egui --example color_picker_demo -- /tmp/photocraft-color-picker
+cargo run -p prism-ui-egui --example color_picker_demo -- /tmp/prism-color-picker
 ```
 
 For reproducible native X11 capture verification, the explicitly ignored test displays an 8 × 8 synthetic swatch in an isolated Xvfb display, captures it in memory and checks the known pixel:
 
 ```sh
-xvfb-run -a cargo test -p photocraft screen_capture_reads_a_known_x11_fixture_pixel -- --ignored --test-threads=1
+xvfb-run -a cargo test -p prism screen_capture_reads_a_known_x11_fixture_pixel -- --ignored --test-threads=1
 ```
 
 Windows, macOS and mixed-DPI monitor arrangements additionally need manual validation on those environments; mock UI tests do not substitute for it.

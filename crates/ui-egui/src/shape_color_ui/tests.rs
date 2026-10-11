@@ -1,20 +1,20 @@
 use super::*;
-use photocraft_doc::{ColorMode, SampleType, Size};
+use prism_doc::{ColorMode, SampleType, Size};
 
-fn app(mode: ColorMode, depth: SampleType) -> PhotocraftApp {
-    let mut s = photocraft_engine::Session::new();
+fn app(mode: ColorMode, depth: SampleType) -> PrismApp {
+    let mut s = prism_engine::Session::new();
     s.add_document(Document::with_background("shape colour", Size::new(120, 100), mode, depth, Color::WHITE), None);
-    let mut a = PhotocraftApp::new(s, Default::default());
+    let mut a = PrismApp::new(s, Default::default());
     a.run("shape.create", json!({"kind":"roundedRect","rect":[10,10,80,70],"radii":12,"fill":[0,0,1,0.7],"stroke":{"color":"#000000","width":2}})).unwrap();
     a.sync_views();
     a
 }
 
-fn fields(a: &PhotocraftApp, id: u64) -> Map<String, Value> {
+fn fields(a: &PrismApp, id: u64) -> Map<String, Value> {
     a.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone()
 }
 
-fn set(a: &mut PhotocraftApp, id: u64, color: &str) {
+fn set(a: &mut PrismApp, id: u64, color: &str) {
     a.ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!(color));
 }
 
@@ -121,7 +121,7 @@ fn rasterized_locked_stale_and_invalid_targets_never_change_a_document() {
             assert!(open(&mut a).is_err());
         }
     }
-    let mut a = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let mut a = PrismApp::new(prism_engine::Session::new(), Default::default());
     assert!(open(&mut a).is_err());
     assert!(confirm(&mut a, &Map::new()).is_err());
 }

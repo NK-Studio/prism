@@ -777,7 +777,9 @@ impl GlowWinitRunning<'_> {
         let gl_surface = viewport.gl_surface.as_ref().unwrap();
         let egui_winit = viewport.egui_winit.as_mut().unwrap();
 
+        let cursor = crate::cursor_png::Prepared::new(&integration.egui_ctx, viewport_id, &platform_output);
         egui_winit.handle_platform_output_with_event_loop(&window, event_loop, platform_output);
+        cursor.apply(&window);
 
         if is_visible {
             let clipped_primitives = integration.egui_ctx.tessellate(shapes, pixels_per_point);
@@ -1738,7 +1740,21 @@ fn render_immediate_viewport(
         }
     }
 
-    egui_winit.handle_platform_output(window, platform_output);
+    let cursor = crate::cursor_png::Prepared::new(&egui_ctx, ids.this, &platform_output);
+    let mut output = Some(platform_output);
+    let mut handled_with_event_loop = false;
+    event_loop_context::with_current_event_loop(|event_loop| {
+        if let Some(output) = output.take() {
+            egui_winit.handle_platform_output_with_event_loop(window, event_loop, output);
+            handled_with_event_loop = true;
+        }
+    });
+    if let Some(output) = output {
+        egui_winit.handle_platform_output(window, output);
+    }
+    if handled_with_event_loop {
+        cursor.apply(window);
+    }
 
     event_loop_context::with_current_event_loop(|event_loop| {
         glutin.handle_viewport_output(event_loop, egui_ctx, &viewport_output);

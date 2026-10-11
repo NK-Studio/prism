@@ -71,8 +71,8 @@ fn file_new_variants() {
     assert_eq!(s.active().unwrap().doc.layers[0].name, "Layer 1");
     s.execute("file.new", json!({"width": 10, "height": 5, "mode": "cmyk", "depth": 16})).unwrap();
     let d = &s.active().unwrap().doc;
-    assert_eq!(d.mode, photocraft_color::ColorMode::Cmyk);
-    assert_eq!(d.depth, photocraft_color::SampleType::U16);
+    assert_eq!(d.mode, prism_color::ColorMode::Cmyk);
+    assert_eq!(d.depth, prism_color::SampleType::U16);
     s.execute("file.new", json!({"background": "#ff0000", "width": 4, "height": 4})).unwrap();
     assert_eq!(px(&mut s, 1, 1), vec![1.0, 0.0, 0.0, 1.0]);
     assert_eq!(s.documents().len(), 3);
@@ -89,7 +89,7 @@ fn layer_lifecycle_with_undo() {
     s.execute("layer.setProps", json!({"name": "Ink", "opacity": 0.5, "blend": "multiply"})).unwrap();
     let doc = &s.active().unwrap().doc;
     let l = doc.layer(LayerId(id)).unwrap();
-    assert_eq!((l.name.as_str(), l.opacity, l.blend), ("Ink", 0.5, photocraft_color::BlendMode::Multiply));
+    assert_eq!((l.name.as_str(), l.opacity, l.blend), ("Ink", 0.5, prism_color::BlendMode::Multiply));
     s.execute("layer.duplicate", json!({})).unwrap();
     assert_eq!(s.active().unwrap().doc.layer_count(), 3);
     s.execute("layer.delete", json!({})).unwrap();
@@ -101,6 +101,126 @@ fn layer_lifecycle_with_undo() {
     assert!(!s.is_enabled("edit.undo"));
     s.execute("edit.redo", json!({})).unwrap();
     assert_eq!(s.active().unwrap().doc.layer_count(), 2);
+}
+
+#[test]
+fn delete_last_layer_is_disabled_without_changing_the_document() {
+    let mut s = session_with_doc();
+    let st = s.active().unwrap();
+    let id = st.active_layer.unwrap();
+    let (revision, history, doc) = (st.revision, st.history.past_len(), st.doc.clone());
+    assert!(!s.is_enabled("layer.delete"));
+    for p in [json!({}), json!({"layer":id.0}), json!({"layer":u64::MAX}), json!({"layer":[]})] {
+        assert!(!s.is_enabled_with("layer.delete", &p));
+        assert!(s.execute("layer.delete", p).is_err());
+        let st = s.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&doc, &st.doc));
+        assert_eq!((st.revision, st.history.past_len(), st.active_layer), (revision, history, Some(id)));
+    }
+    let listed = s.execute("command.list", json!({})).unwrap();
+    assert_eq!(listed.as_array().unwrap().iter().find(|c| c["id"] == "layer.delete").unwrap()["enabled"], false);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(s.is_enabled("layer.delete"));
+    s.execute("layer.delete", json!({})).unwrap();
+    assert!(!s.is_enabled("layer.delete"));
+    assert!(s.undo());
+    assert!(s.is_enabled("layer.delete"));
+    assert!(s.redo());
+    assert!(!s.is_enabled("layer.delete"));
+}
+
+#[test]
+fn delete_enablement_accounts_for_groups_and_explicit_targets() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":64,"height":48,"background":"transparent"})).unwrap();
+    let child = s.active().unwrap().active_layer.unwrap();
+    let group = LayerId(s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+    assert_eq!(s.active().unwrap().doc.layers.len(), 1);
+    assert!(!s.is_enabled("layer.delete"), "the only root group carries every layer");
+    let p = json!({"layer":child.0});
+    assert!(s.is_enabled_with("layer.delete", &p), "child can be removed, leaving the group");
+    s.execute("layer.delete", p).unwrap();
+    assert_eq!(s.active().unwrap().doc.layer_count(), 1);
+    assert_eq!(s.active().unwrap().doc.top_layer(), Some(group));
+    assert!(s.undo());
+    let extra = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.select", json!({"layer":group.0,"mode":"add"})).unwrap();
+    assert!(!s.is_enabled("layer.delete"), "all roots selected");
+    assert!(s.execute("layer.delete", json!({})).is_err());
+    assert!(s.is_enabled_with("layer.delete", &json!({"layer":extra.0})));
+    s.execute("layer.delete", json!({"layer":extra.0})).unwrap();
+    assert!(!s.is_enabled("layer.delete"));
+}
+
+#[test]
+fn delete_locked_layers_is_disabled_without_editing_and_recovers_on_unlock() {
+    for flag in ["all", "transparency", "pixels", "position", "artboard"] {
+        let mut s = session_with_doc();
+        let id = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.setProps", json!({"locks":{flag:true}})).unwrap();
+        let st = s.active().unwrap();
+        let (revision, history, doc) = (st.revision, st.history.past_len(), st.doc.clone());
+        assert!(!s.is_enabled("layer.delete"), "{flag}");
+        let listed = s.execute("command.list", json!({})).unwrap();
+        assert_eq!(listed.as_array().unwrap().iter().find(|c| c["id"] == "layer.delete").unwrap()["enabled"], false);
+        for p in [json!({}), json!({"layer":id})] {
+            assert!(!s.is_enabled_with("layer.delete", &p), "{flag}");
+            assert!(s.execute("layer.delete", p.clone()).unwrap_err().to_string().contains("is locked"));
+            let spec = command_specs().iter().find(|c| c.id == "layer.delete").unwrap();
+            assert!((spec.run)(&mut s, &p).is_err(), "direct run must also protect locks");
+            let st = s.active().unwrap();
+            assert!(std::sync::Arc::ptr_eq(&doc, &st.doc));
+            assert_eq!((st.revision, st.history.past_len()), (revision, history));
+        }
+        s.execute("layer.setProps", json!({"locks":{flag:false}})).unwrap();
+        assert!(s.is_enabled("layer.delete"));
+        assert!(s.undo());
+        assert!(!s.is_enabled("layer.delete"));
+        assert!(s.redo());
+        assert!(s.is_enabled("layer.delete"));
+        s.execute("layer.delete", json!({})).unwrap();
+        assert!(s.active().unwrap().doc.layer(LayerId(id)).is_none());
+    }
+}
+
+#[test]
+fn delete_locked_selection_preserves_unlocked_layers_and_explicit_targets() {
+    let mut s = session_with_doc();
+    let locked = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setProps", json!({"locked":true})).unwrap();
+    let unlocked = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layer":locked,"mode":"add"})).unwrap();
+    assert!(!s.is_enabled("layer.delete"));
+    let st = s.active().unwrap();
+    let (revision, history, doc) = (st.revision, st.history.past_len(), st.doc.clone());
+    assert!(s.execute("layer.delete", json!({})).is_err());
+    assert!(crate::layer_multi_cmds::delete_selected(&mut s).is_err());
+    let st = s.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&doc, &st.doc));
+    assert_eq!((st.revision, st.history.past_len()), (revision, history));
+    assert!(s.is_enabled_with("layer.delete", &json!({"layer":unlocked})));
+    s.execute("layer.delete", json!({"layer":unlocked})).unwrap();
+    assert!(s.active().unwrap().doc.layer(LayerId(locked)).is_some());
+}
+
+#[test]
+fn delete_respects_inherited_locks_and_locked_group_contents() {
+    let mut s = session_with_doc();
+    let child = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let group = s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setProps", json!({"locked":true})).unwrap();
+    assert!(!s.is_enabled("layer.delete"));
+    assert!(!s.is_enabled_with("layer.delete", &json!({"layer":child})));
+    assert!(s.execute("layer.delete", json!({"layer":child})).is_err());
+    s.execute("layer.setProps", json!({"locked":false})).unwrap();
+    assert!(s.is_enabled("layer.delete"));
+    s.execute("layer.setProps", json!({"layer":child,"locked":true})).unwrap();
+    assert!(!s.is_enabled_with("layer.delete", &json!({"layer":group})), "removing a group also removes its locked child");
+    assert!(s.execute("layer.delete", json!({"layer":group})).is_err());
+    s.execute("layer.setProps", json!({"layer":child,"locked":false})).unwrap();
+    assert!(s.is_enabled("layer.delete"));
+    s.execute("layer.delete", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.layer_count(), 1);
 }
 
 #[test]
@@ -469,7 +589,7 @@ fn image_rotation_rotates_every_layer_not_just_the_active_one() {
     // A second (lower) layer with a red dot at the top-left; keep a third layer active.
     s.execute("layer.new.layer", json!({})).unwrap();
     s.edit("dot", |doc, a| {
-        doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(2, 2, 4, 4), &[1.0, 0.0, 0.0, 1.0]);
+        doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(prism_geom::Rect::new(2, 2, 4, 4), &[1.0, 0.0, 0.0, 1.0]);
         Ok(())
     })
     .unwrap();
@@ -512,24 +632,24 @@ fn fill_layer_pixel_rewrites_refresh_the_effect_maps() {
     s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
     s.execute("layer.newFillLayer.gradient", json!({"from": "#000000", "to": "#ffffff", "angle": 0})).unwrap();
     s.edit("shadow", |doc, active| {
-        doc.layer_mut(active.unwrap()).unwrap().effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+        doc.layer_mut(active.unwrap()).unwrap().effects.items.push(prism_doc::Effect::default_drop_shadow());
         Ok(())
     })
     .unwrap();
     let render = |s: &Session| {
         let d = &s.active().unwrap().doc;
-        photocraft_compose::render(d, d.bounds()).px
+        prism_compose::render(d, d.bounds()).px
     };
     // Give the layer the cached-pixels state a PSD import produces (the cache is what Image
     // › Transform & friends rewrite in place, without touching the Fill spec).
     s.edit("cache", |doc, active| {
         let fmt = doc.pixel_format();
         let l = doc.layer_mut(active.unwrap()).unwrap();
-        let photocraft_doc::LayerContent::Fill(f) = &l.content else { return Err(EngineError::Other("not a fill layer".into())) };
+        let prism_doc::LayerContent::Fill(f) = &l.content else { return Err(EngineError::Other("not a fill layer".into())) };
         let fill = f.clone();
-        let mut surface = photocraft_raster::Surface::new(fmt);
-        surface.fill_rect(photocraft_geom::Rect::new(8, 8, 30, 40), &[0.0, 0.0, 1.0, 1.0]);
-        l.fill_cache = Some(photocraft_doc::FillCache { fill, surface });
+        let mut surface = prism_raster::Surface::new(fmt);
+        surface.fill_rect(prism_geom::Rect::new(8, 8, 30, 40), &[0.0, 0.0, 1.0, 1.0]);
+        l.fill_cache = Some(prism_doc::FillCache { fill, surface });
         Ok(())
     })
     .unwrap();
@@ -540,14 +660,14 @@ fn fill_layer_pixel_rewrites_refresh_the_effect_maps() {
     s.edit("shift", |doc, active| {
         let l = doc.layer_mut(active.unwrap()).unwrap();
         let fc = l.fill_cache.as_mut().unwrap();
-        let moved = photocraft_algo::resample::translate_surface(&fc.surface, 12, 0);
+        let moved = prism_algo::resample::translate_surface(&fc.surface, 12, 0);
         fc.surface = moved;
         Ok(())
     })
     .unwrap();
     let after = render(&s);
     assert_ne!(after, warm, "the rewritten cache changes the composite");
-    photocraft_compose::purge_effect_cache();
+    prism_compose::purge_effect_cache();
     let fresh = render(&s);
     assert_eq!(after, fresh, "the effect maps track the cache surface, not the Fill spec alone");
 }
@@ -567,16 +687,16 @@ fn group_effect_maps_follow_child_visibility_and_opacity() {
         s.execute("layer.moveTo", json!({"layer": l, "target": g, "position": "into"})).unwrap();
     }
     s.edit("shadow", |doc, _| {
-        doc.layer_mut(LayerId(g)).unwrap().effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+        doc.layer_mut(LayerId(g)).unwrap().effects.items.push(prism_doc::Effect::default_drop_shadow());
         Ok(())
     })
     .unwrap();
     let render = |s: &Session| {
         let d = &s.active().unwrap().doc;
-        photocraft_compose::render(d, d.bounds()).px
+        prism_compose::render(d, d.bounds()).px
     };
     let mut prev = render(&s); // populate the effect-map cache
-    type Edit = (&'static str, fn(&mut photocraft_doc::Layer));
+    type Edit = (&'static str, fn(&mut prism_doc::Layer));
     let edits: [Edit; 2] = [("hide", |l| l.visible = false), ("opacity", |l| l.opacity = 0.3)];
     for ((name, edit), child) in edits.into_iter().zip([a, b]) {
         let child = LayerId(child);
@@ -587,7 +707,7 @@ fn group_effect_maps_follow_child_visibility_and_opacity() {
         .unwrap();
         let warm = render(&s);
         assert_ne!(warm, prev, "{name}: the composite changes");
-        photocraft_compose::purge_effect_cache();
+        prism_compose::purge_effect_cache();
         assert_eq!(warm, render(&s), "{name}: the group's maps follow its children");
         prev = warm;
     }
@@ -663,24 +783,24 @@ fn integer_params_accept_json_floats() {
 fn move_to_refuses_to_nest_past_the_group_depth_cap() {
     let mut s = session_with_doc();
     let deep = s.execute("layer.new.layer", json!({"name": "Deep"})).unwrap()["layer"].as_u64().unwrap();
-    for _ in 0..photocraft_doc::MAX_GROUP_DEPTH - 1 {
+    for _ in 0..prism_doc::MAX_GROUP_DEPTH - 1 {
         s.execute("layer.groupLayers", json!({"layer": deep})).unwrap();
     }
     // `Deep` sits inside MAX - 1 groups. Moving a two-level group (G2 > G1 > Leaf) beside it
     // would put `Leaf` at MAX + 1.
-    let path = s.active().unwrap().doc.path_of(photocraft_doc::LayerId(deep)).unwrap();
-    assert_eq!(path.len() - 1, photocraft_doc::MAX_GROUP_DEPTH - 1);
+    let path = s.active().unwrap().doc.path_of(prism_doc::LayerId(deep)).unwrap();
+    assert_eq!(path.len() - 1, prism_doc::MAX_GROUP_DEPTH - 1);
     let leaf = s.execute("layer.new.layer", json!({"name": "Leaf"})).unwrap()["layer"].as_u64().unwrap();
     let g1 = s.execute("layer.groupLayers", json!({"layer": leaf})).unwrap()["layer"].as_u64().unwrap();
     let g = s.execute("layer.groupLayers", json!({"layer": g1})).unwrap()["layer"].as_u64().unwrap();
     let past = s.active().unwrap().history.past_len();
     let err = s.execute("layer.moveTo", json!({"layer": g, "target": deep, "position": "above"})).unwrap_err();
     assert!(err.to_string().contains("deeper than"), "{err}");
-    assert!(s.active().unwrap().doc.max_group_depth() <= photocraft_doc::MAX_GROUP_DEPTH);
+    assert!(s.active().unwrap().doc.max_group_depth() <= prism_doc::MAX_GROUP_DEPTH);
     assert_eq!(s.active().unwrap().history.past_len(), past, "no history step recorded");
     // A plain layer beside the deepest one still fits.
     s.execute("layer.moveTo", json!({"layer": leaf, "target": deep, "position": "above"})).unwrap();
-    assert_eq!(s.active().unwrap().doc.max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH - 1);
+    assert_eq!(s.active().unwrap().doc.max_group_depth(), prism_doc::MAX_GROUP_DEPTH - 1);
 }
 
 #[test]
@@ -688,15 +808,15 @@ fn artboard_from_layers_refuses_to_nest_past_the_group_depth_cap() {
     let mut s = session_with_doc();
     let leaf = s.execute("layer.new.layer", json!({"name": "Leaf"})).unwrap()["layer"].as_u64().unwrap();
     let mut top = leaf;
-    for _ in 0..photocraft_doc::MAX_GROUP_DEPTH {
+    for _ in 0..prism_doc::MAX_GROUP_DEPTH {
         top = s.execute("layer.groupLayers", json!({"layer": top})).unwrap()["layer"].as_u64().unwrap();
     }
-    assert_eq!(s.active().unwrap().doc.max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH);
+    assert_eq!(s.active().unwrap().doc.max_group_depth(), prism_doc::MAX_GROUP_DEPTH);
     s.execute("layer.select", json!({"layer": top})).unwrap();
     let past = s.active().unwrap().history.past_len();
     let err = s.execute("layer.new.artboardFromLayers", json!({})).unwrap_err();
     assert!(err.to_string().contains("deeper than"), "{err}");
-    assert_eq!(s.active().unwrap().doc.max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH);
+    assert_eq!(s.active().unwrap().doc.max_group_depth(), prism_doc::MAX_GROUP_DEPTH);
     assert_eq!(s.active().unwrap().history.past_len(), past, "no history step recorded");
 }
 
@@ -739,9 +859,9 @@ fn move_to_copy_places_a_duplicate_in_one_step() {
     assert_eq!(names(&s), ["Background", "A", "B", "A copy", "G"]);
     assert_eq!(steps(&s), before + 1, "one history step");
     assert_eq!(s.active().unwrap().history.undo_label(), Some("Duplicate Layer"));
-    assert_eq!(s.active().unwrap().active_layer, Some(photocraft_doc::LayerId(copy)), "the copy is active");
+    assert_eq!(s.active().unwrap().active_layer, Some(prism_doc::LayerId(copy)), "the copy is active");
     let doc = &s.active().unwrap().doc;
-    let (orig, dup) = (doc.layer(photocraft_doc::LayerId(a)).unwrap(), doc.layer(photocraft_doc::LayerId(copy)).unwrap());
+    let (orig, dup) = (doc.layer(prism_doc::LayerId(a)).unwrap(), doc.layer(prism_doc::LayerId(copy)).unwrap());
     assert_eq!(orig.content, dup.content, "the pixels are copied");
     // Below and into a group.
     s.execute("layer.moveTo", json!({"layer": b, "target": a, "position": "below", "copy": true})).unwrap();
@@ -916,17 +1036,17 @@ fn type_edit_rerenders_cache_to_new_text() {
     let id = r["layer"].as_u64().unwrap();
     let width = |s: &Session| {
         let st = s.active().unwrap();
-        st.doc.layer(photocraft_doc::LayerId(id)).unwrap().surface().unwrap().content_bounds().width()
+        st.doc.layer(prism_doc::LayerId(id)).unwrap().surface().unwrap().content_bounds().width()
     };
     let w0 = width(&s);
-    s.execute("type.edit", json!({"layer": id, "replace": {"start": 0, "end": 11, "text": "Photocraft"}, "coalesce": "k"})).unwrap();
+    s.execute("type.edit", json!({"layer": id, "replace": {"start": 0, "end": 11, "text": "Prism"}, "coalesce": "k"})).unwrap();
     let w1 = width(&s);
-    assert!(w0 > 150 && w1 > 150, "cache widths {w0} → {w1}");
+    assert!(w0 > 150 && w1 > 0 && w1 < w0, "shorter replacement must update cache widths {w0} → {w1}");
 }
 
 #[test]
 fn levels_and_curves_params_cover_output_and_channels() {
-    use photocraft_doc::Adjustment;
+    use prism_doc::Adjustment;
     let a = crate::commands::adjustment_from_params("levels", &json!({"inBlack": 10, "outWhite": 200, "green": {"gamma": 1.5}}));
     let Adjustment::Levels { master, per_channel, .. } = a else { panic!() };
     assert!((master.in_black - 10.0 / 255.0).abs() < 1e-6 && (master.out_white - 200.0 / 255.0).abs() < 1e-6);
@@ -946,7 +1066,7 @@ fn painting_can_target_the_layer_mask() {
     s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
     s.edit("mask", |doc, _| {
-        doc.layer_mut(id).unwrap().mask = Some(photocraft_doc::LayerMask::reveal_all());
+        doc.layer_mut(id).unwrap().mask = Some(prism_doc::LayerMask::reveal_all());
         Ok(())
     })
     .unwrap();
@@ -1038,7 +1158,7 @@ fn duplicating_the_background_unlocks_the_copy() {
     let st = s.active().unwrap();
     let copy = st.doc.layer(st.active_layer.unwrap()).unwrap();
     assert_eq!(copy.name, "Background copy");
-    assert_eq!(copy.locks, photocraft_doc::Locks::default());
+    assert_eq!(copy.locks, prism_doc::Locks::default());
     assert!(st.doc.layers[0].locks.transparency);
 }
 

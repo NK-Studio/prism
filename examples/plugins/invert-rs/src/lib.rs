@@ -11,7 +11,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 }
 
 const MANIFEST: &str = r#"{
-  "id": "org.photocraft.example.invert",
+  "id": "com.nkstudio.prism.example.invert",
   "name": "Invert (WebAssembly)",
   "version": "1.0.0",
   "kind": "filter",

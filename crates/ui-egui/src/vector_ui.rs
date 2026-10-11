@@ -3,13 +3,14 @@
 //! All edits go through the engine's `shape.*` / `path.*` commands.
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, pos2, vec2};
-use photocraft_doc::vector::Path;
-use photocraft_doc::{Document, LayerContent};
-use photocraft_geom::Affine;
+use prism_doc::vector::Path;
+use prism_doc::{Document, LayerContent};
+use prism_geom::Affine;
+use prism_vector::edit::Hit;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::PhotocraftApp;
+use crate::PrismApp;
 use crate::canvas::ViewXform;
 use crate::state::{Tool, ToolOptions};
 use crate::theme::Tokens;
@@ -29,7 +30,7 @@ pub struct PenPath {
 }
 
 pub fn is_shape_tool(t: Tool) -> bool {
-    matches!(t, Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape)
+    matches!(t, Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::Arrow | Tool::CustomShape)
 }
 
 fn rgb32(c: [f32; 4]) -> Color32 {
@@ -42,7 +43,7 @@ fn hex(c: [f32; 4]) -> String {
     format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
 }
 
-fn stroke_param(app: &PhotocraftApp) -> Value {
+fn stroke_param(app: &PrismApp) -> Value {
     let o = &app.ui.tool_options;
     if o.stroke_width > 0.0 { json!({"width": o.stroke_width, "color": hex(app.session.tools.background)}) } else { Value::Null }
 }
@@ -50,7 +51,7 @@ fn stroke_param(app: &PhotocraftApp) -> Value {
 /// Geometry of a Shape-tool drag as `shape.create` params, without fill and stroke (None when too
 /// small): ⇧ constrains proportions, ⌥ draws from the centre. Custom shapes give their box as a `rect`.
 fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
-    Some(if tool == Tool::Line {
+    Some(if matches!(tool, Tool::Line | Tool::Arrow) {
         let (mut dx, mut dy) = (end[0] - start[0], end[1] - start[1]);
         if mods.shift {
             // Snap to 45°.
@@ -61,7 +62,11 @@ fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], m
         if dx.hypot(dy) < 1.0 {
             return None;
         }
-        json!({"kind": "line", "from": start, "to": [start[0] + dx, start[1] + dy], "weight": o.line_weight.max(1.0)})
+        if tool == Tool::Arrow {
+            json!({"kind": "arrow", "from": start, "to": [start[0] + dx, start[1] + dy], "headSize": o.arrow.head_size, "headAngle": o.arrow.head_angle})
+        } else {
+            json!({"kind": "line", "from": start, "to": [start[0] + dx, start[1] + dy], "weight": o.line_weight.max(1.0), "roundTips":o.line_round_tips})
+        }
     } else {
         let (mut w, mut h) = (end[0] - start[0], end[1] - start[1]);
         if mods.shift {
@@ -85,7 +90,7 @@ fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], m
 }
 
 /// Finish a Shape-tool drag: ⇧ constrains proportions, ⌥ draws from the centre.
-pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+pub fn finish_shape(app: &mut PrismApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
     let Some(mut p) = shape_geometry(&app.ui.tool_options, tool, start, end, mods) else { return };
     let fill = if app.ui.tool_options.shape_fill { json!(hex(app.session.tools.foreground)) } else { Value::Null };
     let stroke = stroke_param(app);
@@ -96,8 +101,8 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
         }
         return;
     }
-    p["fill"] = fill;
-    p["stroke"] = stroke;
+    p["fill"] = if tool == Tool::Arrow { Value::Null } else { fill };
+    p["stroke"] = if tool == Tool::Arrow { arrow_stroke(app) } else { stroke };
     if let Err(e) = app.run("shape.create", p) {
         app.ui.status = e;
         app.ui.status_error = true;
@@ -106,9 +111,19 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
 
 /// Shape-tool drag preview: the shape `finish_shape` will create, filled and stroked, under its
 /// path outline. Custom shapes show their box outline only.
-pub fn draw_shape_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+pub fn draw_shape_preview(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
     let o = &app.ui.tool_options;
-    let Some(path) = shape_geometry(o, tool, start, end, mods).and_then(|p| photocraft_engine::vector_cmds::shape_path(&p).ok()) else { return };
+    let Some(path) = shape_geometry(o, tool, start, end, mods).and_then(|p| prism_engine::vector_cmds::shape_path(&p).ok()) else { return };
+    if tool == Tool::Arrow {
+        let (cap, join) = arrow_ends(o.arrow.rounded);
+        let style = prism_vector::StrokeStyle { width: f64::from(o.arrow.width), cap, join, ..Default::default() };
+        let polys = prism_vector::stroke_polygons(&prism_vector::flatten_path(&path, 0.01), &style, 0.05 / f64::from(xf.zoom.max(0.01)));
+        for poly in polys {
+            let pts = poly.into_iter().map(|(x, y)| xf.to_screen(x as f32, y as f32)).collect();
+            painter.add(egui::Shape::convex_polygon(pts, rgb32(app.session.tools.foreground), Stroke::NONE));
+        }
+        return;
+    }
     let custom = tool == Tool::CustomShape;
     // ponytail: preview colours skip the canvas's colour management; the commit renders them exactly.
     let fill = if o.shape_fill && !custom { rgb32(app.session.tools.foreground) } else { Color32::TRANSPARENT };
@@ -131,13 +146,84 @@ fn pen_to_json(pen: &PenPath, closed: bool) -> Value {
 
 /// Pen press: close on the first anchor, reshape the last anchor's outgoing handle,
 /// or add a new anchor (dragging a new anchor pulls symmetrical handles).
-pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64) {
-    let tol = 6.0 / app.current_zoom().max(0.01) as f64;
+/// Cursor intent mirrors the same first/last-anchor hit tests used by `pen_down`.
+pub(crate) fn pen_cursor_asset(app: &PrismApp, p: [f64; 2]) -> u32 {
+    let Some(pen) = app.ui.pen.as_ref().filter(|pen| !pen.knots.is_empty()) else { return 1063 };
+    let tol = pen_hit_tol(app);
+    if pen_closes_at(pen, p, tol) {
+        1034
+    } else if pen.knots.last().is_some_and(|k| (k[0][0] - p[0]).hypot(k[0][1] - p[1]) < tol) {
+        1066
+    } else {
+        1030
+    }
+}
+
+/// Anchor hit radius in document units: 6 screen pixels at the current zoom.
+fn pen_hit_tol(app: &PrismApp) -> f64 {
+    6.0 / f64::from(app.current_zoom().max(0.01))
+}
+
+/// Whether a press at `p` closes the path: it has two or more anchors and `p` is on the first.
+fn pen_closes_at(pen: &PenPath, p: [f64; 2], tol: f64) -> bool {
+    pen.knots.len() >= 2 && pen.knots.first().is_some_and(|k| (k[0][0] - p[0]).hypot(k[0][1] - p[1]) < tol)
+}
+
+/// What Auto Add/Delete does for a press at `p` before a new path is started: on a shown path's
+/// anchor it deletes that anchor, on a segment it adds one there. The path (as Direct Selection
+/// targets it) and the part hit; `None` when it's off or the press starts or continues a path.
+fn auto_edit_at(app: &PrismApp, p: [f64; 2]) -> Option<(crate::direct_select::PathRef, Hit)> {
+    if app.ui.tool != Tool::Pen || !app.ui.tool_options.pen_auto_add_delete || app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
+        return None;
+    }
+    let tol = pen_hit_tol(app);
+    crate::direct_select::candidates(app).into_iter().find_map(|(r, path)| {
+        match prism_vector::edit::hit(&path, prism_geom::Point::new(p[0], p[1]), tol, &[])? {
+            h @ (Hit::Anchor(_) | Hit::Segment(..)) => Some((r, h)),
+            Hit::Handle(..) => None,
+        }
+    })
+}
+
+/// Auto Add/Delete for a press at `p`; whether it handled the press.
+fn auto_add_delete(app: &mut PrismApp, p: [f64; 2]) -> bool {
+    let Some((target, hit)) = auto_edit_at(app, p) else { return false };
+    let mut q = target.params();
+    let r = match hit {
+        Hit::Anchor([s, k]) => {
+            q["subpath"] = json!(s);
+            q["knot"] = json!(k);
+            app.run("path.deleteAnchor", q)
+        }
+        Hit::Segment([s, k], t) => {
+            q["subpath"] = json!(s);
+            q["knot"] = json!(k);
+            q["t"] = json!(t.clamp(0.0, 1.0));
+            app.run("path.addAnchor", q)
+        }
+        Hit::Handle(..) => return false,
+    };
+    if let Err(e) = r {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    true
+}
+
+/// Align Edges (Shape mode): new anchors land on whole pixels, so straight edges stay crisp.
+fn pen_snap(app: &PrismApp, p: [f64; 2]) -> [f64; 2] {
+    let o = &app.ui.tool_options;
+    if o.vector_mode == "shape" && o.pen_align_edges { [p[0].round(), p[1].round()] } else { p }
+}
+
+pub fn pen_down(app: &mut PrismApp, x: f64, y: f64) {
+    if auto_add_delete(app, [x, y]) {
+        return;
+    }
+    let [x, y] = pen_snap(app, [x, y]);
+    let tol = pen_hit_tol(app);
     let pen = app.ui.pen.get_or_insert_with(PenPath::default);
-    if let Some(first) = pen.knots.first().map(|k| k[0])
-        && pen.knots.len() >= 2
-        && (first[0] - x).hypot(first[1] - y) < tol
-    {
+    if pen_closes_at(pen, [x, y], tol) {
         pen_commit(app, true);
         return;
     }
@@ -160,7 +246,7 @@ pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64) {
     pen.adjusting_last = false;
 }
 
-pub fn pen_move(app: &mut PhotocraftApp, x: f64, y: f64) {
+pub fn pen_move(app: &mut PrismApp, x: f64, y: f64) {
     if let Some(pen) = app.ui.pen.as_mut()
         && pen.dragging
     {
@@ -175,35 +261,59 @@ pub fn pen_move(app: &mut PhotocraftApp, x: f64, y: f64) {
     }
 }
 
-pub fn pen_up(app: &mut PhotocraftApp) {
+pub fn pen_up(app: &mut PrismApp) {
     if let Some(pen) = app.ui.pen.as_mut() {
         pen.dragging = false;
         pen.adjusting_last = false;
     }
 }
 
+/// Does a finished Pen subpath join the work path rather than replace it? While the work path is
+/// selected in the Paths panel.
+fn appends_to_work_path(app: &PrismApp) -> bool {
+    app.ui.selected_path.as_deref() == Some("work") && app.session.active().is_some_and(|st| st.doc.work_path.is_some())
+}
+
 /// Finish the pen path: a work path (Path mode) or a new shape layer (Shape mode).
-pub fn pen_commit(app: &mut PhotocraftApp, closed: bool) {
+pub fn pen_commit(app: &mut PrismApp, closed: bool) {
     let Some(pen) = app.ui.pen.take() else { return };
     if pen.knots.len() < 2 {
         return;
     }
-    let path = pen_to_json(&pen, closed);
-    let r = if app.ui.tool_options.vector_mode == "shape" {
-        let fill = if closed && app.ui.tool_options.shape_fill { json!(hex(app.session.tools.foreground)) } else { Value::Null };
-        let stroke =
-            if closed { stroke_param(app) } else { json!({"width": app.ui.tool_options.stroke_width.max(1.0), "color": hex(app.session.tools.foreground)}) };
-        app.run("shape.create", json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke}))
+    let mut path = pen_to_json(&pen, closed);
+    let o = &app.ui.tool_options;
+    let op = o.pen_path_op.clone();
+    let r = if o.vector_mode == "shape" {
+        let fill = if closed && o.shape_fill { json!(hex(app.session.tools.foreground)) } else { Value::Null };
+        let stroke = if closed { stroke_param(app) } else { json!({"width": o.stroke_width.max(1.0), "color": hex(app.session.tools.foreground)}) };
+        let mut q = json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke});
+        // Path Operations other than New Layer add to the selected shape layer.
+        if o.pen_shape_op != "new"
+            && let Some((id, _)) = active_shape_path(app)
+        {
+            q["addTo"] = json!(id);
+            q["op"] = json!(o.pen_shape_op);
+        }
+        app.run("shape.create", q)
     } else if let Some((id, existing)) = targeted_vector_mask(app) {
         // A targeted vector mask takes the new subpath (#196), as in Photoshop.
-        let mut p = photocraft_engine::vector_cmds::path_json(&existing);
-        if let (Some(subs), Some(new)) = (p.get_mut("subpaths").and_then(Value::as_array_mut), path.get("subpaths").and_then(Value::as_array)) {
+        let mut p = prism_engine::vector_cmds::path_json(&existing);
+        if let (Some(subs), Some(new)) = (p.get_mut("subpaths").and_then(Value::as_array_mut), path.get_mut("subpaths").and_then(Value::as_array_mut)) {
+            for sp in new.iter_mut() {
+                sp["op"] = json!(op);
+            }
             subs.extend(new.iter().cloned());
         }
         app.run("layer.vectorMask.edit", json!({"layer": id, "path": p}))
     } else {
+        // While the work path is selected in the Paths panel, each new subpath joins it with the
+        // Path Operation; otherwise it starts a new work path (Photoshop: deselect to start over).
+        let mut q = json!({"name": "work", "path": path});
+        if appends_to_work_path(app) {
+            q["op"] = json!(op);
+        }
         // The drawn work path is selected in the Paths panel, as in Photoshop.
-        app.run("path.set", json!({"name": "work", "path": path})).inspect(|_| app.ui.selected_path = Some("work".into()))
+        app.run("path.set", q).inspect(|_| app.ui.selected_path = Some("work".into()))
     };
     if let Err(e) = r {
         app.ui.status = e;
@@ -213,7 +323,7 @@ pub fn pen_commit(app: &mut PhotocraftApp, closed: bool) {
 
 /// The path that path commands act on without a name: the one selected in the Paths panel, else
 /// the work path, else the selected layer's shape path or vector mask; `None` when there's none.
-pub fn active_path_name(app: &PhotocraftApp) -> Option<String> {
+pub fn active_path_name(app: &PrismApp) -> Option<String> {
     let st = app.session.active()?;
     let rows = path_rows(&st.doc, st.active_layer);
     let key = |r: &PathEntry| match r.kind {
@@ -234,7 +344,7 @@ pub fn takes_path_mask(id: &str) -> bool {
 /// as in Photoshop (#1419): the command gets it as `"path"` unless the caller set one (`null`
 /// opts out). Only an explicitly selected work or saved path counts; deselect it by clicking the
 /// panel's empty area.
-pub fn with_active_path(app: &PhotocraftApp, id: &str, params: Value) -> Value {
+pub fn with_active_path(app: &PrismApp, id: &str, params: Value) -> Value {
     if !takes_path_mask(id) || params.get("path").is_some() {
         return params;
     }
@@ -260,7 +370,7 @@ pub fn with_active_path(app: &PhotocraftApp, id: &str, params: Value) -> Value {
 /// ⌘↩ / Ctrl+Enter (#306): load a path as a selection, like Photoshop with a Pen or Path
 /// Selection tool or a path selected in the Paths panel. A path being drawn with the Pen is
 /// finished first and loads; otherwise [`active_path_name`]. `params` may set feather, mode…
-pub fn path_to_selection(app: &mut PhotocraftApp, params: Value) -> Result<Value, String> {
+pub fn path_to_selection(app: &mut PrismApp, params: Value) -> Result<Value, String> {
     if app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2) {
         // The finished path becomes the work path, or a shape layer's path or a vector mask.
         let on_layer = app.ui.tool_options.vector_mode == "shape" || targeted_vector_mask(app).is_some();
@@ -286,7 +396,7 @@ enum PathTarget {
 }
 
 /// The targeted vector mask of the active layer, if the Layers panel targets it.
-pub(crate) fn targeted_vector_mask(app: &PhotocraftApp) -> Option<(u64, Path)> {
+pub(crate) fn targeted_vector_mask(app: &PrismApp) -> Option<(u64, Path)> {
     let st = app.session.active()?;
     let l = st.active_layer.and_then(|id| st.doc.layer(id))?;
     (app.ui.vector_mask_target && !matches!(l.content, LayerContent::Shape(_))).then_some(())?;
@@ -294,7 +404,7 @@ pub(crate) fn targeted_vector_mask(app: &PhotocraftApp) -> Option<(u64, Path)> {
 }
 
 /// The active shape layer's path, if the active layer is a shape layer.
-pub(crate) fn active_shape_path(app: &PhotocraftApp) -> Option<(u64, Path)> {
+pub(crate) fn active_shape_path(app: &PrismApp) -> Option<(u64, Path)> {
     let st = app.session.active()?;
     let l = st.active_layer.and_then(|id| st.doc.layer(id))?;
     match &l.content {
@@ -305,7 +415,7 @@ pub(crate) fn active_shape_path(app: &PhotocraftApp) -> Option<(u64, Path)> {
 
 /// The path Path Selection edits: the targeted vector mask, the active shape layer's path, else
 /// the work path.
-fn target_path(app: &PhotocraftApp) -> Option<(PathTarget, Path)> {
+fn target_path(app: &PrismApp) -> Option<(PathTarget, Path)> {
     if let Some((id, p)) = targeted_vector_mask(app) {
         return Some((PathTarget::VectorMask(id), p));
     }
@@ -315,7 +425,7 @@ fn target_path(app: &PhotocraftApp) -> Option<(PathTarget, Path)> {
     app.session.active()?.doc.work_path.clone().map(|p| (PathTarget::Work, p))
 }
 
-pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
+pub fn path_selection_finish(app: &mut PrismApp, start: [f64; 2], end: [f64; 2]) {
     let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
     if dx.abs() + dy.abs() < 0.5 {
         return;
@@ -325,11 +435,11 @@ pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64
         PathTarget::Shape(id) => app.run("shape.edit", json!({"layer": id, "move": [dx.round(), dy.round()]})),
         PathTarget::VectorMask(id) => {
             let moved = path.transform(&Affine::translate(dx.round(), dy.round()));
-            app.run("layer.vectorMask.edit", json!({"layer": id, "path": photocraft_engine::vector_cmds::path_json(&moved)}))
+            app.run("layer.vectorMask.edit", json!({"layer": id, "path": prism_engine::vector_cmds::path_json(&moved)}))
         }
         PathTarget::Work => {
             let moved = path.transform(&Affine::translate(dx.round(), dy.round()));
-            app.run("path.set", json!({"name": "work", "path": photocraft_engine::vector_cmds::path_json(&moved)}))
+            app.run("path.set", json!({"name": "work", "path": prism_engine::vector_cmds::path_json(&moved)}))
         }
     };
 }
@@ -394,9 +504,10 @@ pub(crate) fn draw_handle(painter: &egui::Painter, anchor: Pos2, handle: Pos2, a
 }
 
 /// Work path / active shape path outlines, anchors, and the pen path in progress.
-pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
+pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let tool = app.ui.tool;
-    let vector_tool = matches!(tool, Tool::Pen | Tool::PathSelection) || is_shape_tool(tool) || app.ui.shape_corners.is_some();
+    let vector_tool =
+        matches!(tool, Tool::Pen | Tool::PathSelection) || is_shape_tool(tool) || app.ui.shape_corners.is_some() || app.ui.arrow_handles.is_some();
     let accent = Tokens::get(painter.ctx()).accent;
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     let draw_path = |p: &Path, anchors: bool| {
@@ -409,7 +520,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     };
     // View › Show › Target Path (under Extras) hides the paths; the Pen's path in progress stays.
     let paths = app.ui.view.shows(app.ui.view.show.target_path);
-    if app.ui.shape_corners.is_none() && crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers)) {
+    if app.ui.shape_corners.is_none() && app.ui.arrow_handles.is_none() && crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers)) {
         // Direct Selection (or the Pen with ⌘/Ctrl held) draws the paths it edits (#790).
         crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);
     } else if paths {
@@ -421,7 +532,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| doc.layer(id)))
                 && let LayerContent::Shape(sh) = &l.content
             {
-                let preview = crate::shape_corners_ui::outline(app, l.id);
+                let preview = crate::arrow_handles_ui::outline(app, l.id).or_else(|| crate::shape_corners_ui::outline(app, l.id));
                 draw_path(preview.as_ref().unwrap_or(&sh.path), tool == Tool::PathSelection);
             }
         }
@@ -439,12 +550,33 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             }
         }
         painter.add(egui::Shape::line(pts, Stroke::new(1.5, accent)));
-        if let (Some(last), Some(h)) = (pen.knots.last(), app.hover_doc)
-            && !pen.dragging
+        // Hovering the first anchor previews the closing segment and highlights that anchor,
+        // so it's clear a click will close the path.
+        let closing = !pen.dragging && app.hover_doc.is_some_and(|h| pen_closes_at(pen, h, pen_hit_tol(app)));
+        if let (Some(first), Some(last)) = (pen.knots.first(), pen.knots.last())
+            && closing
         {
-            painter.add(egui::Shape::dashed_line(&[to_scr(last[0]), to_scr(h)], Stroke::new(1.0, accent), 4.0, 3.0));
+            let seg: Vec<Pos2> = (0..=16).map(|k| to_scr(bezier(last[0], last[2], first[1], first[0], k as f64 / 16.0))).collect();
+            painter.add(egui::Shape::line(seg, Stroke::new(1.5, accent)));
+        } else if let (Some(last), Some(h)) = (pen.knots.last(), app.hover_doc)
+            && !pen.dragging
+            && app.ui.tool_options.pen_rubber_band
+        {
+            // Rubber Band: the segment a click here would add, curved by the last handle.
+            let seg: Vec<Pos2> = (0..=16).map(|k| to_scr(bezier(last[0], last[2], h, h, k as f64 / 16.0))).collect();
+            painter.add(egui::Shape::line(seg, Stroke::new(1.0, accent)));
+        }
+        if let Some(first) = pen.knots.first()
+            && closing
+        {
+            let c = to_scr(first[0]);
+            painter.circle_stroke(c, 8.0, Stroke::new(1.5, accent));
+            painter.rect_filled(Rect::from_center_size(c, vec2(8.0, 8.0)), 0.0, accent);
         }
         for (i, k) in pen.knots.iter().enumerate() {
+            if i == 0 && closing {
+                continue;
+            }
             let c = to_scr(k[0]);
             let last = i + 1 == pen.knots.len();
             if last && k[2] != k[0] {
@@ -455,13 +587,21 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             draw_anchor(painter, c, last, accent);
         }
     }
+    // Auto Add/Delete: a + or − beside the pointer over a path segment or anchor.
+    if let Some(h) = app.hover_doc
+        && !crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers))
+        && let Some((_, hit)) = auto_edit_at(app, h)
+    {
+        let badge = if matches!(hit, Hit::Anchor(_)) { crate::tool_feedback::Badge::Subtract } else { crate::tool_feedback::Badge::Add };
+        crate::tool_feedback::draw_badge(painter, to_scr(h), badge, false);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
 // Options bars
 
 /// Options bar for vector tools; false for other tools.
-pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
+pub fn options_bar(app: &mut PrismApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !(is_shape_tool(tool) || matches!(tool, Tool::Pen | Tool::PathSelection | Tool::DirectSelection)) {
         return false;
     }
@@ -469,7 +609,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     let lbl = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(s).color(t.text_dim).size(12.0));
     };
-    let o = &mut app.ui.tool_options;
+    if tool == Tool::Arrow {
+        arrow_options(app, ui);
+        return true;
+    }
+    if tool == Tool::Pen {
+        pen_options(app, ui);
+        return true;
+    }
     if tool == Tool::PathSelection {
         lbl(ui, if app.ui.vector_mask_target { "Drag to move the targeted vector mask" } else { tl!("Drag to move the active shape's path or the Work Path") });
         return true;
@@ -485,29 +632,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         );
         return true;
     }
-    if tool == Tool::Pen {
-        let opts = [("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))];
-        crate::widgets::dropdown(ui, "pen-mode", &mut o.vector_mode, &opts, 80.0);
-        crate::widgets::vline(ui, 22.0);
-        lbl(
-            ui,
-            &crate::i18n::fmt(
-                tl!("Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel"),
-                &[("key", &crate::shortcuts::pretty("Enter"))],
-            ),
-        );
-        return true;
-    }
     let mut mode = "shape".to_string();
     crate::widgets::dropdown(ui, "shape-mode", &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
     crate::widgets::vline(ui, 22.0);
-    lbl(ui, tl!("Fill:"));
-    crate::widgets::checkbox(ui, &mut o.shape_fill, "");
-    let (r, _) = ui.allocate_exact_size(vec2(22.0, 16.0), Sense::hover());
-    ui.painter().rect_filled(r, 2.0, rgb32(app.session.tools.foreground));
-    ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Outside);
-    lbl(ui, tl!("Stroke:"));
-    crate::widgets::value_field(ui, &mut o.stroke_width, 0.0..=288.0, "px", 58.0);
+    fill_stroke_fields(app, ui);
+    let o = &mut app.ui.tool_options;
     match tool {
         Tool::Rectangle => {
             crate::widgets::vline(ui, 22.0);
@@ -526,6 +655,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::vline(ui, 22.0);
             lbl(ui, tl!("Weight:"));
             crate::widgets::value_field(ui, &mut o.line_weight, 1.0..=1000.0, "px", 58.0);
+            lbl(ui, tl!("Line tips"));
+            line_tip_picker(ui, "line-tips", &mut o.line_round_tips);
         }
         Tool::CustomShape => {
             crate::widgets::vline(ui, 22.0);
@@ -536,12 +667,223 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     true
 }
 
+fn dim_label(ui: &mut egui::Ui, s: &str) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(s).color(t.text_dim).size(12.0));
+}
+
+/// Shape options: Fill with the foreground colour, and the stroke width.
+fn fill_stroke_fields(app: &mut PrismApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let fg = app.session.tools.foreground;
+    let o = &mut app.ui.tool_options;
+    dim_label(ui, tl!("Fill:"));
+    crate::widgets::checkbox(ui, &mut o.shape_fill, "");
+    let (r, _) = ui.allocate_exact_size(vec2(22.0, 16.0), Sense::hover());
+    ui.painter().rect_filled(r, 2.0, rgb32(fg));
+    ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Outside);
+    dim_label(ui, tl!("Stroke:"));
+    crate::widgets::value_field(ui, &mut o.stroke_width, 0.0..=288.0, "px", 58.0);
+}
+
+/// An options-bar icon button that opens a menu (a small chevron in its corner).
+fn menu_icon(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
+    let r = crate::icons::button(ui, icon, 26.0, false, tip);
+    let t = Tokens::get(ui.ctx());
+    crate::icons::paint(ui, Rect::from_min_size(r.rect.right_bottom() - vec2(9.0, 9.0), vec2(8.0, 8.0)), "chevron-down", 7.0, t.text_dim);
+    r
+}
+
+/// The path the Pen bar's operations, alignment and arrangement act on, and its picked subpaths
+/// (those with anchors selected by Direct Selection; `None` when there are none). Path mode acts
+/// on the work path, Shape mode on the shape layer (or a targeted vector mask).
+fn pen_bar_target(app: &PrismApp) -> Option<(crate::direct_select::PathRef, Path, Option<Vec<usize>>)> {
+    use crate::direct_select::PathRef;
+    let candidates = crate::direct_select::candidates(app);
+    let want_work = app.ui.tool_options.vector_mode != "shape" && !app.ui.vector_mask_target;
+    let (r, path) = candidates.iter().find(|(r, _)| !want_work || *r == PathRef::Work).or(candidates.first()).cloned()?;
+    let ds = &app.ui.direct_selection;
+    let picked = (ds.target == Some(r) && !ds.anchors.is_empty()).then(|| {
+        let mut v: Vec<usize> = ds.anchors.iter().map(|a| a[0]).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    });
+    Some((r, path, picked))
+}
+
+/// Runs a component command on the Pen bar's path with `extra` params, reporting a failure.
+fn run_on_bar_path(app: &mut PrismApp, id: &str, target: crate::direct_select::PathRef, extra: Value) -> Option<Value> {
+    let mut q = target.params();
+    if let (Some(q), Some(extra)) = (q.as_object_mut(), extra.as_object()) {
+        q.extend(extra.clone());
+    }
+    match app.run(id, q) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+            None
+        }
+    }
+}
+
+/// Pen options bar, as in Photoshop: mode, Make (Path mode) or Fill/Stroke (Shape mode), Path
+/// Operations, Path Alignment, Path Arrangement, the gear menu (Rubber Band), Auto Add/Delete
+/// and Align Edges.
+fn pen_options(app: &mut PrismApp, ui: &mut egui::Ui) {
+    let opts = [("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))];
+    crate::widgets::dropdown(ui, "pen-mode", &mut app.ui.tool_options.vector_mode, &opts, 80.0);
+    crate::widgets::vline(ui, 22.0);
+    let shape_mode = app.ui.tool_options.vector_mode == "shape";
+    if shape_mode {
+        fill_stroke_fields(app, ui);
+    } else {
+        dim_label(ui, tl!("Make:"));
+        for (label, cmd) in [(tl!("Selection…"), "path.toSelection"), (tl!("Mask"), "layer.vectorMask.fromPath"), (tl!("Shape"), "path.makeShape")] {
+            let on = crate::canvas_tool_menu::pen_bar_enabled(app, cmd);
+            if ui.add_enabled_ui(on, |ui| crate::widgets::secondary_button(ui, label, 0.0)).inner.clicked() {
+                crate::canvas_tool_menu::pen_bar_run(app, ui.ctx(), cmd);
+            }
+        }
+    }
+    crate::widgets::vline(ui, 22.0);
+    pen_operations_menu(app, ui, shape_mode);
+    pen_alignment_menu(app, ui);
+    pen_arrangement_menu(app, ui);
+    crate::widgets::vline(ui, 22.0);
+    let gear = menu_icon(ui, "settings", tl!("Settings"));
+    egui::Popup::menu(&gear).show(|ui| {
+        ui.set_min_width(160.0);
+        crate::widgets::checkbox(ui, &mut app.ui.tool_options.pen_rubber_band, tl!("Rubber Band"));
+    });
+    crate::widgets::checkbox(ui, &mut app.ui.tool_options.pen_auto_add_delete, tl!("Auto Add/Delete"));
+    // Align Edges snaps shape edges to pixels; a path has no pixels, so it's off in Path mode.
+    ui.add_enabled_ui(shape_mode, |ui| crate::widgets::checkbox(ui, &mut app.ui.tool_options.pen_align_edges, tl!("Align Edges")));
+}
+
+/// Path Operations: how the next subpath combines (and the picked or newest component's
+/// operation, as Photoshop changes the component just drawn), plus Merge Shape Components.
+fn pen_operations_menu(app: &mut PrismApp, ui: &mut egui::Ui, shape_mode: bool) {
+    let resp = menu_icon(ui, "squares-subtract", tl!("Path Operations"));
+    egui::Popup::menu(&resp).show(|ui| {
+        ui.set_min_width(220.0);
+        let current = if shape_mode { app.ui.tool_options.pen_shape_op.clone() } else { app.ui.tool_options.pen_path_op.clone() };
+        let target = pen_bar_target(app);
+        let mut ops = vec![
+            ("combine", tl!("Combine Shapes")),
+            ("subtract", tl!("Subtract Front Shape")),
+            ("intersect", tl!("Intersect Shape Areas")),
+            ("exclude", tl!("Exclude Overlapping Shapes")),
+        ];
+        if shape_mode {
+            ops.insert(0, ("new", tl!("New Layer")));
+        }
+        for (op, label) in ops {
+            if ui.selectable_label(current == op, label).clicked() {
+                if shape_mode {
+                    app.ui.tool_options.pen_shape_op = op.into();
+                } else {
+                    app.ui.tool_options.pen_path_op = op.into();
+                }
+                if let Some((r, path, picked)) = target.clone()
+                    && op != "new"
+                    && path.subpaths.len() > 1
+                {
+                    let subs = picked.unwrap_or_else(|| vec![path.subpaths.len() - 1]);
+                    run_on_bar_path(app, "path.setOperation", r, json!({"op": op, "subpaths": subs}));
+                }
+                ui.close();
+            }
+        }
+        ui.separator();
+        let merge = target.as_ref().is_some_and(|(_, p, _)| p.subpaths.len() > 1);
+        if ui.add_enabled(merge, egui::Button::new(tl!("Merge Shape Components"))).clicked() {
+            if let Some((r, _, _)) = target {
+                run_on_bar_path(app, "path.mergeComponents", r, json!({}));
+                app.ui.direct_selection.anchors.clear();
+            }
+            ui.close();
+        }
+    });
+}
+
+/// Path Alignment: align or distribute the picked components (all when none are picked), to
+/// their own bounds or the canvas.
+fn pen_alignment_menu(app: &mut PrismApp, ui: &mut egui::Ui) {
+    let resp = menu_icon(ui, "align-left", tl!("Path Alignment"));
+    egui::Popup::menu(&resp).show(|ui| {
+        ui.set_min_width(200.0);
+        let target = pen_bar_target(app);
+        let count = target.as_ref().map_or(0, |(_, p, picked)| match picked {
+            Some(subs) => prism_vector::edit::components_of(p, subs).map_or(0, |c| c.len()),
+            None => p.components().len(),
+        });
+        let canvas = app.ui.tool_options.pen_align_canvas;
+        let edges = [
+            ("left", tl!("Left Edges")),
+            ("hcenter", tl!("Horizontal Centers")),
+            ("right", tl!("Right Edges")),
+            ("top", tl!("Top Edges")),
+            ("vcenter", tl!("Vertical Centers")),
+            ("bottom", tl!("Bottom Edges")),
+        ];
+        for (section, id, min) in [(tl!("Align"), "path.alignComponents", if canvas { 1 } else { 2 }), (tl!("Distribute"), "path.distributeComponents", 3)] {
+            ui.label(egui::RichText::new(section).small().color(Tokens::get(ui.ctx()).text_dim));
+            for (edge, label) in edges {
+                if ui.add_enabled(count >= min, egui::Button::new(label)).clicked() {
+                    if let Some((r, _, picked)) = target.clone() {
+                        let mut q = json!({"edge": edge, "to": if canvas { "canvas" } else { "selection" }});
+                        if let Some(subs) = picked {
+                            q["subpaths"] = json!(subs);
+                        }
+                        run_on_bar_path(app, id, r, q);
+                    }
+                    ui.close();
+                }
+            }
+            ui.separator();
+        }
+        dim_label(ui, tl!("Align To:"));
+        for (on, label) in [(false, tl!("Selection")), (true, tl!("Canvas"))] {
+            if ui.selectable_label(canvas == on, label).clicked() {
+                app.ui.tool_options.pen_align_canvas = on;
+            }
+        }
+    });
+}
+
+/// Path Arrangement: restack the picked components (the newest when none are picked).
+fn pen_arrangement_menu(app: &mut PrismApp, ui: &mut egui::Ui) {
+    let resp = menu_icon(ui, "layers", tl!("Path Arrangement"));
+    egui::Popup::menu(&resp).show(|ui| {
+        ui.set_min_width(200.0);
+        let target = pen_bar_target(app);
+        let on = target.as_ref().is_some_and(|(_, p, _)| p.components().len() > 1);
+        for (to, label) in
+            [("front", tl!("Bring to Front")), ("forward", tl!("Bring Forward")), ("backward", tl!("Send Backward")), ("back", tl!("Send to Back"))]
+        {
+            if ui.add_enabled(on, egui::Button::new(label)).clicked() {
+                if let Some((r, path, picked)) = target.clone() {
+                    let subs = picked.unwrap_or_else(|| vec![path.subpaths.len().saturating_sub(1)]);
+                    // The picked anchors' indices change; Direct Selection drops them.
+                    if run_on_bar_path(app, "path.arrangeComponents", r, json!({"to": to, "subpaths": subs})).is_some() {
+                        app.ui.direct_selection.anchors.clear();
+                        app.ui.direct_selection.segment = None;
+                    }
+                }
+                ui.close();
+            }
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------------------------
 // Properties (shape layers)
 
-fn color_of(f: &photocraft_doc::Fill) -> Option<Color32> {
+fn color_of(f: &prism_doc::Fill) -> Option<Color32> {
     match f {
-        photocraft_doc::Fill::Solid(c) => {
+        prism_doc::Fill::Solid(c) => {
             let v = c.to_rgba8();
             Some(Color32::from_rgb(v[0], v[1], v[2]))
         }
@@ -550,7 +892,11 @@ fn color_of(f: &photocraft_doc::Fill) -> Option<Color32> {
 }
 
 /// A colour swatch that opens a picker; returns the new `#rrggbb` when changed.
-fn swatch(ui: &mut egui::Ui, fill: Option<&photocraft_doc::Fill>, tip: &str) -> Option<String> {
+fn swatch(ui: &mut egui::Ui, fill: Option<&prism_doc::Fill>, tip: &str) -> Option<String> {
+    swatch_with_none(ui, fill, tip, true)
+}
+
+fn swatch_with_none(ui: &mut egui::Ui, fill: Option<&prism_doc::Fill>, tip: &str, allow_none: bool) -> Option<String> {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(26.0, 18.0), Sense::click());
     let current = fill.and_then(color_of);
@@ -558,9 +904,9 @@ fn swatch(ui: &mut egui::Ui, fill: Option<&photocraft_doc::Fill>, tip: &str) -> 
         (Some(c), _) => {
             ui.painter().rect_filled(r, 2.0, c);
         }
-        (None, Some(photocraft_doc::Fill::Gradient { stops, .. })) if !stops.is_empty() => {
+        (None, Some(prism_doc::Fill::Gradient { stops, .. })) if !stops.is_empty() => {
             // Gradient fills preview as a left-to-right ramp through their stops.
-            let rgb = |c: &photocraft_doc::Color| {
+            let rgb = |c: &prism_doc::Color| {
                 let v = c.to_rgba8();
                 Color32::from_rgb(v[0], v[1], v[2])
             };
@@ -602,7 +948,7 @@ fn swatch(ui: &mut egui::Ui, fill: Option<&photocraft_doc::Fill>, tip: &str) -> 
         if let Some(rgb) = crate::screen_picker::button(ui, screen_id) {
             out = Some(crate::color_picker_ui::hex(rgb));
         }
-        if fill.is_some() && ui.button(tl!("No Color")).clicked() {
+        if allow_none && fill.is_some() && ui.button(tl!("No Color")).clicked() {
             out = Some("none".into());
         }
     });
@@ -620,13 +966,17 @@ fn corner_radii_patch(radii: [f64; 4], corner: usize, radius: f32) -> Value {
 }
 
 /// Properties panel for a shape layer: Appearance (fill, stroke) and live shape geometry.
-pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocraft_doc::LayerId) {
+pub fn shape_properties(app: &mut PrismApp, ui: &mut egui::Ui, id: prism_doc::LayerId) {
     let Some(sh) = app.session.active().and_then(|s| s.doc.layer(id)).and_then(|l| match &l.content {
         LayerContent::Shape(sh) => Some(sh.clone()),
         _ => None,
     }) else {
         return;
     };
+    if matches!(sh.live, Some(prism_doc::LiveShape::Arrow { .. })) {
+        arrow_properties(app, ui, id, &sh);
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let mut edit: Option<Value> = None;
     let key = |k: &str| format!("shape-{}-{k}", id.0);
@@ -652,8 +1002,8 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
             }
             if sh.stroke.is_some() {
                 let mut align = match sh.stroke.as_ref().map(|s| s.align) {
-                    Some(photocraft_doc::vector::StrokeAlign::Inside) => "inside",
-                    Some(photocraft_doc::vector::StrokeAlign::Outside) => "outside",
+                    Some(prism_doc::vector::StrokeAlign::Inside) => "inside",
+                    Some(prism_doc::vector::StrokeAlign::Outside) => "outside",
                     _ => "center",
                 }
                 .to_string();
@@ -672,9 +1022,9 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
             crate::widgets::value_field(ui, v, range, unit, 64.0).changed()
         };
         match live {
-            photocraft_doc::vector::LiveShape::Rect { rect, .. }
-            | photocraft_doc::vector::LiveShape::Ellipse { rect }
-            | photocraft_doc::vector::LiveShape::Polygon { rect, .. } => {
+            prism_doc::vector::LiveShape::Rect { rect, .. }
+            | prism_doc::vector::LiveShape::Ellipse { rect }
+            | prism_doc::vector::LiveShape::Polygon { rect, .. } => {
                 ui.horizontal(|ui| {
                     let (mut w, mut h) = (rect[2] as f32, rect[3] as f32);
                     let cw = num(ui, "W", &mut w, 1.0..=300000.0, "px");
@@ -684,10 +1034,10 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                     }
                 });
             }
-            photocraft_doc::vector::LiveShape::Line { .. } => {}
+            prism_doc::vector::LiveShape::Line { .. } | prism_doc::LiveShape::Arrow { .. } => {}
         }
         ui.vertical(|ui| match live {
-            photocraft_doc::vector::LiveShape::Rect { radii, .. } => {
+            prism_doc::vector::LiveShape::Rect { radii, .. } => {
                 // Keep the uniform workflow available after independent corner edits too.
                 ui.horizontal(|ui| {
                     let mut all = radii[0] as f32;
@@ -708,7 +1058,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                     });
                 }
             }
-            photocraft_doc::vector::LiveShape::Polygon { sides, star_ratio, .. } => {
+            prism_doc::vector::LiveShape::Polygon { sides, star_ratio, .. } => {
                 ui.horizontal(|ui| {
                     let mut n = *sides as f32;
                     if num(ui, tl!("Sides"), &mut n, 3.0..=100.0, "") {
@@ -721,11 +1071,18 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 })
                 .inner
             }
-            photocraft_doc::vector::LiveShape::Line { weight, .. } => {
+            prism_doc::vector::LiveShape::Line { weight, round_tips, .. } => {
                 ui.horizontal(|ui| {
                     let mut w = *weight as f32;
                     if num(ui, tl!("Weight"), &mut w, 1.0..=10000.0, "px") {
                         edit = Some(json!({"weight": w, "coalesce": key("weight")}));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Line tips"));
+                    let mut rounded = *round_tips;
+                    if line_tip_picker(ui, "line-property-tips", &mut rounded) {
+                        edit = Some(json!({"roundTips":rounded}));
                     }
                 })
                 .inner
@@ -782,7 +1139,7 @@ pub struct PathEntry {
 
 /// The Paths panel's rows, top to bottom: saved paths, the work path, then the selected layer's
 /// shape path ("<Layer> Shape Path") or vector mask ("<Layer> Vector Mask"), like Photoshop.
-pub fn path_rows(doc: &Document, active: Option<photocraft_doc::LayerId>) -> Vec<PathEntry> {
+pub fn path_rows(doc: &Document, active: Option<prism_doc::LayerId>) -> Vec<PathEntry> {
     let mut rows: Vec<_> = doc.paths.iter().map(|p| PathEntry { name: p.name.clone(), path: p.path.clone(), kind: PathRow::Saved }).collect();
     if let Some(wp) = &doc.work_path {
         rows.push(PathEntry { name: "Work Path".into(), path: wp.clone(), kind: PathRow::Work });
@@ -843,7 +1200,7 @@ fn path_context_actions(entry: &PathEntry, doc: &Document) -> Vec<(&'static str,
             }
         }
         let copy_name = format!("{} copy {n}", entry.name);
-        actions.push(("Duplicate Path", "path.set", json!({"name": copy_name, "path": photocraft_engine::vector_cmds::path_json(&entry.path)})));
+        actions.push(("Duplicate Path", "path.set", json!({"name": copy_name, "path": prism_engine::vector_cmds::path_json(&entry.path)})));
     }
     if entry.kind != PathRow::Layer {
         actions.push(("Delete Path", "path.delete", json!({"name": key})));
@@ -853,7 +1210,7 @@ fn path_context_actions(entry: &PathEntry, doc: &Document) -> Vec<(&'static str,
     actions
 }
 
-pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub fn paths_panel(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
         ui.label(egui::RichText::new(tl!("No document")).color(t.text_faint));
@@ -974,12 +1331,153 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+fn line_tip_picker(ui: &mut egui::Ui, id: &str, rounded: &mut bool) -> bool {
+    let mut value = if *rounded { "round" } else { "square" }.to_string();
+    let changed = crate::widgets::dropdown(ui, id, &mut value, &[("square".into(), tl!("Square tips")), ("round".into(), tl!("Round tips"))], 90.0);
+    if changed {
+        *rounded = value == "round";
+    }
+    changed
+}
+
+fn arrow_ends(rounded: bool) -> (prism_doc::LineCap, prism_doc::LineJoin) {
+    if rounded { (prism_doc::LineCap::Round, prism_doc::LineJoin::Round) } else { (prism_doc::LineCap::Butt, prism_doc::LineJoin::Miter) }
+}
+
+fn arrow_stroke(app: &PrismApp) -> Value {
+    let o = &app.ui.tool_options.arrow;
+    json!({"color": app.session.tools.foreground, "width": o.width,
+        "cap": if o.rounded { "round" } else { "butt" }, "join": if o.rounded { "round" } else { "miter" }})
+}
+
+fn arrow_corner_picker(ui: &mut egui::Ui, id: &str, rounded: &mut bool) -> bool {
+    let mut value = if *rounded { "round" } else { "sharp" }.to_string();
+    let changed = crate::widgets::dropdown(ui, id, &mut value, &[("sharp".to_string(), tl!("Angular")), ("round".to_string(), tl!("Rounded"))], 80.0);
+    if changed {
+        *rounded = value == "round";
+    }
+    changed
+}
+
+fn arrow_options(app: &mut PrismApp, ui: &mut egui::Ui) {
+    ui.label(tl!("Color"));
+    let fg = app.session.tools.foreground;
+    if let Some(color) = swatch_with_none(ui, Some(&prism_doc::Fill::Solid(prism_doc::Color::rgba(fg[0], fg[1], fg[2], fg[3]))), tl!("Arrow color"), false)
+        && color != "none"
+    {
+        // This existing command owns the foreground state and text colour synchronization.
+        if let Err(e) = app.run("tools.setColors", json!({"foreground": color})) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+    }
+    let o = &mut app.ui.tool_options.arrow;
+    ui.label(tl!("Thickness"));
+    crate::widgets::value_field(ui, &mut o.width, 0.1..=1000.0, "px", 62.0);
+    ui.label(tl!("Arrowhead length"));
+    crate::widgets::value_field(ui, &mut o.head_size, 0.1..=10000.0, "px", 62.0);
+    ui.label(tl!("Arrowhead angle"));
+    crate::widgets::value_field(ui, &mut o.head_angle, 10.0..=160.0, "°", 62.0);
+    ui.label(tl!("Corners"));
+    arrow_corner_picker(ui, "arrow-corners", &mut o.rounded);
+}
+
+// Separate pointer gestures get separate undo steps, while a held drag or typing
+// session reuses its key. This is view-only transient state, not document data.
+fn arrow_edit_key(ui: &egui::Ui, response: &egui::Response, layer: prism_doc::LayerId, field: &str) -> String {
+    let id = response.id.with("arrow-edit");
+    let frame = ui.ctx().cumulative_frame_nr();
+    // Response focus/drag queries read the Context too: resolve them before its
+    // data write lock, otherwise opening Properties would deadlock the UI thread.
+    let fresh = response.drag_started() || response.gained_focus() || (response.changed() && !response.dragged() && !response.has_focus());
+    let epoch = ui.data_mut(|d| {
+        let old = d.get_temp::<u64>(id).unwrap_or(frame);
+        let epoch = if fresh { frame } else { old };
+        d.insert_temp(id, epoch);
+        epoch
+    });
+    format!("arrow-{}-{field}-{epoch}", layer.0)
+}
+
+fn arrow_properties(app: &mut PrismApp, ui: &mut egui::Ui, id: prism_doc::LayerId, sh: &prism_doc::ShapeLayer) {
+    let Some(prism_doc::LiveShape::Arrow { head_size, head_angle, .. }) = sh.live else { return };
+    let locked = app.session.active().and_then(|st| st.doc.path_of(id).map(|path| st.doc.locks_at(&path))).is_some_and(|locks| locks.all || locks.pixels);
+    let mut edit = None;
+    ui.add_enabled_ui(!locked, |ui| {
+        if !crate::props_layout::section(ui, "arrow-appearance", tl!("Arrow")) {
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.label(tl!("Color"));
+            let coalesce = arrow_color_edit_key(ui, id);
+            if let Some(c) = swatch_with_none(ui, sh.stroke.as_ref().map(|s| &s.paint), tl!("Arrow color"), false)
+                && c != "none"
+            {
+                edit = Some(json!({"stroke":{"color":c}, "coalesce":coalesce}));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(tl!("Thickness"));
+            let mut width = sh.stroke.as_ref().map_or(3.0, |s| s.width);
+            let response = crate::widgets::value_field(ui, &mut width, 0.1..=1000.0, "px", 64.0);
+            let coalesce = arrow_edit_key(ui, &response, id, "width");
+            if response.changed() {
+                edit = Some(json!({"stroke":{"width":width}, "coalesce":coalesce}));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(tl!("Arrowhead length"));
+            let mut head = head_size as f32;
+            let response = crate::widgets::value_field(ui, &mut head, 0.1..=10000.0, "px", 64.0);
+            let coalesce = arrow_edit_key(ui, &response, id, "head");
+            if response.changed() {
+                edit = Some(json!({"headSize":head, "coalesce":coalesce}));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(tl!("Arrowhead angle"));
+            let mut angle = head_angle as f32;
+            let response = crate::widgets::value_field(ui, &mut angle, 10.0..=160.0, "°", 64.0);
+            let coalesce = arrow_edit_key(ui, &response, id, "angle");
+            if response.changed() {
+                edit = Some(json!({"headAngle":angle, "coalesce":coalesce}));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(tl!("Corners"));
+            let mut rounded = sh.stroke.as_ref().is_some_and(|s| s.cap == prism_doc::LineCap::Round && s.join == prism_doc::LineJoin::Round);
+            if arrow_corner_picker(ui, "arrow-property-corners", &mut rounded) {
+                edit = Some(json!({"stroke":{"cap":if rounded { "round" } else { "butt" }, "join":if rounded { "round" } else { "miter" }}}));
+            }
+        });
+    });
+    if let Some(mut params) = edit {
+        params["layer"] = json!(id.0);
+        if let Err(e) = app.run("shape.edit", params) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+    }
+}
+
+fn arrow_color_edit_key(ui: &egui::Ui, layer: prism_doc::LayerId) -> String {
+    let id = ui.id().with(("arrow-color-gesture", layer.0));
+    let frame = ui.ctx().cumulative_frame_nr();
+    let fresh = ui.input(|i| i.pointer.any_pressed() || i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Key { pressed: true, .. })));
+    let epoch = ui.data_mut(|d| {
+        let epoch = if fresh { frame } else { d.get_temp::<u64>(id).unwrap_or(frame) };
+        d.insert_temp(id, epoch);
+        epoch
+    });
+    format!("arrow-{}-color-{epoch}", layer.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn app() -> PhotocraftApp {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    fn app() -> PrismApp {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
         app.sync_views();
         app
@@ -1000,7 +1498,7 @@ mod tests {
         let entries = path_context_actions(&first, doc);
         assert_eq!(entries[0].1, "path.toSelection");
         assert_eq!(entries[0].2["name"], "First");
-        assert!(entries.iter().all(|(_, id, _)| photocraft_engine::commands::find(id).is_some()));
+        assert!(entries.iter().all(|(_, id, _)| prism_engine::commands::find(id).is_some()));
         let (_, id, params) = entries.into_iter().find(|(_, id, _)| *id == "path.toSelection").unwrap();
         app.run(id, params).unwrap();
         assert!(app.session.active().unwrap().doc.selection.is_some());
@@ -1029,7 +1527,7 @@ mod tests {
     }
 
     /// How many shapes the path overlay paints for `app` this frame.
-    fn overlay_shapes(app: &PhotocraftApp, ctx: &egui::Context) -> usize {
+    fn overlay_shapes(app: &PrismApp, ctx: &egui::Context) -> usize {
         let doc = app.session.active().unwrap().doc.clone();
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
@@ -1055,7 +1553,7 @@ mod tests {
         app.run("path.set", json!({"path": path})).unwrap();
         assert!(app.session.active().unwrap().doc.work_path.is_some());
         finish_shape(&mut app, Tool::Rectangle, [100.0, 100.0], [160.0, 150.0], egui::Modifiers::NONE);
-        let toggle = |app: &mut PhotocraftApp, id: &str| crate::menus::invoke(app, &ctx, id, Value::Null).unwrap();
+        let toggle = |app: &mut PrismApp, id: &str| crate::menus::invoke(app, &ctx, id, Value::Null).unwrap();
         for tool in [Tool::Pen, Tool::PathSelection, Tool::DirectSelection, Tool::Rectangle] {
             app.ui.tool = tool;
             assert!(app.ui.view.show.target_path && app.ui.view.extras);
@@ -1120,11 +1618,10 @@ mod tests {
     fn shape_preview_is_the_committed_path() {
         let mut app = app();
         app.ui.tool_options.corner_radius = 8.0;
-        let preview = |app: &PhotocraftApp, tool, end| {
-            shape_geometry(&app.ui.tool_options, tool, [10.0, 10.0], end, egui::Modifiers::ALT)
-                .and_then(|p| photocraft_engine::vector_cmds::shape_path(&p).ok())
+        let preview = |app: &PrismApp, tool, end| {
+            shape_geometry(&app.ui.tool_options, tool, [10.0, 10.0], end, egui::Modifiers::ALT).and_then(|p| prism_engine::vector_cmds::shape_path(&p).ok())
         };
-        for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line] {
+        for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::Arrow] {
             let shown = preview(&app, tool, [60.0, 30.0]).unwrap();
             finish_shape(&mut app, tool, [10.0, 10.0], [60.0, 30.0], egui::Modifiers::ALT);
             let st = app.session.active().unwrap();
@@ -1132,8 +1629,8 @@ mod tests {
             assert_eq!(sh.path, shown, "{tool:?}");
         }
         assert!(preview(&app, Tool::Rectangle, [10.2, 40.0]).is_none(), "too thin to draw");
-        assert!(photocraft_engine::vector_cmds::shape_path(&json!({"kind": "nope", "rect": [0, 0, 5, 5]})).is_err());
-        assert!(photocraft_engine::vector_cmds::shape_path(&json!({"kind": "rect"})).is_err());
+        assert!(prism_engine::vector_cmds::shape_path(&json!({"kind": "nope", "rect": [0, 0, 5, 5]})).is_err());
+        assert!(prism_engine::vector_cmds::shape_path(&json!({"kind": "rect"})).is_err());
     }
 
     #[test]
@@ -1158,14 +1655,173 @@ mod tests {
         assert_eq!((wp.subpaths[0].knots[0].anchor.x, wp.subpaths[0].knots[0].anchor.y), (30.0, 25.0));
     }
 
+    #[test]
+    fn pen_hovering_the_first_anchor_shows_close_feedback() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+            pen_down(&mut app, x, y);
+            pen_up(&mut app);
+        }
+        let ctx = egui::Context::default();
+        let rings = |app: &PrismApp| {
+            let doc = app.session.active().unwrap().doc.clone();
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
+                let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(rect);
+                let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0 };
+                draw_overlay(app, &painter, &xf, &doc);
+            });
+            out.textures_delta.clear();
+            out.shapes.iter().filter(|s| matches!(s.shape, egui::Shape::Circle(_))).count()
+        };
+        app.hover_doc = Some([60.0, 60.0]);
+        assert_eq!(rings(&app), 0);
+        assert_eq!(pen_cursor_asset(&app, [60.0, 60.0]), 1030);
+        // On the first anchor: a ring around it (plus the closing segment preview).
+        app.hover_doc = Some([21.0, 21.0]);
+        assert_eq!(rings(&app), 1);
+        assert_eq!(pen_cursor_asset(&app, [21.0, 21.0]), 1034);
+        // A two-anchor minimum still applies: one anchor never closes.
+        let mut one = self::app();
+        one.ui.tool = Tool::Pen;
+        pen_down(&mut one, 20.0, 20.0);
+        pen_up(&mut one);
+        assert_eq!(pen_cursor_asset(&one, [20.5, 20.5]), 1066);
+    }
+
+    fn pen_triangle(app: &mut PrismApp, x: f64) {
+        for (dx, y) in [(0.0, 20.0), (40.0, 20.0), (20.0, 60.0)] {
+            pen_down(app, x + dx, y);
+            pen_up(app);
+        }
+        pen_down(app, x, 20.0); // close
+        pen_up(app);
+    }
+
+    fn work(app: &PrismApp) -> Path {
+        app.session.active().unwrap().doc.work_path.clone().unwrap()
+    }
+
+    #[test]
+    fn pen_subpaths_join_the_selected_work_path_with_the_path_operation() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        app.ui.tool_options.pen_auto_add_delete = false;
+        pen_triangle(&mut app, 10.0);
+        app.ui.tool_options.pen_path_op = "subtract".into();
+        pen_triangle(&mut app, 100.0);
+        let wp = work(&app);
+        assert_eq!(wp.subpaths.len(), 2);
+        assert_eq!(wp.subpaths[1].op, prism_doc::PathOp::Subtract);
+        // Deselected in the Paths panel: the next path starts a new work path.
+        app.ui.selected_path = None;
+        pen_triangle(&mut app, 200.0);
+        assert_eq!(work(&app).subpaths.len(), 1);
+    }
+
+    #[test]
+    fn pen_auto_add_delete_edits_the_shown_path() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        pen_triangle(&mut app, 10.0);
+        // A press on the top edge adds an anchor there (and starts no new path).
+        pen_down(&mut app, 30.0, 20.0);
+        pen_up(&mut app);
+        assert!(app.ui.pen.as_ref().is_none_or(|p| p.knots.is_empty()));
+        assert_eq!(work(&app).subpaths[0].knots.len(), 4);
+        assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("path.addAnchor"));
+        // A press on an anchor deletes it.
+        pen_down(&mut app, 30.0, 20.0);
+        pen_up(&mut app);
+        assert_eq!(work(&app).subpaths[0].knots.len(), 3);
+        // The overlay shows the + / − badge only when it applies.
+        app.hover_doc = Some([30.0, 20.0]);
+        assert!(matches!(auto_edit_at(&app, [30.0, 20.0]), Some((_, Hit::Segment(..)))));
+        assert!(matches!(auto_edit_at(&app, [10.0, 20.0]), Some((_, Hit::Anchor(_)))));
+        assert!(auto_edit_at(&app, [150.0, 150.0]).is_none());
+        // Off: the press starts a new subpath instead.
+        app.ui.tool_options.pen_auto_add_delete = false;
+        assert!(auto_edit_at(&app, [30.0, 20.0]).is_none());
+        pen_down(&mut app, 30.0, 20.0);
+        pen_up(&mut app);
+        assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.len()), Some(1));
+    }
+
+    #[test]
+    fn pen_shape_mode_aligns_edges_and_adds_to_the_shape_layer() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.pen_auto_add_delete = false;
+        pen_down(&mut app, 10.4, 20.6);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots[0][0], [10.0, 21.0], "Align Edges snaps to pixels");
+        pen_up(&mut app);
+        app.ui.pen = None;
+        pen_triangle(&mut app, 10.0);
+        let layers = app.session.active().unwrap().doc.layers.len();
+        app.ui.tool_options.pen_shape_op = "exclude".into();
+        pen_triangle(&mut app, 30.0);
+        let (_, path) = active_shape_path(&app).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "added to the selected shape layer");
+        assert_eq!((path.subpaths.len(), path.subpaths[1].op), (2, prism_doc::PathOp::Exclude));
+        app.ui.tool_options.pen_shape_op = "new".into();
+        pen_triangle(&mut app, 60.0);
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1);
+    }
+
+    #[test]
+    fn pen_rubber_band_previews_the_next_segment_only_when_on() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        pen_down(&mut app, 20.0, 20.0);
+        pen_up(&mut app);
+        app.hover_doc = Some([90.0, 70.0]);
+        let ctx = egui::Context::default();
+        let off = overlay_shapes(&app, &ctx);
+        app.ui.tool_options.pen_rubber_band = true;
+        assert_eq!(overlay_shapes(&app, &ctx), off + 1);
+    }
+
+    #[test]
+    fn pen_bar_make_buttons_and_component_menus() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        app.ui.tool_options.pen_auto_add_delete = false;
+        assert!(!crate::canvas_tool_menu::pen_bar_enabled(&app, "path.makeShape"), "no path yet");
+        pen_triangle(&mut app, 10.0);
+        pen_triangle(&mut app, 100.0);
+        for cmd in ["path.toSelection", "layer.vectorMask.fromPath", "path.makeShape"] {
+            assert!(crate::canvas_tool_menu::pen_bar_enabled(&app, cmd), "{cmd}");
+        }
+        // The bar acts on the newest component without a Direct Selection pick.
+        let (r, _, picked) = pen_bar_target(&app).unwrap();
+        assert_eq!((r, picked), (crate::direct_select::PathRef::Work, None));
+        run_on_bar_path(&mut app, "path.alignComponents", r, json!({"edge": "top"})).unwrap();
+        assert!(work(&app).subpaths.iter().all(|s| s.knots[0].anchor.y == 20.0));
+        let ctx = egui::Context::default();
+        crate::canvas_tool_menu::pen_bar_run(&mut app, &ctx, "path.makeShape");
+        assert!(app.session.active().unwrap().doc.work_path.is_none(), "Shape consumes the work path");
+        assert!(active_shape_path(&app).is_some());
+        // The bar renders in both modes.
+        PrismApp::setup_context(&ctx, Default::default());
+        for mode in ["path", "shape"] {
+            app.ui.tool_options.vector_mode = mode.into();
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.horizontal(|ui| assert!(options_bar(&mut app, ui, Tool::Pen)));
+            });
+            out.textures_delta.clear();
+        }
+    }
+
     /// #1419: Solid Color (and every new fill or adjustment layer) made while a path is selected
     /// in the Paths panel takes it as its vector mask; with the path deselected, the selection
     /// is its layer mask again.
     #[test]
     fn new_fill_layer_takes_the_selected_path_as_its_vector_mask() {
         let mut app = app();
-        let layer = |app: &PhotocraftApp, r: Result<Value, String>| {
-            let id = photocraft_doc::LayerId(r.unwrap()["layer"].as_u64().unwrap());
+        let layer = |app: &PrismApp, r: Result<Value, String>| {
+            let id = prism_doc::LayerId(r.unwrap()["layer"].as_u64().unwrap());
             app.session.active().unwrap().doc.layer(id).unwrap().clone()
         };
         // Drawing a work path with the Pen selects it.
@@ -1218,9 +1874,9 @@ mod tests {
         use crate::canvas::{ToolEvent, tool_event};
         let mut app = app();
         app.ui.tool = Tool::Pen;
-        let down = |app: &mut PhotocraftApp, x, y| tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
-        let move_to = |app: &mut PhotocraftApp, x, y| tool_event(app, ToolEvent::Move { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
-        let up = |app: &mut PhotocraftApp, x, y| tool_event(app, ToolEvent::Up { x, y }, egui::Modifiers::NONE);
+        let down = |app: &mut PrismApp, x, y| tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+        let move_to = |app: &mut PrismApp, x, y| tool_event(app, ToolEvent::Move { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+        let up = |app: &mut PrismApp, x, y| tool_event(app, ToolEvent::Up { x, y }, egui::Modifiers::NONE);
 
         down(&mut app, 20.0, 20.0);
         up(&mut app, 20.0, 20.0);
@@ -1294,12 +1950,12 @@ mod tests {
         let mut app = app();
         let created = app.run("shape.create", json!({"kind": "roundedRect", "rect": [10, 10, 150, 100], "radii": [5, 10, 15, 20]})).unwrap();
         let id = created["layer"].as_u64().unwrap();
-        let get_radii = |app: &PhotocraftApp| {
+        let get_radii = |app: &PrismApp| {
             let st = app.session.active().unwrap();
-            let shape = st.doc.layer(photocraft_doc::LayerId(id)).unwrap();
+            let shape = st.doc.layer(prism_doc::LayerId(id)).unwrap();
             match &shape.content {
                 LayerContent::Shape(sh) => match &sh.live {
-                    Some(photocraft_doc::vector::LiveShape::Rect { radii, .. }) => *radii,
+                    Some(prism_doc::vector::LiveShape::Rect { radii, .. }) => *radii,
                     _ => panic!("rectangle must remain a live shape"),
                 },
                 _ => panic!("expected shape layer"),
@@ -1342,21 +1998,21 @@ mod tests {
         let mut app = app();
         let id = app.run("shape.create", json!({"kind": "rect", "rect": [10, 10, 100, 60], "fill": "#3070c0"})).unwrap()["layer"].as_u64().unwrap();
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
-            move |ui, app: &mut PhotocraftApp| {
+            move |ui, app: &mut PrismApp| {
                 // Fonts set up after the first frame only apply from the next one.
                 if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     return;
                 }
-                egui::Panel::right("properties").resizable(false).exact_size(285.0).show(ui, |ui| shape_properties(app, ui, photocraft_doc::LayerId(id)));
+                egui::Panel::right("properties").resizable(false).exact_size(285.0).show(ui, |ui| shape_properties(app, ui, prism_doc::LayerId(id)));
             },
             app,
         );
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
         h.run_steps(4);
         let label = h.query_all(egui_kittest::kittest::by().label("Fill").include_labels()).next().expect("the Fill label").rect();
         // The swatch is right of its label.
         let swatch = egui::pos2(label.right() + 17.0, label.center().y);
-        let press = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, pos, pressed| {
+        let press = |h: &mut egui_kittest::Harness<'_, PrismApp>, pos, pressed| {
             h.event(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
             h.step();
         };
@@ -1365,13 +2021,13 @@ mod tests {
         press(&mut h, swatch, true);
         press(&mut h, swatch, false);
         h.run_steps(3);
-        let popup = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+        let popup = |h: &egui_kittest::Harness<'_, PrismApp>| {
             h.ctx.memory(|m| m.areas().visible_layer_ids().into_iter().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id)))
         };
         let opened = popup(&h).expect("the picker opened");
-        let fill = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+        let fill = |h: &egui_kittest::Harness<'_, PrismApp>| {
             let st = h.state().session.active().unwrap();
-            match &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
+            match &st.doc.layer(prism_doc::LayerId(id)).unwrap().content {
                 LayerContent::Shape(sh) => sh.fill.clone(),
                 _ => None,
             }
@@ -1397,3 +2053,116 @@ mod tests {
 #[cfg(test)]
 #[path = "path_selection_tests.rs"]
 mod path_selection_tests;
+
+#[cfg(test)]
+mod arrow_ui_tests {
+    use super::*;
+    use crate::canvas::{ToolEvent, tool_event};
+    #[test]
+    fn arrow_color_drags_have_distinct_undo_groups() {
+        let ctx = egui::Context::default();
+        let mut keys = Vec::new();
+        for pressed in [None, Some(true), None, Some(false), Some(true), None] {
+            let mut input = egui::RawInput::default();
+            if let Some(pressed) = pressed {
+                input.events.push(egui::Event::PointerButton {
+                    pos: egui::pos2(10.0, 10.0),
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            ctx.run_ui(input, |ui| keys.push(arrow_color_edit_key(ui, prism_doc::LayerId(1)))).textures_delta.clear();
+        }
+        assert_eq!(keys[1], keys[2]);
+        assert_eq!(keys[2], keys[3]);
+        assert_ne!(keys[3], keys[4]);
+        assert_eq!(keys[4], keys[5]);
+    }
+
+    #[test]
+    fn arrow_options_and_properties_render_without_nested_context_locks() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":200,"height":200})).unwrap();
+        let id = app.run("shape.create", json!({"kind":"arrow","from":[20,20],"to":[100,100]})).unwrap()["layer"].as_u64().unwrap();
+        let ctx = egui::Context::default();
+        PrismApp::setup_context(&ctx, Default::default());
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.horizontal(|ui| {
+                options_bar(&mut app, ui, Tool::Arrow);
+            });
+            shape_properties(&mut app, ui, prism_doc::LayerId(id));
+        })
+        .textures_delta
+        .clear();
+        PrismApp::setup_context(&ctx, crate::theme::ThemeKind::StudioLight);
+        app.ui.panels.properties = true;
+        app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        for _ in 0..2 {
+            ctx.run_ui(egui::RawInput::default(), |ui| crate::panels::properties_window(&mut app, ui.ctx())).textures_delta.clear();
+        }
+        assert!(crate::props_layout::sections_drawn(&ctx).iter().any(|(name, _)| name == tl!("Arrow")));
+    }
+
+    #[test]
+    fn arrow_drag_shift_cancel_and_style() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":200,"height":200})).unwrap();
+        app.ui.tool = Tool::Arrow;
+        let mods = egui::Modifiers::SHIFT;
+        tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, mods);
+        tool_event(&mut app, ToolEvent::Move { x: 140.0, y: 50.0, pressure: 1.0 }, mods);
+        tool_event(&mut app, ToolEvent::Up { x: 140.0, y: 50.0 }, mods);
+        let info = app.run("shape.info", json!({})).unwrap();
+        assert_eq!(info["kind"], "arrow");
+        assert_eq!(info["live"]["to"][1], 30.0);
+        assert_eq!(info["stroke"]["cap"], "round");
+        assert!(info["fill"].is_null());
+        let before = app.session.active().unwrap().doc.layers.len();
+        tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 80.0, pressure: 1.0 }, mods);
+        tool_event(&mut app, ToolEvent::Move { x: 120.0, y: 130.0, pressure: 1.0 }, mods);
+        assert!(app.drag.is_some());
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            events: vec![
+                egui::Event::ModifiersChanged(mods),
+                egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: mods },
+            ],
+            ..Default::default()
+        };
+        ctx.run_ui(input, |ui| crate::shortcuts::handle(&mut app, ui.ctx())).textures_delta.clear();
+        assert!(app.drag.is_none());
+        tool_event(&mut app, ToolEvent::Up { x: 120.0, y: 130.0 }, mods);
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), before);
+        app.ui.tool_options.arrow.rounded = false;
+        finish_shape(&mut app, Tool::Arrow, [20.0, 100.0], [25.0, 100.0], egui::Modifiers::NONE);
+        let info = app.run("shape.info", json!({})).unwrap();
+        assert_eq!(info["stroke"]["cap"], "butt");
+        assert_eq!(info["stroke"]["join"], "miter");
+    }
+}
+
+#[cfg(test)]
+mod line_tip_tests {
+    use super::*;
+    #[test]
+    fn line_tips_option_matches_created_geometry_and_renders_properties() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":200,"height":200})).unwrap();
+        assert!(!app.ui.tool_options.line_round_tips);
+        app.ui.tool_options.line_round_tips = true;
+        finish_shape(&mut app, Tool::Line, [20.0, 30.0], [130.0, 80.0], Default::default());
+        let info = app.run("shape.info", json!({})).unwrap();
+        assert_eq!(info["live"]["roundTips"], true);
+        let id = prism_doc::LayerId(info["layer"].as_u64().unwrap());
+        let ctx = egui::Context::default();
+        PrismApp::setup_context(&ctx, Default::default());
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.horizontal(|ui| options_bar(&mut app, ui, Tool::Line));
+            ui.set_width(250.0);
+            shape_properties(&mut app, ui, id);
+        })
+        .textures_delta
+        .clear();
+    }
+}

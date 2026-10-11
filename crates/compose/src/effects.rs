@@ -19,13 +19,13 @@
 //! precise glows and chiselled bevels use an exact Euclidean distance transform. Soft falloffs
 //! are two box blurs (a tent).
 
-use photocraft_color::blend::BlendMode;
-use photocraft_doc::Pattern;
-use photocraft_doc::{
+use prism_color::blend::BlendMode;
+use prism_doc::Pattern;
+use prism_doc::{
     Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Layer, Shadow,
     StrokePosition,
 };
-use photocraft_geom::Rect;
+use prism_geom::Rect;
 
 use crate::pattern::{PREPARED_PATTERN_BYTES, Placement, PreparedPatterns};
 use crate::{Buffer, psblend};
@@ -435,7 +435,7 @@ fn apply_contour(m: Map, c: &Contour) -> Map {
     }
 }
 
-fn rgb(c: &photocraft_color::Color) -> [f32; 3] {
+fn rgb(c: &prism_color::Color) -> [f32; 3] {
     c.to_rgb()
 }
 
@@ -1081,7 +1081,7 @@ pub struct FxMaps {
 
 impl FxMaps {
     /// The frame of a gradient stroke `st` of this layer (see [`stroke_frame`]), if built.
-    pub fn stroke_frame(&self, st: &photocraft_doc::StrokeFx) -> Option<Rect> {
+    pub fn stroke_frame(&self, st: &prism_doc::StrokeFx) -> Option<Rect> {
         self.frames.iter().find(|f| f.0 == stroke_widths(st).1.to_bits()).map(|f| f.1)
     }
 }
@@ -1117,7 +1117,7 @@ impl FxMaps {
     }
 }
 
-fn satin_map(shape: &Map, s: &photocraft_doc::effects::Satin) -> Map {
+fn satin_map(shape: &Map, s: &prism_doc::effects::Satin) -> Map {
     let (dx, dy) = offset(s.angle, s.distance);
     let mut a = shape.shifted(dx, dy, 0.0);
     let mut b = shape.shifted(-dx, -dy, 0.0);
@@ -1171,7 +1171,7 @@ pub(crate) fn build_maps_prepared(
         })
         .collect();
     let has_stroke = items.iter().any(|e| matches!(e, Effect::Stroke(_)));
-    let vector_shape = matches!(layer.content, photocraft_doc::LayerContent::Shape(_));
+    let vector_shape = matches!(layer.content, prism_doc::LayerContent::Shape(_));
     let (din, dout) = if has_stroke { (Some(dist_inside_by(&shape, Metric::Chamfer)), Some(dist_outside_by(&shape, Metric::Chamfer))) } else { (None, None) };
     // Without an outline (unfilled shapes), estimate the vector outline from local coverage.
     let outline = crate::effect_outline(layer).is_some();
@@ -1243,7 +1243,7 @@ pub(crate) fn composite_with_effects_prepared(
         }
     }
     let items: Vec<&Effect> = layer.effects.items.iter().filter(|e| e.enabled()).collect();
-    let vector_shape = matches!(layer.content, photocraft_doc::LayerContent::Shape(_));
+    let vector_shape = matches!(layer.content, prism_doc::LayerContent::Shape(_));
     // Multiple instances: the first listed is on top, so paint in reverse.
     let rev = || items.iter().copied().enumerate().rev();
 
@@ -1343,14 +1343,14 @@ pub(crate) fn composite_with_effects_prepared(
     }
     // Strokes. Inside parts are painted over the layer (bottom instance first); outside parts
     // are slid beneath it, so the first listed (top) instance is processed first.
-    let strokes: Vec<&photocraft_doc::StrokeFx> = items.iter().filter_map(|e| if let Effect::Stroke(s) = e { Some(s) } else { None }).collect();
+    let strokes: Vec<&prism_doc::StrokeFx> = items.iter().filter_map(|e| if let Effect::Stroke(s) = e { Some(s) } else { None }).collect();
     let (din, dout) = match (&maps.din, &maps.dout) {
         (Some(a), Some(b)) if !strokes.is_empty() => (maps.crop_vec(a, big, 0.0), maps.crop_vec(b, big, FAR)),
         _ => (Vec::new(), Vec::new()),
     };
     let widths = stroke_widths;
     // A gradient stroke aligned with the layer spans the stroke's own extent.
-    let frame = |st: &photocraft_doc::StrokeFx| maps.stroke_frame(st).unwrap_or(sb);
+    let frame = |st: &prism_doc::StrokeFx| maps.stroke_frame(st).unwrap_or(sb);
     for st in strokes.iter().rev().copied() {
         let (in_w, _) = widths(st);
         if in_w <= 0.0 {
@@ -1495,7 +1495,7 @@ pub fn outline_share(cov: f32, l: f32) -> f32 {
 }
 
 /// (inside width, outside width) of a stroke.
-pub fn stroke_widths(st: &photocraft_doc::StrokeFx) -> (f32, f32) {
+pub fn stroke_widths(st: &prism_doc::StrokeFx) -> (f32, f32) {
     match st.position {
         StrokePosition::Outside => (0.0, st.size),
         StrokePosition::Inside => (st.size, 0.0),
@@ -1734,10 +1734,10 @@ mod tests {
             altitude: 30.0,
             use_global_light: false,
             gloss_contour: Contour::Linear,
-            highlight: photocraft_doc::FxCommon::new(BlendMode::Screen, 0.75),
-            highlight_color: photocraft_color::Color::WHITE,
-            shadow: photocraft_doc::FxCommon::new(BlendMode::Multiply, 0.75),
-            shadow_color: photocraft_color::Color::BLACK,
+            highlight: prism_doc::FxCommon::new(BlendMode::Screen, 0.75),
+            highlight_color: prism_color::Color::WHITE,
+            shadow: prism_doc::FxCommon::new(BlendMode::Multiply, 0.75),
+            shadow_color: prism_color::Color::BLACK,
             contour: None,
             texture: None,
         }
@@ -1823,29 +1823,22 @@ mod tests {
         // A contour reshapes the profile (here a ramp folded at its middle).
         let mut c = plain.clone();
         let fold = vec![
-            photocraft_doc::adjust::CurvePoint { input: 0.0, output: 0.0 },
-            photocraft_doc::adjust::CurvePoint { input: 0.5, output: 1.0 },
-            photocraft_doc::adjust::CurvePoint { input: 1.0, output: 0.0 },
+            prism_doc::adjust::CurvePoint { input: 0.0, output: 0.0 },
+            prism_doc::adjust::CurvePoint { input: 0.5, output: 1.0 },
+            prism_doc::adjust::CurvePoint { input: 1.0, output: 0.0 },
         ];
-        c.contour = Some(photocraft_doc::BevelContour { contour: Contour::Custom { name: "fold".into(), points: fold }, range: 1.0, anti_alias: false });
+        c.contour = Some(prism_doc::BevelContour { contour: Contour::Custom { name: "fold".into(), points: fold }, range: 1.0, anti_alias: false });
         let (b, _) = bevel_maps(&shape, &c, &l, &no_tex(), &PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES));
         let diff: f32 = a[1].v.iter().zip(&b[1].v).map(|(x, y)| (x - y).abs()).sum();
         assert!(diff > 5.0, "{diff}");
         // A striped texture lights the flat middle.
-        let mut sf = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+        let mut sf = prism_raster::Surface::new(prism_color::PixelFormat::RGBA8);
         sf.fill_rect(Rect::new(0, 0, 4, 2), &[0.0, 0.0, 0.0, 1.0]);
         sf.fill_rect(Rect::new(0, 2, 4, 4), &[1.0, 1.0, 1.0, 1.0]);
         let pats = [Pattern::new("stripes", sf, 4, 4)];
         let mut t = plain.clone();
-        t.texture = Some(photocraft_doc::BevelTexture {
-            name: "stripes".into(),
-            id: String::new(),
-            scale: 1.0,
-            depth: 1.0,
-            invert: false,
-            link: true,
-            phase: (0.0, 0.0),
-        });
+        t.texture =
+            Some(prism_doc::BevelTexture { name: "stripes".into(), id: String::new(), scale: 1.0, depth: 1.0, invert: false, link: true, phase: (0.0, 0.0) });
         let tex = TextureCtx { rect: Rect::new(0, 0, 40, 40), patterns: &pats, anchor: (0.0, 0.0) };
         let (m, _) = bevel_maps(&shape, &t, &l, &tex, &PreparedPatterns::new(&pats, PREPARED_PATTERN_BYTES));
         let mid: f32 = (16..24).map(|y| m[0].v[y * 40 + 20] + m[1].v[y * 40 + 20]).sum();
@@ -1856,8 +1849,8 @@ mod tests {
     #[test]
     fn glow_range_stretches_the_contour() {
         let mut g = Glow {
-            common: photocraft_doc::FxCommon::new(BlendMode::Screen, 1.0),
-            paint: FxPaint::Color(photocraft_color::Color::WHITE),
+            common: prism_doc::FxCommon::new(BlendMode::Screen, 1.0),
+            paint: FxPaint::Color(prism_color::Color::WHITE),
             technique: GlowTechnique::Softer,
             spread: 0.0,
             size: 10.0,
@@ -1892,8 +1885,8 @@ mod tests {
 
     fn shadow(noise: f32, origin: (i32, i32)) -> Map {
         let s = Shadow {
-            common: photocraft_doc::FxCommon::new(BlendMode::Multiply, 1.0),
-            color: photocraft_color::Color::BLACK,
+            common: prism_doc::FxCommon::new(BlendMode::Multiply, 1.0),
+            color: prism_color::Color::BLACK,
             angle: 0.0,
             use_global_light: false,
             distance: 0.0,
@@ -1934,8 +1927,8 @@ mod tests {
     #[test]
     fn glow_noise_follows_the_contour_and_range() {
         let g = |noise: f32| Glow {
-            common: photocraft_doc::FxCommon::new(BlendMode::Screen, 1.0),
-            paint: FxPaint::Color(photocraft_color::Color::WHITE),
+            common: prism_doc::FxCommon::new(BlendMode::Screen, 1.0),
+            paint: FxPaint::Color(prism_color::Color::WHITE),
             technique: GlowTechnique::Softer,
             spread: 0.0,
             size: 6.0,

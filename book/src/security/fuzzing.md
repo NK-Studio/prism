@@ -30,7 +30,7 @@ A useful fuzz target should detect more than memory-safety crashes. Relevant fai
 - recursion/stack exhaustion;
 - malformed input accepted into an invalid internal state;
 - inconsistent results between detection and explicit-format decode;
-- corrupted `.pcraft` content accepted despite hash/CRC mismatch.
+- corrupted `.prism` content accepted despite hash/CRC mismatch.
 
 ## Corpus policy
 

@@ -1,12 +1,12 @@
 //! Pixel checks cover live colour changes, Cancel, OK and Undo on both canvas renderers.
-use photocraft_ui_egui::{
-    PhotocraftApp,
+use prism_ui_egui::{
+    PrismApp,
     canvas::ViewXform,
     control::{ControlRequest, Outcome, handle},
 };
 use serde_json::{Value, json};
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, PrismApp>;
 
 fn call(h: &mut Harness, method: &str, params: Value) -> Value {
     let (req, _rx) = ControlRequest::new(method, params);
@@ -23,8 +23,8 @@ fn call(h: &mut Harness, method: &str, params: Value) -> Value {
 fn harness(cpu: bool) -> Option<Harness> {
     match std::panic::catch_unwind(|| {
         egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(64).wgpu().build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut a = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            PrismApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut a = PrismApp::new(prism_engine::Session::new(), Default::default());
             if !cpu && let Some(rs) = &cc.wgpu_render_state {
                 a.set_wgpu(rs.clone());
             }
@@ -48,7 +48,7 @@ fn harness(cpu: bool) -> Option<Harness> {
 fn pixel(h: &mut Harness) -> [u8; 3] {
     let a = h.state();
     let v = &a.ui.views[0];
-    let p = ViewXform { rect: photocraft_ui_egui::rulers::content_rect(a, a.last_canvas_rect), zoom: v.zoom, center: v.center, flip: false, rotation: 0.0 }
+    let p = ViewXform { rect: prism_ui_egui::rulers::content_rect(a, a.last_canvas_rect), zoom: v.zoom, center: v.center, flip: false, rotation: 0.0 }
         .to_screen(80.0, 120.0);
     let img = h.render().unwrap();
     let p = img.get_pixel(p.x.round() as u32, p.y.round() as u32).0;

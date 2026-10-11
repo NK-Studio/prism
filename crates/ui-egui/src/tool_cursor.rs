@@ -26,6 +26,10 @@ struct Cached {
 /// document closes or the pointer leaves the canvas; a later widget's cursor takes precedence.
 pub(crate) struct CursorLifecycle;
 
+pub(crate) fn fallback_key(ctx: &egui::Context) -> egui::Id {
+    egui::Id::new(("tool-cursor-fallback", ctx.viewport_id()))
+}
+
 impl egui::plugin::Plugin for CursorLifecycle {
     fn debug_name(&self) -> &'static str {
         "Prism tool cursor"
@@ -33,10 +37,18 @@ impl egui::plugin::Plugin for CursorLifecycle {
 
     fn on_begin_pass(&mut self, ui: &mut egui::Ui) {
         ui.ctx().set_cursor_image(None);
+        crate::cursor_pack::clear(ui.ctx());
     }
 
     fn on_end_pass(&mut self, ui: &mut egui::Ui) {
-        let fallback = ui.ctx().data(|d| d.get_temp::<CursorIcon>(egui::Id::new("tool-cursor-fallback"))).unwrap_or(CursorIcon::Crosshair);
+        let id = fallback_key(ui.ctx());
+        let fallback = ui.ctx().data(|d| d.get_temp::<CursorIcon>(id)).unwrap_or(CursorIcon::Crosshair);
+        let packed = crate::cursor_pack::active(ui.ctx()).is_some();
+        let overridden = ui.ctx().output(|o| (o.cursor_image.is_some() || packed) && o.cursor_icon != CursorIcon::None);
+        if overridden {
+            crate::cursor_pack::clear(ui.ctx());
+        }
+        crate::cursor_pack::finish_pass(ui.ctx());
         ui.ctx().output_mut(|o| {
             if o.cursor_image.is_some() {
                 if o.cursor_icon == CursorIcon::None {
@@ -56,26 +68,34 @@ pub(crate) fn circle(painter: &Painter, at: Pos2, radius: f32, centre: bool) -> 
 }
 
 pub(crate) fn crosshair(painter: &Painter, at: Pos2, length: f32, gap: f32) -> CursorIcon {
+    if gap == 0.0
+        && (5.0..=8.0).contains(&length)
+        && let Some(icon) = crate::cursor_pack::show(painter.ctx(), at, 1025, CursorIcon::Crosshair)
+    {
+        return icon;
+    }
     show(painter, at, Shape::Crosshair { length, gap })
 }
 
 /// A clean-room arrow with a four-way move badge. The hotspot is the arrow's tip.
 pub(crate) fn move_tool(painter: &Painter, at: Pos2, dragging: bool) -> CursorIcon {
+    if let Some(icon) = crate::cursor_pack::show(painter.ctx(), at, if dragging { 1004 } else { 1059 }, CursorIcon::Default) {
+        return icon;
+    }
     if dragging { CursorIcon::Default } else { show(painter, at, Shape::Move) }
 }
 
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
     let ctx = painter.ctx();
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("tool-cursor-fallback"), if shape == Shape::Move { CursorIcon::Default } else { CursorIcon::Crosshair }));
+    let fallback_key = fallback_key(ctx);
+    ctx.data_mut(|d| d.insert_temp(fallback_key, if shape == Shape::Move { CursorIcon::Default } else { CursorIcon::Crosshair }));
     // The native backend uploads cursor images in root and immediate document viewports.
     // Unsupported/oversize artwork retains the painter fallback below.
     if cfg!(target_os = "windows") || shape == Shape::Move {
         let scale = native_raster_scale(ctx.pixels_per_point());
         if let Some(image) = cached_image(ctx, shape, scale) {
             ctx.set_cursor_image(Some(image));
-            ctx.data_mut(|d| {
-                d.insert_temp(egui::Id::new("tool-cursor-fallback"), if shape == Shape::Move { CursorIcon::Default } else { CursorIcon::Crosshair })
-            });
+            ctx.data_mut(|d| d.insert_temp(fallback_key, if shape == Shape::Move { CursorIcon::Default } else { CursorIcon::Crosshair }));
             return CursorIcon::None;
         }
         // An enormous tip cannot fit an OS cursor. Preserve its full-size outline, with an OS
@@ -99,7 +119,7 @@ fn native_raster_scale(pixels_per_point: f32) -> f32 {
 }
 
 fn cached_image(ctx: &egui::Context, shape: Shape, scale: f32) -> Option<CustomCursorImage> {
-    let id = egui::Id::new("photocraft-tool-cursor");
+    let id = egui::Id::new("prism-tool-cursor");
     if let Some(cached) = ctx.data(|d| d.get_temp::<Cached>(id))
         && cached.shape == shape
         && cached.scale == scale

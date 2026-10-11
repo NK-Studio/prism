@@ -1,14 +1,14 @@
 //! Presets use the live box and its history, never the engine's immediate pixel path.
 use super::*;
-use photocraft_color::{ColorMode, PixelFormat, SampleType};
-use photocraft_geom::Rect;
-use photocraft_raster::Surface;
+use prism_color::{ColorMode, PixelFormat, SampleType};
+use prism_geom::Rect;
+use prism_raster::Surface;
 
 const PRESETS: [&str; 5] =
     ["edit.transform.rotate180", "edit.transform.rotate90Cw", "edit.transform.rotate90Ccw", "edit.transform.flipHorizontal", "edit.transform.flipVertical"];
 
-fn app(fmt: PixelFormat) -> PhotocraftApp {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+fn app(fmt: PixelFormat) -> PrismApp {
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     app.session
@@ -29,7 +29,7 @@ fn app(fmt: PixelFormat) -> PhotocraftApp {
     app
 }
 
-fn rgba() -> PhotocraftApp {
+fn rgba() -> PrismApp {
     app(PixelFormat::RGBA8)
 }
 

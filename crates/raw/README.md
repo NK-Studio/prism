@@ -1,18 +1,18 @@
-# photocraft-raw
+# prism-raw
 
 A clean-room, pure-Rust camera raw decoder and developer. The crate is standalone (no workspace
 dependencies), has no `unsafe`, does no I/O (`&[u8]` in), uses rayon for parallel processing and never panics on hostile input: every offset is
 bounds-checked and sizes are checked against `Limits` before allocating.
 
 ```rust
-use photocraft_raw::{develop, DevelopOptions, Demosaic};
+use prism_raw::{develop, DevelopOptions, Demosaic};
 
 let dev = develop(&bytes, &DevelopOptions { demosaic: Demosaic::Ahd, ..Default::default() })?;
 // dev.rgb: interleaved 16-bit RGB in ProPhoto RGB (ROMM primaries, D50, gamma 1.8)
 // dev.warnings: anything approximated or not applied
 ```
 
-`photocraft-io` uses it so opening a raw file yields a normal 16-bit RGB document tagged with the
+`prism-io` uses it so opening a raw file yields a normal 16-bit RGB document tagged with the
 built-in ProPhoto-compatible profile.
 
 ## Sources (clean-room)
@@ -58,7 +58,7 @@ camera colour tables were copied.
 | Sony compressed ARW ("cRAW", SonyRawFileType 2) | Decoded: 11-bit min/max + 7-bit delta blocks, SonyToneCurve to 14 bits |
 | Panasonic / Leica RW2, RawFormat 5 (12- and 14-bit packed) | Decoded, with PanasonicRaw black / white / WB / sensor borders |
 | Olympus ORF, uncompressed 16-bit (E-1, E-400…) | Decoded, with ImageProcessing black / WB / ValidBits / crop |
-| Nikon "lossy after split" NEF, Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 4 and older, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `photocraft-io` opens the embedded JPEG preview instead |
+| Nikon "lossy after split" NEF, Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 4 and older, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `prism-io` opens the embedded JPEG preview instead |
 | CR3, RAF | Recognised, unsupported (preview fallback where a preview is found) |
 | X-Trans and other non-Bayer CFAs | Unsupported |
 
@@ -80,6 +80,6 @@ curve is applied: the result is a scene-referred rendering, flatter than a camer
 
 ## Tools
 
-`cargo run --release -p photocraft-raw --example rawinfo -- [--dump] [--demosaic ahd] [--png DIR] FILE...`
+`cargo run --release -p prism-raw --example rawinfo -- [--dump] [--demosaic ahd] [--png DIR] FILE...`
 prints what was decoded, times decode and develop, and can write sRGB PNG previews and the
 embedded JPEG previews.

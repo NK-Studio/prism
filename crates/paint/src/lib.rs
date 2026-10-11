@@ -14,8 +14,8 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use photocraft_geom::{Point, Rect};
-use photocraft_raster::Surface;
+use prism_geom::{Point, Rect};
+use prism_raster::Surface;
 use serde::{Deserialize, Serialize};
 
 pub mod bg_erase;
@@ -183,7 +183,7 @@ pub fn smooth(points: &[StrokePoint], amount: f32) -> Vec<StrokePoint> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_color::PixelFormat;
+    use prism_color::PixelFormat;
 
     fn stroke(points: &[(f64, f64)], size: f32) -> Stroke {
         Stroke {

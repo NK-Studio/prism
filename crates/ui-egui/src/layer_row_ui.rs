@@ -8,8 +8,8 @@
 //! The rects drawn each frame are recorded ([`recorded`]) for tests and automation.
 
 use egui::{Align2, FontId, Galley, Painter, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
-use photocraft_color::BlendMode;
-use photocraft_doc::Layer;
+use prism_color::BlendMode;
+use prism_doc::Layer;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -22,6 +22,30 @@ pub const RIGHT_PAD: f32 = 10.0;
 const GAP: f32 = 4.0;
 /// Width of an icon indicator (lock, link).
 const ICON_W: f32 = 14.0;
+
+/// Shape layers retain their image preview, with a vector-path tile at its bottom right.
+/// This is a decoration only: the whole thumbnail keeps its existing click/edit behaviour.
+pub(crate) fn shape_thumb_badge(ui: &egui::Ui, layer: &Layer, thumb: Rect) {
+    if !matches!(layer.content, prism_doc::LayerContent::Shape(_)) || !ui.is_rect_visible(thumb) {
+        return;
+    }
+    let side = (thumb.width().min(thumb.height()) * 0.55).clamp(10.0, 17.0).min(thumb.width().min(thumb.height()));
+    if !side.is_finite() || side < 8.0 {
+        return;
+    }
+    let tile = Rect::from_min_size(thumb.right_bottom() - vec2(side, side), vec2(side, side));
+    let [background, foreground] = Tokens::shape_thumbnail_badge();
+    let p = ui.painter();
+    p.rect_filled(tile, 0.0, background);
+    let path = tile.shrink(side * 0.26);
+    let stroke = Stroke::new(1.0, foreground);
+    p.rect_stroke(path, 0.0, stroke, egui::StrokeKind::Middle);
+    // Four outlined anchor points distinguish vector content from a plain rectangle.
+    let anchor = vec2(side * 0.19, side * 0.19);
+    for point in [path.left_top(), path.right_top(), path.right_bottom(), path.left_bottom()] {
+        p.rect(Rect::from_center_size(point, anchor), 0.0, background, stroke, egui::StrokeKind::Middle);
+    }
+}
 /// Width of the effects triangle beside the fx badge.
 const TRIANGLE_W: f32 = 10.0;
 /// The blend-mode label is shown only while the name keeps at least this much room.
@@ -194,7 +218,7 @@ pub fn label(painter: &Painter, x: f32, cy: f32, right: f32, text: &str, font: F
 }
 
 /// The Layers panel's own items at the top of its panel menu (Photoshop's flyout).
-pub fn panel_menu(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
+pub fn panel_menu(app: &mut crate::PrismApp, ui: &mut egui::Ui) {
     let can = app.session.is_enabled("layer.setExpanded");
     if ui.add_enabled(can, egui::Button::new(tl!("Collapse All Groups"))).clicked() {
         if let Err(e) = app.run("layer.setExpanded", json!({"all": true, "expanded": false})) {
@@ -336,3 +360,9 @@ mod rename_tests;
 
 #[cfg(test)]
 mod edit_tests;
+
+#[cfg(test)]
+mod shape_badge_tests;
+
+#[cfg(test)]
+mod delete_tests;

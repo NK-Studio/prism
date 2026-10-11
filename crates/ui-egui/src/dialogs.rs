@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use crate::PhotocraftApp;
+use crate::PrismApp;
 use crate::state::{Dialog, DialogKind};
 use crate::widgets::{ButtonRole, DialogButton, dialog_buttons};
 
@@ -63,7 +63,7 @@ pub fn free_press(ctx: &egui::Context, canvas: egui::Rect) -> Option<egui::Pos2>
     })
 }
 
-pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
     crate::native_dialogs::show(app, ctx);
     let dialogs = app.ui.dialogs.clone();
     let mut shown = Vec::new();
@@ -71,6 +71,34 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if d.presentation == crate::state::DialogPresentation::Native || crate::doc_windows::viewport(d.window) != ctx.viewport_id() {
             continue;
         }
+        if floats(&d) {
+            floating(app, ctx, &d);
+        } else if let Some(rect) = show_one(app, ctx, &d, false) {
+            shown.push(rect);
+        }
+    }
+    ctx.data_mut(|m| m.insert_temp(egui::Id::new(RECTS), shown));
+}
+
+/// A dialog opened from a detached document window gets an OS window of its own, above the
+/// document windows, like Photoshop's floating dialogs: drawn inside the document window it would
+/// be clipped to that window and could not be dragged past its edges.
+pub fn floats(d: &Dialog) -> bool {
+    d.presentation == crate::state::DialogPresentation::Embedded && d.window.is_some()
+}
+
+/// [`floats`]: the dialog in its own borderless window, dragged by the title row.
+fn floating(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog) {
+    let key = egui::Id::new(("floating-dialog", d.id));
+    crate::floating_window::show(app, ctx, key, crate::native_dialogs::viewport(d.id), display_title(d), |app, child| {
+        show_one(app, child, d, !child.embed_viewports())
+    });
+}
+
+/// Draws one dialog in `ctx`'s window. `own_window`: `ctx` is the dialog's own viewport
+/// ([`floating`]). Returns the area it covers.
+fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: bool) -> Option<egui::Rect> {
+    {
         if let Some(source) = d.source_document.and_then(|id| app.session.documents().iter().position(|s| s.doc.id == id)) {
             crate::doc_windows::activate(app, source, d.window);
         }
@@ -83,22 +111,39 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut fields = d.fields.clone();
         let mut outcome: Option<bool> = None; // Some(true)=OK, Some(false)=Cancel
         let mut apply_requested = false;
-        let title = display_title(&d);
+        let title = display_title(d);
         let id = egui::Id::new(("dialog", d.id));
         // Opens centred, then its top-left stays put (offset from the window's top-left, moved by
         // dragging the title bar; view state only, so egui memory): a dialog whose body grows, like
         // Layer Style switching effects, extends down and right instead of re-centring.
         let pinned: Option<egui::Vec2> = ctx.data(|m| m.get_temp(id));
         let mut drag = egui::Vec2::ZERO;
+        let mut drag_started = false;
         let mut sizing = false;
         let area = match pinned {
+            _ if own_window => crate::floating_window::area(id),
             Some(offset) => egui::Modal::default_area(id).anchor(egui::Align2::LEFT_TOP, offset),
             None => egui::Modal::default_area(id),
         };
         let color_picker = crate::color_picker_ui::owns(&fields);
+        let about_card = d.kind == DialogKind::About && fields.get("systemInfo").and_then(Value::as_bool) != Some(true);
         let mut modal = egui::Modal::new(id).area(area).backdrop_color(egui::Color32::TRANSPARENT);
         if color_picker {
             modal = modal.frame(egui::Frame::popup(&ctx.global_style()).inner_margin(16));
+        }
+        if own_window && !color_picker && !about_card {
+            // The OS window is the frame's edge: no shadow or rounding to clip.
+            modal = modal.frame(crate::floating_window::frame(ctx));
+        }
+        if about_card {
+            let t = crate::about_ui::palette();
+            modal = modal.frame(
+                egui::Frame::popup(&ctx.global_style())
+                    .fill(t.card)
+                    .stroke(egui::Stroke::NONE)
+                    .corner_radius((t.radius_lg * 2.0).round() as u8)
+                    .inner_margin(crate::about_ui::margins(ctx)),
+            );
         }
         // Photoshop doesn't dim the window behind dialogs: previews must be judged at true contrast.
         let modal = modal.show(ctx, |ui| {
@@ -111,15 +156,18 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if d.kind == DialogKind::NewDocument {
                 ui.set_min_width(800.0);
             }
-            // The About window: room for the contributor table, the same width on every tab.
-            let about_tabs = d.kind == DialogKind::About && d.fields.get("systemInfo").and_then(Value::as_bool) != Some(true);
-            if about_tabs {
-                ui.set_min_width(700.0);
+            // A single studio-branded About card, constrained to the window.
+            let about_overview = about_card;
+            if about_overview {
+                ui.set_min_width(crate::about_ui::width(ctx));
+                ui.style_mut().visuals = egui::Visuals::light();
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.style_mut().visuals.override_text_color = Some(crate::about_ui::palette().text);
             }
             ui.set_max_width(wide.unwrap_or(if d.kind == DialogKind::NewDocument {
                 800.0
-            } else if about_tabs {
-                700.0
+            } else if about_overview {
+                crate::about_ui::width(ctx)
             } else if d.kind == DialogKind::LayerStyle || d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
                 600.0
             } else {
@@ -132,13 +180,23 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if color_picker {
                 ui.set_width(crate::color_picker_ui::CONTENT_WIDTH);
             }
-            let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
-            let t = if crate::color_picker_ui::owns(&fields) { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };
-            let bar = egui::Rect::from_min_max(t.min, egui::pos2(ui.max_rect().right(), t.bottom()));
-            drag = ui.interact(bar, id.with("title"), egui::Sense::drag()).drag_delta();
-            ui.add_space(4.0);
-            crate::widgets::hairline(ui);
-            ui.add_space(8.0);
+            if about_card {
+                let header = crate::about_ui::header(ui);
+                let r = ui.interact(header.with_max_x(ui.max_rect().right()), id.with("title"), egui::Sense::drag());
+                drag = r.drag_delta();
+                drag_started |= r.drag_started_by(egui::PointerButton::Primary);
+                ui.add_space(if crate::about_ui::compact(ctx) { 16.0 } else { 42.0 });
+            } else {
+                let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
+                let t = if color_picker { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };
+                let bar = egui::Rect::from_min_max(t.min, egui::pos2(ui.max_rect().right(), t.bottom()));
+                let r = ui.interact(bar, id.with("title"), egui::Sense::drag());
+                drag = r.drag_delta();
+                drag_started |= r.drag_started_by(egui::PointerButton::Primary);
+                ui.add_space(4.0);
+                crate::widgets::hairline(ui);
+                ui.add_space(8.0);
+            }
             match d.kind {
                 DialogKind::NewDocument => crate::new_doc_ui::body(app, ui, &mut fields),
                 DialogKind::About if fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => {
@@ -151,39 +209,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         ui.ctx().copy_text(lines.join("\n"));
                     }
                 }
-                DialogKind::About => {
-                    // Tabs About · Contributors · Models (craftrules standards/contributors.md). The
-                    // tab is a dialog field, so automation can switch it with `ui.dialog.set`.
-                    let tab = about_tab(&fields);
-                    let mut chosen = tab;
-                    ui.horizontal(|ui| {
-                        for (key, label) in [("about", tl!("About")), ("contributors", tl!("Contributors")), ("models", tl!("Models"))] {
-                            if crate::widgets::pill_tab(ui, label, tab == key).clicked() {
-                                chosen = key;
-                            }
-                        }
-                    });
-                    if chosen != tab {
-                        fields.insert("tab".into(), json!(chosen));
-                    }
-                    ui.add_space(8.0);
-                    match chosen {
-                        "contributors" => crate::credits::contributors_ui(ui),
-                        "models" => crate::credits::models_ui(ui),
-                        _ => {
-                            ui.label(tl!("Prism — a native image editor written in Rust."));
-                            ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
-                            ui.add_space(12.0);
-                            ui.vertical_centered(|ui| {
-                                crate::links::discord_button(app, ui, 220.0);
-                                ui.add_space(8.0);
-                                crate::links::link_row(app, ui);
-                            });
-                            ui.add_space(10.0);
-                            ui.weak("egui · wgpu · Prism");
-                        }
-                    }
-                }
+                DialogKind::About => crate::about_ui::body(ui),
                 DialogKind::Command if crate::fill_ui::owns(&fields) => crate::fill_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::rasterize_prompt::owns(&fields) => crate::rasterize_prompt::body(ui, &fields),
                 DialogKind::Command if crate::variables_ui::owns(&fields) => crate::variables_ui::body(app, ui, &mut fields),
@@ -216,12 +242,16 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     outcome = Some(true);
                 }
             } else {
-                ui.add_space(8.0);
+                ui.add_space(if about_card && !crate::about_ui::compact(ctx) { 34.0 } else { 8.0 });
                 // Align::Min, not Center: a centred row fills the height left over from last frame's
                 // (larger) size, so a dialog whose body gets shorter would never shrink back.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
-                    if matches!(d.kind, DialogKind::About | DialogKind::Error) {
+                    if about_card {
+                        if crate::about_ui::ok_button(ui) {
+                            outcome = Some(false);
+                        }
+                    } else if matches!(d.kind, DialogKind::About | DialogKind::Error) {
                         if dialog_buttons(ui, &[DialogButton::new(ButtonRole::Default, tl!("OK"), 84.0)]).is_some() {
                             outcome = Some(false);
                         }
@@ -265,9 +295,19 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.min_rect().expand(ui.spacing().menu_margin.sum().max_elem() + 2.0)
         });
         // The picker has a larger frame margin; include that whole frame in the canvas hit guard.
-        shown.push(if color_picker { modal.response.rect } else { modal.inner });
+        let covered = if color_picker || about_card || own_window { modal.response.rect } else { modal.inner };
+        if own_window && drag_started {
+            // The OS moves its own window (egui would see the pointer move with the window).
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
         // Pin once laid out at its real size (the first frame is an invisible sizing pass).
-        if !sizing && (pinned.is_none() || drag != egui::Vec2::ZERO) {
+        // About stays centred while its font/layout metrics settle; pin only after a drag.
+        // Re-clamp dragged About cards on resize so the fixed footer remains onscreen.
+        if !own_window
+            && !sizing
+            && (pinned.is_none() || drag != egui::Vec2::ZERO || about_card)
+            && (!about_card || pinned.is_some() || drag != egui::Vec2::ZERO)
+        {
             let screen = ctx.content_rect();
             // Keep the whole dialog (and so its title bar) on screen.
             let room = (screen.size() - modal.response.rect.size()).max(egui::Vec2::ZERO);
@@ -299,17 +339,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             None => {}
         }
+        // A floating dialog's first frame is an invisible sizing pass: not its real size yet.
+        (!(own_window && sizing)).then_some(covered)
     }
-    ctx.data_mut(|m| m.insert_temp(egui::Id::new(RECTS), shown));
-}
-
-/// The About window's tabs, as stored in its `tab` field.
-pub const ABOUT_TABS: [&str; 3] = ["about", "contributors", "models"];
-
-/// The About tab to show: the `tab` field when it names one, otherwise "about".
-fn about_tab(fields: &serde_json::Map<String, Value>) -> &'static str {
-    let want = fields.get("tab").and_then(Value::as_str).unwrap_or("");
-    ABOUT_TABS.iter().copied().find(|t| *t == want).unwrap_or("about")
 }
 
 /// The dialog title as shown: [`title`] in the UI language.
@@ -338,7 +370,7 @@ pub fn title(d: &Dialog) -> String {
 }
 
 /// Confirm a dialog: run its action and close it. Used by the OK button and by automation.
-pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
+pub fn confirm(app: &mut PrismApp, id: u64) -> Result<Value, String> {
     let d = app.ui.dialogs.iter().find(|d| d.id == id).cloned().ok_or_else(|| format!("no dialog {id}"))?;
     if d.source_document.is_none() && d.presentation != crate::state::DialogPresentation::Native {
         return confirm_inner(app, id);
@@ -368,7 +400,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     }
     result
 }
-fn confirm_inner(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
+fn confirm_inner(app: &mut PrismApp, id: u64) -> Result<Value, String> {
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
@@ -404,7 +436,7 @@ fn confirm_inner(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 /// Open the parameter dialog of `command`: the adjustment editor for `image.adjustments.*`, the
 /// schema dialog for filters, the Color Range dialog for `select.colorRange`, otherwise a bare
 /// confirm dialog.
-pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) -> u64 {
+pub fn open_command_dialog(app: &mut PrismApp, command: &str, label: &str) -> u64 {
     if command == "image.duplicate"
         && let Ok(id) = crate::duplicate_ui::open(app)
     {
@@ -440,13 +472,15 @@ mod tests {
     fn about_overview_uses_the_prism_product_name() {
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let mut h = Harness::builder().with_size(egui::vec2(1100.0, 740.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         h.state_mut().ui.open_dialog(DialogKind::About, serde_json::Map::new());
         h.run_steps(4);
-        assert!(h.query_by_label("egui · wgpu · Prism").is_some());
-        assert!(h.query_by_label("egui · wgpu · photocraft-engine").is_none());
+        assert!(h.query_by_label("Prism").is_some());
+        assert!(h.query_by_label("NK Studio").is_some());
+        assert!(h.query_by_label("© 2026 NK Studio. All rights reserved.").is_some());
+        assert!(h.query_by_label(&format!("Version {}", prism_engine::build_info::VERSION)).is_some());
     }
 
     #[test]
@@ -454,9 +488,9 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         for size in [egui::vec2(760.0, 480.0), egui::vec2(960.0, 640.0)] {
-            let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
             let mut h = Harness::builder().with_size(size).build_ui_state(|ui, app| show(app, ui.ctx()), app);
-            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
             crate::color_picker_ui::open(h.state_mut(), "foreground");
             h.run_steps(4);
             let frame = rects(&h.ctx)[0];
@@ -483,9 +517,9 @@ mod tests {
     fn dragging_the_title_bar_moves_the_dialog() {
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let mut harness = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
-        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+        PrismApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
         harness.state_mut().ui.open_dialog(DialogKind::LayerStyle, serde_json::Map::new());
         harness.run_steps(3);
         let before = harness.get_by_label("Layer Style").rect();

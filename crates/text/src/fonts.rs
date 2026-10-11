@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use parley::FontContext;
 use parley::fontique::{Blob, Collection, CollectionOptions, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
-use skrifa::raw::{FileRef, TableProvider, types::Tag};
+use skrifa::raw::{FileRef, Offset, TableProvider, types::Tag};
 use skrifa::{MetadataProvider, string::StringId};
 
 /// Family used when a style names no family or an unknown one.
@@ -23,7 +23,7 @@ pub static INTER_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/Inter-Med
 pub static INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf");
 pub static JETBRAINS_MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
 
-/// Fonts shipped with Photocraft (OFL; licences in `assets/fonts`).
+/// Fonts shipped with Prism (OFL; licences in `assets/fonts`).
 pub static BUNDLED: &[(&str, &[u8])] = &[
     ("Inter-Regular.ttf", INTER_REGULAR),
     ("Inter-Medium.ttf", INTER_MEDIUM),
@@ -125,14 +125,7 @@ impl FontDb {
         self.system_loaded = true;
         {
             // One call per file: fontique's directory scan is much slower on large folders.
-            let mut files = Vec::new();
-            for d in system_font_dirs() {
-                collect_font_files(&d, 0, &mut files);
-            }
-            // PingFang (the macOS Chinese UI font) lives outside the font folders.
-            if cfg!(target_os = "macos") {
-                files.extend(crate::cjk::mac_pingfang());
-            }
+            let files = crate::font_discovery::files(system_font_dirs());
             for f in files {
                 self.fcx.collection.load_fonts_from_paths([f]);
             }
@@ -202,6 +195,24 @@ impl FontDb {
         v.sort_by_key(|s| s.to_lowercase());
         v.dedup();
         v
+    }
+
+    /// Korean names embedded in OpenType metadata, keyed by the stable family identifier.
+    /// Fonts without a Korean name are omitted so callers can keep their original name.
+    pub fn korean_family_names(&mut self) -> HashMap<String, String> {
+        let mut names = HashMap::new();
+        for family in self.families() {
+            let Some(info) = self.fcx.collection.family_by_name(&family) else { continue };
+            for face in info.fonts() {
+                let Some(blob) = face.load(Some(&mut self.fcx.source_cache)) else { continue };
+                let Ok(font) = skrifa::FontRef::from_index(blob.as_ref(), face.index()) else { continue };
+                if let Some(name) = korean_family_name(&font) {
+                    names.insert(family.clone(), name);
+                    break;
+                }
+            }
+        }
+        names
     }
 
     pub fn has_family(&mut self, name: &str) -> bool {
@@ -309,6 +320,38 @@ pub fn face_count(bytes: &[u8]) -> usize {
     }
 }
 
+pub(crate) fn korean_family_name(font: &skrifa::FontRef<'_>) -> Option<String> {
+    for id in [StringId::TYPOGRAPHIC_FAMILY_NAME, StringId::FAMILY_NAME] {
+        for name in font.localized_strings(id) {
+            if name.language().is_some_and(|language| language.eq_ignore_ascii_case("ko") || language.to_ascii_lowercase().starts_with("ko-")) {
+                let name = name.to_string();
+                if !name.trim().is_empty() && !name.contains('\u{fffd}') {
+                    return Some(name);
+                }
+            }
+        }
+        // Older macOS Korean fonts have only Macintosh platform / Korean encoding names.
+        // skrifa decodes Unicode and MacRoman, so decode the Korean EUC subset explicitly.
+        if let Ok(table) = font.name() {
+            for record in table.name_record() {
+                if record.platform_id() != 1 || record.encoding_id() != 3 || record.language_id() != 23 || record.name_id() != id {
+                    continue;
+                }
+                let start = record.string_offset().non_null().unwrap_or(0);
+                let end = start.checked_add(usize::from(record.length()))?;
+                let data = table.string_data();
+                let Some(bytes) = data.as_bytes().get(start..end) else { continue };
+                if let Some(name) = encoding_rs::EUC_KR.decode_without_bom_handling_and_without_replacement(bytes)
+                    && !name.trim().is_empty()
+                {
+                    return Some(name.into_owned());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Heuristic PostScript-name split: `MyriadPro-BoldIt` → ("Myriad Pro", 700, italic).
 pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
     let (fam, style) = ps.split_once('-').unwrap_or((ps, ""));
@@ -355,20 +398,9 @@ pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
     ResolvedFont { family: family.trim().to_string(), weight, italic, exact: false }
 }
 
-fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            if depth < 8 {
-                collect_font_files(&p, depth + 1, out);
-            }
-        } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| matches!(x.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc")) {
-            out.push(p);
-        }
-    }
+#[cfg(test)]
+fn collect_font_files(dir: &std::path::Path, _depth: u32, out: &mut Vec<std::path::PathBuf>) {
+    out.extend(crate::font_discovery::files([dir.to_path_buf()]));
 }
 
 fn system_font_dirs() -> Vec<std::path::PathBuf> {
@@ -377,6 +409,7 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
     let mut v = Vec::new();
     if cfg!(target_os = "macos") {
         v.push(PathBuf::from("/System/Library/Fonts"));
+        v.extend(crate::font_discovery::mac_asset_roots());
         v.push(PathBuf::from("/Library/Fonts"));
         if let Some(h) = &home {
             v.push(h.join("Library/Fonts"));
@@ -413,6 +446,62 @@ pub fn is_hidden_family(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    // Synthetic name-only SFNT: no external or committed font asset needed.
+    fn named_font(records: &[(u16, u16, &str)]) -> Vec<u8> {
+        let mut table = Vec::new();
+        for value in [0, records.len() as u16, 6 + records.len() as u16 * 12] {
+            table.extend(value.to_be_bytes());
+        }
+        let mut strings = Vec::new();
+        for &(id, language, name) in records {
+            let encoded: Vec<u8> = name.encode_utf16().flat_map(u16::to_be_bytes).collect();
+            for value in [3, 1, language, id, encoded.len() as u16, strings.len() as u16] {
+                table.extend(value.to_be_bytes());
+            }
+            strings.extend(encoded);
+        }
+        table.extend(strings);
+        let mut sfnt = vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+        sfnt.extend(b"name");
+        sfnt.extend(0u32.to_be_bytes());
+        sfnt.extend(28u32.to_be_bytes());
+        sfnt.extend((table.len() as u32).to_be_bytes());
+        sfnt.extend(table);
+        sfnt
+    }
+
+    #[test]
+    fn korean_names_prefer_typographic_family_and_fall_back_to_legacy_family() {
+        let bytes = named_font(&[(1, 0x0412, "나눔고딕"), (16, 0x0409, "Nanum Gothic"), (16, 0x0412, "나눔고딕 새 이름")]);
+        let font = skrifa::FontRef::new(&bytes).unwrap();
+        assert_eq!(super::korean_family_name(&font).as_deref(), Some("나눔고딕 새 이름"));
+        let bytes = named_font(&[(1, 0x0412, "나눔고딕"), (16, 0x0412, "   ")]);
+        let font = skrifa::FontRef::new(&bytes).unwrap();
+        assert_eq!(super::korean_family_name(&font).as_deref(), Some("나눔고딕"));
+    }
+
+    #[test]
+    fn legacy_mac_korean_metadata_is_decoded_without_replacement() {
+        let mut bytes = named_font(&[(1, 0x0412, "궁서체")]);
+        bytes[34..36].copy_from_slice(&1u16.to_be_bytes());
+        bytes[36..38].copy_from_slice(&3u16.to_be_bytes());
+        bytes[38..40].copy_from_slice(&23u16.to_be_bytes());
+        bytes[46..52].copy_from_slice(&[0xb1, 0xc3, 0xbc, 0xad, 0xc3, 0xbc]);
+        assert_eq!(super::korean_family_name(&skrifa::FontRef::new(&bytes).unwrap()).as_deref(), Some("궁서체"));
+        bytes[51] = 0xff;
+        assert!(super::korean_family_name(&skrifa::FontRef::new(&bytes).unwrap()).is_none());
+    }
+
+    #[test]
+    fn fonts_without_korean_metadata_keep_their_original_name() {
+        let bytes = named_font(&[(1, 0x0409, "Example"), (16, 0x0411, "日本語")]);
+        let font = skrifa::FontRef::new(&bytes).unwrap();
+        assert!(super::korean_family_name(&font).is_none());
+        let mut db = super::FontDb::new();
+        assert!(db.korean_family_names().is_empty());
+        assert!(db.has_family(super::DEFAULT_FAMILY));
+    }
+
     #[test]
     fn hidden_families_sort_last_and_are_not_listed() {
         assert!(super::is_hidden_family(".Hiragino Kaku Gothic Interface"));
@@ -463,7 +552,7 @@ mod tests {
     #[test]
     fn missing_font_dirs_are_skipped() {
         let mut files = Vec::new();
-        super::collect_font_files(std::path::Path::new("/nonexistent/photocraft/fonts"), 0, &mut files);
+        super::collect_font_files(std::path::Path::new("/nonexistent/prism/fonts"), 0, &mut files);
         assert!(files.is_empty());
     }
 }

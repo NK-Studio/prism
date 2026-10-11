@@ -1,5 +1,5 @@
 [package]
-name = "photocraft-raw"
+name = "prism-raw"
 description = "Clean-room, pure-Rust camera raw decoder and developer (DNG, CR2, TIFF/EP raws)"
 version.workspace = true
 edition.workspace = true
@@ -20,7 +20,7 @@ rayon = { workspace = true }
 
 # Parallel bands on native.
 [dev-dependencies]
-photocraft-raw = { path = ".", features = ["testgen"] }
+prism-raw = { path = ".", features = ["testgen"] }
 # Writes sRGB PNG previews in the `rawinfo` example.
 png = "0.18"
 

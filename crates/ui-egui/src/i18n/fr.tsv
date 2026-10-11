@@ -16,7 +16,7 @@
 # Conventions: menus are nouns (Fichier, Édition, Image ...), commands are infinitives (Ouvrir…,
 # Enregistrer sous…), sentence case. French typography: a no-break space (U+00A0) before
 # « : ; ? ! » and "%", and inside guillemets « … ». Product and technology names (Prism,
-# ArtCraft, OpenType, Lab ...) stay as they are; RGB/CMYK read RVB/CMJN; the trailing "…" of
+# Prism, OpenType, Lab ...) stay as they are; RGB/CMYK read RVB/CMJN; the trailing "…" of
 # dialog commands is kept.
 	File	Fichier
 	Edit	Édition
@@ -692,8 +692,6 @@
 	About Prism	À propos de Prism
 	Prism Website	Site web de Prism
 	Prism on GitHub	Prism sur GitHub
-	ArtCraft Website	Site web d'ArtCraft
-	Join the ArtCraft Discord…	Rejoindre le Discord d'ArtCraft…
 	Report an Issue…	Signaler un problème…
 	WIA Support…	Prise en charge de WIA…
 	Apply	Appliquer
@@ -949,7 +947,6 @@
 	Diffusion	Diffusion
 	Discard the embedded profile (don't color manage)	Ignorer le profil incorporé (sans gestion des couleurs)
 	Discontiguous	Non contigu
-	Discord	Discord
 	Dismiss	Fermer
 	Display P3	Display P3
 	Display Text	Texte affiché
@@ -1075,7 +1072,6 @@
 	Invert All	Tout inverser
 	Invert has no settings.	Inverser n'a aucun réglage.
 	Italic	Italique
-	Join us on Discord	Rejoignez-nous sur Discord
 	Justify all	Justifier tout
 	Justify last centered	Justifier, dernière ligne centrée
 	Justify last left	Justifier, dernière ligne à gauche
@@ -1463,7 +1459,6 @@
 	Apple Watch 45mm	Apple Watch 45 mm
 	Aqua	Aqua
 	Art & Illustration	Art et illustration
-	ArtCraft	ArtCraft
 	Background Eraser Tool	Outil Gomme d'arrière-plan
 	Bevel & Emboss	Biseau et relief
 	Blend Mode	Mode de fusion
@@ -2674,3 +2669,50 @@ fontWeight	Italic	Italique
 	{name} copy	{name} copie
 	Duplicate Image	Dupliquer l’image
 	Preparing preview…	Préparation de l’aperçu…
+
+	Load Font File…	Charger un fichier de police…
+	Favorite	Ajouter aux favoris
+	Unfavorite	Retirer des favoris
+	TTF, OTF, TTC, OTC — available until Prism exits	TTF, OTF, TTC, OTC — disponibles jusqu’à la fermeture de Prism
+	Loaded font (this session)	Police chargée (cette session)
+	Favorite fonts	Polices favorites
+
+	All fonts	Toutes les polices
+	Korean only	Coréen uniquement
+	No preview	Aucun aperçu
+
+# Prism About introduction and footer.
+	Turn ideas into images.	Transformez vos idées en images.
+	Prism is a desktop image editor by NK Studio.	Prism est un éditeur d’images de bureau créé par NK Studio.
+	Refine layers, color, and typography to bring your vision to life.	Affinez les calques, les couleurs et la typographie pour donner vie à votre vision.
+	All rights reserved.	Tous droits réservés.
+	Built for creative expression.	Conçu pour l’expression créative.
+
+	Arrow Tool	Outil Flèche
+	Arrow	Flèche
+	Arrow color	Couleur de la flèche
+	Thickness	Épaisseur
+	Arrowhead	Taille de la pointe
+	Corners	Angles
+	Angular	Vifs
+	Rounded	Arrondis
+
+	Arrowhead length	Longueur de la pointe
+
+	Arrowhead angle	Angle de la pointe
+
+	Line tips	Extrémités
+
+	Square tips	Extrémités carrées
+
+	Round tips	Extrémités arrondies
+	Make:	Créer :
+	Selection…	Sélection…
+	Align To:	Aligner sur :
+	Rubber Band	Élastique
+	Auto Add/Delete	Ajout/suppression auto
+	Align Edges	Aligner les bords
+	Path Operations	Opérations sur le tracé
+	Path Alignment	Alignement du tracé
+	Path Arrangement	Disposition du tracé
+	New Layer	Nouveau calque

@@ -47,7 +47,7 @@ jobs:
           ./packaging/windows/check-icons.ps1
       - name: XML, desktop entry, AppStream
         run: |
-          xmllint --noout packaging/windows/photocraft.wxs packaging/macos/*.plist* packaging/freebsd/*.xml*
-          desktop-file-validate packaging/freebsd/ai.storyteller.photocraft.desktop
-          sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/freebsd/ai.storyteller.photocraft.metainfo.xml.in >"$RUNNER_TEMP/ai.storyteller.photocraft.metainfo.xml"
-          appstreamcli validate --no-net --explain "$RUNNER_TEMP/ai.storyteller.photocraft.metainfo.xml"
+          xmllint --noout packaging/windows/prism.wxs packaging/macos/*.plist* packaging/freebsd/*.xml*
+          desktop-file-validate packaging/freebsd/com.nkstudio.prism.desktop
+          sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/freebsd/com.nkstudio.prism.metainfo.xml.in >"$RUNNER_TEMP/com.nkstudio.prism.metainfo.xml"
+          appstreamcli validate --no-net --explain "$RUNNER_TEMP/com.nkstudio.prism.metainfo.xml"

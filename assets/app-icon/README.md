@@ -1,64 +1,16 @@
 # Prism app icon
 
-## Current macOS and Windows icon
+`prism-1024.png` is the owner-supplied 1024 × 1024 RGBA Prism logo and
+the canonical artwork for all platforms. The ICNS, ICO, hicolor PNGs and
+self-contained SVG wrappers are derived from it, preserving alpha and margins.
 
-`photocraft-1024.png` is the owner-supplied 1024 × 1024 RGBA Prism logo.
-The macOS `photocraft.icns`, Windows `photocraft.ico`, and the 256 px runtime
-window icon are derived from this PNG, preserving its artwork and existing margins.
-Machine filenames remain `photocraft`.
+Regenerate on macOS with `packaging/icons.sh` (or `packaging/icons.sh --png`).
+The script requires `sips`, `iconutil`, Python 3 and Cargo. No font files are used.
+All outputs are committed, so native packaging uses them directly.
 
-Regenerate these assets on macOS with `packaging/icons.sh --png` (requires
-`sips`, `iconutil`, and Cargo). The ICO contains 16, 20, 24, 32, 40, 48, 64,
-128 and 256 px images; the ICNS contains standard 1×/2× images up to 1024 px.
+The ICO contains 16, 20, 24, 32, 40, 48, 64, 128 and 256 px images. The ICNS
+contains standard 1×/2× representations up to 1024 px. FreeBSD desktop icons
+include 16, 24, 32, 48, 64, 128, 256 and 512 px PNGs and a scalable SVG.
 
-The SVG files and other Linux sizes below still contain the previous artwork.
-Running the script without `--png` restores that SVG artwork, including replacing
-the current PNG, so use `--png` for the current macOS/Windows icon.
-
-## Previous SVG artwork
-
-A **nine-tailed kitsune with a brow diamond**: an engraving portrait, seated, looking back at the
-viewer, in the Crafting Apps' owl-template framing (full-bleed field, head and body filling the
-tile, tails running off the edges).
-
-## Palette
-
-Exactly three colours:
-
-| Colour | Hex | Used for |
-|---|---|---|
-| Ink | `#0b0b0c` | line work and contours |
-| Paper | `#efe9dc` | the figure |
-| Prism blue (app colour) | `#2f7bf5` | the full-bleed field |
-
-## Geometry
-
-A 512-unit tile (`viewBox="0 0 512 512"`), rounded square with `rx=112`, no border. The macOS
-renders pad it onto Apple's 824/1024 icon grid; the Windows and Linux renders crop 22 units off
-each side so the figure reads at 16–48 px.
-
-## Provenance
-
-The owner's original drawing, made in ArtCraft (2880 px, engraving style, keyed to the palette),
-vectorised with craftrules `assets/logo-options/_tools/vectorize_tile.py`. The source PNG stays in
-craftrules at `assets/app-icons/photocraft/source.png`. License: see `LICENSE.txt`.
-
-## Files
-
-- `photocraft.svg`: canonical master (traced at 2048 px).
-- `photocraft-small.svg`: lighter trace (traced at 1024 px); also the hicolor scalable icon.
-- `photocraft-1024.png`: 1024 px render on the macOS grid.
-- `photocraft.icns`: macOS bundle icon (`CFBundleIconFile`).
-- `photocraft.ico`: Windows icon, 16–256 px, embedded in the `.exe` by `apps/photocraft/build.rs`.
-- `hicolor/<size>/apps/ai.storyteller.photocraft.png` (16–512) and `hicolor/scalable/...svg`:
-  Linux icon theme.
-
-The app also sets the window icon and Wayland app ID at runtime (`apps/photocraft/src/app_icon.rs`,
-`main.rs`). On Windows the taskbar shows the icon of the Start Menu shortcut that launches the
-exe, so the MSI's `<Icon Id>` keeps the `.exe` extension (ICE50); `app_icon.rs` documents the
-details and tests the `.ico` sizes and the WiX icon references.
-
-## Regenerate
-
-Replace `photocraft.svg` (and `photocraft-small.svg`), then run `packaging/icons.sh`. It needs
-`resvg`, plus `iconutil` on macOS; the `.ico` is packed by `cargo xtask ico`.
+The original copyright and license are retained in `LICENSE.txt`; asset
+provenance is listed in the root `ATTRIBUTION.md`.

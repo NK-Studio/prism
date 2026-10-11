@@ -680,8 +680,6 @@
 	About Prism	프리즘 정보
 	Prism Website	프리즘 웹사이트
 	Prism on GitHub	GitHub의 프리즘
-	ArtCraft Website	ArtCraft 웹사이트
-	Join the ArtCraft Discord…	ArtCraft Discord 참여…
 	Report an Issue…	문제 신고…
 	WIA Support…	WIA 지원…
 	Apply	적용
@@ -941,7 +939,6 @@
 	Diffusion	확산
 	Discard the embedded profile (don't color manage)	포함된 프로파일 버리기(색상 관리 안 함)
 	Discontiguous	비인접
-	Discord	Discord
 	Dismiss	닫기
 	Display P3	Display P3
 	Display Text	표시 텍스트
@@ -1067,7 +1064,6 @@
 	Invert All	모두 반전
 	Invert has no settings.	반전에는 설정이 없습니다.
 	Italic	기울임꼴
-	Join us on Discord	Discord 참여
 	Justify all	모든 줄 양쪽 정렬
 	Justify last centered	마지막 줄 가운데 정렬
 	Justify last left	마지막 줄 왼쪽 정렬
@@ -1457,7 +1453,6 @@
 	Apple Watch 45mm	Apple Watch 45mm
 	Aqua	청록
 	Art & Illustration	아트 및 일러스트레이션
-	ArtCraft	ArtCraft
 	Background Eraser Tool	배경 지우개 도구
 	Bevel & Emboss	경사와 엠보스
 	Blend Mode	혼합 모드
@@ -2477,7 +2472,6 @@ cameraRaw	Color	색상
 	Custom Pixel Aspect Ratio	사용자 정의 픽셀 종횡비
 	32-bit Preview Options	32비트 미리 보기 옵션
 	New Guide	새 안내선
-	Join the ArtCraft Discord	ArtCraft Discord 참여
 	Report an Issue	문제 신고
 	WIA Support	WIA 지원
 	Load Files into Stack	파일을 스택으로 불러오기
@@ -2832,3 +2826,60 @@ fontWeight	Italic	기울임
 	Duplicate Image	이미지 복제
 	Preparing preview…	미리보기 준비 중…
 	Columns	열
+
+	Load Font File…	폰트 파일 불러오기…
+	Favorite	즐겨찾기 추가
+	Unfavorite	즐겨찾기 해제
+	TTF, OTF, TTC, OTC — available until Prism exits	TTF, OTF, TTC, OTC — 프리즘을 종료할 때까지 사용 가능
+	Loaded font (this session)	폰트 불러옴 (현재 실행 중에 사용 가능)
+
+	Favorite fonts	즐겨찾는 폰트
+
+	All fonts	전체
+	Korean only	한글만
+	No preview	미리보기 없음
+
+# Prism About introduction and footer.
+	Turn ideas into images.	아이디어를 이미지로.
+	Prism is a desktop image editor by NK Studio.	프리즘은 NK Studio가 만드는 데스크톱 이미지 편집기입니다.
+	Refine layers, color, and typography to bring your vision to life.	레이어, 색상, 타이포그래피를 다듬어 생각한 장면을 표현하세요.
+	All rights reserved.	모든 권리 보유.
+	Built for creative expression.	더 자유로운 표현을 위해.
+
+# NK Studio philosophy (English fallback in other locales)
+	Where intuition meets logic, new expression begins.	감각과 논리 사이,\n새로운 표현을 만듭니다.
+	Art gives imagination form, and programming brings it to life. Making games means connecting these two languages to build a world.	아트는 상상에 모습을 주고, 프로그래밍은 그 상상이 움직이게 합니다.\n게임을 만드는 일은 두 언어를 이어 하나의 세계를 완성하는 과정입니다.
+	Prism began at this meeting point. Just as light unfolds into many colors through a prism, we hope every creator's ideas unfold into an expression of their own.	프리즘은 그 만남에서 출발했습니다.\n빛이 프리즘을 지나 다양한 색으로 펼쳐지듯,\n창작자의 아이디어가 자신만의 표현으로 펼쳐지기를 바랍니다.
+	A tool for drawing imagination and creating possibilities.	상상을 그리고, 가능성을 만드는 도구.
+
+	Hue Cube	색조 육면체
+	Brightness Cube	밝기 육면체
+	Color Wheel	색상환
+	HSB Sliders	HSB 슬라이더
+
+	Arrow Tool	화살표 도구
+	Arrow	화살표
+	Arrow color	화살표 색상
+	Arrowhead	화살촉 크기
+	Angular	각지게
+	Rounded	둥글게
+
+	Arrowhead length	화살촉 길이
+
+	Arrowhead angle	화살촉 각도
+
+	Line tips	선 끝 모양
+
+	Square tips	사각 팁
+
+	Round tips	라운드 팁
+	Make:	만들기:
+	Selection…	선택…
+	Mask	마스크
+	Align To:	정렬 기준:
+	Rubber Band	고무 밴드
+	Auto Add/Delete	자동 추가/삭제
+	Align Edges	가장자리 맞춤
+	Path Operations	패스 작업
+	Path Alignment	패스 정렬
+	Path Arrangement	패스 배열

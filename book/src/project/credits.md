@@ -1,6 +1,6 @@
 # Credits
 
-Prism (프리즘) is independently maintained by NK-Studio and is derived from [PhotoCraft](https://github.com/storytold/photocraft), created by the ArtCraft team and PhotoCraft contributors. Original copyright, source attribution, and licensing are preserved in `README.md`, `NOTICE`, and the license files. Every merged contribution is credited in the repository history and release notes.
+Prism (프리즘) is a desktop image editor maintained by NK Studio. Original source copyright, attribution, and licensing are preserved in `NOTICE`, `ATTRIBUTION.md`, and the license files. Every merged contribution is credited in the repository history and release notes.
 
 ## Documentation
 

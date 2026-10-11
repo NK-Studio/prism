@@ -1,4 +1,4 @@
-# photocraft-codecs
+# prism-codecs
 
 Codecs for flat raster image formats, written in pure Rust. The crate is standalone: it depends on no other
 workspace crate and defines its own `Image` type. It does no I/O: decoders take `&[u8]` and encoders return `Vec<u8>`.
@@ -18,7 +18,7 @@ It follows the "avoid GIMP's hole" rules in `plan/architecture.md` §1.1:
   pages left out, or data that ended early.
 
 ```rust
-use photocraft_codecs::*;
+use prism_codecs::*;
 
 let img = decode(&bytes)?;                               // detect + decode (default Limits)
 for w in fidelity_warnings(&img, Format::Jpeg) {         // e.g. "16-bit will be reduced to 8-bit"
@@ -62,10 +62,10 @@ the same.
 ## Documented asymmetries and limitations
 
 * **Camera raw files** (DNG, CR2, NEF, ARW… which are TIFF-structured) are recognised and refused
-  with `CodecError::Unsupported`: they are sensor data, not flat images. `photocraft-raw` decodes
-  and develops them, and `photocraft-io` routes them there.
+  with `CodecError::Unsupported`: they are sensor data, not flat images. `prism-raw` decodes
+  and develops them, and `prism-io` routes them there.
 
-* **HEIF/HEIC (read-only, feature `heif`).** Decoding lives in the optional `photocraft-heif` crate
+* **HEIF/HEIC (read-only, feature `heif`).** Decoding lives in the optional `prism-heif` crate
   behind the non-default `heif` feature (official Prism builds enable it; distributors choose).
   Without it, HEIF is still detected and decoding returns `CodecError::Unsupported` ("HEIC/HEIF
   support isn't included in this build"). iPhone and Mac photos decode with `heic-rs` (pure Rust, no `unsafe`):
@@ -91,7 +91,7 @@ the same.
   `DecodeWarning::MoreFrames` / `MorePages` in `Image::warnings`, with the total when the file
   states it (frames and TIFF directories are counted without decoding them; reduced-resolution
   TIFF directories and transparency masks are not pages). Any TIFF page can still be opened
-  with `decode_tiff_page` (and `photocraft_io::import_tiff_page`).
+  with `decode_tiff_page` (and `prism_io::import_tiff_page`).
 * **EXIF in TIFF** is stored as a sub-IFD rather than a blob, so it is not preserved yet.
   `caps.exif = false` for TIFF, and a warning is raised.
 * **Orientation** (EXIF tag 274 in JPEG, PNG `eXIf` and WebP; the decoded page's tag in TIFF and
@@ -153,7 +153,7 @@ the same.
   P6, and anything with alpha or CMYK gives P7 (PAM). Writing a `.pbm` file therefore produces
   whichever of these fits the data.
 * **Colour conversions** (CMYK↔RGB, RGB→gray) are naive. Colour-managed conversion belongs in
-  `photocraft-color`.
+  `prism-color`.
 
 ## Limits (decompression bombs)
 
@@ -166,7 +166,7 @@ including chunks after IDAT. This budget is separate from pixels, not a total pr
 
 ## Tests
 
-`cargo test -p photocraft-codecs` covers:
+`cargo test -p prism-codecs` covers:
 
 * the full round-trip matrix (every writable format × 4 sample types × 6 layouts), exact for
   lossless formats and above a PSNR threshold for lossy ones;

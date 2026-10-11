@@ -4,7 +4,7 @@
 //! way the app creates it; the CPU compositor without an adapter).
 //!
 //! ```sh
-//! cargo run --release -p photocraft-ui-egui --example perf_scenarios -- [--quick] [--json out.json] [--only text] [--reps N] [--cpu]
+//! cargo run --release -p prism-ui-egui --example perf_scenarios -- [--quick] [--json out.json] [--only text] [--reps N] [--cpu]
 //! ```
 //!
 //! `cargo xtask perf` runs this and maps the rows to scenario ids in `perf/budgets.toml`, so
@@ -16,9 +16,9 @@
 use std::time::Instant;
 
 use eframe::egui_wgpu::RenderState;
-use photocraft_engine::Session;
-use photocraft_testkit::perf::{RssSampler, report, row, write_report};
-use photocraft_ui_egui::gpu_canvas::GpuCanvas;
+use prism_engine::Session;
+use prism_testkit::perf::{RssSampler, report, row, write_report};
+use prism_ui_egui::gpu_canvas::GpuCanvas;
 use serde_json::{Value, json};
 
 type Res<T> = Result<T, String>;
@@ -58,14 +58,13 @@ fn photo_jpeg(w: u32, h: u32) -> Res<Vec<u8>> {
             }
         }
     });
-    let img =
-        photocraft_codecs::Image::from_raw(w, h, photocraft_codecs::ChannelLayout::Rgb, photocraft_codecs::SampleType::U8, px).map_err(|e| e.to_string())?;
-    photocraft_codecs::encode(&img, photocraft_codecs::Format::Jpeg, &Default::default()).map_err(|e| e.to_string())
+    let img = prism_codecs::Image::from_raw(w, h, prism_codecs::ChannelLayout::Rgb, prism_codecs::SampleType::U8, px).map_err(|e| e.to_string())?;
+    prism_codecs::encode(&img, prism_codecs::Format::Jpeg, &Default::default()).map_err(|e| e.to_string())
 }
 
 fn open_photo(w: u32, h: u32) -> Res<Session> {
     let jpeg = photo_jpeg(w, h)?;
-    let doc = photocraft_io::import("photo.jpg", &jpeg).map_err(|e| e.to_string())?.document;
+    let doc = prism_io::import("photo.jpg", &jpeg).map_err(|e| e.to_string())?.document;
     let mut s = Session::new();
     s.open_document(doc, Some("photo.jpg".into()));
     Ok(s)
@@ -73,13 +72,13 @@ fn open_photo(w: u32, h: u32) -> Res<Session> {
 
 /// How far an edit's composite change reaches beyond its damage (layer effects); mirrors
 /// `canvas::effect_reach`.
-fn reach(layers: &[photocraft_doc::Layer]) -> i32 {
+fn reach(layers: &[prism_doc::Layer]) -> i32 {
     layers
         .iter()
         .map(|l| {
-            let own = if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
+            let own = if prism_compose::effects::has_effects(l) { prism_compose::effects::margin(l) } else { 0 };
             let kids = match &l.content {
-                photocraft_doc::LayerContent::Group(g) => reach(&g.children),
+                prism_doc::LayerContent::Group(g) => reach(&g.children),
                 _ => 0,
             };
             own + kids
@@ -120,7 +119,7 @@ impl Bench {
             None => {
                 let r = damage.unwrap_or(doc.bounds()).intersect(&doc.bounds());
                 if !r.is_empty() {
-                    std::hint::black_box(photocraft_compose::render(doc, r));
+                    std::hint::black_box(prism_compose::render(doc, r));
                 }
             }
         }
@@ -132,13 +131,13 @@ impl Bench {
     /// previous frame and where it is now (`move_ui::damage`).
     fn drag_frame(&self, s: &Session, layer: u64, i: usize) -> Res<f64> {
         let doc = s.active().ok_or("no document")?.doc.clone();
-        let id = photocraft_doc::LayerId(layer);
-        let all = photocraft_geom::Rect::new(i32::MIN / 2, i32::MIN / 2, i32::MAX / 2, i32::MAX / 2);
-        let was = doc.layer(id).and_then(|l| photocraft_compose::change_bounds(l, all)).ok_or("no bounds")?;
+        let id = prism_doc::LayerId(layer);
+        let all = prism_geom::Rect::new(i32::MIN / 2, i32::MIN / 2, i32::MAX / 2, i32::MAX / 2);
+        let was = doc.layer(id).and_then(|l| prism_compose::change_bounds(l, all)).ok_or("no bounds")?;
         // Frame i shows offset (d, d / 2); the canvas showed the previous frame's.
         let (d, prev) = (3 * i as i32 + 1, if i == 0 { 0 } else { 3 * i as i32 - 2 });
         let t = Instant::now();
-        let shown = photocraft_engine::layer_multi_cmds::moved(&doc, &[id], d, d / 2).map_err(|e| e.to_string())?;
+        let shown = prism_engine::layer_multi_cmds::moved(&doc, &[id], d, d / 2).map_err(|e| e.to_string())?;
         let damage = was.translate(prev, prev / 2).union(&was.translate(d, d / 2)).inflate(1).intersect(&doc.bounds());
         match &self.gpu {
             Some((g, rs)) => {
@@ -146,7 +145,7 @@ impl Bench {
                 let _ = rs.device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: None });
             }
             None => {
-                std::hint::black_box(photocraft_compose::render(&shown, damage));
+                std::hint::black_box(prism_compose::render(&shown, damage));
             }
         }
         Ok(ms(t))
@@ -204,7 +203,7 @@ impl Bench {
 
 /// A headless GPU canvas on a device created like the app's.
 fn canvas() -> Option<(GpuCanvas, RenderState)> {
-    let setup = photocraft_ui_egui::gpu_canvas::wgpu_setup();
+    let setup = prism_ui_egui::gpu_canvas::wgpu_setup();
     let rs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| egui_kittest::wgpu::create_render_state(setup, Default::default()))).ok()?;
     eprintln!("adapter: {}", rs.adapter.get_info().name);
     Some((GpuCanvas::new(&rs), rs))
@@ -578,13 +577,13 @@ fn job_scenarios(b: &mut Bench, sz: &Sizes) {
         let (w, h) = sz.layered;
         match layered_doc(w, h).and_then(|(s, _)| {
             let d = s.active().ok_or("no document")?.doc.clone();
-            photocraft_io::export(&d, "layered.psd", &Default::default()).map(|o| o.bytes).map_err(|e| e.to_string())
+            prism_io::export(&d, "layered.psd", &Default::default()).map(|o| o.bytes).map_err(|e| e.to_string())
         }) {
             Ok(psd) => {
                 let mut holder = Session::new();
                 b.time(open, &mut holder, reps, true, |b, s, _| {
                     let t = Instant::now();
-                    let d = photocraft_io::import("layered.psd", &psd).map_err(|e| e.to_string())?.document;
+                    let d = prism_io::import("layered.psd", &psd).map_err(|e| e.to_string())?.document;
                     *s = Session::new();
                     s.open_document(d, Some("layered.psd".into()));
                     Ok(ms(t) + b.refresh(s, true)?)
@@ -623,7 +622,7 @@ fn job_scenarios(b: &mut Bench, sz: &Sizes) {
 }
 
 /// Wait (polling like the UI's frame loop) until job `id` has ended.
-fn wait_job(s: &mut Session, id: photocraft_engine::jobs::JobId) -> Res<()> {
+fn wait_job(s: &mut Session, id: prism_engine::jobs::JobId) -> Res<()> {
     let t = Instant::now();
     loop {
         if s.poll_jobs().iter().any(|e| e.id == id) {
@@ -636,10 +635,10 @@ fn wait_job(s: &mut Session, id: photocraft_engine::jobs::JobId) -> Res<()> {
     }
 }
 
-fn start_job(s: &mut Session, id: &str, p: Value) -> Res<photocraft_engine::jobs::JobId> {
+fn start_job(s: &mut Session, id: &str, p: Value) -> Res<prism_engine::jobs::JobId> {
     match s.start(id, p).map_err(|e| format!("{id}: {e}"))? {
-        photocraft_engine::jobs::Started::Job(j) => Ok(j),
-        photocraft_engine::jobs::Started::Done(_) => Err(format!("{id} did not run as a background job")),
+        prism_engine::jobs::Started::Job(j) => Ok(j),
+        prism_engine::jobs::Started::Done(_) => Err(format!("{id} did not run as a background job")),
     }
 }
 
@@ -679,7 +678,7 @@ fn background_job_scenarios(b: &mut Bench, sz: &Sizes) {
     }
     let brushes = "import 500 brushes: longest UI-thread step";
     if b.wanted(brushes) {
-        use photocraft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
+        use prism_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
         let list: Vec<LegacyBrush> = (0..500)
             .map(|i| {
                 let side = 40 + (i % 60) as u32;
@@ -694,7 +693,7 @@ fn background_job_scenarios(b: &mut Bench, sz: &Sizes) {
             .collect();
         match write_v12(2, &list, true) {
             Ok(abr) => {
-                let data = photocraft_engine::paint::tile::b64_encode(&abr);
+                let data = prism_engine::paint::tile::b64_encode(&abr);
                 let mut s = Session::new();
                 b.time(brushes, &mut s, reps.min(5), true, |_, s, _| {
                     // The UI thread's work: starting the job, then each frame's poll (the last one
@@ -736,8 +735,8 @@ fn frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
     };
     let doc = std::mem::take(&mut s);
     let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |cc| {
-        photocraft_ui_egui::PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = photocraft_ui_egui::PhotocraftApp::new(doc, photocraft_ui_egui::Services::default());
+        prism_ui_egui::PrismApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = prism_ui_egui::PrismApp::new(doc, prism_ui_egui::Services::default());
         app.background_jobs = true;
         app
     });

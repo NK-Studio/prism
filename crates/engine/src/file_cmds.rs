@@ -10,11 +10,11 @@
 
 use std::sync::Arc;
 
-use photocraft_algo::resample::{Resample, resize_surface, translate_surface};
-use photocraft_color::{ColorMode, PixelFormat};
-use photocraft_doc::{Affine, Document, Layer, LayerContent, LayerId, SmartObject, SmartSource};
-use photocraft_geom::Rect;
-use photocraft_raster::{Surface, from_rgba_into};
+use prism_algo::resample::{Resample, resize_surface, translate_surface};
+use prism_color::{ColorMode, PixelFormat};
+use prism_doc::{Affine, Document, Layer, LayerContent, LayerId, SmartObject, SmartSource};
+use prism_geom::Rect;
+use prism_raster::{Surface, from_rgba_into};
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, layer_param};
@@ -70,15 +70,15 @@ fn is_file(path: &str) -> bool {
 }
 
 /// Every file the engine opens is read here: in bounded reads, with a clear error when it does
-/// not fit in memory (see [`photocraft_format::read`]).
+/// not fit in memory (see [`prism_format::read`]).
 pub(crate) fn read_file(path: &str) -> Result<Vec<u8>> {
-    photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    prism_format::read_file(std::path::Path::new(path)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }
 
 /// Every file the engine writes goes through here: crash-safe (temp file + fsync + rename, see
-/// [`photocraft_format::atomic`]), so a failed save never destroys the previous file.
+/// [`prism_format::atomic`]), so a failed save never destroys the previous file.
 pub(crate) fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
-    photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| EngineError::Other(e.to_string()))
+    prism_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| EngineError::Other(e.to_string()))
 }
 
 /// Files of a folder that look like images we can open, sorted by name.
@@ -96,15 +96,15 @@ pub(crate) fn list_images(dir: &str) -> Result<Vec<String>> {
 
 /// Extensions the batch commands pick up from a folder.
 const OPENABLE: &[&str] = &[
-    "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico", "pnm", "ppm", "pgm", "heic", "heif",
-    "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz", "af", "afdesign", "afphoto", "afpub",
+    "psd", "psb", "prism", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico", "pnm", "ppm", "pgm", "heic",
+    "heif", "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz", "af", "afdesign", "afphoto", "afpub",
 ];
 
 /// Whether saving `doc` as a TIFF writes Photoshop layer data (anything beyond a lone
 /// Background layer). The UI asks before such a save when the "ask before saving layered TIFF"
-/// preference is on; see `photocraft_io::tiff_layers`.
+/// preference is on; see `prism_io::tiff_layers`.
 pub fn tiff_would_write_layers(doc: &Document) -> bool {
-    photocraft_io::tiff_layers::would_write_layers(doc)
+    prism_io::tiff_layers::would_write_layers(doc)
 }
 
 pub(crate) fn file_name(path: &str) -> String {
@@ -117,9 +117,9 @@ pub fn extension(path: &str) -> Option<String> {
 }
 
 /// Whether a save without a new path may write back to `path`: only layered files (PSD, PSB,
-/// .pcraft). A flat file goes through Save As instead, so it is never flattened over the original.
+/// .prism). A flat file goes through Save As instead, so it is never flattened over the original.
 pub fn saves_in_place(path: &str) -> bool {
-    extension(path).is_some_and(|ext| matches!(ext.as_str(), "psd" | "psb" | "pcraft"))
+    extension(path).is_some_and(|ext| matches!(ext.as_str(), "psd" | "psb") || prism_format::is_native_extension(&ext))
 }
 
 /// Whether `path` names a document template (.psdt). A template opens as a new untitled document
@@ -165,7 +165,7 @@ pub(crate) fn sanitize(name: &str) -> String {
 }
 
 pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
-    let r = photocraft_io::import(name, bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
+    let r = prism_io::import(name, bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
     // Auxiliary imports return only a document and cannot surface the preview's fidelity warning.
     // Open has its own warning-preserving path; never silently place or process a thumbnail.
     if r.preview_only {
@@ -206,7 +206,7 @@ impl From<Option<f64>> for SaveOpts {
 /// Encodes `doc` for `path`'s extension.
 pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<(Vec<u8>, Vec<String>)> {
     let save = save.into();
-    let mut opts = photocraft_io::ExportOptions { tiff_layers: save.tiff_layers, ..Default::default() };
+    let mut opts = prism_io::ExportOptions { tiff_layers: save.tiff_layers, ..Default::default() };
     if let Some(q) = save.quality {
         let q = (q.clamp(0.0, 12.0) / 12.0 * 99.0 + 1.0).round() as u8;
         opts.encode.jpeg_quality = q;
@@ -214,7 +214,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
         opts.encode.webp_quality = q;
         opts.encode.webp_lossless = false;
     }
-    photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    prism_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }
 
 pub(crate) fn save_doc(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<Vec<String>> {
@@ -239,7 +239,7 @@ fn size_param(p: &Value, key: &str) -> Option<f64> {
 // ---------- pixels ----------
 
 /// A composite buffer as a surface in `fmt` (straight RGBA → the format's model and depth).
-pub(crate) fn buffer_surface(buf: &photocraft_compose::Buffer, fmt: PixelFormat) -> Surface {
+pub(crate) fn buffer_surface(buf: &prism_compose::Buffer, fmt: PixelFormat) -> Surface {
     let n = fmt.channels();
     let mut data = vec![0.0f32; buf.px.len() * n];
     for (p, out) in buf.px.iter().zip(data.chunks_exact_mut(n)) {
@@ -255,7 +255,7 @@ pub(crate) fn buffer_surface(buf: &photocraft_compose::Buffer, fmt: PixelFormat)
 
 /// The flattened image of `doc` as a surface in `fmt`, placed at the origin.
 pub(crate) fn flattened(doc: &Document, fmt: PixelFormat) -> Surface {
-    photocraft_compose::flatten_to_surface(doc, fmt, None)
+    prism_compose::flatten_to_surface(doc, fmt, None)
 }
 
 // ---------- close / revert / save a copy / open as ----------
@@ -323,7 +323,7 @@ pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
     };
-    let r = photocraft_io::import(&decode_name, bytes).map_err(|e| EngineError::Other(format!("{decode_name}: {e}")))?;
+    let r = prism_io::import(&decode_name, bytes).map_err(|e| EngineError::Other(format!("{decode_name}: {e}")))?;
     let mut doc = r.document;
     let path = match template_name(s, name) {
         Some(untitled) => {
@@ -363,7 +363,7 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let fmt = d.doc.pixel_format();
-    let vector = photocraft_io::svg::is_svg(&bytes);
+    let vector = prism_io::svg::is_svg(&bytes);
     let src = import(name, &bytes)?;
     let (w, h) = (src.size.width as f64, src.size.height as f64);
     let scale = match f64_param(p, "scale") {
@@ -782,7 +782,7 @@ fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
     let first = &docs[0].1;
     let w = docs.iter().map(|(_, d)| d.size.width).max().unwrap_or(1);
     let h = docs.iter().map(|(_, d)| d.size.height).max().unwrap_or(1);
-    let mut stack = Document::new(stem(&paths[0]), photocraft_doc::Size::new(w, h), first.mode, first.depth);
+    let mut stack = Document::new(stem(&paths[0]), prism_doc::Size::new(w, h), first.mode, first.depth);
     stack.resolution_dpi = first.resolution_dpi;
     stack.icc_profile = first.icc_profile.clone();
     let fmt = stack.pixel_format();
@@ -795,7 +795,7 @@ fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
         // "Create Smart Object after Loading Layers": the layers go inside one smart object, ready
         // for Layer › Smart Objects › Stack Mode.
         let children = std::mem::take(&mut stack.layers);
-        let group = Layer::new(stem(&paths[0]), LayerContent::Group(photocraft_doc::Group { children, expanded: true, artboard: None }));
+        let group = Layer::new(stem(&paths[0]), LayerContent::Group(prism_doc::Group { children, expanded: true, artboard: None }));
         let smart = crate::smart_cmds::layer_to_smart(&stack, &group)?;
         stack.layers = vec![smart];
     }
@@ -813,7 +813,7 @@ fn has_live_effects(l: &Layer) -> bool {
 fn bake(l: &Layer, canvas: Rect, fmt: PixelFormat, keep_effects: bool) -> Surface {
     let mut tmp = l.clone();
     tmp.opacity = 1.0;
-    tmp.blend = photocraft_color::BlendMode::Normal;
+    tmp.blend = prism_color::BlendMode::Normal;
     tmp.visible = true;
     tmp.clipped = false;
     if !keep_effects {
@@ -823,7 +823,7 @@ fn bake(l: &Layer, canvas: Rect, fmt: PixelFormat, keep_effects: bool) -> Surfac
     // Render over the union of the canvas and the content so off-canvas pixels survive.
     let area = l.surface().map_or(canvas, |s| s.content_bounds().union(&canvas));
     let area = if keep_effects { area.inflate(256) } else { area };
-    buffer_surface(&photocraft_compose::render_layer(&tmp, area), fmt)
+    buffer_surface(&prism_compose::render_layer(&tmp, area), fmt)
 }
 
 fn walk_ids(doc: &Document) -> Vec<LayerId> {
@@ -920,7 +920,7 @@ fn layers_to_files(s: &mut Session, p: &Value) -> Result<Value> {
 pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
     let n = size.clamp(2, 256);
     let (w, h) = ((n * n) as u32, n as u32);
-    let mut lattice = Document::new("lut", photocraft_doc::Size::new(w, h), ColorMode::Rgb, photocraft_color::SampleType::F32);
+    let mut lattice = Document::new("lut", prism_doc::Size::new(w, h), ColorMode::Rgb, prism_color::SampleType::F32);
     let fmt = lattice.pixel_format();
     let step = 1.0 / (n - 1) as f32;
     let mut data = Vec::with_capacity((w * h) as usize * fmt.channels());
@@ -944,7 +944,7 @@ pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
         a.clipped = false;
         lattice.layers.push(a);
     }
-    let out = photocraft_compose::flatten(&lattice);
+    let out = prism_compose::flatten(&lattice);
     let mut s = format!("TITLE \"{}\"\n# Created by Prism\nLUT_3D_SIZE {n}\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n", title.replace('"', "'"));
     // .cube order: red changes fastest, then green, then blue.
     for b in 0..n {

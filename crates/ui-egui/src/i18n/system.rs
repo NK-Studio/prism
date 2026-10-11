@@ -37,7 +37,7 @@ fn bounded_tags(tags: impl IntoIterator<Item = String>) -> Vec<String> {
 }
 
 fn detect_system_tags() -> Vec<String> {
-    if let Ok(tag) = std::env::var("PHOTOCRAFT_LOCALE")
+    if let Ok(tag) = std::env::var("PRISM_LOCALE").or_else(|_| std::env::var("PHOTOCRAFT_LOCALE"))
         && !tag.trim().is_empty()
     {
         return bounded_tags([tag]);

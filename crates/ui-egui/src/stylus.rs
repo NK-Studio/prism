@@ -8,7 +8,7 @@
 //!   `egui::Event::Touch { force }` alongside the emulated pointer. [`Stylus::update`] reads it.
 //!   winit drops the pen's tilt and rotation, so those stay 0.
 //! - **macOS**: winit 0.30 drops `NSEvent` tablet data, so the desktop app installs an AppKit
-//!   local event monitor (the `photocraft-tablet` crate) that writes pressure, tilt, rotation and
+//!   local event monitor (the `prism-tablet` crate) that writes pressure, tilt, rotation and
 //!   the eraser end into the [`StylusFeed`] before winit handles each event.
 //!
 //! Preferences › Tools › Use Tablet Pressure off makes a pen paint like a mouse. Flipping the pen
@@ -134,7 +134,7 @@ impl Stylus {
 
     /// Switch to the Eraser when the pen's eraser end comes in, and back to the previous tool when
     /// the tip does (Photoshop). Not during a drag. Returns whether the tool changed.
-    pub fn sync_eraser_tool(app: &mut crate::PhotocraftApp) -> bool {
+    pub fn sync_eraser_tool(app: &mut crate::PrismApp) -> bool {
         use crate::state::Tool;
         if app.drag.is_some() {
             return false;
@@ -240,7 +240,7 @@ mod tests {
     fn pen_samples_reach_the_brush_stroke() {
         use crate::canvas::{ToolEvent, tool_event};
         use serde_json::json;
-        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut app = crate::PrismApp::new(prism_engine::Session::new(), Default::default());
         app.session.execute("file.new", json!({"width": 120, "height": 80})).unwrap();
         app.session.execute("layer.new.layer", json!({})).unwrap();
         app.ui.tool = crate::state::Tool::Brush;
@@ -293,7 +293,7 @@ mod tests {
     fn eraser_end_switches_tools_once_and_never_mid_drag() {
         use crate::canvas::{ToolEvent, tool_event};
         use crate::state::Tool;
-        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut app = crate::PrismApp::new(prism_engine::Session::new(), Default::default());
         app.session.execute("file.new", serde_json::json!({"width": 60, "height": 60})).unwrap();
         app.ui.tool = Tool::Brush;
         let pen = |eraser| Some(PenSample { pressure: 0.5, eraser, ..Default::default() });

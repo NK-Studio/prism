@@ -9,12 +9,12 @@
 
 use std::sync::Arc;
 
-use photocraft_algo::{
+use prism_algo::{
     self as algo, BlurPath, BlurQuality, BlurShape, DepthSource, DiffuseMode, Distribution, ExtrudeType, FieldPin, FilterParams, HsbModel, IrisPin, LensType,
     Light, LightKind, MezzotintType, SmartBlurMode, SpinPin, TextureChannel, TileFill, UndefinedAreas, WindMethod, ZigZagStyle,
 };
-use photocraft_doc::{Document, Layer};
-use photocraft_geom::Rect;
+use prism_doc::{Document, Layer};
+use prism_geom::Rect;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -416,9 +416,9 @@ pub(crate) fn prepare(s: &Session, id: &str, p: &Value) -> Value {
 
 /// A flattened document (or one of its layers) as an RGBA map image.
 fn map_from_document(doc: &Document, layer: Option<u64>) -> Option<algo::Image> {
-    let buf = match layer.and_then(|l| doc.layer(photocraft_doc::LayerId(l))) {
-        Some(l) => photocraft_compose::render_layer(l, l.surface().map(|s| s.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds())),
-        None => photocraft_compose::flatten(doc),
+    let buf = match layer.and_then(|l| doc.layer(prism_doc::LayerId(l))) {
+        Some(l) => prism_compose::render_layer(l, l.surface().map(|s| s.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds())),
+        None => prism_compose::flatten(doc),
     };
     if buf.rect.is_empty() {
         return None;

@@ -4,13 +4,13 @@
 use std::sync::Arc;
 
 use egui::{Event, Modifiers, PointerButton, Stroke, vec2};
-use photocraft_doc::{Document, LayerContent, LayerId, LiveShape};
-use photocraft_geom::Rect;
+use prism_doc::{Document, LayerContent, LayerId, LiveShape};
+use prism_geom::Rect;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    PhotocraftApp,
+    PrismApp,
     canvas::{ToolEvent, ViewXform},
     state::Tool,
     theme::Tokens,
@@ -58,7 +58,7 @@ fn allowed(tool: Tool) -> bool {
     matches!(tool, Tool::Rectangle | Tool::PathSelection | Tool::DirectSelection)
 }
 
-fn rectangle(app: &PhotocraftApp) -> Option<(LayerId, [f64; 4], [f64; 4])> {
+fn rectangle(app: &PrismApp) -> Option<(LayerId, [f64; 4], [f64; 4])> {
     if !allowed(app.ui.tool)
         || app.ui.transform.is_some()
         || app.ui.mask_target
@@ -89,7 +89,7 @@ fn handles(rect: [f64; 4], radii: [f64; 4], zoom: f32) -> [[f64; 2]; 4] {
     let [x, y, w, h] = rect;
     let cap = w.min(h) / 4.0;
     let minimum = (12.0 / f64::from(zoom.max(0.01))).min(cap);
-    let radii = photocraft_vector::shapes::clamp_radii(w, h, radii);
+    let radii = prism_vector::shapes::clamp_radii(w, h, radii);
     std::array::from_fn(|i| {
         let inset = radii.get(i).copied().unwrap_or(0.0).clamp(minimum, cap);
         match i {
@@ -101,7 +101,7 @@ fn handles(rect: [f64; 4], radii: [f64; 4], zoom: f32) -> [[f64; 2]; 4] {
     })
 }
 
-fn hit(app: &PhotocraftApp, p: [f64; 2]) -> Option<usize> {
+fn hit(app: &PrismApp, p: [f64; 2]) -> Option<usize> {
     let (_, rect, radii) = rectangle(app)?;
     let reach = GRAB / f64::from(app.current_zoom().max(0.01));
     handles(rect, radii, app.current_zoom())
@@ -113,7 +113,7 @@ fn hit(app: &PhotocraftApp, p: [f64; 2]) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
-pub(crate) fn cancel_stale(app: &mut PhotocraftApp) {
+pub(crate) fn cancel_stale(app: &mut PrismApp) {
     let valid = app.ui.shape_corners.as_ref().is_none_or(|drag| {
         app.session.active().is_some_and(|st| st.doc.id.0 == drag.document && st.revision == drag.revision)
             && app.ui.tool == drag.tool
@@ -129,7 +129,7 @@ pub(crate) fn cancel_stale(app: &mut PhotocraftApp) {
     }
 }
 
-fn update(app: &mut PhotocraftApp, p: [f64; 2]) {
+fn update(app: &mut PrismApp, p: [f64; 2]) {
     let zoom = f64::from(app.current_zoom().max(0.01));
     let Some(d) = app.ui.shape_corners.as_mut() else { return };
     if (p[0] - d.start[0]).hypot(p[1] - d.start[1]) * zoom < 0.5 {
@@ -137,7 +137,7 @@ fn update(app: &mut PhotocraftApp, p: [f64; 2]) {
         return;
     }
     let Some(direction) = DIRECTIONS.get(d.corner) else { return };
-    let effective = photocraft_vector::shapes::clamp_radii(d.rect[2], d.rect[3], d.base);
+    let effective = prism_vector::shapes::clamp_radii(d.rect[2], d.rect[3], d.base);
     let Some(initial) = effective.get(d.corner).copied() else { return };
     let delta = ((p[0] - d.start[0]) * direction[0] + (p[1] - d.start[1]) * direction[1]) / 2.0;
     let max = if d.linked {
@@ -155,7 +155,7 @@ fn update(app: &mut PhotocraftApp, p: [f64; 2]) {
     }
 }
 
-fn commit(app: &mut PhotocraftApp) {
+fn commit(app: &mut PrismApp) {
     cancel_stale(app);
     let Some(drag) = app.ui.shape_corners.take() else { return };
     if drag.radii == drag.base {
@@ -165,12 +165,12 @@ fn commit(app: &mut PhotocraftApp) {
         app.ui.status = e;
         app.ui.status_error = true;
     } else {
-        crate::canvas::shown_as_document(app, photocraft_doc::DocId(drag.document), |key| (TAG..TAG * 2).contains(&key));
+        crate::canvas::shown_as_document(app, prism_doc::DocId(drag.document), |key| (TAG..TAG * 2).contains(&key));
     }
 }
 
 /// Shared native/control pointer path. Misses fall through to drawing a new rectangle.
-pub(crate) fn pointer(app: &mut PhotocraftApp, event: ToolEvent, mods: Modifiers) -> bool {
+pub(crate) fn pointer(app: &mut PrismApp, event: ToolEvent, mods: Modifiers) -> bool {
     cancel_stale(app);
     let p = match event {
         ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => [x, y],
@@ -217,7 +217,7 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, event: ToolEvent, mods: Modifiers
 }
 
 /// Own the actual press, including tiny drags below egui's normal drag threshold.
-pub(crate) fn canvas_input(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, response: &egui::Response) -> bool {
+pub(crate) fn canvas_input(app: &mut PrismApp, ctx: &egui::Context, xf: &ViewXform, response: &egui::Response) -> bool {
     cancel_stale(app);
     if !app.shape_corner_runtime.native_press && (app.drag.is_some() || rectangle(app).is_none()) {
         return false;
@@ -260,7 +260,7 @@ pub(crate) fn canvas_input(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &Vi
     consumed
 }
 
-pub(crate) fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+pub(crate) fn keys(app: &mut PrismApp, ctx: &egui::Context) -> bool {
     cancel_stale(app);
     if app.ui.shape_corners.is_none() {
         return false;
@@ -277,7 +277,7 @@ pub(crate) fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     false
 }
 
-pub(crate) fn display_doc(app: &mut PhotocraftApp, index: usize) -> Option<(Arc<Document>, u64)> {
+pub(crate) fn display_doc(app: &mut PrismApp, index: usize) -> Option<(Arc<Document>, u64)> {
     cancel_stale(app);
     if app.session.active_index() != Some(index) {
         return None;
@@ -296,9 +296,9 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, index: usize) -> Option<(Arc<
     let mut shown = (*st.doc).clone();
     let LayerContent::Shape(mut shape) = shown.layer(LayerId(drag.layer))?.content.clone() else { return None };
     shape.live = Some(LiveShape::Rect { rect: drag.rect, radii: drag.radii });
-    shape.path = photocraft_vector::shapes::live_path(shape.live.as_ref()?);
+    shape.path = prism_vector::shapes::live_path(shape.live.as_ref()?);
     shape.psd_raw = None;
-    photocraft_engine::vector_cmds::refresh_shape(&shown, &mut shape);
+    prism_engine::vector_cmds::refresh_shape(&shown, &mut shape);
     let [x, y, w, h] = drag.rect;
     let stroke = shape.stroke.as_ref().map_or(0.0, |s| f64::from(s.width).abs()).ceil().min(1e7) as i32;
     let area = Rect::new(x.floor() as i32, y.floor() as i32, (x + w).ceil() as i32, (y + h).ceil() as i32).inflate(stroke.saturating_add(2));
@@ -311,25 +311,25 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, index: usize) -> Option<(Arc<
 }
 
 /// A radius edit changes only the rectangle's footprint, including its stroke and effects.
-pub(crate) fn damage(app: &PhotocraftApp, document: u64, revision: u64, from: u64, to: u64) -> Option<Rect> {
+pub(crate) fn damage(app: &PrismApp, document: u64, revision: u64, from: u64, to: u64) -> Option<Rect> {
     let p = app.shape_corner_runtime.preview.as_ref()?;
     let ours = |key| (TAG..TAG * 2).contains(&key);
     (p.document == document && p.revision == revision && (ours(from) || ours(to)) && (from == 0 || ours(from)) && (to == 0 || ours(to))).then_some(p.area)
 }
 
-pub(crate) fn cursor(app: &PhotocraftApp, point: [f64; 2]) -> Option<egui::CursorIcon> {
+pub(crate) fn cursor(app: &PrismApp, point: [f64; 2]) -> Option<egui::CursorIcon> {
     let corner = app.ui.shape_corners.as_ref().map(|d| d.corner).or_else(|| hit(app, point))?;
     Some(if corner % 2 == 0 { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw })
 }
 
 /// Canvas overlays otherwise use the committed document, so their outline needs the same
 /// pending radii as the compositor (also on the first frame of native pointer movement).
-pub(crate) fn outline(app: &PhotocraftApp, layer: LayerId) -> Option<photocraft_doc::Path> {
+pub(crate) fn outline(app: &PrismApp, layer: LayerId) -> Option<prism_doc::Path> {
     let drag = app.ui.shape_corners.as_ref().filter(|d| d.layer == layer.0)?;
-    Some(photocraft_vector::shapes::live_path(&LiveShape::Rect { rect: drag.rect, radii: drag.radii }))
+    Some(prism_vector::shapes::live_path(&LiveShape::Rect { rect: drag.rect, radii: drag.radii }))
 }
 
-pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
+pub(crate) fn draw(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some((id, rect, base)) = rectangle(app) else { return };
     let drag = app.ui.shape_corners.as_ref().filter(|d| d.layer == id.0);
     let radii = drag.map_or(base, |d| d.radii);
@@ -343,7 +343,7 @@ pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform)
         painter.circle_stroke(at, 4.5, Stroke::new(if on { 2.0 } else { 1.5 }, t.accent));
         painter.circle_filled(at, 1.5, t.accent);
         if on {
-            let radius = photocraft_vector::shapes::clamp_radii(rect[2], rect[3], radii).get(i).copied().unwrap_or(0.0);
+            let radius = prism_vector::shapes::clamp_radii(rect[2], rect[3], radii).get(i).copied().unwrap_or(0.0);
             let text = format!("{}: {} px", crate::i18n::t("Corner radius"), crate::widgets::fmt_num(radius));
             let text = painter.layout_no_wrap(text, crate::theme::medium(12.0), t.text);
             let size = text.size() + vec2(12.0, 8.0);
@@ -357,7 +357,7 @@ pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform)
     }
 }
 
-pub(crate) fn inspect(app: &PhotocraftApp) -> Value {
+pub(crate) fn inspect(app: &PrismApp) -> Value {
     let Some((layer, rect, base)) = rectangle(app) else { return Value::Null };
     let radii = app.ui.shape_corners.as_ref().map_or(base, |d| d.radii);
     json!({"layer": layer.0, "rect": rect, "radii": radii, "handles": handles(rect, radii, app.current_zoom()), "drag": app.ui.shape_corners})
@@ -368,7 +368,7 @@ mod tests;
 
 /// A native document view changed during a held corner gesture. Keep the last preview footprint
 /// so its pixels are invalidated, but discard the pointer and the uncommitted radii.
-pub(crate) fn cancel_view_gesture(app: &mut PhotocraftApp) {
+pub(crate) fn cancel_view_gesture(app: &mut PrismApp) {
     app.ui.shape_corners = None;
     app.shape_corner_runtime.native_press = false;
 }

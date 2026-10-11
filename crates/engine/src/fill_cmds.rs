@@ -5,9 +5,9 @@
 //! transparency. The selection (or the whole canvas) is filled, as one history step ("Fill").
 //! Every parameter is validated: a bad one is an error, never a panic.
 
-use photocraft_color::BlendMode;
-use photocraft_geom::{Rect, TILE_SIZE};
-use photocraft_raster::{Surface, from_rgba_into, to_rgba};
+use prism_color::BlendMode;
+use prism_geom::{Rect, TILE_SIZE};
+use prism_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
 
 use crate::commands::{blend_from_str, color_param, layer_param};
@@ -106,11 +106,11 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         "pattern" => {
             let pat = crate::pattern_cmds::resolve_param(s, CMD, p)?;
             let (scale, angle, _, phase) = crate::pattern_cmds::placement(p);
-            let tile = photocraft_compose::pattern::Tile::new(&pat).ok_or_else(|| bad("the pattern is empty"))?;
+            let tile = prism_compose::pattern::Tile::new(&pat).ok_or_else(|| bad("the pattern is empty"))?;
             // Photoshop's Fill uses the canvas origin.
-            let place = photocraft_compose::pattern::Placement::new(Rect::EMPTY, false, phase, scale, angle);
+            let place = prism_compose::pattern::Placement::new(Rect::EMPTY, false, phase, scale, angle);
             out["pattern"] = json!(pat.id);
-            Source::Pixels(area, photocraft_compose::pattern::render(&tile, &place, area))
+            Source::Pixels(area, prism_compose::pattern::render(&tile, &place, area))
         }
         "history" => {
             let explicit = match p.get("state") {
@@ -168,10 +168,10 @@ pub(crate) fn composite_over(surf: &mut Surface, src: &Surface, area: Rect, limi
     blend_into(surf, area, &source, limit, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false });
 }
 
-/// The selection filled from its surroundings (`photocraft_algo::content_aware`), as straight
+/// The selection filled from its surroundings (`prism_algo::content_aware`), as straight
 /// RGBA over the sampling window. Only the selected pixels are used.
 fn content_aware(surf: &Surface, sel: &Surface, canvas: Rect, color_adaptation: bool, seed: u64) -> Result<Source> {
-    use photocraft_algo::content_aware::{FillOptions, color_level, fill, rotation_level};
+    use prism_algo::content_aware::{FillOptions, color_level, fill, rotation_level};
     let hole_bounds = sel.content_bounds().intersect(&canvas);
     if hole_bounds.is_empty() {
         return Err(EngineError::Other("the selection is outside the canvas".into()));
@@ -283,7 +283,7 @@ fn blend_into(surf: &mut Surface, area: Rect, source: &Source, sel: Option<&Surf
 /// The selection's coverage over one tile (its channel 0).
 struct Mask<'a> {
     bytes: &'a [u8],
-    fmt: photocraft_color::PixelFormat,
+    fmt: prism_color::PixelFormat,
     origin: Rect,
 }
 
@@ -292,7 +292,7 @@ impl Mask<'_> {
         let bpp = self.fmt.bytes_per_pixel();
         // A default-pixel mask is one pixel long: every position reads it.
         let i = if self.bytes.len() == bpp { 0 } else { ((y - self.origin.y0) as usize * TILE_SIZE as usize + (x - self.origin.x0) as usize) * bpp };
-        self.bytes.get(i..i + bpp).map_or(0.0, |px| photocraft_color::read_sample(px, self.fmt.sample, 0))
+        self.bytes.get(i..i + bpp).map_or(0.0, |px| prism_color::read_sample(px, self.fmt.sample, 0))
     }
     /// Fully selected over `r`?
     fn full(&self, r: Rect) -> bool {
@@ -301,7 +301,7 @@ impl Mask<'_> {
 }
 
 /// Blend into one tile's encoded pixels (`bytes`, the tile at `origin`) over `tr`.
-fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rect, tr: Rect, source: &Source, mask: Option<&Mask>, b: Blend) {
+fn blend_tile(bytes: &mut [u8], fmt: &prism_color::PixelFormat, origin: Rect, tr: Rect, source: &Source, mask: Option<&Mask>, b: Blend) {
     let Blend { mode, opacity, keep_alpha, restore } = b;
     let n = fmt.channels();
     let bpp = fmt.bytes_per_pixel();
@@ -314,7 +314,7 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
         Source::Color(c) if c[3] >= 1.0 && mode == BlendMode::Normal => {
             let m = from_rgba_into(fmt, *c, &mut enc);
             let mut bytes = vec![0u8; bpp];
-            photocraft_raster::encode_pixel(fmt, enc.get(..m.min(n)).unwrap_or(&[]), &mut bytes);
+            prism_raster::encode_pixel(fmt, enc.get(..m.min(n)).unwrap_or(&[]), &mut bytes);
             // Keeping alpha: copy the colour samples only (alpha is the last sample).
             let keep = if (keep_alpha || !fmt.alpha) && fmt.alpha { bpp - bpp / n.max(1) } else { bpp };
             Some((bytes, keep))
@@ -339,24 +339,24 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
                 continue;
             }
             for (c, v) in px.iter_mut().enumerate().take(n) {
-                *v = photocraft_color::read_sample(pb, fmt.sample, c);
+                *v = prism_color::read_sample(pb, fmt.sample, c);
             }
             let d = to_rgba(fmt, &px[..n.min(8)]);
             let mut c = source.at(x, y);
             if mode == BlendMode::Dissolve {
                 // Dissolve: each pixel is either fully painted or untouched, with the coverage as odds.
-                k = if photocraft_color::dither_noise(x, y) < c[3] * k { 1.0 } else { 0.0 };
+                k = if prism_color::dither_noise(x, y) < c[3] * k { 1.0 } else { 0.0 };
                 c[3] = 1.0;
                 if k <= 0.0 {
                     continue;
                 }
             }
-            let mut o = if restore && blend == BlendMode::Normal { lerp(d, c, k) } else { photocraft_color::blend::composite(blend, d, c, k) };
+            let mut o = if restore && blend == BlendMode::Normal { lerp(d, c, k) } else { prism_color::blend::composite(blend, d, c, k) };
             if keep_alpha || !fmt.alpha {
                 o[3] = d[3];
             }
             let m = from_rgba_into(fmt, o, &mut enc);
-            photocraft_raster::encode_pixel(fmt, enc.get(..m.min(n)).unwrap_or(&[]), pb);
+            prism_raster::encode_pixel(fmt, enc.get(..m.min(n)).unwrap_or(&[]), pb);
         }
     }
 }
@@ -454,7 +454,7 @@ mod tests {
         assert!(close(px(&s, 17, 12), [0x33 as f32 / 255.0, 0x66 as f32 / 255.0, 0x99 as f32 / 255.0, 1.0]), "{:?}", px(&s, 17, 12));
     }
 
-    /// `cargo test -p photocraft-engine --release --lib fill_cmds::tests::timing_24mp -- --ignored --nocapture`
+    /// `cargo test -p prism-engine --release --lib fill_cmds::tests::timing_24mp -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn timing_24mp() {
@@ -515,15 +515,15 @@ mod tests {
     }
 
     /// A session whose canvas is `size` and whose selection is the given (sparse) rectangles, as
-    /// a loaded `.pcraft` can declare (#963): the canvas size is not capped on load and the
+    /// a loaded `.prism` can declare (#963): the canvas size is not capped on load and the
     /// selection tiles can lie far apart. Nothing here allocates more than a few tiles.
     fn huge_selection(size: (u32, u32), rects: &[Rect]) -> Session {
         let mut s = session();
         s.execute(CMD, json!({"contents": "color", "color": "#336699"})).unwrap();
         let st = s.active_mut().unwrap();
         let doc = std::sync::Arc::make_mut(&mut st.doc);
-        doc.size = photocraft_geom::Size::new(size.0, size.1);
-        let mut sel = Surface::new(photocraft_color::PixelFormat::GRAY8);
+        doc.size = prism_geom::Size::new(size.0, size.1);
+        let mut sel = Surface::new(prism_color::PixelFormat::GRAY8);
         for r in rects {
             sel.fill_rect(*r, &[1.0]);
         }

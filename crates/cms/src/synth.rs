@@ -437,7 +437,7 @@ pub fn cmyk_profile(p: &CmykParams) -> Profile {
     .with_encoded_bytes()
 }
 
-/// The default coated profile (what `profiles/photocraft-coated-cmyk.icc` contains).
+/// The default coated profile (what `profiles/prism-coated-cmyk.icc` contains).
 pub fn coated_cmyk() -> Profile {
     cmyk_profile(&CmykParams::default())
 }

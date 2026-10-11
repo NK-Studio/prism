@@ -23,7 +23,7 @@ fn alpha_sum(sh: &ShapeLayer) -> f64 {
     let c = sh.cache.as_ref().unwrap();
     let r = c.content_bounds();
     let fmt = c.format();
-    c.read_region(r).chunks_exact(fmt.channels()).map(|p| f64::from(photocraft_raster::to_rgba(&fmt, p)[3])).sum()
+    c.read_region(r).chunks_exact(fmt.channels()).map(|p| f64::from(prism_raster::to_rgba(&fmt, p)[3])).sum()
 }
 
 fn selection_mask(s: &Session) -> Vec<f32> {
@@ -81,7 +81,7 @@ fn shape_create_fill_stroke_and_composite() {
     assert_eq!(r["fill"], "#ff0000");
     assert_eq!(r["stroke"]["align"], "outside");
     assert_eq!(r["bounds"], json!([16, 16, 68, 68]));
-    let f = photocraft_compose::flatten(doc(&s));
+    let f = prism_compose::flatten(doc(&s));
     let px = |x: i32, y: i32| f.get(x, y);
     assert!(px(50, 50)[0] > 0.99 && px(50, 50)[2] < 0.01);
     assert!(px(18, 50)[2] > 0.99 && px(18, 50)[0] < 0.01);
@@ -156,12 +156,12 @@ fn shape_rasterize_keeps_pixels() {
     let mut s = session(64, 64, 16);
     let id = s.execute("shape.create", json!({"kind": "ellipse", "rect": [4, 4, 40, 30]})).unwrap()["layer"].as_u64().unwrap();
     let before = shape(&s, id).cache.unwrap();
-    let flat = photocraft_compose::flatten(doc(&s));
+    let flat = prism_compose::flatten(doc(&s));
     s.execute("layer.rasterize.shape", json!({"layer": id})).unwrap();
     let l = doc(&s).layer(LayerId(id)).unwrap();
     assert!(matches!(l.content, LayerContent::Raster(_)));
     assert_eq!(l.surface().unwrap(), &before);
-    assert_eq!(photocraft_compose::flatten(doc(&s)).px, flat.px);
+    assert_eq!(prism_compose::flatten(doc(&s)).px, flat.px);
     assert!(s.execute("shape.rasterize", json!({"layer": id})).is_err());
 }
 
@@ -378,32 +378,32 @@ fn vector_mask_commands_and_compositing() {
     s.execute("path.fill", json!({"name": "all", "color": "#000000"})).unwrap();
     // Reveal All: nothing hidden.
     s.execute("layer.vectorMask.revealAll", json!({})).unwrap();
-    let f = photocraft_compose::flatten(doc(&s));
+    let f = prism_compose::flatten(doc(&s));
     assert!(f.get(80, 80)[0] < 0.01);
     // Current path → only the left half shows the black layer.
     s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[0, 0], [50, 0], [50, 100], [0, 100]]}]}})).unwrap();
     s.execute("layer.vectorMask.currentPath", json!({})).unwrap();
-    let f = photocraft_compose::flatten(doc(&s));
+    let f = prism_compose::flatten(doc(&s));
     assert!(f.get(20, 50)[0] < 0.01 && f.get(80, 50)[0] > 0.99);
     // Disable → all black again; toggling re-enables.
     s.execute("layer.vectorMask.enabled", json!({})).unwrap();
-    assert!(photocraft_compose::flatten(doc(&s)).get(80, 50)[0] < 0.01);
+    assert!(prism_compose::flatten(doc(&s)).get(80, 50)[0] < 0.01);
     s.execute("layer.vectorMask.enabled", json!({})).unwrap();
     // Density 50%: the hidden half shows half grey.
     let r = s.execute("layer.vectorMask.edit", json!({"density": 50})).unwrap();
     assert_eq!(r["density"], 50.0);
-    assert!((photocraft_compose::flatten(doc(&s)).get(80, 50)[0] - 0.5).abs() < 0.01);
+    assert!((prism_compose::flatten(doc(&s)).get(80, 50)[0] - 0.5).abs() < 0.01);
     s.execute("layer.vectorMask.edit", json!({"density": 100})).unwrap();
     // Hide All.
     s.execute("layer.vectorMask.hideAll", json!({})).unwrap();
-    assert!(photocraft_compose::flatten(doc(&s)).get(20, 50)[0] > 0.99);
+    assert!(prism_compose::flatten(doc(&s)).get(20, 50)[0] > 0.99);
     // Rasterize into the pixel mask: same composite, no vector mask left.
     s.execute("layer.vectorMask.currentPath", json!({})).unwrap();
-    let before = photocraft_compose::flatten(doc(&s));
+    let before = prism_compose::flatten(doc(&s));
     s.execute("layer.rasterize.vectorMask", json!({})).unwrap();
     let l = doc(&s).layer(LayerId(id)).unwrap();
     assert!(l.vector_mask.is_none() && l.mask.is_some());
-    assert_eq!(photocraft_compose::flatten(doc(&s)).px, before.px);
+    assert_eq!(prism_compose::flatten(doc(&s)).px, before.px);
     // Delete / undo.
     s.undo();
     s.execute("layer.vectorMask.delete", json!({})).unwrap();
@@ -469,4 +469,177 @@ fn path_stroke_rejects_oversized_brush_before_rendering() {
     s.execute("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[2, 2], [20, 20]]}]}})).unwrap();
     let result = s.execute("path.stroke", json!({"size": 1e30}));
     assert!(result.is_err(), "path strokes share the bounded paint renderer");
+}
+
+#[test]
+fn arrow_defaults_edit_history_locks_and_render_depths() {
+    for depth in [8, 16, 32] {
+        let mut s = session(200, 150, depth);
+        s.execute("tools.setColors", json!({"foreground":"#cc2233"})).unwrap();
+        let result = s.execute("shape.create", json!({"kind":"arrow","from":[20,80],"to":[150,40]})).unwrap();
+        let id = result["layer"].as_u64().unwrap();
+        assert_eq!(result["kind"], "arrow");
+        assert_eq!(result["live"]["headSize"], 16.0);
+        let original = shape(&s, id);
+        assert!(original.fill.is_none());
+        assert_eq!(original.stroke.as_ref().unwrap().width, 3.0);
+        assert_eq!(original.stroke.as_ref().unwrap().cap, LineCap::Round);
+        assert!(alpha_sum(&original) > 300.0);
+        for head in [20.0, 24.0, 32.0] {
+            s.execute("shape.edit", json!({"layer":id,"headSize":head,"stroke":{"width":8,"cap":"butt","join":"miter"},"coalesce":"arrow-resize"})).unwrap();
+        }
+        let edited = shape(&s, id);
+        assert_ne!(original.path, edited.path);
+        assert_eq!(edited.stroke.as_ref().unwrap().cap, LineCap::Butt);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(shape(&s, id), original);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(shape(&s, id), edited);
+        s.execute("layer.setProps", json!({"layer":id,"locked":true})).unwrap();
+        assert!(s.execute("shape.edit", json!({"layer":id,"headSize":12})).is_err());
+        assert_eq!(shape(&s, id), edited);
+    }
+}
+
+#[test]
+fn arrow_similarity_transform_keeps_live_and_nonuniform_keeps_actual_path() {
+    let mut s = session(200, 150, 8);
+    let id = s.execute("shape.create", json!({"kind":"arrow","from":[20,20],"to":[80,30]})).unwrap()["layer"].as_u64().unwrap();
+    let original = shape(&s, id);
+    let angle = 0.37_f64;
+    for a in [
+        Affine::translate(7.0, -3.0),
+        Affine { m: [angle.cos(), angle.sin(), -angle.sin(), angle.cos(), 10.0, 20.0] },
+        Affine { m: [-2.0, 0.0, 0.0, 2.0, 180.0, 0.0] },
+    ] {
+        let mut sh = original.clone();
+        transform_shape(&mut sh, &a);
+        let live = sh.live.as_ref().unwrap();
+        let rebuilt = vector::shapes::live_path(live);
+        for (p, q) in sh.path.subpaths.iter().zip(&rebuilt.subpaths) {
+            // Reflection reverses V wing order but preserves the same open path.
+            let mut actual = p.knots.iter().map(|k| (k.anchor.x, k.anchor.y)).collect::<Vec<_>>();
+            let expected = q.knots.iter().map(|k| (k.anchor.x, k.anchor.y)).collect::<Vec<_>>();
+            if actual.len() == 3 && a.m[0] * a.m[3] - a.m[1] * a.m[2] < 0.0 {
+                actual.reverse();
+            }
+            for (p, q) in actual.iter().zip(expected) {
+                assert!((p.0 - q.0).abs() < 1e-8 && (p.1 - q.1).abs() < 1e-8);
+            }
+        }
+    }
+    for a in [Affine { m: [2.0, 0.0, 0.0, 1.0, 0.0, 0.0] }, Affine { m: [1.0, 0.2, 0.0, 1.0, 0.0, 0.0] }] {
+        let mut sh = original.clone();
+        transform_shape(&mut sh, &a);
+        assert!(sh.live.is_none());
+        assert_eq!(sh.path, original.path.transform(&a));
+    }
+}
+
+#[test]
+fn arrow_invalid_geometry_and_stroke_leave_document_unchanged() {
+    let mut s = session(100, 100, 8);
+    let valid = json!({"kind":"arrow","from":[10,20],"to":[80,70]});
+    for patch in [
+        json!({"from":[1]}),
+        json!({"to":[0,0,0]}),
+        json!({"from":"bad"}),
+        json!({"from":[1e300,0]}),
+        json!({"to":[10,20]}),
+        json!({"headSize":0}),
+        json!({"headSize":-1}),
+        json!({"headSize":1e300}),
+        json!({"headSize":"16"}),
+        json!({"headAngle":0}),
+        json!({"headAngle":161}),
+        json!({"headAngle":"60"}),
+        json!({"headAngle":1e300}),
+        json!({"stroke":{"width":1e300}}),
+        json!({"stroke":{"width":"wide"}}),
+        json!({"stroke":{"cap":1}}),
+    ] {
+        let before = doc(&s).clone();
+        let mut p = valid.clone();
+        for (k, v) in patch.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        assert!(s.execute("shape.create", p).is_err(), "{patch}");
+        assert_eq!(doc(&s), &before);
+    }
+    let id = s.execute("shape.create", valid).unwrap()["layer"].as_u64().unwrap();
+    let before = doc(&s).clone();
+    assert!(s.execute("shape.edit", json!({"layer":id,"headSize":"invalid"})).is_err());
+    assert_eq!(doc(&s), &before);
+}
+
+#[test]
+fn arrow_perspective_retains_vector_and_rejects_horizon() {
+    use prism_algo::transform::{Homography, Interp};
+    let live = LiveShape::Arrow { from: [10.0, 20.0], to: [80.0, 40.0], head_size: 16.0, head_angle: 60.0 };
+    let sh = ShapeLayer { path: vector::shapes::live_path(&live), live: Some(live), stroke: Some(ShapeStroke::default()), ..Default::default() };
+    let mut layer = Layer::new("Arrow", LayerContent::Shape(sh.clone()));
+    let h = Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.001, 0.0, 1.0]);
+    crate::transform_cmds::transform_layer(None, Default::default(), &mut layer, &h, None, Interp::Bilinear).unwrap();
+    let LayerContent::Shape(actual) = &layer.content else { panic!("rasterized") };
+    assert!(actual.live.is_none());
+    for (a, b) in actual.path.subpaths.iter().zip(&sh.path.subpaths) {
+        assert!(!a.closed);
+        for (a, b) in a.knots.iter().zip(&b.knots) {
+            let (x, y) = h.apply(b.anchor.x, b.anchor.y);
+            assert_eq!(a.anchor, Point::new(x, y));
+        }
+    }
+    let mut layer = Layer::new("Arrow", LayerContent::Shape(sh));
+    let horizon = Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, -40.0]);
+    assert!(crate::transform_cmds::transform_layer(None, Default::default(), &mut layer, &horizon, None, Interp::Bilinear).is_err());
+}
+
+#[test]
+fn arrow_angle_edit_is_independent_and_undoable() {
+    let old: LiveShape = serde_json::from_value(json!({"kind":"arrow","from":[0,0],"to":[100,0],"headSize":20})).unwrap();
+    assert!(matches!(old, LiveShape::Arrow { head_angle: 60.0, .. }));
+    let mut s = session(240, 180, 8);
+    let created = s.execute("shape.create", json!({"kind":"arrow","from":[10,30],"to":[100,30],"headSize":32})).unwrap();
+    assert_eq!(created["live"]["headAngle"], 60.0);
+    let edited = s.execute("shape.edit", json!({"headAngle":110})).unwrap();
+    assert_eq!(edited["live"]["headSize"], 32.0);
+    assert_eq!(edited["live"]["headAngle"], 110.0);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.execute("shape.info", json!({})).unwrap()["live"]["headAngle"], 60.0);
+    s.execute("edit.redo", json!({})).unwrap();
+    s.execute("shape.edit", json!({"transform":[0,2,-2,0,200,0]})).unwrap();
+    assert_eq!(s.execute("shape.info", json!({})).unwrap()["live"]["headAngle"], 110.0);
+}
+
+#[test]
+fn line_tips_are_editable_undoable_and_validate_atomically() {
+    let old: LiveShape = serde_json::from_value(json!({"kind":"line","from":[20,30],"to":[120,30],"weight":12})).unwrap();
+    assert!(matches!(old, LiveShape::Line { round_tips: false, .. }));
+    for depth in [8, 16, 32] {
+        let mut s = session(200, 150, depth);
+        let created = s.execute("shape.create", json!({"kind":"line","from":[20,30],"to":[120,30],"weight":12})).unwrap();
+        let id = created["layer"].as_u64().unwrap();
+        assert_eq!(created["live"]["roundTips"], false);
+        let square = shape(&s, id);
+        s.execute("shape.edit", json!({"roundTips":true})).unwrap();
+        assert!(alpha_sum(&shape(&s, id)) > alpha_sum(&square));
+        assert!(s.undo());
+        assert_eq!(shape(&s, id), square);
+        assert!(s.redo());
+        s.execute("shape.edit", json!({"weight":18})).unwrap();
+        assert!(matches!(shape(&s, id).live, Some(LiveShape::Line { round_tips: true, weight: 18.0, .. })));
+        for params in [json!({"roundTips":"round"}), json!({"weight":-1}), json!({"from":[]}), json!({"to":[1,2,3]}), json!({"weight":10001})] {
+            let before = doc(&s).clone();
+            assert!(s.execute("shape.edit", params).is_err());
+            assert_eq!(doc(&s), &before);
+        }
+        s.execute("shape.edit", json!({"transform":[0,2,-2,0,100,0]})).unwrap();
+        assert!(matches!(shape(&s, id).live, Some(LiveShape::Line { round_tips: true, weight: 36.0, .. })));
+        s.execute("shape.edit", json!({"transform":[2,0,0,1,0,0]})).unwrap();
+        assert!(shape(&s, id).live.is_none());
+        s.execute("layer.setProps", json!({"layer":id,"locked":true})).unwrap();
+        let before = doc(&s).clone();
+        assert!(s.execute("shape.edit", json!({"roundTips":false})).is_err());
+        assert_eq!(doc(&s), &before);
+    }
 }

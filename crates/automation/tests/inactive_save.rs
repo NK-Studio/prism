@@ -1,6 +1,6 @@
-//! Regression for #1350: saving an inactive .pcraft file must not select it.
+//! Regression for #1350: saving an inactive .prism file must not select it.
 
-use photocraft_automation::Headless;
+use prism_automation::Headless;
 use serde_json::json;
 
 #[test]
@@ -11,7 +11,7 @@ fn indexed_native_save_preserves_active_document_and_future_command_target() {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("first.pcraft");
+    let path = dir.join("first.prism");
     let mut headless = Headless::trusted_local();
 
     headless.handle("doc.new", json!({"width": 2, "height": 2, "background": "white", "name": "first"})).unwrap();

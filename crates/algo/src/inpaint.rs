@@ -164,7 +164,7 @@ struct Solver<'a> {
     /// Target centres (patch overlaps the hole), row-major.
     targets: Vec<bool>,
     /// Cancellation: checked per row band; a cancelled solve's output is discarded.
-    ctl: photocraft_raster::Interrupt<'a>,
+    ctl: prism_raster::Interrupt<'a>,
 }
 
 impl Solver<'_> {
@@ -354,7 +354,7 @@ impl Solver<'_> {
 /// patch to copy from (the caller can fall back to [`membrane_fill`]).
 pub fn complete(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bool], p: &CompleteParams) -> Option<Vec<f32>> {
     // Never cancelled, so never `Err`.
-    complete_with(w, h, ch, img, hole, p, &photocraft_raster::Interrupt::NONE).unwrap_or(None)
+    complete_with(w, h, ch, img, hole, p, &prism_raster::Interrupt::NONE).unwrap_or(None)
 }
 
 /// [`complete`] that can be cancelled (checked per EM iteration, PatchMatch pass and row band)
@@ -366,8 +366,8 @@ pub fn complete_with(
     img: &[f32],
     hole: &[bool],
     p: &CompleteParams,
-    ctl: &photocraft_raster::Interrupt,
-) -> Result<Option<Vec<f32>>, photocraft_raster::Cancelled> {
+    ctl: &prism_raster::Interrupt,
+) -> Result<Option<Vec<f32>>, prism_raster::Cancelled> {
     assert_eq!(img.len(), w * h * ch);
     assert_eq!(hole.len(), w * h);
     let Some((bx0, by0, bx1, by1)) = hole_bbox(w, h, hole) else { return Ok(Some(img.to_vec())) };

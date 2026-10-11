@@ -6,12 +6,12 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use photocraft_cms::{Builtin, ColorSpace, Profile};
-use photocraft_color::{ColorMode, SampleType};
-use photocraft_io::*;
+use prism_cms::{Builtin, ColorSpace, Profile};
+use prism_color::{ColorMode, SampleType};
+use prism_io::*;
 
-fn single(mode: ColorMode, depth: SampleType, alpha: bool) -> photocraft_doc::Document {
-    let mut d = photocraft_doc::Document::new("s", photocraft_geom::Size::new(9, 6), mode, depth);
+fn single(mode: ColorMode, depth: SampleType, alpha: bool) -> prism_doc::Document {
+    let mut d = prism_doc::Document::new("s", prism_geom::Size::new(9, 6), mode, depth);
     let fmt = d.pixel_format();
     d.layers.push(raster("Background", fmt, d.bounds(), 3, alpha));
     d

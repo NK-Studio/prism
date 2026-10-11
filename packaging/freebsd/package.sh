@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Build and package Prism for FreeBSD:
 #
-#   $DIST/photocraft-<version>-freebsd-x86_64.tar.gz   a /usr/local-style tree:
-#       photocraft-<version>-freebsd-x86_64/{bin, share/applications, share/icons, share/mime,
-#       share/metainfo, share/doc/photocraft}
+#   $DIST/prism-<version>-freebsd-x86_64.tar.gz   a /usr/local-style tree:
+#       prism-<version>-freebsd-x86_64/{bin, share/applications, share/icons, share/mime,
+#       share/metainfo, share/doc/prism}
 #
 # Install by copying the tree's contents into /usr/local:
-#   tar -xzf photocraft-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
+#   tar -xzf prism-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
 #
 # Usage: packaging/freebsd/package.sh [--skip-build] [--dry-run]
 #   --dry-run   stage the tree from stub binaries and list it, without building (works on any OS)
@@ -16,7 +16,7 @@ set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 DESKTOP="$ROOT/packaging/freebsd"
-APP_ID=ai.storyteller.photocraft
+APP_ID=com.nkstudio.prism
 
 SKIP_BUILD=0
 DRY_RUN=0
@@ -40,14 +40,14 @@ if [ "$DRY_RUN" = 0 ] && [ "$(uname -s)" != FreeBSD ]; then
   echo "error: build on FreeBSD (or pass --dry-run to check the tree layout)" >&2
   exit 2
 fi
-BASENAME="photocraft-$VERSION-freebsd-$ARCH"
+BASENAME="prism-$VERSION-freebsd-$ARCH"
 
 echo "==> Prism $VERSION for FreeBSD $ARCH"
 
 # The release VM has 12 GB; full parallelism on the biggest crates runs it out of memory.
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release --locked -p photocraft -p photocraft-cli --features heif)
+  (cd "$ROOT" && cargo build --release --locked -p prism -p prism-cli --features heif)
 fi
 WORK="$CARGO_TARGET_DIR/freebsd-package"
 STAGE="$WORK/$BASENAME"
@@ -61,7 +61,7 @@ if [ "$DRY_RUN" = 1 ]; then
   BIN="$WORK/stub-bin"
   OUT_DIR="$WORK"
   mkdir -p "$BIN"
-  for b in photocraft photocraft-cli; do
+  for b in prism prism-cli; do
     printf '#!/bin/sh\necho "%s %s (dry-run stub)"\n' "$b" "$VERSION" >"$BIN/$b"
     chmod 755 "$BIN/$b"
   done
@@ -70,23 +70,23 @@ fi
 # ---- stage a /usr/local-style tree --------------------------------------------------------------
 # FreeBSD's install(1) has no -D: create the directories first.
 mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/mime/packages" \
-  "$STAGE/share/metainfo" "$STAGE/share/icons" "$STAGE/share/doc/photocraft"
-install -m 755 "$BIN/photocraft" "$BIN/photocraft-cli" "$STAGE/bin/"
-strip "$STAGE/bin/photocraft" "$STAGE/bin/photocraft-cli" 2>/dev/null || true
+  "$STAGE/share/metainfo" "$STAGE/share/icons" "$STAGE/share/doc/prism"
+install -m 755 "$BIN/prism" "$BIN/prism-cli" "$STAGE/bin/"
+strip "$STAGE/bin/prism" "$STAGE/bin/prism-cli" 2>/dev/null || true
 # The desktop entry, MIME type, metainfo and icons belong to the FreeBSD package.
 install -m 644 "$DESKTOP/$APP_ID.desktop" "$STAGE/share/applications/$APP_ID.desktop"
 install -m 644 "$DESKTOP/$APP_ID.mime.xml" "$STAGE/share/mime/packages/$APP_ID.xml"
-sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$PHOTOCRAFT_BUILD_DATE/g" \
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$PRISM_BUILD_DATE/g" \
   "$DESKTOP/$APP_ID.metainfo.xml.in" >"$STAGE/share/metainfo/$APP_ID.metainfo.xml"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/share/icons/"
-copy_docs "$STAGE/share/doc/photocraft"
+copy_docs "$STAGE/share/doc/prism"
 for f in NOTICE ATTRIBUTION.md; do
-  if [ -f "$ROOT/$f" ]; then install -m 644 "$ROOT/$f" "$STAGE/share/doc/photocraft/"; fi
+  if [ -f "$ROOT/$f" ]; then install -m 644 "$ROOT/$f" "$STAGE/share/doc/prism/"; fi
 done
 
-for f in bin/photocraft bin/photocraft-cli "share/applications/$APP_ID.desktop" \
+for f in bin/prism bin/prism-cli "share/applications/$APP_ID.desktop" \
   "share/icons/hicolor/256x256/apps/$APP_ID.png" "share/icons/hicolor/scalable/apps/$APP_ID.svg" \
-  share/doc/photocraft/LICENSE-MIT share/doc/photocraft/LICENSE-APACHE; do
+  share/doc/prism/LICENSE-MIT share/doc/prism/LICENSE-APACHE; do
   if [ ! -e "$STAGE/$f" ]; then echo "error: $f is missing from the package" >&2; exit 1; fi
 done
 
@@ -95,7 +95,7 @@ mkdir -p "$OUT_DIR"
 tar -C "$WORK" -czf "$OUT_DIR/$BASENAME.tar.gz" "$BASENAME"
 echo "wrote $OUT_DIR/$BASENAME.tar.gz"
 
-"$STAGE/bin/photocraft-cli" --version
+"$STAGE/bin/prism-cli" --version
 if [ "$DRY_RUN" = 1 ]; then
   echo "==> dry run: tarball contents"
   tar -tzvf "$OUT_DIR/$BASENAME.tar.gz"

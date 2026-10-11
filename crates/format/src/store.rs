@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 use std::time::SystemTime;
 
-use photocraft_color::{PixelFormat, SampleType};
-use photocraft_doc::Document;
-use photocraft_raster::{Rgba8Image, Tile};
+use prism_color::{PixelFormat, SampleType};
+use prism_doc::Document;
+use prism_raster::{Rgba8Image, Tile};
 
 use crate::convert::{self, Fetch, Loader, Sink, is_valid_hash, swap_to_le};
 use crate::manifest::{ContentM, FORMAT_VERSION, Hash, LayerM, Manifest};
@@ -45,9 +45,9 @@ fn hash_bytes(b: &[u8]) -> Hash {
 }
 
 fn png(img: &Rgba8Image) -> Result<Vec<u8>> {
-    let image = photocraft_codecs::Image::from_u8(img.width, img.height, photocraft_codecs::ChannelLayout::Rgba, img.pixels.clone())
+    let image = prism_codecs::Image::from_u8(img.width, img.height, prism_codecs::ChannelLayout::Rgba, img.pixels.clone())
         .map_err(|e| FormatError::Unsupported(format!("preview: {e}")))?;
-    photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).map_err(|e| FormatError::Unsupported(format!("preview: {e}")))
+    prism_codecs::encode(&image, prism_codecs::Format::Png, &Default::default()).map_err(|e| FormatError::Unsupported(format!("preview: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -313,11 +313,11 @@ fn tile_le(t: &Tile, sample: SampleType) -> std::borrow::Cow<'_, [u8]> {
     }
 }
 
-/// Default for [`PcraftWriter::set_reverify_budget`]: compressed bytes of already-verified
+/// Default for [`PrismWriter::set_reverify_budget`]: compressed bytes of already-verified
 /// objects re-read per directory save.
 pub const DEFAULT_REVERIFY_BUDGET: u64 = 16 * 1024 * 1024;
 
-/// Incremental `.pcraft` writer. Keep one per open document: it remembers
+/// Incremental `.prism` writer. Keep one per open document: it remembers
 /// tile hashes (by `Arc` identity), compressed objects, and objects it has
 /// verified in the current directory, so repeated saves stay cheap.
 ///
@@ -330,7 +330,7 @@ pub const DEFAULT_REVERIFY_BUDGET: u64 = 16 * 1024 * 1024;
 /// the cached objects, oldest-checked first, up to [`DEFAULT_REVERIFY_BUDGET`] bytes (see
 /// [`Self::set_reverify_budget`]). Over enough saves every object is read again, and a damaged
 /// one is rewritten.
-pub struct PcraftWriter {
+pub struct PrismWriter {
     hash_cache: HashMap<usize, (Weak<Tile>, Hash)>,
     /// Compressed objects by bundle path (ZIP mode).
     compressed: HashMap<String, Arc<Vec<u8>>>,
@@ -338,7 +338,7 @@ pub struct PcraftWriter {
     reverify_budget: u64,
 }
 
-impl Default for PcraftWriter {
+impl Default for PrismWriter {
     fn default() -> Self {
         Self { hash_cache: HashMap::new(), compressed: HashMap::new(), verified_directory: None, reverify_budget: DEFAULT_REVERIFY_BUDGET }
     }
@@ -487,7 +487,7 @@ fn par_compress<'a>(objects: &[(&'a String, &'a Object)]) -> Result<Vec<Compress
     })
 }
 
-impl PcraftWriter {
+impl PrismWriter {
     pub fn new() -> Self {
         Self::default()
     }
@@ -513,7 +513,7 @@ impl PcraftWriter {
         }
         let manifest = Manifest {
             format_version: FORMAT_VERSION,
-            generator: format!("photocraft-format {}", env!("CARGO_PKG_VERSION")),
+            generator: format!("prism-format {}", env!("CARGO_PKG_VERSION")),
             document,
             thumbnail: opts.thumbnail.as_ref().map(|_| THUMB.to_owned()),
             composite: opts.composite.as_ref().map(|_| COMPOSITE.to_owned()),

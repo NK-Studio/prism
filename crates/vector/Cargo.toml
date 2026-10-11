@@ -1,5 +1,5 @@
 [package]
-name = "photocraft-vector"
+name = "prism-vector"
 description = "Vector paths, shape layers, strokes and vector masks → anti-aliased coverage and surfaces"
 version.workspace = true
 edition.workspace = true
@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 rayon = { workspace = true }
-photocraft-geom = { workspace = true }
-photocraft-color = { workspace = true }
-photocraft-raster = { workspace = true }
-photocraft-doc = { workspace = true }
+prism-geom = { workspace = true }
+prism-color = { workspace = true }
+prism-raster = { workspace = true }
+prism-doc = { workspace = true }

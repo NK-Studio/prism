@@ -1,7 +1,7 @@
 # Simplified Chinese catalog
 
 The `zh-hans` catalog is registered as **简体中文** in the shared i18n foundation
-introduced by [Prism PR #169](https://github.com/storytold/photocraft/pull/169).
+introduced by [upstream PR #169](https://github.com/storytold/photocraft/pull/169).
 Simplified Chinese support landed in
 [PR #282](https://github.com/storytold/photocraft/pull/282), after the v0.2.0 release.
 That release does not contain the language selector or this catalog; use a build
@@ -57,7 +57,7 @@ complete catalog coverage does not claim those strings are translated.
 
 ## Validation and maintenance
 
-Run `cargo test -p photocraft-ui-egui`, the touched-crate all-target clippy check,
+Run `cargo test -p prism-ui-egui`, the touched-crate all-target clippy check,
 `cargo xtask layers`. The shared catalog tests validate
 duplicate keys, placeholders, ellipses, menu coverage, `tl!` literals, brush
 sections and blend modes. Chinese-specific tests cover locale selection, fallback,

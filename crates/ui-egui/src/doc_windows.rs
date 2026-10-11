@@ -1,18 +1,18 @@
 //! Native document ownership, independent cameras and tab drag-and-drop. No document is cloned
 //! when a tab floats: every view dispatches to the same engine Session and history.
 use crate::{
-    PhotocraftApp,
+    PrismApp,
     state::{DocWindow, DocWindowKind, View},
 };
 use egui::{Context, Id, Pos2, Rect, ViewportId};
-use photocraft_doc::DocId;
+use prism_doc::DocId;
 use serde_json::{Value, json};
 
 pub(crate) fn viewport(window: Option<u64>) -> ViewportId {
     window.map_or(ViewportId::ROOT, |id| ViewportId::from_hash_of(("docwin", id)))
 }
 
-impl PhotocraftApp {
+impl PrismApp {
     /// Camera targeted by the panels and View commands. Other documents retain their main view.
     pub fn view(&self, document: usize) -> Option<&View> {
         self.ui
@@ -38,15 +38,32 @@ impl PhotocraftApp {
     }
 }
 
-/// Floating document windows are above the editor while our app is foreground.
-/// They return to the ordinary desktop stack when another app takes focus.
-pub(crate) fn window_level(app: &PhotocraftApp, ctx: &Context) -> egui::viewport::WindowLevel {
-    let active =
-        app.services.application_active.as_ref().map_or_else(|| ctx.input(|i| i.raw.viewports.values().any(|v| v.focused == Some(true))), |active| active());
-    if active { egui::viewport::WindowLevel::AlwaysOnTop } else { egui::viewport::WindowLevel::Normal }
+/// Whether Prism is foreground, including focus in any detached window.
+pub(crate) fn application_active(app: &PrismApp, ctx: &Context) -> bool {
+    app.services.application_active.as_ref().map_or_else(|| ctx.input(|i| i.raw.viewports.values().any(|v| v.focused == Some(true))), |active| active())
 }
 
-pub(crate) fn sync_window_level(app: &PhotocraftApp, ctx: &Context) {
+/// Floating documents stay above the editor while Prism is active. Two exceptions use ordinary
+/// stacking: the unsaved-changes prompt's native save picker (a root-window panel an always-on-top
+/// canvas could cover; the prompt itself floats above them), and a floating dialog
+/// ([`crate::dialogs::floats`]), the one window kept on top so clicking its document to pan the
+/// preview cannot bury it.
+pub(crate) fn window_level(app: &PrismApp, ctx: &Context) -> egui::viewport::WindowLevel {
+    let save_picker = app.discard.is_some() && app.file_dialog_open();
+    if !save_picker && !app.ui.dialogs.iter().any(crate::dialogs::floats) && application_active(app, ctx) {
+        egui::viewport::WindowLevel::AlwaysOnTop
+    } else {
+        egui::viewport::WindowLevel::Normal
+    }
+}
+
+/// The level of a floating modal's own window ([`crate::floating_window`]): above the document
+/// windows while Prism is active.
+pub(crate) fn dialog_level(app: &PrismApp, ctx: &Context) -> egui::viewport::WindowLevel {
+    if application_active(app, ctx) { egui::viewport::WindowLevel::AlwaysOnTop } else { egui::viewport::WindowLevel::Normal }
+}
+
+pub(crate) fn sync_window_level(app: &PrismApp, ctx: &Context) {
     let level = window_level(app, ctx);
     let key = Id::new(("document-window-level", ctx.viewport_id()));
     let old = ctx.data(|d| d.get_temp::<egui::viewport::WindowLevel>(key));
@@ -57,11 +74,11 @@ pub(crate) fn sync_window_level(app: &PhotocraftApp, ctx: &Context) {
     }
 }
 
-pub(crate) fn docked(app: &PhotocraftApp) -> Vec<usize> {
+pub(crate) fn docked(app: &PrismApp) -> Vec<usize> {
     (0..app.session.documents().len()).filter(|i| !app.ui.windows.iter().any(|w| w.open && w.document == *i && w.kind == DocWindowKind::Detached)).collect()
 }
 
-pub(crate) fn main_index(app: &PhotocraftApp) -> Option<usize> {
+pub(crate) fn main_index(app: &PrismApp) -> Option<usize> {
     let docked = docked(app);
     let preferred = if app.ui.active_window.is_none() { app.session.active_index() } else { None };
     preferred
@@ -70,7 +87,7 @@ pub(crate) fn main_index(app: &PhotocraftApp) -> Option<usize> {
         .or_else(|| docked.first().copied())
 }
 
-pub(crate) fn sync(app: &mut PhotocraftApp) {
+pub(crate) fn sync(app: &mut PrismApp) {
     if app.ui.active_window.is_some_and(|id| !app.ui.windows.iter().any(|w| w.id == id && w.open && Some(w.document) == app.session.active_index())) {
         app.ui.active_window = None;
     }
@@ -82,7 +99,7 @@ pub(crate) fn sync(app: &mut PhotocraftApp) {
 }
 
 /// Finish text in its source document and discard held gestures before another view takes input.
-pub(crate) fn activate(app: &mut PhotocraftApp, document: usize, window: Option<u64>) {
+pub(crate) fn activate(app: &mut PrismApp, document: usize, window: Option<u64>) {
     if app.session.active_index() != Some(document) {
         if app.ui.text_edit.is_some() {
             crate::type_tool::commit(app);
@@ -100,13 +117,14 @@ pub(crate) fn activate(app: &mut PhotocraftApp, document: usize, window: Option<
         crate::move_mods::abandon(app);
         crate::type_transform::cancel_drag(app);
         crate::shape_corners_ui::cancel_view_gesture(app);
+        crate::arrow_handles_ui::cancel_view_gesture(app);
     }
     app.session.set_active(document);
     app.ui.active_window = window;
     app.jobs.focus = None;
 }
 
-pub(crate) fn activate_main(app: &mut PhotocraftApp, document: usize) {
+pub(crate) fn activate_main(app: &mut PrismApp, document: usize) {
     if !docked(app).contains(&document) {
         return;
     }
@@ -129,7 +147,7 @@ pub(crate) fn requested_focus(ctx: &Context) -> Option<u64> {
     ctx.data(|d| d.get_temp::<RequestedFocus>(focus_key())).filter(|f| f.until > std::time::Instant::now()).map(|f| f.window)
 }
 
-pub fn focus(app: &mut PhotocraftApp, ctx: &Context, window: u64) -> Result<Value, String> {
+pub fn focus(app: &mut PrismApp, ctx: &Context, window: u64) -> Result<Value, String> {
     let document = app.ui.windows.iter().find(|w| w.open && w.id == window).map(|w| w.document).ok_or_else(|| format!("no window {window}"))?;
     if app.session.documents().get(document).is_none() {
         return Err("window's document is closed".into());
@@ -143,7 +161,7 @@ pub fn focus(app: &mut PhotocraftApp, ctx: &Context, window: u64) -> Result<Valu
     Ok(json!({"window": window, "document": document}))
 }
 
-pub(crate) fn focus_native(app: &mut PhotocraftApp, ctx: &Context) {
+pub(crate) fn focus_native(app: &mut PrismApp, ctx: &Context) {
     // Focus commands take an OS event-loop turn to arrive. Keep the requested document
     // stable through that turn, rather than letting stale viewport info retarget input.
     if crate::native_dialogs::is_open(app) {
@@ -167,7 +185,7 @@ pub(crate) fn focus_native(app: &mut PhotocraftApp, ctx: &Context) {
     }
 }
 
-pub fn detach(app: &mut PhotocraftApp, ctx: &Context, document: usize, position: Option<[f32; 2]>) -> Result<Value, String> {
+pub fn detach(app: &mut PrismApp, ctx: &Context, document: usize, position: Option<[f32; 2]>) -> Result<Value, String> {
     if app.session.documents().get(document).is_none() {
         return Err(format!("no document {document}"));
     }
@@ -185,7 +203,7 @@ pub fn detach(app: &mut PhotocraftApp, ctx: &Context, document: usize, position:
     focus(app, ctx, id)
 }
 
-pub fn additional(app: &mut PhotocraftApp, document: usize) -> Result<Value, String> {
+pub fn additional(app: &mut PrismApp, document: usize) -> Result<Value, String> {
     if app.session.documents().get(document).is_none() {
         return Err(format!("no document {document}"));
     }
@@ -195,7 +213,7 @@ pub fn additional(app: &mut PhotocraftApp, document: usize) -> Result<Value, Str
     Ok(json!({"window": id}))
 }
 
-pub fn attach(app: &mut PhotocraftApp, ctx: &Context, window: u64, before: Option<DocId>) -> Result<Value, String> {
+pub fn attach(app: &mut PrismApp, ctx: &Context, window: u64, before: Option<DocId>) -> Result<Value, String> {
     let w = app.ui.windows.iter().find(|w| w.open && w.id == window).cloned().ok_or_else(|| format!("no window {window}"))?;
     if w.kind != DocWindowKind::Detached {
         return Err("window is an additional view, not a detached tab".into());
@@ -220,7 +238,7 @@ pub fn attach(app: &mut PhotocraftApp, ctx: &Context, window: u64, before: Optio
     Ok(json!({"document": document}))
 }
 
-pub(crate) fn consolidate(app: &mut PhotocraftApp) {
+pub(crate) fn consolidate(app: &mut PrismApp) {
     for w in &app.ui.windows {
         if w.kind == DocWindowKind::Detached
             && let Some(v) = app.ui.views.get_mut(w.document)
@@ -234,7 +252,7 @@ pub(crate) fn consolidate(app: &mut PhotocraftApp) {
     sync(app);
 }
 
-pub fn close(app: &mut PhotocraftApp, ctx: &Context, window: u64) -> Result<Value, String> {
+pub fn close(app: &mut PrismApp, ctx: &Context, window: u64) -> Result<Value, String> {
     let w = app.ui.windows.iter().find(|w| w.open && w.id == window).cloned().ok_or_else(|| format!("no window {window}"))?;
     if app.ui.dialogs.iter().any(|d| d.window == Some(window)) || app.file_dialog_open() {
         return Err("close the dialog before closing this document window".into());
@@ -337,10 +355,18 @@ impl egui::plugin::Plugin for NativeInput {
     }
 }
 
-pub(crate) fn queue_input(app: &mut PhotocraftApp, ctx: &Context) {
+/// The unsaved-changes prompt is app-modal and has its own window: automation input aimed at any
+/// window (or none) answers it, as the windows behind it take none.
+pub(crate) fn prompt_takes_input(app: &PrismApp, ctx: &Context) -> bool {
+    app.discard.is_some() && !ctx.embed_viewports() && app.synthetic_dialog.is_none()
+}
+
+pub(crate) fn queue_input(app: &mut PrismApp, ctx: &Context) {
     ctx.data_mut(|d| d.insert_temp(Id::new("document-typing"), app.ui.text_edit.is_some()));
-    if app.synthetic_window.is_some() || app.synthetic_dialog.is_some() {
-        let id = app.synthetic_dialog.map(crate::native_dialogs::viewport).unwrap_or_else(|| viewport(app.synthetic_window));
+    let prompt = prompt_takes_input(app, ctx);
+    if app.synthetic_window.is_some() || app.synthetic_dialog.is_some() || prompt {
+        let prompt = prompt.then(crate::discard_ui::viewport);
+        let id = prompt.or(app.synthetic_dialog.map(crate::native_dialogs::viewport)).unwrap_or_else(|| viewport(app.synthetic_window));
         let events = std::mem::take(&mut app.synthetic);
         ctx.data_mut(|d| {
             let mut q = d.get_temp::<InputQueue>(input_key(id)).unwrap_or_default();
@@ -349,7 +375,7 @@ pub(crate) fn queue_input(app: &mut PhotocraftApp, ctx: &Context) {
         });
     }
 }
-pub(crate) fn queue_drag_input(app: &mut PhotocraftApp, ctx: &Context) {
+pub(crate) fn queue_drag_input(app: &mut PrismApp, ctx: &Context) {
     let id = viewport(app.synthetic_window);
     let events = std::mem::take(&mut app.synthetic);
     ctx.data_mut(|d| {
@@ -363,13 +389,15 @@ pub(crate) fn automated(ctx: &Context) -> bool {
     let id = ctx.viewport_id();
     ctx.data(|d| d.get_temp::<bool>(automated_key(id))).unwrap_or(false)
 }
-pub(crate) fn input_pending(app: &PhotocraftApp, ctx: &Context) -> bool {
-    ctx.data(|d| d.get_temp::<InputQueue>(input_key(ViewportId::ROOT))).is_some_and(|q| !q.events.is_empty())
+pub(crate) fn input_pending(app: &PrismApp, ctx: &Context) -> bool {
+    let queued = |id: ViewportId| ctx.data(|d| d.get_temp::<InputQueue>(input_key(id))).is_some_and(|q| !q.events.is_empty());
+    queued(ViewportId::ROOT)
+        || (app.discard.is_some() && queued(crate::discard_ui::viewport()))
         || app
             .ui
             .dialogs
             .iter()
-            .filter(|d| d.presentation == crate::state::DialogPresentation::Native)
+            .filter(|d| crate::native_dialogs::own_window(d))
             .any(|d| ctx.data(|m| m.get_temp::<InputQueue>(input_key(crate::native_dialogs::viewport(d.id)))).is_some_and(|q| !q.events.is_empty()))
         || app.ui.windows.iter().any(|w| ctx.data(|d| d.get_temp::<InputQueue>(input_key(viewport(Some(w.id))))).is_some_and(|q| !q.events.is_empty()))
 }
@@ -405,7 +433,7 @@ fn desktop_rect(ctx: &Context, local: Rect) -> Option<Rect> {
     ctx.input(|i| i.viewport().inner_rect.map(|inner| local.translate(inner.min.to_vec2()) * scale))
 }
 
-pub(crate) fn tab_drag(app: &PhotocraftApp, ctx: &Context, document: usize, window: Option<u64>, strip: Rect, response: &egui::Response) {
+pub(crate) fn tab_drag(app: &PrismApp, ctx: &Context, document: usize, window: Option<u64>, strip: Rect, response: &egui::Response) {
     if !response.drag_started()
         || !app.ui.dialogs.is_empty()
         || app.discard.is_some()
@@ -413,6 +441,7 @@ pub(crate) fn tab_drag(app: &PhotocraftApp, ctx: &Context, document: usize, wind
         || app.drag.is_some()
         || app.guide_drag.is_some()
         || app.ui.shape_corners.is_some()
+        || app.ui.arrow_handles.is_some()
         || app.ui.type_transform.is_some()
         || crate::layer_transfer::pointer_if_armed(app, ctx).is_some()
     {
@@ -443,7 +472,7 @@ pub(crate) fn clear_drop_strip(ctx: &Context) {
     ctx.data_mut(|d| d.remove::<DropStrip>(strip_key()));
 }
 
-pub(crate) fn drop_strip(app: &PhotocraftApp, ctx: &Context, rect: Rect, tabs: &[(usize, Rect)]) {
+pub(crate) fn drop_strip(app: &PrismApp, ctx: &Context, rect: Rect, tabs: &[(usize, Rect)]) {
     let Some(rect) = desktop_rect(ctx, rect) else { return };
     let tabs = tabs.iter().filter_map(|(i, r)| Some((app.session.documents().get(*i)?.doc.id, desktop_rect(ctx, *r)?))).collect();
     let scale = ctx.pixels_per_point();
@@ -500,7 +529,7 @@ pub(crate) fn move_window(ctx: &Context, window: u64) {
 
 /// Fade the entire native window, never overlay black on the document. Called every source
 /// frame so leaving the target, cancelling, or releasing restores the OS titlebar as well.
-pub(crate) fn fade_window(app: &mut PhotocraftApp, ctx: &Context, window: u64) {
+pub(crate) fn fade_window(app: &mut PrismApp, ctx: &Context, window: u64) {
     let drag = ctx.data(|d| d.get_temp::<TabDrag>(drag_key()));
     let target = ctx.data(|d| d.get_temp::<DropStrip>(strip_key()));
     let docking = matches!((drag, target), (Some(drag), Some(target)) if drag.window == Some(window) && can_attach(&drag, &target));
@@ -515,7 +544,7 @@ pub(crate) fn fade_window(app: &mut PhotocraftApp, ctx: &Context, window: u64) {
     }
 }
 
-pub(crate) fn drag_indicator(app: &PhotocraftApp, ctx: &Context, workspace: Rect) {
+pub(crate) fn drag_indicator(app: &PrismApp, ctx: &Context, workspace: Rect) {
     let Some(drag) = ctx.data(|d| d.get_temp::<TabDrag>(drag_key())) else { return };
     let target = ctx.data(|d| d.get_temp::<DropStrip>(strip_key()));
     let t = crate::theme::Tokens::get(ctx);
@@ -559,7 +588,7 @@ pub(crate) fn drag_indicator(app: &PhotocraftApp, ctx: &Context, workspace: Rect
     }
 }
 
-pub(crate) fn finish_drag(app: &mut PhotocraftApp, ctx: &Context) {
+pub(crate) fn finish_drag(app: &mut PrismApp, ctx: &Context) {
     let Some(drag) = ctx.data(|d| d.get_temp::<TabDrag>(drag_key())) else { return };
     if !app.ui.dialogs.is_empty()
         || app.discard.is_some()
@@ -606,7 +635,7 @@ pub(crate) fn finish_drag(app: &mut PhotocraftApp, ctx: &Context) {
     }
 }
 
-pub(crate) fn dialogs_here(app: &PhotocraftApp, ctx: &Context) -> bool {
+pub(crate) fn dialogs_here(app: &PrismApp, ctx: &Context) -> bool {
     let host = app.ui.dialogs.last().map_or(app.ui.active_window, |d| d.window);
     !crate::native_dialogs::is_open(app) && viewport(host) == ctx.viewport_id()
 }

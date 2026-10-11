@@ -1,5 +1,5 @@
 [package]
-name = "photocraft-engine"
+name = "prism-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,32 +12,32 @@ workspace = true
 corpus = []
 
 [dependencies]
-photocraft-geom = { workspace = true }
-photocraft-color = { workspace = true }
-photocraft-cms = { workspace = true }
-photocraft-raster = { workspace = true }
-photocraft-doc = { workspace = true }
-photocraft-ops = { workspace = true }
-photocraft-compose = { workspace = true }
+prism-geom = { workspace = true }
+prism-color = { workspace = true }
+prism-cms = { workspace = true }
+prism-raster = { workspace = true }
+prism-doc = { workspace = true }
+prism-ops = { workspace = true }
+prism-compose = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
-photocraft-paint = { workspace = true }
-photocraft-algo = { workspace = true }
-photocraft-text = { workspace = true }
-photocraft-vector = { workspace = true }
-photocraft-io = { workspace = true }
-photocraft-psd = { workspace = true }
-photocraft-format = { workspace = true }
-photocraft-plugins = { workspace = true }
+prism-paint = { workspace = true }
+prism-algo = { workspace = true }
+prism-text = { workspace = true }
+prism-vector = { workspace = true }
+prism-io = { workspace = true }
+prism-psd = { workspace = true }
+prism-format = { workspace = true }
+prism-plugins = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
-photocraft-codecs = { workspace = true }
+prism-codecs = { workspace = true }
 flate2 = { workspace = true }
 
 [dev-dependencies]
-photocraft-affinity = { workspace = true, features = ["synth"] }
+prism-affinity = { workspace = true, features = ["synth"] }
 # Synthetic camera raw files for the open tests.
-photocraft-raw = { workspace = true, features = ["testgen"] }
+prism-raw = { workspace = true, features = ["testgen"] }
 # WebAssembly text -> binary for plug-in test modules (Apache-2.0 WITH LLVM-exception).
 wat = "1.228"

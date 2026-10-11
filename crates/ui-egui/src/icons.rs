@@ -108,6 +108,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Triangle => "triangle",
         Tool::Polygon => "pentagon",
         Tool::Line => "slash",
+        Tool::Arrow => "annotation-arrow",
         Tool::CustomShape => "cloud",
     }
 }
@@ -134,7 +135,7 @@ pub fn button_chrome(ui: &egui::Ui, rect: Rect, selected: bool, hovered: bool) -
 pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(box_size), Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let tint = button_chrome(ui, rect, selected, resp.hovered());
+    let tint = if ui.is_enabled() { button_chrome(ui, rect, selected, resp.hovered()) } else { Tokens::get(ui.ctx()).text_faint };
     paint(ui, rect, name, (box_size * 0.52).round(), tint);
     if tooltip.is_empty() { resp } else { resp.on_hover_text(tl!(tooltip)) }
 }

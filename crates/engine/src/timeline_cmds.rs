@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use photocraft_doc::Timeline;
+use prism_doc::Timeline;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;

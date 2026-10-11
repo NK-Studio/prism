@@ -6,7 +6,7 @@
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Map, Value, json};
 
-use crate::PhotocraftApp;
+use crate::PrismApp;
 use crate::state::DialogKind;
 use crate::theme::Tokens;
 
@@ -14,8 +14,8 @@ const UNITS: [(&str, &str); 7] =
     [("px", "Pixels"), ("percent", "Percent"), ("in", "Inches"), ("cm", "Centimeters"), ("mm", "Millimeters"), ("pt", "Points"), ("pica", "Picas")];
 
 /// Dialog unit for the Units & Rulers preference.
-fn pref_unit(u: photocraft_engine::prefs::Unit) -> &'static str {
-    use photocraft_engine::prefs::Unit;
+fn pref_unit(u: prism_engine::prefs::Unit) -> &'static str {
+    use prism_engine::prefs::Unit;
     match u {
         Unit::Pixels => "px",
         Unit::Percent => "percent",
@@ -28,8 +28,8 @@ fn pref_unit(u: photocraft_engine::prefs::Unit) -> &'static str {
 }
 
 /// Image Size resampling for Preferences › General › Image Interpolation.
-fn pref_resample(i: photocraft_engine::prefs::Interpolation) -> &'static str {
-    use photocraft_engine::prefs::Interpolation;
+fn pref_resample(i: prism_engine::prefs::Interpolation) -> &'static str {
+    use prism_engine::prefs::Interpolation;
     match i {
         Interpolation::BicubicAutomatic => "auto",
         Interpolation::Nearest => "nearest",
@@ -45,12 +45,12 @@ pub fn is_sizing(command: &str) -> bool {
     matches!(command, "image.imageSize" | "image.canvasSize")
 }
 
-pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
+pub fn open(app: &mut PrismApp, command: &str) -> Option<u64> {
     let unit = pref_unit(app.session.prefs().units_and_rulers.rulers);
     let resample = pref_resample(app.session.prefs().general.image_interpolation);
     let d = &app.session.active()?.doc;
     let (w, h, res) = (d.size.width as f64, d.size.height as f64, d.resolution_dpi as f64);
-    let label = photocraft_engine::commands::find(command).map(|c| c.label).unwrap_or("Image Size…");
+    let label = prism_engine::commands::find(command).map(|c| c.label).unwrap_or("Image Size…");
     let mut f = Map::new();
     f.insert("__command".into(), json!(command));
     f.insert("__label".into(), json!(label));
@@ -129,7 +129,7 @@ pub fn human_bytes(b: f64) -> String {
     }
 }
 
-pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if f.get("__command").and_then(Value::as_str) == Some("image.canvasSize") {
         canvas_size(app, ui, f);
     } else {
@@ -378,7 +378,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     });
 }
 
-fn canvas_size(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+fn canvas_size(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
     let bpp = num(f, "__bytesPerPixel").max(1.0);
@@ -542,15 +542,15 @@ fn apply_fit(f: &mut Map<String, Value>, preset: &str) {
 #[derive(Clone)]
 struct Preview {
     revision: u64,
-    receiver: std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<photocraft_compose::Buffer>>>,
-    buffer: Option<std::sync::Arc<photocraft_compose::Buffer>>,
+    receiver: std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<prism_compose::Buffer>>>,
+    buffer: Option<std::sync::Arc<prism_compose::Buffer>>,
     texture: Option<egui::TextureHandle>,
     key: String,
     zoom: f32,
     pan: egui::Vec2,
     failed: bool,
 }
-fn preview(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &Map<String, Value>, height: f32) {
+fn preview(app: &mut PrismApp, ui: &mut egui::Ui, f: &Map<String, Value>, height: f32) {
     let Some(st) = app.session.documents().iter().find(|s| Some(s.doc.id.0) == f.get("__sourceDoc").and_then(Value::as_u64)) else { return };
     let doc = st.doc.clone();
     let revision = st.revision;
@@ -562,7 +562,7 @@ fn preview(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &Map<String, Value>, h
         let failed = std::thread::Builder::new()
             .name("size-preview".into())
             .spawn(move || {
-                let image = photocraft_compose::thumbnail_buffer(&worker_doc, 512);
+                let image = prism_compose::thumbnail_buffer(&worker_doc, 512);
                 let _ = tx.send(image);
             })
             .is_err();
@@ -597,31 +597,31 @@ fn preview(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &Map<String, Value>, h
         let scale = (512.0 / w.max(h)).min(1.0);
         let (pw, ph) = ((w * scale).round().clamp(1.0, 512.0) as u32, (h * scale).round().clamp(1.0, 512.0) as u32);
         let filter = match method {
-            "nearest" => photocraft_algo::resample::Resample::Nearest,
-            "bilinear" => photocraft_algo::resample::Resample::Bilinear,
-            "lanczos" => photocraft_algo::resample::Resample::Lanczos,
-            "preserveDetails" => photocraft_algo::resample::Resample::PreserveDetails,
+            "nearest" => prism_algo::resample::Resample::Nearest,
+            "bilinear" => prism_algo::resample::Resample::Bilinear,
+            "lanczos" => prism_algo::resample::Resample::Lanczos,
+            "preserveDetails" => prism_algo::resample::Resample::PreserveDetails,
             "auto" if w >= num(f, "__origW") && h >= num(f, "__origH") && (w > num(f, "__origW") || h > num(f, "__origH")) => {
-                photocraft_algo::resample::Resample::PreserveDetails
+                prism_algo::resample::Resample::PreserveDetails
             }
             "auto" if w <= num(f, "__origW") && h <= num(f, "__origH") && (w < num(f, "__origW") || h < num(f, "__origH")) => {
-                photocraft_algo::resample::Resample::Lanczos
+                prism_algo::resample::Resample::Lanczos
             }
-            _ => photocraft_algo::resample::Resample::Bicubic,
+            _ => prism_algo::resample::Resample::Bicubic,
         };
-        let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA32F);
+        let mut surface = prism_raster::Surface::new(prism_color::PixelFormat::RGBA32F);
         let pixels: Vec<_> = buffer.px.iter().flat_map(|p| p.iter().copied()).collect();
         surface.write_region(buffer.rect, &pixels);
-        let resized = photocraft_algo::resample::resize_surface_in_canvas(
+        let resized = prism_algo::resample::resize_surface_in_canvas(
             &surface,
             f64::from(pw) / f64::from(buffer.rect.width().max(1)),
             f64::from(ph) / f64::from(buffer.rect.height().max(1)),
             filter,
             buffer.rect,
         );
-        let rect = photocraft_geom::Rect::from_xywh(0, 0, pw, ph);
+        let rect = prism_geom::Rect::from_xywh(0, 0, pw, ph);
         let pixels = resized.read_region(rect);
-        let image = photocraft_compose::Buffer {
+        let image = prism_compose::Buffer {
             rect,
             px: pixels
                 .as_chunks::<4>()
@@ -694,10 +694,10 @@ mod tests {
             for scale in [1.0, 2.0] {
                 for (command, width) in [("image.imageSize", 860.0), ("image.imageSize", 480.0), ("image.canvasSize", 500.0), ("image.canvasSize", 440.0)] {
                     let ctx = egui::Context::default();
-                    crate::PhotocraftApp::setup_context(&ctx, Default::default());
+                    crate::PrismApp::setup_context(&ctx, Default::default());
                     crate::theme::apply(&ctx, theme);
                     ctx.set_pixels_per_point(scale);
-                    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                    let mut app = crate::PrismApp::new(prism_engine::Session::new(), Default::default());
                     app.session.execute("file.new", json!({"width":320,"height":240})).unwrap();
                     let id = open(&mut app, command).unwrap();
                     let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn columns_fit_resolution_and_validation() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
         app.session.execute("file.new", json!({"width":3000,"height":1500})).unwrap();
         let id = open(&mut app, "image.imageSize").unwrap();
         let mut f = app.ui.dialog_mut(id).unwrap().fields.clone();
@@ -742,7 +742,7 @@ mod tests {
     }
     #[test]
     fn transparent_canvas_disables_extension_and_relative_zero_is_valid() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
         app.session.execute("file.new", json!({"width":20,"height":10,"background":"transparent"})).unwrap();
         let id = open(&mut app, "image.canvasSize").unwrap();
         let f = &mut app.ui.dialog_mut(id).unwrap().fields;
@@ -768,20 +768,20 @@ mod tests {
 
     #[test]
     fn dialog_maps_to_engine_command() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
         let id = open(&mut app, "image.imageSize").unwrap();
         let d = app.ui.dialog_mut(id).unwrap();
         d.fields.insert("width".into(), json!(100));
         d.fields.insert("height".into(), json!(50));
         crate::dialogs::confirm(&mut app, id).unwrap();
-        assert_eq!(app.session.active().unwrap().doc.size, photocraft_doc::Size::new(100, 50));
+        assert_eq!(app.session.active().unwrap().doc.size, prism_doc::Size::new(100, 50));
         let id = open(&mut app, "image.canvasSize").unwrap();
         let d = app.ui.dialog_mut(id).unwrap();
         d.fields.insert("width".into(), json!(120));
         d.fields.insert("anchor".into(), json!("topLeft"));
         crate::dialogs::confirm(&mut app, id).unwrap();
-        assert_eq!(app.session.active().unwrap().doc.size, photocraft_doc::Size::new(120, 50));
+        assert_eq!(app.session.active().unwrap().doc.size, prism_doc::Size::new(120, 50));
     }
 
     /// #441: a typed zero width showed "0 px × 1 px" while OK resized to 1×1.
@@ -789,7 +789,7 @@ mod tests {
     fn typed_zero_width_shows_the_applied_size() {
         use egui::accesskit::Role;
         use egui_kittest::{Harness, kittest::Queryable};
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
             |ui, app| {
@@ -803,7 +803,7 @@ mod tests {
             },
             app,
         );
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         let id = open(h.state_mut(), "image.imageSize").unwrap();
         h.run_steps(3);
         let width = h.query_all_by_role(Role::SpinButton).next().map(|n| n.rect()).expect("the Width field");
@@ -820,6 +820,6 @@ mod tests {
         let f = h.state().ui.dialogs.first().map(|d| d.fields.clone()).expect("the dialog is open");
         assert_eq!((num(&f, "width"), num(&f, "height")), (1.0, 1.0), "{f:?}");
         crate::dialogs::confirm(h.state_mut(), id).unwrap();
-        assert_eq!(h.state().session.active().unwrap().doc.size, photocraft_doc::Size::new(1, 1));
+        assert_eq!(h.state().session.active().unwrap().doc.size, prism_doc::Size::new(1, 1));
     }
 }

@@ -12,7 +12,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Japanese computing vocabulary (レイヤー, ぼかし, 選択範囲 ...). No proprietary localisation
 # resource, string table or product UI was consulted or copied; add entries the same way.
-# Product and technology names (Prism, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
+# Product and technology names (Prism, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing "…" of dialog commands is kept.
 
 	File	ファイル
@@ -704,8 +704,6 @@
 	About Prism	Prism について
 	Prism Website	Prism の Web サイト
 	Prism on GitHub	GitHub 上の Prism
-	ArtCraft Website	ArtCraft の Web サイト
-	Join the ArtCraft Discord…	ArtCraft の Discord に参加…
 	Report an Issue…	問題を報告…
 	WIA Support…	WIA サポート…
 	Apply	適用
@@ -964,7 +962,6 @@
 	Diffusion	拡散
 	Discard the embedded profile (don't color manage)	埋め込みプロファイルを破棄(カラーマネジメントしない)
 	Discontiguous	不連続
-	Discord	Discord
 	Dismiss	閉じる
 	Display P3	Display P3
 	Display Text	表示テキスト
@@ -1091,7 +1088,6 @@
 	Invert All	すべて反転
 	Invert has no settings.	階調の反転には設定がありません。
 	Italic	イタリック
-	Join us on Discord	Discord に参加
 	Justify all	均等配置(最終行も)
 	Justify last centered	最終行中央揃えの両端揃え
 	Justify last left	最終行左揃えの両端揃え
@@ -1483,7 +1479,6 @@
 	Apple Watch 45mm	Apple Watch 45mm
 	Aqua	アクア
 	Art & Illustration	アート・イラスト
-	ArtCraft	ArtCraft
 	Background Eraser Tool	背景消しゴムツール
 	Bevel & Emboss	ベベルとエンボス
 	Blend Mode	描画モード
@@ -3119,7 +3114,6 @@ fontWeight	Italic	斜体
 	Install Plug-in	プラグインをインストール
 	Intersect with	共通部分
 	Intersect with selection  (⇧⌥)	選択範囲との共通部分  (⇧⌥)
-	Join the ArtCraft Discord	ArtCraft の Discord に参加
 	Keep proportions	縦横比を固定
 	Keep view in sync	ビューを同期
 	Keeps the current texture when switching presets.	プリセットを切り替えても現在のテクスチャを維持します。
@@ -3277,3 +3271,47 @@ fontWeight	Italic	斜体
 	{name} copy	{name} のコピー
 	Duplicate Image	画像を複製
 	Preparing preview…	プレビューを準備中…
+
+	Load Font File…	フォントファイルを読み込む…
+	Favorite	お気に入りに追加
+	Unfavorite	お気に入りから削除
+	TTF, OTF, TTC, OTC — available until Prism exits	TTF、OTF、TTC、OTC — Prism を終了するまで使用可能
+	Loaded font (this session)	フォントを読み込みました（このセッション）
+	Favorite fonts	お気に入りのフォント
+
+	All fonts	すべてのフォント
+	Korean only	韓国語のみ
+	No preview	プレビューなし
+
+# Prism About introduction and footer.
+	Turn ideas into images.	アイデアを画像に。
+	Prism is a desktop image editor by NK Studio.	PrismはNK Studioが手がけるデスクトップ画像編集ソフトです。
+	Refine layers, color, and typography to bring your vision to life.	レイヤー、色、文字を磨き、思い描いたイメージを形にしましょう。
+	All rights reserved.	無断転載を禁じます。
+	Built for creative expression.	自由な表現のために。
+
+	Arrow Tool	矢印ツール
+	Arrow	矢印
+	Arrow color	矢印の色
+	Arrowhead	矢じりのサイズ
+	Angular	角形
+	Rounded	丸形
+
+	Arrowhead length	矢じりの長さ
+
+	Arrowhead angle	矢じりの角度
+
+	Line tips	線端
+
+	Square tips	角型
+
+	Round tips	丸型
+	Make:	作成:
+	Selection…	選択範囲…
+	Align To:	整列:
+	Rubber Band	ラバーバンド
+	Auto Add/Delete	自動追加・削除
+	Align Edges	エッジを整列
+	Path Operations	パスの操作
+	Path Alignment	パスの整列
+	Path Arrangement	パスの配置

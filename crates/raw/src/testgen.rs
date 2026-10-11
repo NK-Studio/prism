@@ -441,7 +441,7 @@ impl DngSpec {
             baseline_exposure: None,
             orientation: 1,
             opcode_list2: None,
-            make: "Photocraft".into(),
+            make: "Prism".into(),
             model: "Synthetic".into(),
         }
     }

@@ -3,20 +3,20 @@
 
 use std::sync::Arc;
 
-use photocraft_color::{PixelFormat, SampleType};
-use photocraft_doc::{
+use prism_color::{PixelFormat, SampleType};
+use prism_doc::{
     AlphaChannel, CompAppearance, CompLayerState, DocId, Document, Effects, FillCache, Group, Layer, LayerComp, LayerContent, LayerId, LayerMask, Metadata,
     NamedPath, Pattern, ShapeLayer, SmartObject, SmartSource, TextLayer,
 };
-use photocraft_geom::{TILE_SIZE, TileCoord};
-use photocraft_raster::{Surface, Tile, decode_pixel, encode_pixel};
+use prism_geom::{TILE_SIZE, TileCoord};
+use prism_raster::{Surface, Tile, decode_pixel, encode_pixel};
 
 use crate::manifest::*;
 use crate::{FormatError, Result};
 
 /// Deepest group nesting a bundle may hold — the one nesting limit every consumer of the layer
-/// tree shares; see [`photocraft_doc::MAX_GROUP_DEPTH`].
-pub use photocraft_doc::MAX_GROUP_DEPTH;
+/// tree shares; see [`prism_doc::MAX_GROUP_DEPTH`].
+pub use prism_doc::MAX_GROUP_DEPTH;
 
 fn too_deep() -> FormatError {
     FormatError::LimitExceeded(format!("layer groups nested deeper than {MAX_GROUP_DEPTH}"))
@@ -104,7 +104,7 @@ fn opt_blob(b: &Option<Arc<Vec<u8>>>, sink: &mut dyn Sink) -> Option<Hash> {
     b.as_ref().map(|b| sink.blob(b))
 }
 
-fn video_m(v: &photocraft_doc::VideoData, sink: &mut dyn Sink) -> crate::manifest::VideoDataM {
+fn video_m(v: &prism_doc::VideoData, sink: &mut dyn Sink) -> crate::manifest::VideoDataM {
     crate::manifest::VideoDataM {
         frames: v.frames.iter().map(|f| surface_m(f, sink)).collect(),
         source: v.source.clone(),
@@ -297,9 +297,9 @@ pub(crate) struct Loader<'a> {
 }
 
 impl Loader<'_> {
-    fn video(&mut self, m: &crate::manifest::VideoDataM) -> Result<photocraft_doc::VideoData> {
+    fn video(&mut self, m: &crate::manifest::VideoDataM) -> Result<prism_doc::VideoData> {
         let frames = m.frames.iter().map(|f| self.surface(f)).collect::<Result<Vec<_>>>()?;
-        Ok(photocraft_doc::VideoData { frames, source: m.source.clone(), fps: m.fps, show_altered: m.show_altered })
+        Ok(prism_doc::VideoData { frames, source: m.source.clone(), fps: m.fps, show_altered: m.show_altered })
     }
 
     fn surface(&mut self, m: &SurfaceM) -> Result<Surface> {
@@ -537,8 +537,8 @@ impl Loader<'_> {
         for sl in &mut slices.list {
             if let Some(l) = sl.layer {
                 sl.layer = self.id_map.get(&l.0).copied();
-                if sl.layer.is_none() && sl.origin == photocraft_doc::SliceOrigin::Layer {
-                    sl.origin = photocraft_doc::SliceOrigin::User;
+                if sl.layer.is_none() && sl.origin == prism_doc::SliceOrigin::Layer {
+                    sl.origin = prism_doc::SliceOrigin::User;
                 }
             }
         }
@@ -597,6 +597,6 @@ pub(crate) fn reserve_ids_through(max: u64) -> bool {
     if max - probe > 10_000_000 {
         return false;
     }
-    photocraft_doc::ensure_ids_above(max);
+    prism_doc::ensure_ids_above(max);
     true
 }

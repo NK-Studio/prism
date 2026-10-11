@@ -1,20 +1,33 @@
-//! doc → .pcraft → doc equality, incremental saves, ids, previews.
+//! doc → .prism → doc equality, incremental saves, ids, previews.
 
 mod common;
 use common::*;
-use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::text::{CharStyle, ParagraphStyle, TextRun};
-use photocraft_doc::text_styles::{CharacterStyleDef, ParagraphStyleDef};
-use photocraft_doc::{Document, Layer, LayerContent, LayerId, Slice, TextLayer};
-use photocraft_format::*;
-use photocraft_raster::Rgba8Image;
+use prism_color::{ColorMode, SampleType};
+use prism_doc::text::{CharStyle, ParagraphStyle, TextRun};
+use prism_doc::text_styles::{CharacterStyleDef, ParagraphStyleDef};
+use prism_doc::{Document, Layer, LayerContent, LayerId, Slice, TextLayer};
+use prism_format::*;
+use prism_raster::Rgba8Image;
 
 const MODES: [ColorMode; 4] = [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab];
+
+#[test]
+fn legacy_generator_metadata_is_still_readable() {
+    let dir = temp_dir("legacy-generator");
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U16);
+    PrismWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    let path = dir.join("manifest.json");
+    let mut manifest: Manifest = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    manifest.generator = "photocraft-format 0.5.0".into();
+    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    assert_eq!(load_path(&dir).unwrap(), doc);
+    std::fs::remove_dir_all(dir).unwrap();
+}
 
 fn check_zip(mode: ColorMode, depth: SampleType) {
     let doc = rich_doc(mode, depth);
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
-    assert!(is_pcraft(&bytes));
+    assert!(is_prism(&bytes));
     let back = load_from_bytes(&bytes).unwrap();
     assert_eq!(back, doc, "{mode:?} {depth:?}");
 }
@@ -41,7 +54,7 @@ fn directory_bundle_roundtrip_all_modes() {
         for depth in SampleType::ALL {
             let doc = rich_doc(mode, depth);
             let dir = temp_dir("dir");
-            PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+            PrismWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
             assert!(dir.join("manifest.json").is_file());
             assert_eq!(load_path(&dir).unwrap(), doc, "{mode:?} {depth:?}");
             std::fs::remove_dir_all(dir).unwrap();
@@ -53,8 +66,8 @@ fn directory_bundle_roundtrip_all_modes() {
 fn save_path_zip_file() {
     let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let dir = temp_dir("file");
-    let path = dir.join("a.pcraft");
-    PcraftWriter::new().save_path(&doc, &path, &SaveOptions::default()).unwrap();
+    let path = dir.join("a.prism");
+    PrismWriter::new().save_path(&doc, &path, &SaveOptions::default()).unwrap();
     assert!(path.is_file());
     assert_eq!(load_path(&path).unwrap(), doc);
     std::fs::remove_dir_all(dir).unwrap();
@@ -62,7 +75,7 @@ fn save_path_zip_file() {
 
 /// Deepest group nesting in `layers` (0 when there are no groups).
 fn group_depth(layers: &[Layer]) -> usize {
-    layers.iter().map(|l| if let photocraft_doc::LayerContent::Group(g) = &l.content { 1 + group_depth(&g.children) } else { 0 }).max().unwrap_or(0)
+    layers.iter().map(|l| if let prism_doc::LayerContent::Group(g) = &l.content { 1 + group_depth(&g.children) } else { 0 }).max().unwrap_or(0)
 }
 
 /// [`rich_doc`] with its layers wrapped in groups until they are nested `levels` deep.
@@ -100,13 +113,13 @@ fn nesting_beyond_the_load_limit_is_refused_at_save() {
 
 #[test]
 fn empty_document_roundtrips() {
-    let doc = Document::new("empty", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let doc = Document::new("empty", prism_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
     assert_eq!(load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap(), doc);
 }
 
 #[test]
 fn exhausted_document_ids_and_maximal_text_runs_roundtrip() {
-    let mut doc = Document::new("exhausted", photocraft_doc::Size::new(2, 1), ColorMode::Rgb, SampleType::U8);
+    let mut doc = Document::new("exhausted", prism_doc::Size::new(2, 1), ColorMode::Rgb, SampleType::U8);
     doc.slices.list.push(Slice { id: u32::MAX, ..Default::default() });
     doc.text_styles.character.push(CharacterStyleDef { id: u32::MAX, ..Default::default() });
     doc.text_styles.paragraph.push(ParagraphStyleDef { id: u32::MAX, ..Default::default() });
@@ -116,8 +129,8 @@ fn exhausted_document_ids_and_maximal_text_runs_roundtrip() {
             text: "ab".into(),
             runs: vec![TextRun { len: 1, style: CharStyle::default() }, TextRun { len: usize::MAX, style: CharStyle { size_pt: 24.0, ..Default::default() } }],
             paragraphs: vec![
-                photocraft_doc::text::ParagraphRun { len: 1, style: ParagraphStyle::default() },
-                photocraft_doc::text::ParagraphRun { len: usize::MAX, style: ParagraphStyle::default() },
+                prism_doc::text::ParagraphRun { len: 1, style: ParagraphStyle::default() },
+                prism_doc::text::ParagraphRun { len: usize::MAX, style: ParagraphStyle::default() },
             ],
             ..Default::default()
         }),
@@ -138,7 +151,7 @@ fn exhausted_document_ids_and_maximal_text_runs_roundtrip() {
 #[test]
 fn zip_incremental_only_new_tiles() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U16);
-    let mut w = PcraftWriter::new();
+    let mut w = PrismWriter::new();
     let (_, s1) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert!(s1.tiles_total > 5);
     assert_eq!(s1.tiles_written, s1.tiles_total);
@@ -158,14 +171,14 @@ fn zip_incremental_only_new_tiles() {
 fn directory_incremental_and_gc() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let dir = temp_dir("gc");
-    let mut w = PcraftWriter::new();
+    let mut w = PrismWriter::new();
     let s1 = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     assert_eq!(s1.tiles_written, s1.tiles_total);
     let s2_same_writer = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     assert_eq!(s2_same_writer.tiles_written, 0);
     assert_eq!(s2_same_writer.tiles_reused, s2_same_writer.tiles_total);
     // A fresh writer still skips files already on disk.
-    let s2 = PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    let s2 = PrismWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     assert_eq!(s2.tiles_written, 0);
     assert_eq!(s2.objects_removed, 0);
     // Delete a layer: its unique tiles get garbage-collected.
@@ -181,13 +194,13 @@ fn directory_incremental_and_gc() {
 
 #[test]
 fn identical_tiles_are_stored_once() {
-    let mut doc = Document::new("d", photocraft_doc::Size::new(10, 10), ColorMode::Rgb, SampleType::U8);
+    let mut doc = Document::new("d", prism_doc::Size::new(10, 10), ColorMode::Rgb, SampleType::U8);
     let mut a = Layer::raster("a", doc.pixel_format());
     scribble(a.surface_mut().unwrap(), 5, false);
     let b = a.duplicate();
     doc.layers.push(a);
     doc.layers.push(b);
-    let (_, s) = PcraftWriter::new().save_zip(&doc, &SaveOptions::default()).unwrap();
+    let (_, s) = PrismWriter::new().save_zip(&doc, &SaveOptions::default()).unwrap();
     let per_layer = doc.layers[0].surface().unwrap().tile_count();
     assert_eq!(s.tiles_total, per_layer);
 }
@@ -231,7 +244,7 @@ fn previews_embedded_and_readable() {
     let opts = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(thumb.clone()) };
     let bytes = save_to_bytes(&doc, &opts).unwrap();
     let png = read_thumbnail(&bytes).unwrap().unwrap();
-    let img = photocraft_codecs::decode(&png).unwrap();
+    let img = prism_codecs::decode(&png).unwrap();
     assert_eq!(img.dimensions(), (4, 3));
     assert_eq!(img.to_rgba8(), thumb.pixels);
     let m = read_manifest(&bytes).unwrap();
@@ -263,12 +276,12 @@ fn save_is_deterministic() {
 }
 
 #[test]
-fn not_pcraft() {
-    assert!(!is_pcraft(b""));
-    assert!(!is_pcraft(b"8BPS...."));
+fn not_prism() {
+    assert!(!is_prism(b""));
+    assert!(!is_prism(b"8BPS...."));
     let mut z = zip::ZipWriter::new();
     z.add("other.txt", b"x").unwrap();
-    assert!(!is_pcraft(&z.finish().unwrap()));
+    assert!(!is_prism(&z.finish().unwrap()));
 }
 
 #[test]
@@ -300,17 +313,17 @@ fn vector_fields_roundtrip_and_default_when_absent() {
         }
     }
     strip(&mut v["layers"]);
-    let old: photocraft_format::manifest::DocM = serde_json::from_value(v).unwrap();
+    let old: prism_format::manifest::DocM = serde_json::from_value(v).unwrap();
     assert!(old.paths.is_empty() && old.work_path.is_none());
     assert!(old.layers.iter().all(|l| l.vector_mask.is_none()));
 }
 
-/// Type kerning (#206): the auto mode and manual kerning survive .pcraft; manifests written
+/// Type kerning (#206): the auto mode and manual kerning survive .prism; manifests written
 /// before `kern` existed load with no manual kerning.
 #[test]
 fn text_kerning_roundtrips_and_defaults() {
-    use photocraft_doc::LayerContent;
-    use photocraft_doc::text::Kerning;
+    use prism_doc::LayerContent;
+    use prism_doc::text::Kerning;
     let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
     let back = load_from_bytes(&bytes).unwrap();
@@ -339,20 +352,20 @@ fn text_kerning_roundtrips_and_defaults() {
     }
     strip(&mut v);
     assert!(!v.to_string().contains("\"kern\""));
-    let old: photocraft_format::manifest::DocM = serde_json::from_value(v).unwrap();
+    let old: prism_format::manifest::DocM = serde_json::from_value(v).unwrap();
     let s = serde_json::to_string(&old).unwrap();
     assert!(s.contains("\"kern\":0.0"), "kern defaults to 0");
 }
 
 #[test]
 fn channel_restrictions_and_bevel_elements_roundtrip() {
-    use photocraft_doc::{Bevel, BevelContour, BevelTexture, Contour, Effect};
+    use prism_doc::{Bevel, BevelContour, BevelTexture, Contour, Effect};
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     doc.layers[0].excluded_channels = 0b101;
     let mut b = Bevel {
         enabled: true,
-        style: photocraft_doc::BevelStyle::Emboss,
-        technique: photocraft_doc::BevelTechnique::ChiselHard,
+        style: prism_doc::BevelStyle::Emboss,
+        technique: prism_doc::BevelTechnique::ChiselHard,
         depth: 1.2,
         up: false,
         size: 9.0,
@@ -361,10 +374,10 @@ fn channel_restrictions_and_bevel_elements_roundtrip() {
         altitude: 40.0,
         use_global_light: false,
         gloss_contour: Contour::Linear,
-        highlight: photocraft_doc::FxCommon::new(photocraft_color::BlendMode::Screen, 0.7),
-        highlight_color: photocraft_color::Color::WHITE,
-        shadow: photocraft_doc::FxCommon::new(photocraft_color::BlendMode::Multiply, 0.6),
-        shadow_color: photocraft_color::Color::BLACK,
+        highlight: prism_doc::FxCommon::new(prism_color::BlendMode::Screen, 0.7),
+        highlight_color: prism_color::Color::WHITE,
+        shadow: prism_doc::FxCommon::new(prism_color::BlendMode::Multiply, 0.6),
+        shadow_color: prism_color::Color::BLACK,
         contour: None,
         texture: None,
     };
@@ -378,7 +391,7 @@ fn channel_restrictions_and_bevel_elements_roundtrip() {
 
 #[test]
 fn blend_if_roundtrips() {
-    use photocraft_doc::{BlendIf, BlendRange};
+    use prism_doc::{BlendIf, BlendRange};
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U16);
     let mut bi = BlendIf::default();
     bi.set(0, [BlendRange { black: [20, 60], white: [255, 255] }, BlendRange::FULL]);
@@ -392,11 +405,11 @@ fn blend_if_roundtrips() {
 }
 
 /// Advanced Blending (knockout, as-group switches, transparency shapes, masks hide effects)
-/// survives .pcraft at every depth; manifests written before the field existed load with
+/// survives .prism at every depth; manifests written before the field existed load with
 /// Photoshop's defaults, and default layers don't write it.
 #[test]
 fn advanced_blending_roundtrips_and_defaults_when_absent() {
-    use photocraft_doc::{AdvancedBlending, Knockout};
+    use prism_doc::{AdvancedBlending, Knockout};
     for depth in SampleType::ALL {
         let mut doc = rich_doc(ColorMode::Rgb, depth);
         let a = AdvancedBlending {
@@ -425,24 +438,24 @@ fn advanced_blending_roundtrips_and_defaults_when_absent() {
         for l in old["layers"].as_array_mut().unwrap() {
             l.as_object_mut().unwrap().remove("advanced");
         }
-        let old: photocraft_format::manifest::DocM = serde_json::from_value(old).unwrap();
+        let old: prism_format::manifest::DocM = serde_json::from_value(old).unwrap();
         assert!(old.layers.iter().all(|l| l.advanced.is_default()));
     }
 }
 
 #[test]
 fn video_layer_frames_survive_roundtrip() {
-    use photocraft_doc::{Timeline, VideoData, VideoSource};
-    use photocraft_geom::Rect;
-    let mut doc = Document::new("Vid", photocraft_geom::Size { width: 8, height: 6 }, ColorMode::Rgb, SampleType::U8);
+    use prism_doc::{Timeline, VideoData, VideoSource};
+    use prism_geom::Rect;
+    let mut doc = Document::new("Vid", prism_geom::Size { width: 8, height: 6 }, ColorMode::Rgb, SampleType::U8);
     doc.timeline = Some(Timeline::new(3, 24.0));
     let fmt = doc.pixel_format();
     let mut l = Layer::raster("Clip", fmt);
     let mut frames = Vec::new();
     for i in 0..3u8 {
-        let mut s = photocraft_raster::Surface::new(fmt);
+        let mut s = prism_raster::Surface::new(fmt);
         let v = i as f32 / 2.0;
-        s.fill_rect(Rect::new(0, 0, 8, 6), &photocraft_raster::from_rgba(&fmt, [v, 0.0, 1.0 - v, 1.0]));
+        s.fill_rect(Rect::new(0, 0, 8, 6), &prism_raster::from_rgba(&fmt, [v, 0.0, 1.0 - v, 1.0]));
         frames.push(s);
     }
     let mut vd = VideoData::new(frames, 24.0);
@@ -470,7 +483,7 @@ fn video_layer_frames_survive_roundtrip() {
 /// save is refused instead, naming the value; finite documents are unaffected.
 #[test]
 fn a_non_finite_float_is_refused_at_save_rather_than_breaking_every_later_load() {
-    use photocraft_doc::Adjustment;
+    use prism_doc::Adjustment;
     type Mutate = Box<dyn Fn(&mut Document)>;
     let base = rich_doc(ColorMode::Rgb, SampleType::U8);
     let cases: Vec<(&str, Mutate)> = vec![
@@ -499,12 +512,47 @@ fn a_non_finite_float_is_refused_at_save_rather_than_breaking_every_later_load()
         let msg = err.to_string();
         assert!(msg.contains(field) && msg.contains("NaN or infinite"), "{field}: {msg}");
         // The incremental writer shares the check, for autosave and directory bundles.
-        let mut w = PcraftWriter::new();
-        assert!(matches!(w.save_zip(&doc, &SaveOptions::default()), Err(FormatError::NonFinite { .. })), "{field}: PcraftWriter");
+        let mut w = PrismWriter::new();
+        assert!(matches!(w.save_zip(&doc, &SaveOptions::default()), Err(FormatError::NonFinite { .. })), "{field}: PrismWriter");
     }
     // The same document with finite values round-trips as before.
     let mut doc = base.clone();
     doc.insert_above(None, Layer::new("adj", LayerContent::Adjustment(Adjustment::Exposure { exposure: 0.5, offset: 0.0, gamma: 1.0 })));
     let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
     assert_eq!(back, doc);
+}
+
+#[test]
+fn arrow_native_roundtrip_preserves_editable_metadata_and_style() {
+    use prism_doc::{LineCap, LineJoin, LiveShape, Path, ShapeLayer, ShapeStroke, Subpath};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut doc = rich_doc(ColorMode::Rgb, depth);
+        doc.layers.push(Layer::new(
+            "Arrow",
+            LayerContent::Shape(ShapeLayer {
+                path: Path::new(vec![Subpath::polyline(&[(10.0, 20.0), (80.0, 20.0)]), Subpath::polyline(&[(66.0, 28.0), (80.0, 20.0), (66.0, 12.0)])]),
+                live: Some(LiveShape::Arrow { from: [10.0, 20.0], to: [80.0, 20.0], head_size: 16.0, head_angle: 105.0 }),
+                stroke: Some(ShapeStroke { width: 3.0, cap: LineCap::Round, join: LineJoin::Round, ..Default::default() }),
+                ..Default::default()
+            }),
+        ));
+        let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+        assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+    }
+}
+
+#[test]
+fn round_line_native_metadata_roundtrip() {
+    use prism_doc::{LiveShape, ShapeLayer};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut doc = rich_doc(ColorMode::Rgb, depth);
+        doc.layers.push(Layer::new(
+            "Round line",
+            LayerContent::Shape(ShapeLayer {
+                live: Some(LiveShape::Line { from: [10.0, 20.0], to: [80.0, 20.0], weight: 12.0, round_tips: true }),
+                ..Default::default()
+            }),
+        ));
+        assert_eq!(load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap(), doc);
+    }
 }

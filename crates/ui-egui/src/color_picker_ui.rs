@@ -8,7 +8,7 @@
 use egui::{Color32, Mesh, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Map, Value, json};
 
-use crate::PhotocraftApp;
+use crate::PrismApp;
 use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::widgets;
@@ -106,7 +106,7 @@ fn c32(c: [f32; 3]) -> Color32 {
 }
 
 /// Open the picker for the foreground or background colour.
-pub fn open(app: &mut PhotocraftApp, target: &str) -> u64 {
+pub fn open(app: &mut PrismApp, target: &str) -> u64 {
     let c = if target == "background" { app.session.tools.background } else { app.session.tools.foreground };
     let rgb = [c[0], c[1], c[2]];
     let hsv = rgb_to_hsv(rgb);
@@ -123,7 +123,7 @@ pub fn open(app: &mut PhotocraftApp, target: &str) -> u64 {
 
 /// Open the picker on `rgb` for something other than the tool colours: OK runs `command` with
 /// `params` plus `"color": "#rrggbb"` (e.g. a gradient stop's colour).
-pub fn open_for_command(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], command: &str, params: Value) -> u64 {
+pub fn open_for_command(app: &mut PrismApp, label: &str, rgb: [f32; 3], command: &str, params: Value) -> u64 {
     let hsv = rgb_to_hsv(rgb);
     let mut f = Map::new();
     f.insert("__colorPicker".into(), json!("command"));
@@ -143,13 +143,13 @@ pub fn owns(f: &Map<String, Value>) -> bool {
 }
 
 /// The Color Picker, when it is the top dialog (another dialog opened over it takes the input).
-pub fn top(app: &PhotocraftApp) -> Option<u64> {
+pub fn top(app: &PrismApp) -> Option<u64> {
     app.ui.dialogs.last().filter(|d| owns(&d.fields)).map(|d| d.id)
 }
 
 /// Eyedropper: the top Color Picker's new colour becomes the image's composite colour at document
 /// point (x, y). Off the image or over transparency nothing changes.
-pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) {
+pub fn sample_at(app: &mut PrismApp, x: f64, y: f64) {
     let Some(id) = top(app) else { return };
     let Some(rgb) = crate::canvas::composite_color(app, x, y) else { return };
     if let Some(d) = app.ui.dialog_mut(id) {
@@ -190,8 +190,8 @@ pub fn current(f: &Map<String, Value>) -> Components {
     Components {
         rgb,
         hsv: kept(f, "__hsv", rgb, |h| hsv_to_rgb(h[0], h[1], h[2])).unwrap_or_else(|| rgb_to_hsv(rgb)),
-        lab: kept(f, "__lab", rgb, photocraft_color::convert::lab_to_srgb).unwrap_or_else(|| photocraft_color::convert::srgb_to_lab(rgb)),
-        cmyk: kept(f, "__cmyk", rgb, photocraft_color::convert::cmyk_to_rgb).unwrap_or_else(|| photocraft_color::convert::rgb_to_cmyk(rgb)),
+        lab: kept(f, "__lab", rgb, prism_color::convert::lab_to_srgb).unwrap_or_else(|| prism_color::convert::srgb_to_lab(rgb)),
+        cmyk: kept(f, "__cmyk", rgb, prism_color::convert::cmyk_to_rgb).unwrap_or_else(|| prism_color::convert::rgb_to_cmyk(rgb)),
     }
 }
 
@@ -430,7 +430,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 if widgets::value_field(ui, &mut x, range, "", 54.0).changed() {
                     let mut l = lab;
                     l[i] = x;
-                    edit = Some((photocraft_color::convert::lab_to_srgb(l).map(|c| c.clamp(0.0, 1.0)), Keep::Lab(l)));
+                    edit = Some((prism_color::convert::lab_to_srgb(l).map(|c| c.clamp(0.0, 1.0)), Keep::Lab(l)));
                 }
                 ui.label("");
                 ui.end_row();
@@ -443,7 +443,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 if widgets::value_field(ui, &mut x, 0.0..=100.0, "", 54.0).changed() {
                     let mut k = cmyk;
                     k[i] = x / 100.0;
-                    edit = Some((photocraft_color::convert::cmyk_to_rgb(k).map(|c| c.clamp(0.0, 1.0)), Keep::Cmyk(k)));
+                    edit = Some((prism_color::convert::cmyk_to_rgb(k).map(|c| c.clamp(0.0, 1.0)), Keep::Cmyk(k)));
                 }
                 ui.label(egui::RichText::new("%").color(t.text_faint));
                 ui.end_row();
@@ -459,14 +459,14 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
 }
 
 /// Add to Swatches was clicked: add the picked colour to the Swatches panel.
-pub fn take_add_swatch(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
+pub fn take_add_swatch(app: &mut PrismApp, f: &mut Map<String, Value>) {
     if f.remove("__addSwatch").and_then(|v| v.as_bool()) == Some(true) {
         crate::swatches_ui::add_from_picker(app, f);
     }
 }
 
 /// OK: set the foreground or background colour.
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+pub fn confirm(app: &mut PrismApp, f: &Map<String, Value>) -> Result<Value, String> {
     if crate::shape_color_ui::owns(f) {
         return crate::shape_color_ui::confirm(app, f);
     }
@@ -505,7 +505,7 @@ mod tests {
             },
             f,
         );
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         h.run_steps(2);
         h
     }
@@ -543,13 +543,13 @@ mod tests {
     #[test]
     fn lab_and_cmyk_fields_take_multi_digit_values() {
         let base = parse_hex("#336699").unwrap();
-        let lab = photocraft_color::convert::srgb_to_lab(base);
-        let cmyk = photocraft_color::convert::rgb_to_cmyk(base);
+        let lab = prism_color::convert::srgb_to_lab(base);
+        let cmyk = prism_color::convert::rgb_to_cmyk(base);
         // Fields in order: H S B R G B, L a b, C M Y K.
         for (field, typed, want) in [
-            (6, "60", photocraft_color::convert::lab_to_srgb([60.0, lab[1], lab[2]])),
-            (7, "30", photocraft_color::convert::lab_to_srgb([lab[0], 30.0, lab[2]])),
-            (9, "40", photocraft_color::convert::cmyk_to_rgb([0.4, cmyk[1], cmyk[2], cmyk[3]])),
+            (6, "60", prism_color::convert::lab_to_srgb([60.0, lab[1], lab[2]])),
+            (7, "30", prism_color::convert::lab_to_srgb([lab[0], 30.0, lab[2]])),
+            (9, "40", prism_color::convert::cmyk_to_rgb([0.4, cmyk[1], cmyk[2], cmyk[3]])),
         ] {
             let mut h = picker("#336699");
             h.query_all_by_role(Role::SpinButton).nth(field).unwrap().click();
@@ -601,9 +601,9 @@ mod tests {
     fn side_buttons_and_keyboard_confirm_or_cancel_without_changing_the_other_color() {
         for target in ["foreground", "background"] {
             for action in ["OK", "Cancel", "Enter", "Escape"] {
-                let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                let app = PrismApp::new(prism_engine::Session::new(), Default::default());
                 let mut h = Harness::builder().with_size(vec2(760.0, 480.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
-                PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+                PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
                 let original_fg = h.state().session.tools.foreground;
                 let original_bg = h.state().session.tools.background;
                 let id = open(h.state_mut(), target);
@@ -676,7 +676,7 @@ mod tests {
         f.insert("color".into(), json!("#808080"));
         f.insert("__hsv".into(), json!([200.0, 0.0, 128.0 / 255.0]));
         assert_eq!(current(&f).hsv[0], 200.0);
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
         let id = open(&mut app, "background");
         let d = app.ui.dialog_mut(id).unwrap();
         d.fields.insert("color".into(), json!("#3366cc"));
@@ -685,13 +685,13 @@ mod tests {
         assert_eq!(hex([app.session.tools.background[0], app.session.tools.background[1], app.session.tools.background[2]]), "#3366cc");
     }
 
-    fn dialog_color(app: &PhotocraftApp, id: u64) -> &str {
+    fn dialog_color(app: &PrismApp, id: u64) -> &str {
         app.ui.dialogs.iter().find(|d| d.id == id).and_then(|d| d.fields.get("color")).and_then(Value::as_str).unwrap()
     }
 
     #[test]
     fn the_top_picker_samples_the_image() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 40, "height": 20, "background": "transparent"})).unwrap();
         app.run("shape.create", json!({"kind": "rect", "rect": [0, 0, 20, 20], "fill": "#ff0000"})).unwrap();
         app.run("shape.create", json!({"kind": "rect", "rect": [20, 0, 10, 20], "fill": "#00ff00"})).unwrap();
@@ -735,7 +735,7 @@ mod screen_integration_tests {
     use egui_kittest::{Harness, kittest::Queryable};
     #[test]
     fn text_swatch_opens_full_dialog_and_screen_pick_waits_for_ok() {
-        let mut session = photocraft_engine::Session::new();
+        let mut session = prism_engine::Session::new();
         session.execute("file.new", json!({"width":160,"height":120})).unwrap();
         let id = session.execute("type.create", json!({"text":"Hello world","color":"#000000","size":24,"x":10,"y":60})).unwrap()["layer"].as_u64().unwrap();
         let services = crate::Services {
@@ -747,8 +747,8 @@ mod screen_integration_tests {
             ..Default::default()
         };
         let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = PhotocraftApp::new(session, services);
+            PrismApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut app = PrismApp::new(session, services);
             app.ui.tool = crate::state::Tool::Type;
             app
         });
@@ -766,8 +766,8 @@ mod screen_integration_tests {
         h.get_by_label("OK").click();
         h.run_steps(4);
         let doc = &h.state().session.active().unwrap().doc;
-        let layer = doc.layer(photocraft_doc::LayerId(id)).unwrap();
-        let photocraft_doc::LayerContent::Text(text) = &layer.content else { panic!("not text") };
+        let layer = doc.layer(prism_doc::LayerId(id)).unwrap();
+        let prism_doc::LayerContent::Text(text) = &layer.content else { panic!("not text") };
         assert_eq!(text.color.to_rgba8(), [255, 136, 0, 255]);
         assert_eq!(h.state().session.active().unwrap().history.entries().len(), before + 1);
     }

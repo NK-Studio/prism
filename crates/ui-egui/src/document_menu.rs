@@ -1,11 +1,11 @@
 //! Document-header menu. Targets survive focus changes and document reordering.
-use crate::{PhotocraftApp, state::DocumentContextMenu};
+use crate::{PrismApp, state::DocumentContextMenu};
 use egui::{Context, Response, Ui};
 use serde_json::{Value, json};
 
 pub const COMMANDS: [&str; 5] = ["image.duplicate", "image.imageSize", "image.canvasSize", "file.fileInfo", "file.print"];
 
-pub fn available(app: &PhotocraftApp, menu: &DocumentContextMenu, id: &str) -> bool {
+pub fn available(app: &PrismApp, menu: &DocumentContextMenu, id: &str) -> bool {
     if !crate::menus::modal_allows(app, id) || app.file_dialog_open() {
         return false;
     }
@@ -21,7 +21,7 @@ pub fn available(app: &PhotocraftApp, menu: &DocumentContextMenu, id: &str) -> b
         && (id != "file.closeOthers" || app.session.documents().len() > 1)
 }
 
-pub fn choose(app: &mut PhotocraftApp, ctx: &Context, id: &str) -> Result<Value, String> {
+pub fn choose(app: &mut PrismApp, ctx: &Context, id: &str) -> Result<Value, String> {
     let menu = app.ui.document_context_menu.clone().ok_or("no document context menu is open")?;
     if !available(app, &menu, id) {
         return Err("document action is unavailable".into());
@@ -42,7 +42,7 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, id: &str) -> Result<Value,
     result
 }
 
-pub fn response(app: &mut PhotocraftApp, ui: &Ui, response: &Response, document: usize, window: Option<u64>) {
+pub fn response(app: &mut PrismApp, ui: &Ui, response: &Response, document: usize, window: Option<u64>) {
     let state_id = egui::Id::new(("document-context-popup", ui.ctx().viewport_id()));
     if let Some((popup, menu)) = ui.ctx().data(|d| d.get_temp::<(egui::Id, DocumentContextMenu)>(state_id))
         && !egui::Popup::is_id_open(ui.ctx(), popup)
@@ -62,7 +62,7 @@ pub fn response(app: &mut PhotocraftApp, ui: &Ui, response: &Response, document:
             if i == 3 || i == 4 {
                 ui.separator();
             }
-            let label = photocraft_engine::commands::find(command).map_or(command, |s| s.label);
+            let label = prism_engine::commands::find(command).map_or(command, |s| s.label);
             if ui.add_enabled(available(app, &menu, command), egui::Button::new(tl!(label))).clicked() {
                 selected = Some(command);
             }
@@ -91,16 +91,16 @@ pub fn response(app: &mut PhotocraftApp, ui: &Ui, response: &Response, document:
     }
 }
 
-pub fn inspect(app: &PhotocraftApp) -> Value {
+pub fn inspect(app: &PrismApp) -> Value {
     app.ui.document_context_menu.as_ref().map_or(Value::Null, |menu| json!({"document":menu.document,"window":menu.window,
-        "items":COMMANDS.iter().enumerate().map(|(i,id)|json!({"id":id,"label":photocraft_engine::commands::find(id).map(|s|s.label),"enabled":available(app,menu,id),"separatorBefore":i==3||i==4})).collect::<Vec<_>>()}))
+        "items":COMMANDS.iter().enumerate().map(|(i,id)|json!({"id":id,"label":prism_engine::commands::find(id).map(|s|s.label),"enabled":available(app,menu,id),"separatorBefore":i==3||i==4})).collect::<Vec<_>>()}))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn app() -> PhotocraftApp {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    fn app() -> PrismApp {
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
         for name in ["A", "B"] {
             app.session.execute("file.new", json!({"name":name,"width":20,"height":10})).unwrap();
         }

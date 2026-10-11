@@ -2,11 +2,11 @@
 //! compositor) instead of panicking with "Buffer 'pc_compose_uniforms' is invalid". Skips when no
 //! GPU adapter exists.
 
-use photocraft_color::{Color, ColorMode, SampleType};
-use photocraft_doc::{Document, Layer, LayerContent};
-use photocraft_geom::{Rect, Size};
-use photocraft_gpu::{Compositor, DeviceHealth, Fault, render_to_vec};
-use photocraft_raster::Surface;
+use prism_color::{Color, ColorMode, SampleType};
+use prism_doc::{Document, Layer, LayerContent};
+use prism_geom::{Rect, Size};
+use prism_gpu::{Compositor, DeviceHealth, Fault, render_to_vec};
+use prism_raster::Surface;
 
 /// Concurrent wgpu instances in one process segfault on some drivers (see `parity.rs`).
 static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

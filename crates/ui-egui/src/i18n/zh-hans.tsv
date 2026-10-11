@@ -704,8 +704,6 @@
 	About Prism	关于 Prism
 	Prism Website	Prism 网站
 	Prism on GitHub	Prism 的 GitHub 页面
-	ArtCraft Website	ArtCraft 网站
-	Join the ArtCraft Discord…	加入 ArtCraft 的 Discord 社区…
 	Report an Issue…	报告问题…
 	WIA Support…	WIA 支持…
 	Apply	应用
@@ -964,7 +962,6 @@
 	Diffusion	扩散
 	Discard the embedded profile (don't color manage)	丢弃嵌入的配置文件（不进行色彩管理）
 	Discontiguous	不连续
-	Discord	Discord
 	Dismiss	关闭
 	Display P3	Display P3
 	Display Text	显示文字
@@ -1093,7 +1090,6 @@
 	Invert All	全部反相
 	Invert has no settings.	反相没有可调整的设置。
 	Italic	斜体
-	Join us on Discord	加入我们的 Discord 社区
 	Justify all	全部两端对齐
 	Justify last centered	两端对齐，末行居中
 	Justify last left	两端对齐，末行左对齐
@@ -1488,7 +1484,6 @@
 	Apple Watch 45mm	Apple Watch 45mm
 	Aqua	水绿色
 	Art & Illustration	艺术与插画
-	ArtCraft	ArtCraft
 	Background Eraser Tool	背景橡皮擦工具
 	Bevel & Emboss	斜面和浮雕
 	Blend Mode	混合模式
@@ -2261,3 +2256,52 @@ fontWeight	Italic	斜体
 	Preparing preview…	正在准备预览…
 	Columns	栏
 	Duplicate	复制
+
+	Load Font File…	加载字体文件…
+	Favorite	添加到收藏
+	Unfavorite	取消收藏
+	TTF, OTF, TTC, OTC — available until Prism exits	TTF、OTF、TTC、OTC — 退出 Prism 前可用
+	Loaded font (this session)	已加载字体（当前会话）
+	Favorite fonts	收藏的字体
+
+	All fonts	所有字体
+	Korean only	仅韩文字体
+	No preview	无预览
+
+# Prism About introduction and footer.
+	Turn ideas into images.	让创意成为图像。
+	Prism is a desktop image editor by NK Studio.	Prism 是 NK Studio 打造的桌面图像编辑器。
+	Refine layers, color, and typography to bring your vision to life.	细致调整图层、色彩与文字，呈现心中所想。
+	All rights reserved.	保留所有权利。
+	Built for creative expression.	为自由创作而打造。
+
+	Arrow Tool	箭头工具
+	Arrow	箭头
+	Arrow color	箭头颜色
+	Thickness	线条粗细
+	Arrowhead	箭头大小
+	Corners	拐角
+	Angular	尖角
+	Rounded	圆角
+
+	Arrowhead length	箭头长度
+
+	Arrowhead angle	箭头角度
+
+	Line tips	线端
+
+	Square tips	方形端点
+
+	Round tips	圆形端点
+	Make:	建立：
+	Selection…	选区…
+	Mask	蒙版
+	Align To:	对齐到：
+	Rubber Band	橡皮带
+	Auto Add/Delete	自动添加/删除
+	Align Edges	对齐边缘
+	Path Operations	路径操作
+	Path Alignment	路径对齐方式
+	Path Arrangement	路径排列方式
+	New Layer	新建图层
+	Settings	设置

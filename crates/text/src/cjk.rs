@@ -78,7 +78,7 @@ pub fn script_order(locale: Option<&str>) -> [CjkScript; 4] {
     }
 }
 
-/// The user's UI locale (cached). `PHOTOCRAFT_LOCALE` overrides; then macOS's preferred
+/// The user's UI locale (cached). `PRISM_LOCALE` overrides; then macOS's preferred
 /// language list, the Windows user locale, and finally `LC_ALL` / `LC_MESSAGES` / `LANG` /
 /// `LANGUAGE`. `None` when nothing is set.
 pub fn ui_locale() -> Option<&'static str> {
@@ -93,7 +93,7 @@ pub fn ui_script_order() -> [CjkScript; 4] {
 
 fn detect_locale() -> Option<String> {
     let env = |k: &str| std::env::var(k).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty() && v != "C" && v != "POSIX" && !v.starts_with("C."));
-    if let Some(v) = env("PHOTOCRAFT_LOCALE") {
+    if let Some(v) = env("PRISM_LOCALE") {
         return Some(v);
     }
     if let Some(v) = os_locale() {
@@ -335,28 +335,12 @@ pub fn last_resort_files() -> Vec<FontFile> {
 /// (`/System/Library/AssetsV2/com_apple_MobileAsset_Font*/<hash>.asset/AssetData/PingFang.ttc`).
 /// Looks there (a few small directory listings) and in the pre-Catalina location.
 pub fn mac_pingfang() -> Option<std::path::PathBuf> {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     let old = PathBuf::from("/System/Library/Fonts/PingFang.ttc");
     if old.is_file() {
         return Some(old);
     }
-    let roots = [Path::new("/System/Library/AssetsV2"), Path::new("/System/Library/AssetsV2/PreinstalledAssetsV2/InstallWithOs")];
-    for root in roots {
-        let Ok(rd) = std::fs::read_dir(root) else { continue };
-        for e in rd.flatten().take(512) {
-            if !e.file_name().to_string_lossy().starts_with("com_apple_MobileAsset_Font") {
-                continue;
-            }
-            let Ok(assets) = std::fs::read_dir(e.path()) else { continue };
-            for a in assets.flatten().take(4096) {
-                let p = a.path().join("AssetData/PingFang.ttc");
-                if p.is_file() {
-                    return Some(p);
-                }
-            }
-        }
-    }
-    None
+    crate::font_discovery::files(crate::font_discovery::mac_asset_roots()).into_iter().find(|p| p.file_name().is_some_and(|n| n == "PingFang.ttc"))
 }
 
 /// Face index in a font file (or collection) whose family name is `family`; 0 when `family` is

@@ -7,15 +7,15 @@ use std::path::{Path as FsPath, PathBuf};
 #[cfg(feature = "corpus")]
 use std::sync::Arc;
 
-use photocraft_color::{Color, ColorMode, SampleType};
-use photocraft_doc::{
+use prism_color::{Color, ColorMode, SampleType};
+use prism_doc::{
     Document, Fill, Knot, Layer, LayerContent, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp, ShapeLayer, ShapeStroke, Size, StrokeAlign, Subpath,
     VectorMask,
 };
-use photocraft_geom::{Point, Rect};
-use photocraft_io::*;
+use prism_geom::{Point, Rect};
+use prism_io::*;
 #[cfg(feature = "corpus")]
-use photocraft_psd::PsdFile;
+use prism_psd::PsdFile;
 
 fn roundtrip(d: &Document) -> Document {
     let r = export(d, "x.psd", &ExportOptions::default()).unwrap();
@@ -45,7 +45,7 @@ fn doc() -> Document {
 
 fn shape_layer(sh: ShapeLayer) -> Layer {
     let mut sh = sh;
-    sh.cache = Some(photocraft_vector::render_shape(&sh, photocraft_color::PixelFormat::RGBA8, Rect::new(0, 0, 256, 256)));
+    sh.cache = Some(prism_vector::render_shape(&sh, prism_color::PixelFormat::RGBA8, Rect::new(0, 0, 256, 256)));
     Layer::new("Shape", LayerContent::Shape(sh))
 }
 
@@ -57,7 +57,7 @@ fn saved_paths_work_path_and_clipping_roundtrip() {
     inv.inverted = true;
     d.paths.push(NamedPath { name: "Inverted".into(), path: inv, psd_raw: None });
     d.work_path = Some(Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (128.0, 0.0), (128.0, 128.0)])]));
-    d.clipping_path = Some(photocraft_doc::ClippingPath { name: "Outline".into(), flatness: 0.0 });
+    d.clipping_path = Some(prism_doc::ClippingPath { name: "Outline".into(), flatness: 0.0 });
     let b = roundtrip(&d);
     assert_eq!(b.paths.len(), 2);
     assert_eq!(b.paths[0].name, "Outline");
@@ -100,7 +100,7 @@ fn shape_layer_typed_roundtrip() {
     };
     d.layers.push(shape_layer(sh.clone()));
     let mut ell = ShapeLayer {
-        path: photocraft_vector::shapes::ellipse(64.0, 64.0, 128.0, 64.0),
+        path: prism_vector::shapes::ellipse(64.0, 64.0, 128.0, 64.0),
         fill: None,
         stroke: Some(ShapeStroke::default()),
         live: Some(LiveShape::Ellipse { rect: [64.0, 64.0, 128.0, 64.0] }),
@@ -148,7 +148,7 @@ fn vector_mask_roundtrip_and_removal() {
     assert_eq!(b.layers[1].vector_mask.as_ref(), Some(&vm));
     assert!(b.layers[1].psd_blocks.iter().any(|(k, _)| k == b"vmsk"));
     // The composite honours it (left half black, right half white).
-    let f = photocraft_compose::flatten(&b);
+    let f = prism_compose::flatten(&b);
     assert!(f.get(10, 10)[0] < 0.01 && f.get(200, 10)[0] > 0.99);
     // Removing the vector mask removes the block.
     let mut c = b.clone();
@@ -199,12 +199,11 @@ fn corpus_shape_coverage_matches_photoshop() {
             if sh.stroke.is_some() || !matches!(sh.fill, Some(Fill::Solid(_))) || !l.effects.items.is_empty() || sh.path.is_empty() {
                 continue;
             }
-            let r =
-                cache.content_bounds().union(&photocraft_vector::fill_rasterizer(&sh.path, 0.01).pixel_bounds().unwrap_or(Rect::EMPTY)).intersect(&d.bounds());
+            let r = cache.content_bounds().union(&prism_vector::fill_rasterizer(&sh.path, 0.01).pixel_bounds().unwrap_or(Rect::EMPTY)).intersect(&d.bounds());
             if r.is_empty() {
                 continue;
             }
-            let ours = photocraft_vector::path_coverage(&sh.path, r);
+            let ours = prism_vector::path_coverage(&sh.path, r);
             let mut theirs = vec![[0.0f32; 4]; ours.len()];
             cache.read_rgba_into(r, &mut theirs);
             let (mut inter, mut uni, mut max) = (0.0f64, 0.0f64, 0.0f32);
@@ -275,4 +274,56 @@ fn corpus_vector_blocks_survive_roundtrip() {
         }
     }
     eprintln!("vector corpus: {checked} vector blocks byte-identical after round trip");
+}
+
+#[test]
+fn arrow_psd_roundtrip_retains_open_paths_and_stroke_without_live_metadata() {
+    for rounded in [false, true] {
+        let mut d = doc();
+        let live = LiveShape::Arrow { from: [24.0, 60.0], to: [210.0, 150.0], head_size: 24.0, head_angle: 105.0 };
+        let sh = ShapeLayer {
+            path: prism_vector::shapes::live_path(&live),
+            fill: None,
+            stroke: Some(ShapeStroke {
+                width: 7.0,
+                cap: if rounded { LineCap::Round } else { LineCap::Butt },
+                join: if rounded { LineJoin::Round } else { LineJoin::Miter },
+                ..Default::default()
+            }),
+            live: Some(live),
+            ..Default::default()
+        };
+        d.layers.push(shape_layer(sh.clone()));
+        let back = roundtrip(&d);
+        let LayerContent::Shape(actual) = &back.layers.last().unwrap().content else { panic!("lost shape") };
+        assert!(actual.live.is_none());
+        assert!(actual.fill.is_none());
+        assert_eq!(actual.stroke, sh.stroke);
+        assert_eq!(actual.path.subpaths.len(), 2);
+        for (a, b) in actual.path.subpaths.iter().zip(&sh.path.subpaths) {
+            assert!(!a.closed);
+            assert_eq!(a.knots.len(), b.knots.len());
+            for (a, b) in a.knots.iter().zip(&b.knots) {
+                assert!((a.anchor.x - b.anchor.x).abs() < 0.001 && (a.anchor.y - b.anchor.y).abs() < 0.001);
+            }
+        }
+    }
+}
+
+#[test]
+fn round_line_tips_psd_roundtrip_preserves_capsule_path() {
+    let mut d = doc();
+    let live = LiveShape::Line { from: [24.0, 60.0], to: [210.0, 150.0], weight: 24.0, round_tips: true };
+    let sh =
+        ShapeLayer { path: prism_vector::shapes::live_path(&live), fill: Some(Fill::Solid(Color::rgb(1.0, 0.0, 0.0))), live: Some(live), ..Default::default() };
+    d.layers.push(shape_layer(sh.clone()));
+    let back = roundtrip(&d);
+    let LayerContent::Shape(actual) = &back.layers.last().unwrap().content else { panic!("lost shape") };
+    assert!(actual.live.is_none());
+    assert!(actual.path.subpaths[0].closed);
+    for (a, b) in actual.path.subpaths[0].knots.iter().zip(&sh.path.subpaths[0].knots) {
+        for (a, b) in [(a.anchor, b.anchor), (a.in_ctrl, b.in_ctrl), (a.out_ctrl, b.out_ctrl)] {
+            assert!((a.x - b.x).abs() < 0.001 && (a.y - b.y).abs() < 0.001);
+        }
+    }
 }

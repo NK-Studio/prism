@@ -13,7 +13,7 @@
 # graphics-editor vocabulary (Слой, Каналы, Маска, Выделение, Кривые ...), matching Photoshop's
 # Russian menu tradition where it is unambiguous. No proprietary localisation resource was
 # consulted or copied; entries are added the same way.
-# Product and technology names (Prism, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
+# Product and technology names (Prism, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing "…" of dialog commands is kept; the colon of a label ("Width:") becomes
 # the Russian typographic equivalent, with the space the source carries.
 
@@ -457,8 +457,6 @@
 	Prism Website	Сайт Prism
 	Prism on GitHub	Prism на GitHub
 	Report an Issue…	Сообщить о проблеме…
-	ArtCraft Website	Сайт ArtCraft
-	Join the ArtCraft Discord…	Discord сообщества ArtCraft…
 	System Info…	Информация о системе…
 
 # Tools and options bar
@@ -1534,9 +1532,7 @@
 	Preserve Transparency	Сохранить прозрачность
 	Reverse	Обратить
 	Align with layer	По слою
-	Join us on Discord	Мы в Discord
 	Prism website	Сайт Prism
-	ArtCraft	ArtCraft
 	GitHub	GitHub
 	No character style	Нет стиля символов
 	No author	Нет автора
@@ -1936,7 +1932,6 @@
 	Delete tool preset	Удалить набор инструментов
 	Depth Jitter	Колебание глубины
 	Discontiguous	Несмежные пикселы
-	Discord	Discord
 	Display P3	Display P3
 	Display Text	Показывать текст
 	Divide…	Деление…
@@ -2523,3 +2518,52 @@ fontWeight	Italic	Курсив
 	Duplicate Image	Дублировать изображение
 	Preparing preview…	Подготовка просмотра…
 	Error	Ошибка
+
+	Load Font File…	Загрузить файл шрифта…
+	Favorite	Добавить в избранное
+	Unfavorite	Удалить из избранного
+	TTF, OTF, TTC, OTC — available until Prism exits	TTF, OTF, TTC, OTC — доступны до закрытия Prism
+	Loaded font (this session)	Шрифт загружен (этот сеанс)
+	Favorite fonts	Избранные шрифты
+
+	Font size	Размер шрифта
+
+	All fonts	Все шрифты
+	Korean only	Только корейские
+	No preview	Нет предпросмотра
+
+# Prism About introduction and footer.
+	Turn ideas into images.	Превращайте идеи в изображения.
+	Prism is a desktop image editor by NK Studio.	Prism — настольный редактор изображений от NK Studio.
+	Refine layers, color, and typography to bring your vision to life.	Настраивайте слои, цвет и типографику, чтобы воплотить свой замысел.
+	All rights reserved.	Все права защищены.
+	Built for creative expression.	Создан для творческого самовыражения.
+
+	Arrow Tool	Инструмент «Стрелка»
+	Arrow	Стрелка
+	Arrow color	Цвет стрелки
+	Thickness	Толщина
+	Arrowhead	Размер наконечника
+	Corners	Углы
+	Angular	Острые
+	Rounded	Скруглённые
+
+	Arrowhead length	Длина наконечника
+
+	Arrowhead angle	Угол наконечника
+
+	Line tips	Концы линии
+
+	Square tips	Прямые концы
+
+	Round tips	Круглые концы
+	Make:	Создать:
+	Selection…	Выделение…
+	Align To:	Выровнять по:
+	Rubber Band	Резиновая нить
+	Auto Add/Delete	Автоматическое добавление/удаление
+	Align Edges	Выровнять края
+	Path Operations	Операции с контуром
+	Path Alignment	Выравнивание контура
+	Path Arrangement	Порядок контуров
+	New Layer	Новый слой

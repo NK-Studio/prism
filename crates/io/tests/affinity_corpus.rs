@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use photocraft_io::{ExportOptions, export, import};
+use prism_io::{ExportOptions, export, import};
 
 /// (file, ceiling). Measured differences when the importer landed are in the comments.
 const FILES: &[(&str, f64)] = &[
@@ -84,10 +84,10 @@ fn public_affinity_documents_look_like_their_affinity_thumbnails() {
         let bytes = corpus(name);
         let r = import(name, &bytes).unwrap();
         assert!(!r.preview_only, "{name} opened as its preview: {:?}", r.warnings);
-        let thumb = photocraft_codecs::decode(photocraft_affinity::preview(&bytes).unwrap().png).unwrap();
+        let thumb = prism_codecs::decode(prism_affinity::preview(&bytes).unwrap().png).unwrap();
         let (tw, th) = thumb.dimensions();
         let png = export(&r.document, "x.png", &ExportOptions::default()).unwrap().bytes;
-        let flat = photocraft_codecs::decode(&png).unwrap();
+        let flat = prism_codecs::decode(&png).unwrap();
         let (fw, fh) = flat.dimensions();
         // Several pages sit side by side; the thumbnail shows the first.
         let fw_first = ((f64::from(fh) * f64::from(tw) / f64::from(th)).round() as u32).min(fw);

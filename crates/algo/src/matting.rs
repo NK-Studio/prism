@@ -13,9 +13,9 @@
 //! Work is tiled: only tiles near the selection boundary are processed (in parallel on native
 //! targets), so cost scales with the boundary length rather than the selection area.
 
-use photocraft_color::PixelFormat;
-use photocraft_geom::Rect;
-use photocraft_raster::Surface;
+use prism_color::PixelFormat;
+use prism_geom::Rect;
+use prism_raster::Surface;
 use serde::{Deserialize, Serialize};
 
 use crate::segment::{RgbImage, Sampler};
@@ -571,7 +571,7 @@ pub fn masked_copy(src: &Surface, alpha: &Region) -> Surface {
 mod tests {
     use super::*;
     use crate::segment::ImageSampler;
-    use photocraft_color::SampleType;
+    use prism_color::SampleType;
 
     /// Horizontal blend from `a` (left) to `b` (right) across a Gaussian-blurred edge at x = 40.
     fn blurred_edge(w: usize, h: usize, sigma: f32) -> (RgbImage, Vec<f32>) {

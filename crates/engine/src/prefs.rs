@@ -650,6 +650,8 @@ pub struct TypePrefs {
     pub font_preview: FontPreview,
     pub fill_new_type_layers_with_placeholder: bool,
     pub recent_fonts: u32,
+    /// Font families pinned to the top of the Type picker.
+    pub favorite_fonts: Vec<String>,
 }
 
 impl Default for TypePrefs {
@@ -663,6 +665,7 @@ impl Default for TypePrefs {
             font_preview: FontPreview::Medium,
             fill_new_type_layers_with_placeholder: true,
             recent_fonts: 10,
+            favorite_fonts: Vec::new(),
         }
     }
 }
@@ -1016,6 +1019,12 @@ fn set_path(root: &mut Value, path: &str, value: Value) -> std::result::Result<(
 
 /// Validate one value for `path` before it is stored (choices, ranges, colours).
 fn check_value(path: &str, v: &Value) -> std::result::Result<(), String> {
+    if path == "type.favoriteFonts" {
+        let Some(names) = v.as_array() else { return Err("favorite fonts must be an array".into()) };
+        if names.len() > 512 || names.iter().any(|n| n.as_str().is_none_or(|s| s.trim().is_empty() || s.len() > 1024)) {
+            return Err("favorite fonts must contain at most 512 nonempty family names (1024 bytes each)".into());
+        }
+    }
     if path == "performance.renderingMode" && v.is_null() {
         return Ok(()); // Legacy policy, resolved from useGpu and gpuBackend.
     }
@@ -1266,7 +1275,7 @@ impl Session {
             st.history.max_bytes = bytes;
             st.history.trim(&st.doc);
         }
-        photocraft_compose::set_effect_cache_budget(budget << 20);
+        prism_compose::set_effect_cache_budget(budget << 20);
         crate::plugin_cmds::sync_prefs(self);
     }
 
@@ -1295,7 +1304,7 @@ impl Session {
         let prefs: Preferences = serde_json::from_value(v).map_err(|e| format!("preferences: {e}"))?;
         if let Some(c) = color {
             self.color.settings = serde_json::from_value(c).unwrap_or_default();
-            photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);
+            prism_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);
         }
         self.prefs.edit(|p| *p = prefs);
         if let Some(v) = presets {
@@ -1393,7 +1402,7 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     // `colorSettings.blendTextGamma` lives in the compositor too, as `edit.colorSettings` sets it.
-    photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
+    prism_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
     s.apply_prefs();
     let view = s.prefs_view();
     let out: Map<String, Value> = changes.iter().map(|(k, _)| (k.clone(), get_path(&view, k).cloned().unwrap_or(Value::Null))).collect();
@@ -1423,7 +1432,7 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     s.prefs.edit(|_| ());
-    photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
+    prism_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
     s.apply_prefs();
     if path.is_some_and(|path| keyed(path).is_some()) {
         // The removed override is absent, so reading its old path would report an error.

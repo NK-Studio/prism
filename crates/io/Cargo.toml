@@ -1,6 +1,6 @@
 [package]
-name = "photocraft-io"
-description = "Import/export between photocraft documents and PSD/PSB and flat raster formats"
+name = "prism-io"
+description = "Import/export between prism documents and PSD/PSB and flat raster formats"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,27 +12,27 @@ workspace = true
 [features]
 # Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
 corpus = []
-# HEIC/HEIF decode (forwarded to photocraft-codecs; see its `heif` feature).
-heif = ["photocraft-codecs/heif"]
+# HEIC/HEIF decode (forwarded to prism-codecs; see its `heif` feature).
+heif = ["prism-codecs/heif"]
 
 [dependencies]
 resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 
-photocraft-geom = { workspace = true }
-photocraft-color = { workspace = true }
-photocraft-cms = { workspace = true }
-photocraft-raster = { workspace = true }
-photocraft-doc = { workspace = true }
-photocraft-compose = { workspace = true }
-photocraft-algo = { workspace = true }
-photocraft-psd = { workspace = true }
-photocraft-codecs = { workspace = true }
-photocraft-raw = { workspace = true }
-photocraft-affinity = { workspace = true }
-photocraft-text = { workspace = true }
-photocraft-paint = { workspace = true }
-photocraft-vector = { workspace = true }
-photocraft-format = { path = "../format" }
+prism-geom = { workspace = true }
+prism-color = { workspace = true }
+prism-cms = { workspace = true }
+prism-raster = { workspace = true }
+prism-doc = { workspace = true }
+prism-compose = { workspace = true }
+prism-algo = { workspace = true }
+prism-psd = { workspace = true }
+prism-codecs = { workspace = true }
+prism-raw = { workspace = true }
+prism-affinity = { workspace = true }
+prism-text = { workspace = true }
+prism-paint = { workspace = true }
+prism-vector = { workspace = true }
+prism-format = { path = "../format" }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
@@ -40,8 +40,8 @@ blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 # already in the tree through the UI's icon loader; text shaping needs the fonts feature set.
 [dev-dependencies]
 crc32fast = "1.5"
-photocraft-affinity = { workspace = true, features = ["synth"] }
+prism-affinity = { workspace = true, features = ["synth"] }
 flate2 = { workspace = true }
-photocraft-psd = { workspace = true, features = ["testgen"] }
-photocraft-raw = { workspace = true, features = ["testgen"] }
+prism-psd = { workspace = true, features = ["testgen"] }
+prism-raw = { workspace = true, features = ["testgen"] }
 proptest = { workspace = true }

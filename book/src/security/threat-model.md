@@ -12,7 +12,7 @@ This threat model covers the source repository's desktop, CLI, WebAssembly, form
 
 ## Threat actors
 
-- an author of a malicious image, PSD/PSB, `.pcraft`, profile, LUT, pattern, or embedded object;
+- an author of a malicious image, PSD/PSB, `.prism`, profile, LUT, pattern, or embedded object;
 - a malicious or compromised local process connecting to a loopback server;
 - a malicious, compromised, or over-privileged MCP client or automation agent;
 - a project/action file that induces unsafe paths or expensive commands;
@@ -22,7 +22,7 @@ This threat model covers the source repository's desktop, CLI, WebAssembly, form
 
 ```text
 untrusted files and bytes
-  PSD / PSB / raster / .pcraft / ICC / LUT / pattern / embedded content
+  PSD / PSB / raster / .prism / ICC / LUT / pattern / embedded content
 
 untrusted control data
   CLI arguments / filesystem paths / JSON-lines / MCP requests / agent commands

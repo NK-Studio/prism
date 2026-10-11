@@ -1,21 +1,21 @@
 //! Rendered pixel regression for corner dragging on the GPU and CPU fallback canvas.
 use egui::{Event, Modifiers, PointerButton, Pos2};
-use photocraft_ui_egui::{PhotocraftApp, canvas::ViewXform};
+use prism_ui_egui::{PrismApp, canvas::ViewXform};
 use serde_json::json;
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, PrismApp>;
 
 fn harness(cpu: bool) -> Option<Harness> {
     match std::panic::catch_unwind(|| {
         egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_max_steps(64).wgpu().build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut a = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            PrismApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut a = PrismApp::new(prism_engine::Session::new(), Default::default());
             if !cpu && let Some(rs) = &cc.wgpu_render_state {
                 a.set_wgpu(rs.clone());
             }
             a.run("file.new", json!({"width":300,"height":200,"background":"white"})).unwrap();
             a.run("shape.create", json!({"kind":"roundedRect","rect":[20,30,200,100],"radii":20,"fill":"#0000ff"})).unwrap();
-            a.ui.tool = photocraft_ui_egui::state::Tool::Rectangle;
+            a.ui.tool = prism_ui_egui::state::Tool::Rectangle;
             a.ui.extras.snap = false;
             a.ui.extras.rulers = false;
             a.sync_views();
@@ -36,7 +36,7 @@ fn screen(h: &Harness, x: f32, y: f32) -> Pos2 {
     let a = h.state();
     let v = &a.ui.views[0];
     ViewXform {
-        rect: photocraft_ui_egui::rulers::content_rect(a, a.last_canvas_rect),
+        rect: prism_ui_egui::rulers::content_rect(a, a.last_canvas_rect),
         zoom: v.zoom,
         center: v.center,
         flip: a.ui.view.flip_horizontal,

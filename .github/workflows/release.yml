@@ -28,7 +28,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: 1
-  PHOTOCRAFT_BUILD_SHA: ${{ github.sha }}
+  PRISM_BUILD_SHA: ${{ github.sha }}
   INPUT_VERSION: ${{ inputs.version }}
   # craft-fonts (https://github.com/storytold/craft-fonts): shared font assets every release
   # embeds (today the Japanese fonts). An optional build input for everyone else; see
@@ -70,8 +70,8 @@ jobs:
     runs-on: macos-15-xlarge  # M2 Pro larger runner; use only in release.yml (actions_macos_xl budget caps spend)
     environment: release
     env:
-      PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PRISM_VERSION: ${{ needs.version.outputs.version }}
+      PRISM_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
       - name: Check out craft-fonts (embedded fonts)
@@ -88,7 +88,7 @@ jobs:
           key: release-macos-universal
       - name: Apply version override
         if: inputs.version != ''
-        run: cargo xtask version set "$PHOTOCRAFT_VERSION"
+        run: cargo xtask version set "$PRISM_VERSION"
       - name: Import signing certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -137,8 +137,8 @@ jobs:
           # .github/workflows/windows-arm64.yml installs and runs it on ARM64 hardware.
           - { arch: arm64, target: aarch64-pc-windows-msvc }
     env:
-      PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PRISM_VERSION: ${{ needs.version.outputs.version }}
+      PRISM_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
       - name: Check out craft-fonts (embedded fonts)
@@ -156,7 +156,7 @@ jobs:
       - name: Apply version override
         if: inputs.version != ''
         shell: bash
-        run: cargo xtask version set "$PHOTOCRAFT_VERSION"
+        run: cargo xtask version set "$PRISM_VERSION"
       - name: Install WiX
         shell: pwsh
         run: dotnet tool install --global wix --version 5.0.2
@@ -189,8 +189,8 @@ jobs:
     timeout-minutes: 180
     # No `environment: release`: this job signs nothing, so it gets no release secrets.
     env:
-      PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PRISM_VERSION: ${{ needs.version.outputs.version }}
+      PRISM_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
       - name: Check out craft-fonts (embedded fonts)
@@ -208,7 +208,7 @@ jobs:
           cpu: 4
           mem: 12288
           # Passed into the VM by name; never templated into the script below.
-          envs: "PHOTOCRAFT_VERSION PHOTOCRAFT_BUILD_DATE PHOTOCRAFT_BUILD_SHA INPUT_VERSION"
+          envs: "PRISM_VERSION PRISM_BUILD_DATE PRISM_BUILD_SHA INPUT_VERSION"
           # The FreeBSD CI packages, plus bash for the packaging script.
           prepare: |
             pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
@@ -219,13 +219,13 @@ jobs:
             git config --global --add safe.directory "$PWD"
             # Build outside the checkout so only dist/ is copied back out of the VM (copying the
             # target dir back fails on large builds). 4 jobs: more runs the VM out of memory.
-            export CARGO_TARGET_DIR=/var/tmp/photocraft-target CARGO_BUILD_JOBS=4
-            if [ -n "$INPUT_VERSION" ]; then cargo xtask version set "$PHOTOCRAFT_VERSION"; fi
+            export CARGO_TARGET_DIR=/var/tmp/prism-target CARGO_BUILD_JOBS=4
+            if [ -n "$INPUT_VERSION" ]; then cargo xtask version set "$PRISM_VERSION"; fi
             # craft-fonts was checked out next to the sources and synced into the VM with them.
             export CRAFT_FONTS_DIR="$PWD/craft-fonts" CRAFT_FONTS_REQUIRED=1
             bash packaging/freebsd/package.sh
-            tar -tzf dist/release/photocraft-*-freebsd-x86_64.tar.gz \
-              | grep -E '/bin/photocraft$|/bin/photocraft-cli$|/share/applications/ai\.storyteller\.photocraft\.desktop$|/share/doc/photocraft/LICENSE-MIT$'
+            tar -tzf dist/release/prism-*-freebsd-x86_64.tar.gz \
+              | grep -E '/bin/prism$|/bin/prism-cli$|/share/applications/ai\.storyteller\.prism\.desktop$|/share/doc/prism/LICENSE-MIT$'
       - uses: actions/upload-artifact@v4
         with:
           name: release-freebsd-x86_64

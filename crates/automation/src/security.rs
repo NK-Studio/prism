@@ -11,6 +11,18 @@ use serde_json::{Value, json};
 
 use crate::AutomationError;
 
+/// Prism environment variables take precedence; historical names remain read-only aliases.
+pub fn environment(name: &str) -> Option<std::ffi::OsString> {
+    if name.is_empty() || name.contains(['=', '\0']) {
+        return None;
+    }
+    resolve_environment(name, |key| std::env::var_os(key))
+}
+
+fn resolve_environment(name: &str, lookup: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::ffi::OsString> {
+    lookup(name).or_else(|| name.strip_prefix("PRISM_").and_then(|suffix| lookup(&format!("PHOTOCRAFT_{suffix}"))))
+}
+
 /// The first request on every TCP connection must use this method.
 pub const AUTH_METHOD: &str = "auth";
 /// Maximum encoded JSON request line, including its newline.
@@ -180,11 +192,7 @@ pub fn client_token(supplied: Option<&str>, token_file: Option<&Path>) -> Result
         return Ok(token.to_ascii_lowercase());
     }
     token_file.map_or_else(
-        || {
-            Err(AutomationError::BadRequest(
-                "bridge mode needs --control-token, --control-token-file, PHOTOCRAFT_CONTROL_TOKEN, or PHOTOCRAFT_CONTROL_TOKEN_FILE".into(),
-            ))
-        },
+        || Err(AutomationError::BadRequest("bridge mode needs --control-token, --control-token-file, PRISM_CONTROL_TOKEN, or PRISM_CONTROL_TOKEN_FILE".into())),
         |path| read_token_file(path).map(|v| v.to_ascii_lowercase()),
     )
 }
@@ -232,14 +240,55 @@ pub fn configure_stream(stream: &std::net::TcpStream) -> std::io::Result<()> {
 
 /// Environment-aware token inputs shared by the desktop app and CLI.
 pub fn token_inputs(supplied: Option<String>, token_file: Option<PathBuf>) -> (Option<String>, Option<PathBuf>) {
-    let supplied = supplied.or_else(|| std::env::var("PHOTOCRAFT_CONTROL_TOKEN").ok());
-    let token_file = token_file.or_else(|| std::env::var_os("PHOTOCRAFT_CONTROL_TOKEN_FILE").map(PathBuf::from));
+    let supplied = supplied.or_else(|| environment("PRISM_CONTROL_TOKEN").and_then(|value| value.into_string().ok()));
+    let token_file = token_file.or_else(|| environment("PRISM_CONTROL_TOKEN_FILE").map(PathBuf::from));
     (supplied, token_file)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_environment_names_are_rejected_without_panicking() {
+        for name in ["", "invalid=name", "invalid\0name"] {
+            assert!(environment(name).is_none());
+        }
+    }
+
+    #[test]
+    fn prism_environment_has_priority_and_legacy_automation_keeps_working() {
+        for suffix in ["CONTROL_TOKEN", "CONTROL_TOKEN_FILE", "CONFIG_DIR", "CONTROL_PORT", "GPU_STARTUP_FAILURE"] {
+            let new = format!("PRISM_{suffix}");
+            let old = format!("PHOTOCRAFT_{suffix}");
+            assert_eq!(resolve_environment(&new, |key| (key == old).then(|| "legacy".into())), Some("legacy".into()));
+            assert_eq!(
+                resolve_environment(&new, |key| {
+                    if key == new {
+                        Some("current".into())
+                    } else if key == old {
+                        Some("legacy".into())
+                    } else {
+                        None
+                    }
+                }),
+                Some("current".into())
+            );
+            assert_eq!(
+                resolve_environment(&new, |key| {
+                    if key == new {
+                        Some("".into())
+                    } else if key == old {
+                        Some("legacy".into())
+                    } else {
+                        None
+                    }
+                }),
+                Some("".into())
+            );
+        }
+        assert_eq!(resolve_environment("HOME", |_| None), None);
+    }
 
     #[test]
     fn generated_tokens_are_valid_and_distinct() {
@@ -296,7 +345,7 @@ mod tests {
 
     #[test]
     fn token_file_round_trips_between_server_and_client() {
-        let path = std::env::temp_dir().join(format!("photocraft-control-token-{}-{}.txt", std::process::id(), generate_token().unwrap()));
+        let path = std::env::temp_dir().join(format!("prism-control-token-{}-{}.txt", std::process::id(), generate_token().unwrap()));
         let server = server_token(None, Some(&path)).unwrap();
         let client = client_token(None, Some(&path)).unwrap();
         assert_eq!(server, client);

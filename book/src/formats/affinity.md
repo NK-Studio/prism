@@ -18,7 +18,7 @@ ellipses), master pages, and CMYK or Lab colour (converted to RGB without the do
 Nothing is dropped without a warning.
 
 Prism can't write Affinity files. An opened Affinity document has no save path: Save asks for
-a new file (`.pcraft`, PSD, PNG…) and never writes over the Affinity file.
+a new file (`.prism`, PSD, PNG…) and never writes over the Affinity file.
 
 If the native data can't be read (a damaged file, or a layout Prism doesn't know), Prism
 opens the small PNG preview Affinity stores in the file instead, as a single pixel layer named

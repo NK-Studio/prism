@@ -1,11 +1,11 @@
 //! Image menu: Image Size, Canvas Size, Crop, Trim, Mode (colour model and
 //! bit depth) conversions, Duplicate.
 
-use photocraft_algo::resample::{Resample, crop_surface, resize_surface_in_canvas, translate_surface};
-use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{Document, Effect, Effects, FxPaint, Layer, LayerContent, Size};
-use photocraft_geom::Rect;
-use photocraft_raster::Surface;
+use prism_algo::resample::{Resample, crop_surface, resize_surface_in_canvas, translate_surface};
+use prism_color::{ColorMode, SampleType};
+use prism_doc::{Document, Effect, Effects, FxPaint, Layer, LayerContent, Size};
+use prism_geom::Rect;
+use prism_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -193,7 +193,7 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
             doc.selection = Some(resize_surface_in_canvas(sel, sx, sy, Resample::Bilinear, canvas));
         }
         // Vector geometry, guides and marks scale with the pixels; vectors re-render sharp.
-        crate::canvas_geom::transform_geometry(doc, &photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
+        crate::canvas_geom::transform_geometry(doc, &prism_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
         doc.size = Size::new(nw, nh);
         crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
         Ok(())
@@ -234,7 +234,7 @@ fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> Result<()> 
     }
     // Type, shapes, smart objects, vector masks, paths, guides, slices, notes… (caches above
     // are already translated exactly, so nothing needs re-rendering for the move itself).
-    crate::canvas_geom::transform_geometry(doc, &photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy)));
+    crate::canvas_geom::transform_geometry(doc, &prism_geom::Affine::translate(f64::from(dx), f64::from(dy)));
     Ok(())
 }
 
@@ -332,7 +332,7 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
             && let LayerContent::Raster(surf) = &mut bg.content
         {
             let fmt = surf.format();
-            let px = photocraft_raster::from_rgba(&fmt, ext);
+            let px = prism_raster::from_rgba(&fmt, ext);
             let keep = surf.content_bounds().intersect(&old);
             let saved = surf.to_interleaved(keep);
             surf.fill_rect(canvas, &px);
@@ -394,7 +394,7 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
 fn trim(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
-    let buf = photocraft_compose::flatten(&d.doc);
+    let buf = prism_compose::flatten(&d.doc);
     let based = p.get("basedOn").and_then(Value::as_str).unwrap_or("transparent");
     let w = canvas.width() as usize;
     let reference = match based {
@@ -455,16 +455,16 @@ fn convert_depth(s: &mut Session, depth: SampleType) -> Result<Value> {
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let mut doc = (*d.doc).clone();
-    doc.id = photocraft_doc::DocId::fresh();
+    doc.id = prism_doc::DocId::fresh();
     doc.name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("{} copy", d.doc.name));
     if p.get("mergedOnly").and_then(Value::as_bool).unwrap_or(false) {
         if doc.size.area().saturating_mul(16) > MAX_RESAMPLE_BYTES {
             return Err(bad("image.duplicate", "merged duplicate exceeds the allocation budget"));
         }
-        let buf = photocraft_compose::flatten(&doc);
+        let buf = prism_compose::flatten(&doc);
         let fmt = doc.pixel_format();
         let mut surf = Surface::new(fmt);
-        let vals: Vec<f32> = buf.px.iter().flat_map(|q| photocraft_raster::from_rgba(&fmt, *q)).collect();
+        let vals: Vec<f32> = buf.px.iter().flat_map(|q| prism_raster::from_rgba(&fmt, *q)).collect();
         surf.write_region(doc.bounds(), &vals);
         surf.prune();
         doc.layers = vec![Layer::new("Background", LayerContent::Raster(surf))];
@@ -472,7 +472,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let mut ids = std::collections::HashMap::new();
     for_each_layer(&mut doc.layers, &mut |l| {
         let old = l.id;
-        l.id = photocraft_doc::LayerId::fresh();
+        l.id = prism_doc::LayerId::fresh();
         l.psd_id = None;
         ids.insert(old, l.id);
     });
@@ -508,7 +508,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
             copy.selected_layers = selected;
             copy.layer_anchor = active;
         }
-        copy.history.set_current_layers(photocraft_ops::LayerTarget { active: copy.active_layer, selected: copy.selected_layers.clone() });
+        copy.history.set_current_layers(prism_ops::LayerTarget { active: copy.active_layer, selected: copy.selected_layers.clone() });
     }
     Ok(json!({ "document": index, "name": name }))
 }
@@ -650,7 +650,7 @@ mod tests {
         s.edit("paint", |doc, active| {
             let l = doc.layer_mut(active.unwrap()).unwrap();
             l.surface_mut().unwrap().fill_rect(Rect::new(10, 5, 20, 15), &[1.0, 0.0, 0.0, 1.0]);
-            l.mask = Some(photocraft_doc::LayerMask::reveal_all());
+            l.mask = Some(prism_doc::LayerMask::reveal_all());
             l.effects.items.push(Effect::default_drop_shadow());
             Ok(())
         })
@@ -667,16 +667,16 @@ mod tests {
         let mut s = session();
         s.edit("references", |d, _| {
             let layer = d.layers[0].id;
-            d.variables.defs.push(photocraft_doc::variables::VariableDef { name: "show".into(), layer, kind: photocraft_doc::variables::VarKind::Visibility });
-            d.slices.list.push(photocraft_doc::Slice { layer: Some(layer), ..Default::default() });
-            d.layer_comps.push(photocraft_doc::LayerComp {
+            d.variables.defs.push(prism_doc::variables::VariableDef { name: "show".into(), layer, kind: prism_doc::variables::VarKind::Visibility });
+            d.slices.list.push(prism_doc::Slice { layer: Some(layer), ..Default::default() });
+            d.layer_comps.push(prism_doc::LayerComp {
                 id: 1,
                 name: "comp".into(),
                 comment: String::new(),
                 apply_visibility: true,
                 apply_position: true,
                 apply_appearance: true,
-                states: photocraft_doc::comps::capture_states(d),
+                states: prism_doc::comps::capture_states(d),
             });
             Ok(())
         })
@@ -699,7 +699,7 @@ mod tests {
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk] {
             for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
                 for (w, h, method) in [(16, 12, "preserveDetails"), (4, 3, "lanczos"), (16, 3, "bicubic")] {
-                    let original = Document::with_background("small", Size::new(8, 6), mode, depth, photocraft_color::Color::WHITE);
+                    let original = Document::with_background("small", Size::new(8, 6), mode, depth, prism_color::Color::WHITE);
                     let mut auto = Session::new();
                     auto.add_document(original.clone(), None);
                     let mut explicit = Session::new();
@@ -782,7 +782,7 @@ mod tests {
                 s.execute("select.all", json!({})).unwrap();
                 s.execute("image.imageSize", json!({"width": w, "resample": resample})).unwrap();
                 let d = doc(&s);
-                let flat = photocraft_compose::flatten(d);
+                let flat = prism_compose::flatten(d);
                 let (w, h) = (flat.rect.width() as usize, flat.rect.height() as usize);
                 let mid = flat.px[(h / 2) * w + w / 2];
                 assert!((mid[3] - 1.0).abs() < 1e-3, "{depth} {resample}: {mid:?}");

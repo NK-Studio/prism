@@ -13,7 +13,7 @@ desktop UI       CLI       JSON control       MCP
                           |
        document model + operations + compositors
                           |
-             PSD / raster / .pcraft I/O
+             PSD / raster / .prism I/O
 ```
 
 The enforced dependency direction runs from format-independent foundation crates through the document and operation layers to composition, I/O, the engine, and finally UI/automation. `cargo xtask layers` checks this rule.
@@ -22,12 +22,12 @@ The complete design narrative and dependency diagram remain in [`docs/architectu
 
 ## Core properties
 
-- `photocraft-doc` holds the pure-data document model.
-- `photocraft-engine::Session` owns open documents, active state, history, and command dispatch.
-- `photocraft-compose` is the CPU reference compositor; `photocraft-gpu` accelerates supported interactive paths.
-- `photocraft-io` maps between documents and PSD or flat formats.
-- `photocraft-format` reads and writes the native `.pcraft` bundle.
-- `photocraft-ui-egui` is a thin shell over engine commands.
-- `photocraft-automation` exposes the headless engine and the live-GUI bridge.
+- `prism-doc` holds the pure-data document model.
+- `prism-engine::Session` owns open documents, active state, history, and command dispatch.
+- `prism-compose` is the CPU reference compositor; `prism-gpu` accelerates supported interactive paths.
+- `prism-io` maps between documents and PSD or flat formats.
+- `prism-format` reads and writes the native `.prism` bundle.
+- `prism-ui-egui` is a thin shell over engine commands.
+- `prism-automation` exposes the headless engine and the live-GUI bridge.
 
 See [Crates and dependency layers](crates.md) for the complete workspace map.

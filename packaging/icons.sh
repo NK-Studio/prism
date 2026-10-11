@@ -1,89 +1,53 @@
 #!/usr/bin/env bash
-# Regenerate every app icon from assets/app-icon/photocraft.svg (the canonical master).
-#
-# Needs: resvg (brew install resvg / cargo install resvg). On macOS, iconutil also writes the
-# .icns. The outputs are committed, so packaging never needs these tools.
-#
-#   packaging/icons.sh
-#   packaging/icons.sh --png  # macOS + Windows from photocraft-1024.png (macOS tools)
+# Generate every platform icon from the owner-supplied Prism PNG.
+# Requires macOS sips/iconutil; outputs are committed, so packaging needs neither.
+# packaging/icons.sh [--png] (--png remains accepted for existing build scripts).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="$ROOT/assets/app-icon"
-SVG="$DIR/photocraft.svg"
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
-
-if [[ "${1:-}" == "--png" && "$#" == 1 ]]; then
-  SOURCE="$DIR/photocraft-1024.png"
-  command -v sips >/dev/null || { echo "error: sips not found (macOS required)" >&2; exit 1; }
-  command -v iconutil >/dev/null || { echo "error: iconutil not found (macOS required)" >&2; exit 1; }
-  # Keep the PNG artwork, alpha and existing margins; never add padding a second time.
-  SET="$TMP/photocraft.iconset"
-  mkdir -p "$SET"
-  for s in 16 32 128 256 512; do
-    sips -z "$s" "$s" "$SOURCE" --out "$SET/icon_${s}x${s}.png" >/dev/null
-    sips -z "$((s * 2))" "$((s * 2))" "$SOURCE" --out "$SET/icon_${s}x${s}@2x.png" >/dev/null
-  done
-  iconutil -c icns -o "$TMP/photocraft.icns" "$SET"
-  ICO_PNGS=()
-  for s in 16 20 24 32 40 48 64 128 256; do
-    sips -z "$s" "$s" "$SOURCE" --out "$TMP/ico-$s.png" >/dev/null
-    ICO_PNGS+=("$TMP/ico-$s.png")
-  done
-  (cd "$ROOT" && cargo run -q -p xtask -- ico "$TMP/photocraft.ico" "${ICO_PNGS[@]}")
-  cp "$TMP/photocraft.icns" "$DIR/photocraft.icns"
-  cp "$TMP/photocraft.ico" "$DIR/photocraft.ico"
-  # This PNG is also embedded as the Windows runtime window/taskbar icon.
-  cp "$TMP/ico-256.png" "$DIR/hicolor/256x256/apps/ai.storyteller.photocraft.png"
-  echo "macOS and Windows icons written from $SOURCE"
-  exit 0
-elif [[ "$#" != 0 ]]; then
+SOURCE="$DIR/prism-1024.png"
+if [[ "$#" != 0 && !( "$#" == 1 && "$1" == "--png" ) ]]; then
   echo "usage: packaging/icons.sh [--png]" >&2
   exit 1
 fi
-
-command -v resvg >/dev/null || { echo "error: resvg not found (brew install resvg)" >&2; exit 1; }
-
-# The artwork is a full-bleed 512-unit tile (rx=112). macOS icons pad it to Apple's 824/1024 body
-# grid (transparent margin). Windows and FreeBSD icons crop 22 units off each side (into the
-# rounded corners) so the portrait reads at 16-48 px.
-grep -q 'viewBox="0 0 512 512"' "$SVG" || { echo "error: expected viewBox=\"0 0 512 512\" in $SVG" >&2; exit 1; }
-MAC="$TMP/mac.svg"
-sed 's/viewBox="0 0 512 512"/viewBox="-62 -62 636 636"/' "$SVG" >"$MAC"
-TIGHT="$TMP/tight.svg"
-sed 's/viewBox="0 0 512 512"/viewBox="22 22 468 468"/' "$SVG" >"$TIGHT"
-
-render() { resvg -w "$2" -h "$2" "$1" "$3" </dev/null; }
-
-render "$MAC" 1024 "$DIR/photocraft-1024.png"
-
-# FreeBSD hicolor theme (the 256px PNG is also the runtime window icon).
-for s in 16 24 32 48 64 128 256 512; do
-  mkdir -p "$DIR/hicolor/${s}x${s}/apps"
-  render "$TIGHT" "$s" "$DIR/hicolor/${s}x${s}/apps/ai.storyteller.photocraft.png"
+command -v sips >/dev/null || { echo "error: sips not found (macOS required)" >&2; exit 1; }
+command -v iconutil >/dev/null || { echo "error: iconutil not found (macOS required)" >&2; exit 1; }
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+# Keep the PNG artwork, alpha and existing margins; do not add padding again.
+SET="$TMP/prism.iconset"
+mkdir -p "$SET"
+for s in 16 32 128 256 512; do
+  sips -z "$s" "$s" "$SOURCE" --out "$SET/icon_${s}x${s}.png" >/dev/null
+  sips -z "$((s * 2))" "$((s * 2))" "$SOURCE" --out "$SET/icon_${s}x${s}@2x.png" >/dev/null
 done
-mkdir -p "$DIR/hicolor/scalable/apps"
-# The lighter trace (photocraft-small.svg) keeps the scalable theme icon cheap to render.
-cp "$DIR/photocraft-small.svg" "$DIR/hicolor/scalable/apps/ai.storyteller.photocraft.svg"
-
-# Windows .ico.
+iconutil -c icns -o "$TMP/prism.icns" "$SET"
 ICO_PNGS=()
 for s in 16 20 24 32 40 48 64 128 256; do
-  render "$TIGHT" "$s" "$TMP/ico-$s.png"
+  sips -z "$s" "$s" "$SOURCE" --out "$TMP/ico-$s.png" >/dev/null
   ICO_PNGS+=("$TMP/ico-$s.png")
 done
-(cd "$ROOT" && cargo run -q -p xtask -- ico "$DIR/photocraft.ico" "${ICO_PNGS[@]}")
-
-# macOS .icns.
-if command -v iconutil >/dev/null; then
-  SET="$TMP/photocraft.iconset"
-  mkdir -p "$SET"
-  for s in 16 32 128 256 512; do
-    render "$MAC" "$s" "$SET/icon_${s}x${s}.png"
-    render "$MAC" $((s * 2)) "$SET/icon_${s}x${s}@2x.png"
-  done
-  iconutil -c icns -o "$DIR/photocraft.icns" "$SET"
-else
-  echo "warning: iconutil not found (macOS only); photocraft.icns not regenerated" >&2
-fi
-echo "icons written to $DIR"
+(cd "$ROOT" && cargo run --profile fast --locked -q -p xtask -- ico "$TMP/prism.ico" "${ICO_PNGS[@]}")
+for s in 16 24 32 48 64 128 256 512; do
+  mkdir -p "$DIR/hicolor/${s}x${s}/apps"
+  sips -z "$s" "$s" "$SOURCE" --out "$DIR/hicolor/${s}x${s}/apps/com.nkstudio.prism.png" >/dev/null
+done
+# The scalable desktop icon is self-contained, using the same artwork as the PNGs.
+python3 - "$SOURCE" "$DIR" <<'PYICON'
+import base64
+import pathlib
+import sys
+source, directory = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+encoded = base64.b64encode(source.read_bytes()).decode("ascii")
+svg = ('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+       'width="1024" height="1024" viewBox="0 0 1024 1024">'
+       '<title>Prism — NK Studio</title><image width="1024" height="1024" '
+       f'xlink:href="data:image/png;base64,{encoded}"/></svg>\n')
+for relative in ("prism.svg", "prism-small.svg", "hicolor/scalable/apps/com.nkstudio.prism.svg"):
+    output = directory / relative
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(svg, encoding="utf-8")
+PYICON
+cp "$TMP/prism.icns" "$DIR/prism.icns"
+cp "$TMP/prism.ico" "$DIR/prism.ico"
+echo "macOS, Windows and FreeBSD icons written from $SOURCE"

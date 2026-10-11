@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use photocraft_raster::Surface;
+use prism_raster::Surface;
 
 /// Where a video layer's footage came from.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -18,7 +18,7 @@ pub enum VideoSource {
 /// A video layer's frame stack (Layer › Video Layers). The layer's displayed content surface is a
 /// cache of `frames[timeline.current]`, which the engine keeps in sync as the playhead moves.
 ///
-/// Frames are full raster surfaces held in memory. (`.pcraft` persistence of the stack is a
+/// Frames are full raster surfaces held in memory. (`.prism` persistence of the stack is a
 /// follow-up; a saved document keeps the current frame as the layer's raster content.)
 #[derive(Clone, Debug)]
 pub struct VideoData {

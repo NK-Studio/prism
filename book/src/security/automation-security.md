@@ -8,7 +8,7 @@ Automation is a privilege boundary because requests can cause filesystem access,
 - Headless TCP refuses a successfully bound non-loopback address.
 - Every desktop-control and headless-TCP connection must authenticate with a 256-bit bearer token before method dispatch.
 - Encoded request lines are limited to 1 MiB on desktop and headless TCP and on the headless
-  JSON-lines stdio server (`photocraft-cli serve`). MCP over stdio has no request-byte cap: the
+  JSON-lines stdio server (`prism-cli serve`). MCP over stdio has no request-byte cap: the
   MCP SDK reads its own lines, and only MCP tool results are size-checked. Active TCP connections
   are limited to 16, and headless/MCP batches to 256 steps.
 - JSON-lines replies and encoded MCP tool results are limited to 8 MiB; retained batch replies
@@ -26,7 +26,7 @@ Automation is a privilege boundary because requests can cause filesystem access,
 - Engine commands are expected to reject invalid parameters without panicking.
 - Remote filesystem methods use separately granted read and write directory capabilities.
 - A save without a `path` (MCP `doc_save`, `serve` `doc.save`, the control channel's `app.save`)
-  writes back only to the document's own PSD, PSB or `.pcraft` file in its own format; any other
+  writes back only to the document's own PSD, PSB or `.prism` file in its own format; any other
   save needs an explicit `path`, so automation never flattens or converts over the file it opened.
 - Automation paths must be relative beneath the applicable root. Absolute paths, parent
   traversal, alternate separators, Windows device names, malformed components, and link escapes

@@ -1,8 +1,8 @@
 //! Parametric ("live") shapes → paths: rectangles with corner radii, ellipses, polygons, stars
 //! and lines. Knots run clockwise on screen (y down), starting at the top.
 
-use photocraft_doc::{Knot, LiveShape, Path, Subpath};
-use photocraft_geom::Point;
+use prism_doc::{Knot, LiveShape, Path, Subpath};
+use prism_geom::Point;
 
 /// Handle length of a quarter-circle cubic, `4/3·(√2 − 1)`.
 pub const KAPPA: f64 = 0.552_284_749_830_793_4;
@@ -118,13 +118,64 @@ pub fn line(a: (f64, f64), b: (f64, f64), weight: f64) -> Path {
     Path::new(vec![Subpath::polygon(&[(a.0 + nx, a.1 + ny), (b.0 + nx, b.1 + ny), (b.0 - nx, b.1 - ny), (a.0 - nx, a.1 - ny)])])
 }
 
+/// Filled line with independently retained round-tip geometry. Square tips use the legacy path.
+pub fn line_with_tips(a: [f64; 2], b: [f64; 2], weight: f64, round_tips: bool) -> Path {
+    if !a.iter().chain(b.iter()).chain(std::iter::once(&weight)).all(|v| v.is_finite()) || weight < 0.0 {
+        return Path::default();
+    }
+    if !round_tips {
+        return line((a[0], a[1]), (b[0], b[1]), weight);
+    }
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let length = dx.hypot(dy);
+    if !length.is_finite() {
+        return Path::default();
+    }
+    let (ux, uy) = if length > 1e-9 { (dx / length, dy / length) } else { (1.0, 0.0) };
+    let r = weight / 2.0;
+    rounded_rect(-r, -r, length + weight, weight, [r; 4]).transform(&prism_geom::Affine { m: [ux, uy, -uy, ux, a[0], a[1]] })
+}
+
+/// Straight shaft and open V head, with a 60° included angle. Invalid/zero lengths
+/// produce no geometry; the head is shortened so its wings cannot pass the tail.
+pub fn arrow(from: [f64; 2], to: [f64; 2], head_size: f64) -> Path {
+    arrow_with_angle(from, to, head_size, 60.0)
+}
+
+/// Open arrow with an included head angle of 10–160 degrees.
+pub fn arrow_with_angle(from: [f64; 2], to: [f64; 2], head_size: f64, head_angle: f64) -> Path {
+    let [ax, ay] = from;
+    let [bx, by] = to;
+    let (dx, dy) = (bx - ax, by - ay);
+    let length = dx.hypot(dy);
+    if ![ax, ay, bx, by, length, head_size].iter().all(|v| v.is_finite())
+        || length <= 1e-9
+        || head_size <= 0.0
+        || !head_angle.is_finite()
+        || !(10.0..=160.0).contains(&head_angle)
+    {
+        return Path::default();
+    }
+    let (ux, uy) = (dx / length, dy / length);
+    let wing = head_size.min(length);
+    let half = head_angle.to_radians() / 2.0;
+    let back = wing * half.cos();
+    let side = wing * half.sin();
+    Path::new(vec![
+        Subpath::polyline(&[(ax, ay), (bx, by)]),
+        Subpath::polyline(&[(bx - ux * back - uy * side, by - uy * back + ux * side), (bx, by), (bx - ux * back + uy * side, by - uy * back - ux * side)]),
+    ])
+}
+
 /// The path of a live shape.
 pub fn live_path(s: &LiveShape) -> Path {
     match s {
         LiveShape::Rect { rect: [x, y, w, h], radii } => rounded_rect(*x, *y, *w, *h, *radii),
         LiveShape::Ellipse { rect: [x, y, w, h] } => ellipse(*x, *y, *w, *h),
         LiveShape::Polygon { rect: [x, y, w, h], sides, star_ratio } => polygon(*x, *y, *w, *h, *sides, *star_ratio),
-        LiveShape::Line { from, to, weight } => line((from[0], from[1]), (to[0], to[1]), *weight),
+        LiveShape::Arrow { from, to, head_size, head_angle } => arrow_with_angle(*from, *to, *head_size, *head_angle),
+        LiveShape::Line { from, to, weight, round_tips } => line_with_tips(*from, *to, *weight, *round_tips),
     }
 }
 
@@ -149,5 +200,78 @@ mod tests {
         assert_eq!(polygon(0.0, 0.0, 10.0, 10.0, 6, 1.0).subpaths[0].knots.len(), 6);
         let top = polygon(0.0, 0.0, 10.0, 10.0, 3, 1.0).subpaths[0].knots[0].anchor;
         assert!((top.x - 5.0).abs() < 1e-9 && top.y.abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod arrow_tests {
+    use super::*;
+    #[test]
+    fn arrow_is_open_sixty_degree_and_never_extends_behind_tail() {
+        for angle in 0..16 {
+            let angle = angle as f64 * std::f64::consts::TAU / 16.0;
+            for length in [0.1, 2.0, 100.0] {
+                let (ux, uy) = (angle.cos(), angle.sin());
+                let p = arrow([10.0, 20.0], [10.0 + ux * length, 20.0 + uy * length], 16.0);
+                assert_eq!(p.subpaths.len(), 2);
+                assert!(p.subpaths.iter().all(|s| !s.closed));
+                let k = &p.subpaths[1].knots;
+                let (a, b, c) = (k[0].anchor, k[1].anchor, k[2].anchor);
+                let dot = (a.x - b.x) * (c.x - b.x) + (a.y - b.y) * (c.y - b.y);
+                assert!((dot / (a.x - b.x).hypot(a.y - b.y) / (c.x - b.x).hypot(c.y - b.y) - 0.5).abs() < 1e-9);
+                for q in [a, c] {
+                    assert!((q.x - 10.0) * ux + (q.y - 20.0) * uy >= -1e-9);
+                }
+            }
+        }
+        assert!(arrow([0.0; 2], [0.0; 2], 16.0).subpaths.is_empty());
+        assert!(arrow([0.0; 2], [f64::INFINITY, 0.0], 16.0).subpaths.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod arrow_angle_tests {
+    use super::*;
+    #[test]
+    fn variable_angles_have_equal_wing_lengths_and_roundtrip_old_metadata() {
+        for angle in [10.0_f64, 30.0, 60.0, 100.0, 160.0] {
+            let p = arrow_with_angle([0.0, 0.0], [100.0, 0.0], 20.0, angle);
+            let k = &p.subpaths[1].knots;
+            let a = k[0].anchor;
+            let c = k[2].anchor;
+            assert!(((a.x - 100.0).hypot(a.y) - 20.0).abs() < 1e-9);
+            assert!(((c.x - 100.0).hypot(c.y) - 20.0).abs() < 1e-9);
+            let dot = ((a.x - 100.0) * (c.x - 100.0) + a.y * c.y) / 400.0;
+            assert!((dot - angle.to_radians().cos()).abs() < 1e-9);
+        }
+        for angle in [0.0, 161.0, f64::NAN, f64::INFINITY] {
+            assert!(arrow_with_angle([0.0; 2], [100.0, 0.0], 20.0, angle).subpaths.is_empty());
+        }
+    }
+}
+
+#[cfg(test)]
+mod line_tip_tests {
+    use super::*;
+    #[test]
+    fn square_is_legacy_and_round_is_a_capsule_in_every_direction() {
+        for angle in 0..16 {
+            let a = angle as f64 * std::f64::consts::TAU / 16.0;
+            for length in [0.0, 0.1, 100.0] {
+                let to = [20.0 + length * a.cos(), 30.0 + length * a.sin()];
+                assert_eq!(line_with_tips([20.0, 30.0], to, 12.0, false), line((20.0, 30.0), (to[0], to[1]), 12.0));
+                let p = line_with_tips([20.0, 30.0], to, 12.0, true);
+                assert_eq!(p.subpaths.len(), 1);
+                assert!(p.subpaths[0].closed);
+                assert_eq!(p.subpaths[0].knots.len(), if length == 0.0 { 4 } else { 6 });
+                assert!(p.subpaths[0].knots.iter().all(|k| k.anchor.x.is_finite() && k.anchor.y.is_finite()));
+            }
+        }
+        let p = line_with_tips([20.0, 30.0], [120.0, 30.0], 12.0, true);
+        let xs: Vec<_> = p.subpaths[0].knots.iter().map(|k| k.anchor.x).collect();
+        assert_eq!(xs.iter().copied().fold(f64::INFINITY, f64::min), 14.0);
+        assert_eq!(xs.iter().copied().fold(f64::NEG_INFINITY, f64::max), 126.0);
+        assert!(line_with_tips([f64::NAN, 0.0], [1.0, 1.0], 12.0, true).subpaths.is_empty());
+        assert!(line_with_tips([0.0; 2], [1.0; 2], -1.0, true).subpaths.is_empty());
     }
 }

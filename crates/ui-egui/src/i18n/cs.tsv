@@ -16,7 +16,7 @@
 # particular not the Czech localisation of Adobe Photoshop. Add entries the same way.
 # Conventions: menus are nouns (Soubor, Úpravy, Obraz ...), commands are infinitives (Otevřít…,
 # Uložit jako…), sentence case as in the English source. Product and technology names
-# (Prism, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin letters; the trailing "…" of
+# (Prism, OpenType, CMYK, Lab ...) stay in Latin letters; the trailing "…" of
 # dialog commands is kept.
 
 	File	Soubor
@@ -708,8 +708,6 @@
 	About Prism	O aplikaci Prism
 	Prism Website	Web Prism
 	Prism on GitHub	Prism na GitHubu
-	ArtCraft Website	Web ArtCraft
-	Join the ArtCraft Discord…	Připojit se k Discordu ArtCraft…
 	Report an Issue…	Nahlásit problém…
 	WIA Support…	Podpora WIA…
 	Apply	Použít
@@ -974,7 +972,6 @@
 	Diffusion	Difuze
 	Discard the embedded profile (don't color manage)	Zahodit vložený profil (bez správy barev)
 	Discontiguous	Nesouvislé
-	Discord	Discord
 	Dismiss	Zavřít
 	Display P3	Display P3
 	Display Text	Zobrazený text
@@ -1101,7 +1098,6 @@
 	Invert All	Invertovat vše
 	Invert has no settings.	Invertovat nemá žádná nastavení.
 	Italic	Kurzíva
-	Join us on Discord	Přidejte se k nám na Discordu
 	Justify all	Do bloku vše
 	Justify last centered	Do bloku, poslední řádek na střed
 	Justify last left	Do bloku, poslední řádek vlevo
@@ -1493,7 +1489,6 @@
 	Apple Watch 45mm	Apple Watch 45 mm
 	Aqua	Akvamarínové
 	Art & Illustration	Umění a ilustrace
-	ArtCraft	ArtCraft
 	Background Eraser Tool	Nástroj guma pozadí
 	Bevel & Emboss	Úkos a reliéf
 	Blend Mode	Režim prolnutí
@@ -2253,3 +2248,52 @@ fontWeight	Italic	Kurzíva
 	Preparing preview…	Příprava náhledu…
 	Columns	Sloupce
 	Duplicate	Duplikovat
+
+	Load Font File…	Načíst soubor písma…
+	Favorite	Přidat k oblíbeným
+	Unfavorite	Odebrat z oblíbených
+	TTF, OTF, TTC, OTC — available until Prism exits	TTF, OTF, TTC, OTC — dostupné do ukončení Prism
+	Loaded font (this session)	Písmo načteno (tato relace)
+	Favorite fonts	Oblíbená písma
+
+	All fonts	Všechna písma
+	Korean only	Pouze korejská
+	No preview	Bez náhledu
+
+# Prism About introduction and footer.
+	Turn ideas into images.	Proměňte nápady v obrazy.
+	Prism is a desktop image editor by NK Studio.	Prism je desktopový editor obrázků od NK Studio.
+	Refine layers, color, and typography to bring your vision to life.	Dolaďte vrstvy, barvy a typografii a uskutečněte svou vizi.
+	All rights reserved.	Všechna práva vyhrazena.
+	Built for creative expression.	Pro tvůrčí vyjádření.
+
+	Arrow Tool	Nástroj šipka
+	Arrow	Šipka
+	Arrow color	Barva šipky
+	Thickness	Tloušťka
+	Arrowhead	Velikost hrotu
+	Corners	Rohy
+	Angular	Hranaté
+	Rounded	Zaoblené
+
+	Arrowhead length	Délka hrotu
+
+	Arrowhead angle	Úhel hrotu
+
+	Line tips	Konce čáry
+
+	Square tips	Hranaté konce
+
+	Round tips	Zaoblené konce
+	Make:	Vytvořit:
+	Selection…	Výběr…
+	Mask	Maska
+	Align To:	Zarovnat k:
+	Rubber Band	Gumová čára
+	Auto Add/Delete	Automaticky přidat/odstranit
+	Align Edges	Zarovnat okraje
+	Path Operations	Operace s cestou
+	Path Alignment	Zarovnání cesty
+	Path Arrangement	Uspořádání cesty
+	New Layer	Nová vrstva
+	Settings	Nastavení

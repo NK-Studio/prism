@@ -3,7 +3,7 @@
 Prism follows the same conventions as FilmCraft #28. Start a headless session:
 
 ```sh
-photocraft-cli mcp --automation-read-root /work/project --automation-write-root /work/project
+prism-cli mcp --automation-read-root /work/project --automation-write-root /work/project
 ```
 
 Paths are relative to the corresponding root; without a root that filesystem authority is
@@ -32,7 +32,7 @@ Tool execution failures return `isError:true`. A worker panic becomes a tool err
 existing poisoned-session recovery keeps serving. Invalid JSON lines receive `-32700` with
 `id:null`; the next line is still processed.
 
-`photocraft://document` and `photocraft://commands` return live JSON matching `doc_inspect`
+`prism://document` and `prism://commands` return live JSON matching `doc_inspect`
 and `command_list`. Resource reads are uncached; tool/resource catalogs are private and cached
 for ten minutes. List/read responses include the MCP 2026-07-28 result/cache fields.
 

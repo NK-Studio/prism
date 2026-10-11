@@ -3,19 +3,19 @@
 //! [`crate::Services`], applying the interface theme, autosave and crash recovery, and the
 //! history log.
 //!
-//! The values live in the engine ([`photocraft_engine::prefs::Preferences`], so agents read and
+//! The values live in the engine ([`prism_engine::prefs::Preferences`], so agents read and
 //! change them with `prefs.get` / `prefs.set`); this module only edits a working copy in a dialog
 //! and commits it with those commands on Apply or OK.
 
 use std::collections::{BTreeMap, HashMap};
 
 use egui::{Color32, RichText, Sense, vec2};
-use photocraft_doc::DocId;
-use photocraft_engine::prefs::{self, SECTIONS, Theme};
-use photocraft_engine::snap::{SnapLine, SnapTargets};
+use prism_doc::DocId;
+use prism_engine::prefs::{self, SECTIONS, Theme};
+use prism_engine::snap::{SnapLine, SnapTargets};
 use serde_json::{Map, Value, json};
 
-use crate::PhotocraftApp;
+use crate::PrismApp;
 use crate::state::DialogKind;
 use crate::theme::{ThemeKind, Tokens};
 
@@ -46,7 +46,7 @@ pub struct Runtime {
 }
 
 /// The GPU canvas colours from Preferences › Transparency & Gamut.
-pub fn canvas_style(app: &PhotocraftApp) -> crate::gpu_canvas::CanvasStyle {
+pub fn canvas_style(app: &PrismApp) -> crate::gpu_canvas::CanvasStyle {
     let t = &app.session.prefs().transparency_and_gamut;
     let [l, d] = t.colors();
     let f = |c: [u8; 3]| c.map(|v| v as f32 / 255.0);
@@ -61,7 +61,7 @@ pub fn canvas_style(app: &PhotocraftApp) -> crate::gpu_canvas::CanvasStyle {
 }
 
 /// Pasteboard colour from Preferences › Interface (`None` = the theme's default canvas).
-pub fn pasteboard_color(app: &PhotocraftApp) -> Option<Color32> {
+pub fn pasteboard_color(app: &PrismApp) -> Option<Color32> {
     use prefs::CanvasColor;
     let i = &app.session.prefs().interface;
     Some(match i.canvas_color {
@@ -96,7 +96,7 @@ fn theme_pref(k: ThemeKind) -> Theme {
 
 /// Load saved preferences (once) and recover autosaved documents. Called when the app is
 /// created.
-pub fn load(app: &mut PhotocraftApp) {
+pub fn load(app: &mut PrismApp) {
     if app.prefs_rt.loaded {
         return;
     }
@@ -137,7 +137,7 @@ pub fn load(app: &mut PhotocraftApp) {
 
 /// Attach the brush preset store once its background load finishes, and surface write
 /// failures in the status bar.
-fn presets_store(app: &mut PhotocraftApp) {
+fn presets_store(app: &mut PrismApp) {
     if let Some(rx) = &app.services.preset_store {
         match rx.try_recv() {
             Ok(opened) => {
@@ -174,7 +174,7 @@ fn display_scale(pref: prefs::UiScale, native: Option<f32>, monitor_px: Option<e
     }
 }
 
-fn sync_display_scale(app: &PhotocraftApp, ctx: &egui::Context) {
+fn sync_display_scale(app: &PrismApp, ctx: &egui::Context) {
     let native = ctx.native_pixels_per_point();
     // ViewportInfo uses egui points, including the current UI zoom. Converting back to
     // physical pixels avoids oscillating between 100% and 200% on successive frames.
@@ -188,7 +188,7 @@ fn sync_display_scale(app: &PhotocraftApp, ctx: &egui::Context) {
 /// Interface › Show Tooltips and Tools › Show Tooltips (either one off hides them): egui never
 /// shows a tooltip whose delay is infinite. Re-checked every frame because a theme change
 /// rebuilds the style; that's one style read, and a write only when it differs.
-fn sync_tooltips(app: &PhotocraftApp, ctx: &egui::Context) {
+fn sync_tooltips(app: &PrismApp, ctx: &egui::Context) {
     let p = app.session.prefs();
     let delay = if p.interface.show_tooltips && p.tools.show_tooltips { crate::theme::TOOLTIP_DELAY } else { f32::INFINITY };
     if ctx.global_style().interaction.tooltip_delay != delay {
@@ -197,7 +197,7 @@ fn sync_tooltips(app: &PhotocraftApp, ctx: &egui::Context) {
 }
 
 /// Per-frame upkeep: theme sync, persistence, autosave and the history log.
-pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+pub fn tick(app: &mut PrismApp, ctx: &egui::Context) {
     if !app.prefs_rt.loaded {
         load(app);
     }
@@ -256,7 +256,7 @@ struct SaveRetry {
 /// Save changed preferences. A failed write stays pending and is retried with a backoff (a newer
 /// change retries sooner); the status bar reports the first failure and a notice a persistent
 /// one. Returns the seconds until the next retry while one is pending.
-fn persist(app: &mut PhotocraftApp, now: f64) -> Option<f64> {
+fn persist(app: &mut PrismApp, now: f64) -> Option<f64> {
     let rev = app.session.prefs.rev();
     if rev == app.prefs_rt.saved_rev {
         return None;
@@ -307,7 +307,7 @@ fn persist(app: &mut PhotocraftApp, now: f64) -> Option<f64> {
 
 /// Write `ours` over the stored preferences, keeping what another instance (a second browser
 /// tab, another app window) changed there since this one last loaded or saved them.
-fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
+fn write_prefs(app: &mut PrismApp, ours: &Value) -> Result<(), String> {
     let Some(save) = app.services.save_prefs.as_mut() else { return Ok(()) };
     let stored = app.services.load_prefs.as_mut().and_then(|load| load()).and_then(|t| serde_json::from_str::<Value>(&t).ok());
     let text = match (stored, &app.prefs_rt.saved_value) {
@@ -350,7 +350,7 @@ fn merge_changes(base: &Value, ours: &Value, theirs: &mut Value) {
 
 /// Write the preferences now, through the same merge as [`persist`], for recovery choices that
 /// need the result immediately. The pending revision stays unsaved when the write fails.
-pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
+pub(crate) fn save_preferences(app: &mut PrismApp) -> Result<(), String> {
     let rev = app.session.prefs.rev();
     let ours = app.session.prefs_value();
     write_prefs(app, &ours)?;
@@ -363,7 +363,7 @@ pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
 }
 
 /// Background autosave of documents with unsaved changes every N minutes (File Handling).
-fn autosave(app: &mut PhotocraftApp) {
+fn autosave(app: &mut PrismApp) {
     let fh = &app.session.prefs().file_handling;
     let (on, minutes) = (fh.autosave, fh.autosave_minutes.max(1));
     if app.services.autosave.is_none() {
@@ -441,12 +441,12 @@ fn autosave(app: &mut PhotocraftApp) {
 }
 
 /// Force the autosave timer to fire on the next tick (tests, `prefs` changes).
-pub fn autosave_now(app: &mut PhotocraftApp) {
+pub fn autosave_now(app: &mut PrismApp) {
     app.prefs_rt.next_autosave_ms = f64::MIN_POSITIVE;
 }
 
 /// History Log preference: append executed commands to a text file.
-fn history_log(app: &mut PhotocraftApp) {
+fn history_log(app: &mut PrismApp) {
     let n = app.session.journal.len();
     if n <= app.prefs_rt.log_len {
         app.prefs_rt.log_len = n;
@@ -461,7 +461,7 @@ fn history_log(app: &mut PhotocraftApp) {
     let Some(append) = app.services.append_text.as_mut() else { return };
     let mut text = String::new();
     for (id, params) in &app.session.journal[start..] {
-        let label = photocraft_engine::commands::find(id).map_or(id.as_str(), |c| c.label).trim_end_matches('…');
+        let label = prism_engine::commands::find(id).map_or(id.as_str(), |c| c.label).trim_end_matches('…');
         match hl.detail {
             prefs::LogDetail::SessionsOnly => {
                 if matches!(id.as_str(), "file.new" | "file.open" | "file.close" | "file.openAs") {
@@ -483,7 +483,7 @@ pub use crate::shortcuts::{default_shortcut, effective_shortcut};
 
 /// Every shortcut-bearing command (engine registry plus shell commands): (id, label, menu path,
 /// default shortcut), menu items first in Photoshop order.
-pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, Option<String>)> {
+pub fn shortcut_items(app: &PrismApp) -> Vec<(String, String, Vec<String>, Option<String>)> {
     let mut out: Vec<(String, String, Vec<String>, Option<String>)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for it in crate::menus::menu_items(app) {
@@ -496,10 +496,10 @@ pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, 
     // Commands without a menu item: the colour and fill keys (D, X, ⌥⌫…) sit under Tools, as
     // Photoshop lists its colour keys in the Tools shortcut set, after the rest; then the held
     // temporary tools (#249).
-    let tools_key = |id: &str| id.starts_with("tools.") || photocraft_engine::fill_key_cmds::IDS.contains(&id);
+    let tools_key = |id: &str| id.starts_with("tools.") || prism_engine::fill_key_cmds::IDS.contains(&id);
     let mut tools = Vec::new();
     let mut layer = Vec::new();
-    for c in photocraft_engine::command_specs() {
+    for c in prism_engine::command_specs() {
         if seen.insert(c.id.to_string()) && c.shortcut.is_some() {
             let item = (c.id.to_string(), c.label.to_string(), c.menu.iter().map(|s| s.to_string()).collect::<Vec<_>>(), c.shortcut.map(Into::into));
             if c.menu.is_empty() && tools_key(c.id) {
@@ -568,7 +568,7 @@ pub fn is_modifier_key(key: egui::Key) -> bool {
 
 /// Shell front ends for Edit-menu commands invoked without parameters (dialogs, pickers).
 /// `None` when `id` isn't handled here.
-pub fn invoke(app: &mut PhotocraftApp, _ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+pub fn invoke(app: &mut PrismApp, _ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     let empty = params.as_object().is_none_or(|o| o.is_empty());
     if !empty {
         return None;
@@ -600,7 +600,7 @@ pub fn invoke(app: &mut PhotocraftApp, _ctx: &egui::Context, id: &str, params: &
         }
         "edit.fade" | "edit.findAndReplaceText" | "edit.defineBrushPreset" | "edit.defineCustomShape" | "edit.autoAlignLayers" | "edit.autoBlendLayers" => {
             if !app.session.is_enabled(id) {
-                return Some(Err(photocraft_engine::commands::find(id)
+                return Some(Err(prism_engine::commands::find(id)
                     .map_or("not available".into(), |c| format!("{} is not available right now", c.label.trim_end_matches('…')))));
             }
             let d = crate::filter_dialog::open(app, id);
@@ -651,7 +651,7 @@ pub fn invoke(app: &mut PhotocraftApp, _ctx: &egui::Context, id: &str, params: &
     }
 }
 
-fn open_kind(app: &mut PhotocraftApp, kind: &str, label: &str, fields: Value) -> u64 {
+fn open_kind(app: &mut PrismApp, kind: &str, label: &str, fields: Value) -> u64 {
     let mut f = Map::new();
     f.insert("__prefsui".into(), json!(kind));
     f.insert("__label".into(), json!(label));
@@ -677,12 +677,12 @@ fn preference_values(p: &prefs::Preferences) -> Map<String, Value> {
 }
 
 /// Compare the editable sections, excluding settings managed outside Preferences.
-pub fn preferences_changed(app: &PhotocraftApp, fields: &Map<String, Value>) -> bool {
+pub fn preferences_changed(app: &PrismApp, fields: &Map<String, Value>) -> bool {
     is_preferences(fields) && fields.get("values").and_then(Value::as_object).is_some_and(|values| *values != preference_values(app.session.prefs()))
 }
 
 /// Commit the working copy and keep the current section open. Failure leaves the draft intact.
-pub fn apply(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
+pub fn apply(app: &mut PrismApp, id: u64) -> Result<Value, String> {
     let d = app.ui.dialogs.iter().find(|d| d.id == id).ok_or_else(|| format!("no dialog {id}"))?;
     if d.kind != DialogKind::Command || !is_preferences(&d.fields) {
         return Err("Apply is only available for Preferences".into());
@@ -707,7 +707,7 @@ pub fn width(fields: &Map<String, Value>) -> Option<f32> {
 }
 
 /// Open Edit › Preferences on `section`.
-pub fn open_preferences(app: &mut PhotocraftApp, section: &str) -> u64 {
+pub fn open_preferences(app: &mut PrismApp, section: &str) -> u64 {
     let section = if SECTIONS.iter().any(|(id, _)| *id == section) { section } else { "general" };
     let working = preference_values(app.session.prefs());
     let order = field_order(app.session.prefs(), &working);
@@ -733,7 +733,7 @@ fn field_order(p: &prefs::Preferences, sections: &Map<String, Value>) -> Value {
 }
 
 /// Open Keyboard Shortcuts and Menus on a tab (0 shortcuts, 1 menus, 2 toolbar).
-pub fn open_shortcuts(app: &mut PhotocraftApp, tab: u64) -> u64 {
+pub fn open_shortcuts(app: &mut PrismApp, tab: u64) -> u64 {
     let p = app.session.prefs();
     let fields = json!({
         "tab": tab,
@@ -750,7 +750,7 @@ pub fn open_shortcuts(app: &mut PhotocraftApp, tab: u64) -> u64 {
 }
 
 /// Open the Embedded Profile Mismatch prompt for the active document.
-pub fn open_mismatch(app: &mut PhotocraftApp, report: &Value) -> u64 {
+pub fn open_mismatch(app: &mut PrismApp, report: &Value) -> u64 {
     let msg = if report.get("missing").and_then(Value::as_bool) == Some(true) {
         format!("The document does not have an embedded colour profile. Working space: {}.", report["working"].as_str().unwrap_or("?"))
     } else {
@@ -776,7 +776,7 @@ pub fn open_mismatch(app: &mut PhotocraftApp, report: &Value) -> u64 {
 // ------------------------------------------------------------------ bodies
 
 /// Render one of our dialogs' bodies.
-pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     match f.get("__prefsui").and_then(Value::as_str).unwrap_or("") {
         "prefs" => {
             f.insert("__gpuInfo".into(), json!(app.perf.gpu_info.lines()));
@@ -1112,7 +1112,7 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
 
 /// Keyboard Shortcuts and Menus: a searchable list of commands by menu with editable shortcuts
 /// (click a shortcut, press keys; ⌫ removes it), menu visibility and colours, toolbar tools.
-fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+fn shortcuts_body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let mut tab = f.get("tab").and_then(Value::as_u64).unwrap_or(0);
     ui.horizontal(|ui| {
@@ -1319,7 +1319,7 @@ fn toolbar_tab(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     f.insert("toolbarHidden".into(), json!(hidden));
 }
 
-fn presets_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+fn presets_body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let mut kind = f.get("kind").and_then(Value::as_str).unwrap_or("brushes").to_string();
     ui.horizontal(|ui| {
@@ -1410,7 +1410,7 @@ fn mismatch_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 // ------------------------------------------------------------------ confirm
 
 /// OK on one of our dialogs.
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+pub fn confirm(app: &mut PrismApp, f: &Map<String, Value>) -> Result<Value, String> {
     match f.get("__prefsui").and_then(Value::as_str).unwrap_or("") {
         "prefs" => {
             let values = f.get("values").cloned().unwrap_or(Value::Null);
@@ -1517,7 +1517,7 @@ mod tests {
 
     #[test]
     fn quick_export_controls_match_selected_format() {
-        let mut obj = serde_json::to_value(photocraft_engine::prefs::Export::default()).unwrap().as_object().unwrap().clone();
+        let mut obj = serde_json::to_value(prism_engine::prefs::Export::default()).unwrap().as_object().unwrap().clone();
         assert!(!export_field_visible(&obj, "jpegQuality"));
         assert!(!export_field_visible(&obj, "webpLossless"));
         assert!(!export_field_visible(&obj, "webpQuality"));
@@ -1554,7 +1554,7 @@ mod tests {
     /// language that claims complete menus (Japanese, Traditional Chinese, ...).
     #[test]
     fn preference_labels_are_translated() {
-        let session = photocraft_engine::Session::new();
+        let session = prism_engine::Session::new();
         let v: Value = serde_json::from_str(&session.prefs_to_json()).expect("prefs json");
         for lang in crate::i18n::Lang::all().filter(|l| l.complete_menus()) {
             let mut missing = Vec::new();
@@ -1575,17 +1575,17 @@ mod tests {
         }
     }
 
-    fn app_with_store() -> (PhotocraftApp, Arc<Mutex<Option<String>>>) {
+    fn app_with_store() -> (PrismApp, Arc<Mutex<Option<String>>>) {
         app_with_saved(None)
     }
 
-    fn app_with_saved(text: Option<String>) -> (PhotocraftApp, Arc<Mutex<Option<String>>>) {
+    fn app_with_saved(text: Option<String>) -> (PrismApp, Arc<Mutex<Option<String>>>) {
         let store: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(text));
         (app_on(&store, Arc::default()), store)
     }
 
     /// An app whose preferences live in `store`; writes fail while `fail` is set.
-    fn app_on(store: &Arc<Mutex<Option<String>>>, fail: Arc<std::sync::atomic::AtomicBool>) -> PhotocraftApp {
+    fn app_on(store: &Arc<Mutex<Option<String>>>, fail: Arc<std::sync::atomic::AtomicBool>) -> PrismApp {
         let (a, b) = (store.clone(), store.clone());
         let services = crate::Services {
             load_prefs: Some(Box::new(move || a.lock().unwrap().clone())),
@@ -1598,7 +1598,7 @@ mod tests {
             })),
             ..Default::default()
         };
-        PhotocraftApp::new(photocraft_engine::Session::new(), services)
+        PrismApp::new(prism_engine::Session::new(), services)
     }
 
     fn stored(store: &Arc<Mutex<Option<String>>>) -> Value {
@@ -1770,7 +1770,7 @@ mod tests {
     fn ui_font_size_commands_follow_themes_and_dpi_and_reset_live() {
         let (mut app, _) = app_with_store();
         let ctx = egui::Context::default();
-        PhotocraftApp::setup_context(&ctx, ThemeKind::Pro);
+        PrismApp::setup_context(&ctx, ThemeKind::Pro);
         let mut input = egui::RawInput::default();
         input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(1.5);
         for (theme, scale, expected) in
@@ -1845,8 +1845,11 @@ mod tests {
         let values = prefs::Preferences::default().to_json();
         assert!(has_visible_fields(&values, "general"));
         assert!(has_visible_fields(&values, "fileHandling"));
+        // Type favorites are live and can be cleared in Preferences.
+        assert!(has_visible_fields(&values, "type"));
+        assert!(!prefs::is_hidden("type.favoriteFonts"));
         // Every setting of these sections is still unimplemented.
-        for section in ["type", "integrations", "scratchDisks"] {
+        for section in ["integrations", "scratchDisks"] {
             assert!(!has_visible_fields(&values, section), "{section}");
         }
         // Rotate View with Trackpad is live; the other Enhanced Controls rows stay hidden.
@@ -1893,11 +1896,11 @@ mod tests {
 
     #[test]
     fn brush_preset_store_attaches_when_loaded_and_persists() {
-        use photocraft_engine::preset_store::{MemBackend, open};
+        use prism_engine::preset_store::{MemBackend, open};
         let mem = MemBackend::default();
         let ctx = egui::Context::default();
         let (tx, rx) = std::sync::mpsc::channel();
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { preset_store: Some(rx), ..Default::default() });
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services { preset_store: Some(rx), ..Default::default() });
         // Still loading: presets made now are kept and written once the store arrives.
         tick(&mut app, &ctx);
         app.run("brush.presets.save", json!({"name": "Early"})).unwrap();
@@ -1906,7 +1909,7 @@ mod tests {
         tick(&mut app, &ctx);
         assert!(app.services.preset_store.is_none() && app.session.preset_store.is_some());
         app.run("brush.presets.save", json!({"name": "Late"})).unwrap();
-        let mut s2 = photocraft_engine::Session::new();
+        let mut s2 = prism_engine::Session::new();
         assert!(s2.attach_preset_store(open(Box::new(mem))).is_empty());
         for n in ["Early", "Late"] {
             assert!(s2.tools.presets.iter().any(|p| p.name == n), "{n}");
@@ -1948,7 +1951,7 @@ mod tests {
         app.run("prefs.set", json!({"values": {"interface.language": "en", "type.smartQuotes": false}})).unwrap();
         let id = open_preferences(&mut app, "interface");
         let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            PrismApp::setup_context(&cc.egui_ctx, Default::default());
             app
         });
         h.run_steps(4);
@@ -2008,7 +2011,7 @@ mod tests {
         app.custom_titlebar = true;
         let id = open_preferences(&mut app, "interface");
         let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            PrismApp::setup_context(&cc.egui_ctx, Default::default());
             app
         });
         h.run_steps(4);
@@ -2166,7 +2169,7 @@ mod tests {
         let id = crate::menus::invoke(&mut app, &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
         app.ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), json!("bogus"));
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            PrismApp::setup_context(&cc.egui_ctx, Default::default());
             app
         });
         h.run_steps(4);
@@ -2188,13 +2191,13 @@ mod tests {
         let saved: Saved = Arc::default();
         let s2 = saved.clone();
         let services = crate::Services {
-            autosave: Some(Box::new(move |doc: &Arc<photocraft_doc::Document>, rev: u64, _path: Option<&str>| {
+            autosave: Some(Box::new(move |doc: &Arc<prism_doc::Document>, rev: u64, _path: Option<&str>| {
                 s2.lock().unwrap().push((doc.id.0, rev));
                 Ok(())
             })),
             ..Default::default()
         };
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let mut app = PrismApp::new(prism_engine::Session::new(), services);
         let ctx = egui::Context::default();
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
         tick(&mut app, &ctx);
@@ -2235,7 +2238,7 @@ mod tests {
         type Log = Arc<Mutex<Vec<String>>>;
         let log: Log = Arc::default();
         let (l1, l2, l3) = (log.clone(), log.clone(), log.clone());
-        use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
+        use prism_doc::{Color, ColorMode, Document, SampleType, Size};
         let doc = || Document::with_background("R", Size::new(4, 4), ColorMode::Rgb, SampleType::U8, Color::WHITE);
         let services = crate::Services {
             autosave: Some(Box::new(move |d: &Arc<Document>, _: u64, _: Option<&str>| {
@@ -2247,7 +2250,7 @@ mod tests {
             adopt_autosave: Some(Box::new(move |id: u64, key: &str| l3.lock().unwrap().push(format!("adopt {id} {key}")))),
             ..Default::default()
         };
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let mut app = PrismApp::new(prism_engine::Session::new(), services);
         let ctx = egui::Context::default();
         let ids: Vec<u64> = app.session.documents().iter().map(|d| d.doc.id.0).collect();
         assert!(app.session.documents().iter().all(|d| d.is_dirty()), "recovered documents are unsaved");

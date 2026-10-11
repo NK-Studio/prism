@@ -1,10 +1,10 @@
 //! Compare committed radius edits with the live corner drag on a 24 MP CPU canvas.
-//! cargo run --release -p photocraft-ui-egui --example shape_corners_bench
+//! cargo run --release -p prism-ui-egui --example shape_corners_bench
 use std::{io, time::Instant};
 
 use egui::Modifiers;
-use photocraft_ui_egui::{
-    PhotocraftApp,
+use prism_ui_egui::{
+    PrismApp,
     canvas::{ToolEvent, ensure_texture, tool_event},
     state::Tool,
 };
@@ -16,7 +16,7 @@ fn median(mut samples: Vec<f64>) -> f64 {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut a = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let mut a = PrismApp::new(prism_engine::Session::new(), Default::default());
     a.run("file.new", json!({"width":6000,"height":4000,"background":"white"})).map_err(io::Error::other)?;
     a.run("shape.create", json!({"kind":"roundedRect","rect":[800,600,1600,1000],"radii":20,"fill":"#317acf"})).map_err(io::Error::other)?;
     a.ui.tool = Tool::Rectangle;

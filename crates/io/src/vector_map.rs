@@ -6,10 +6,10 @@
 //! a preserved block is written back byte-identical while it still decodes to the layer's
 //! current model; otherwise it is regenerated from the model.
 
-use photocraft_doc::{Fill, FillRule, Knot, LineCap, LineJoin, LiveShape, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask};
-use photocraft_geom::Point;
-use photocraft_psd::descriptor::{Descriptor, Id, Value, VersionedDescriptor};
-use photocraft_psd::path::{PathData, PsdKnot, PsdSubpath, VectorMaskBlock};
+use prism_doc::{Fill, FillRule, Knot, LineCap, LineJoin, LiveShape, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask};
+use prism_geom::Point;
+use prism_psd::descriptor::{Descriptor, Id, Value, VersionedDescriptor};
+use prism_psd::path::{PathData, PsdKnot, PsdSubpath, VectorMaskBlock};
 
 use crate::blocks::{bool_of, enum_of, fill_from_desc, fill_to_desc, get_desc, num, parse_prefix_versioned};
 
@@ -145,7 +145,7 @@ pub fn vmsk_bytes(path: &Path, flags: u32, w: u32, h: u32) -> Vec<u8> {
 }
 
 /// A layer's vector mask from its `vmsk`/`vsms` block. A vector mask without subpaths reveals
-/// everything unless inverted (see `photocraft_vector::vector_mask_values`), the opposite of a
+/// everything unless inverted (see `prism_vector::vector_mask_values`), the opposite of a
 /// shape's coverage, hence the flip.
 pub fn vector_mask_from_block(data: &[u8], w: u32, h: u32) -> Option<VectorMask> {
     let (mut path, flags) = path_from_vmsk(data, w, h)?;
@@ -257,7 +257,7 @@ pub fn parse_vstk(data: &[u8], dpi: f32) -> Option<VstkInfo> {
         Some(Value::List(l)) => l.iter().filter_map(|v| num(Some(v))).map(|v| v as f32).collect(),
         _ => Vec::new(),
     };
-    let paint = get_desc(&d, "strokeStyleContent").and_then(content_fill).unwrap_or(Fill::Solid(photocraft_color::Color::BLACK));
+    let paint = get_desc(&d, "strokeStyleContent").and_then(content_fill).unwrap_or(Fill::Solid(prism_color::Color::BLACK));
     let stroke = ShapeStroke {
         width: unit_px(d.get("strokeStyleLineWidth"), dpi).unwrap_or(1.0) as f32,
         paint,
@@ -383,6 +383,7 @@ pub fn live_from_vogk(data: &[u8]) -> Option<LiveShape> {
             from: point_of(o, "keyOriginLineStart")?,
             to: point_of(o, "keyOriginLineEnd")?,
             weight: num(o.get("keyOriginLineWeight")).unwrap_or(1.0),
+            round_tips: false,
         }),
         _ => None,
     }
@@ -421,7 +422,8 @@ pub fn vogk_bytes(s: &LiveShape, dpi: f32) -> Option<Vec<u8>> {
             )
             .with("keyOriginShapeBBox", bbox(*rect)),
         LiveShape::Ellipse { rect } => base(5).with("keyOriginShapeBBox", bbox(*rect)),
-        LiveShape::Line { from, to, weight } => {
+        LiveShape::Line { round_tips: true, .. } => return None,
+        LiveShape::Line { from, to, weight, .. } => {
             let pnt = |p: [f64; 2]| Value::Descriptor(Descriptor::new("Pnt ").with("Hrzn", Value::Double(p[0])).with("Vrtc", Value::Double(p[1])));
             let r = [from[0].min(to[0]), from[1].min(to[1]), (from[0] - to[0]).abs(), (from[1] - to[1]).abs()];
             base(4)
@@ -435,7 +437,7 @@ pub fn vogk_bytes(s: &LiveShape, dpi: f32) -> Option<Vec<u8>> {
                 .with("keyOriginLineArrLngth", Value::Double(0.0))
                 .with("keyOriginLineArrConc", Value::Integer(0))
         }
-        LiveShape::Polygon { .. } => return None,
+        LiveShape::Polygon { .. } | LiveShape::Arrow { .. } => return None,
     };
     let o = o.with("keyOriginIndex", Value::Integer(0));
     let d = Descriptor::new("null").with("keyDescriptorList", Value::List(vec![Value::Descriptor(o)]));
@@ -508,7 +510,7 @@ pub fn shape_blocks(sh: &ShapeLayer, raw: &mut Vec<([u8; 4], Vec<u8>)>, w: u32, 
     // Photoshop shapes always carry fill content, even with the fill turned off.
     let present = raw.iter().any(|(k, _)| matches!(k, b"vscg" | b"SoCo" | b"GdFl" | b"PtFl"));
     if sh.fill.is_none() && !present {
-        raw.push((*b"vscg", vscg_bytes(&Fill::Solid(photocraft_color::Color::BLACK))));
+        raw.push((*b"vscg", vscg_bytes(&Fill::Solid(prism_color::Color::BLACK))));
     }
     // Stroke (+ fill enabled flag). A fill we could not decode counts as unchanged.
     let undecodable_fill = sh.fill.is_none() && present && !has_fill_block(raw);
@@ -541,7 +543,7 @@ pub fn shape_blocks(sh: &ShapeLayer, raw: &mut Vec<([u8; 4], Vec<u8>)>, w: u32, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_color::Color;
+    use prism_color::Color;
 
     fn sample_path() -> Path {
         let mut p = Path::new(vec![
@@ -606,9 +608,9 @@ mod tests {
         // No subpaths: a vector mask with initial fill reveals all, without hides all; a shape
         // with initial fill covers everything.
         let reveal = vector_mask_from_block(&vmsk_with(true, &[]), 100, 100).unwrap();
-        assert_eq!(photocraft_vector::vector_mask_values(&reveal, photocraft_geom::Rect::new(0, 0, 2, 2)), vec![1.0; 4]);
+        assert_eq!(prism_vector::vector_mask_values(&reveal, prism_geom::Rect::new(0, 0, 2, 2)), vec![1.0; 4]);
         let hide = vector_mask_from_block(&vmsk_with(false, &[]), 100, 100).unwrap();
-        assert_eq!(photocraft_vector::vector_mask_values(&hide, photocraft_geom::Rect::new(0, 0, 2, 2)), vec![0.0; 4]);
+        assert_eq!(prism_vector::vector_mask_values(&hide, prism_geom::Rect::new(0, 0, 2, 2)), vec![0.0; 4]);
         assert!(path_from_vmsk(&vmsk_with(true, &[]), 100, 100).unwrap().0.inverted);
         // Our own writer round-trips each case.
         for m in [reveal, hide] {
@@ -666,11 +668,12 @@ mod tests {
             LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [0.0; 4] },
             LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [1.0, 2.0, 3.0, 4.0] },
             LiveShape::Ellipse { rect: [5.0, 6.0, 7.0, 8.0] },
-            LiveShape::Line { from: [0.0, 10.0], to: [20.0, 0.0], weight: 3.0 },
+            LiveShape::Line { from: [0.0, 10.0], to: [20.0, 0.0], weight: 3.0, round_tips: false },
         ] {
             let b = vogk_bytes(&s, 72.0).unwrap();
             assert_eq!(live_from_vogk(&b), Some(s));
         }
+        assert!(vogk_bytes(&LiveShape::Line { from: [0.0, 10.0], to: [20.0, 0.0], weight: 3.0, round_tips: true }, 72.0).is_none());
         assert!(vogk_bytes(&LiveShape::Polygon { rect: [0.0; 4], sides: 5, star_ratio: 1.0 }, 72.0).is_none());
     }
 

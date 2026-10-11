@@ -36,7 +36,7 @@ Test files accepted into the repository must be minimized, free of personal or p
 
 Security reports may cover:
 
-- PSD/PSB, raster, `.pcraft`, ICC, LUT, pattern, and embedded-object parsing;
+- PSD/PSB, raster, `.prism`, ICC, LUT, pattern, and embedded-object parsing;
 - decompression bombs, oversized dimensions, integer overflow, memory exhaustion, recursion, or hangs;
 - import/export and filesystem path handling, including traversal, symlinks, and unsafe overwrite behavior;
 - engine command validation and serialization/deserialization;

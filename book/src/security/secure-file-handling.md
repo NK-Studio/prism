@@ -6,9 +6,9 @@ Remote automation paths are untrusted relative names resolved beneath explicitly
 ## Implemented
 
 - Format loaders return structured errors for I/O and malformed data.
-- `.pcraft` ZIP loading validates archive offsets, entry sizes, CRCs, content hashes, and configured decompressed-size budgets.
+- `.prism` ZIP loading validates archive offsets, entry sizes, CRCs, content hashes, and configured decompressed-size budgets.
 - Raster and PSD loaders apply parser/decode limits before major pixel allocation.
-- Native `.pcraft` saves use temporary-file/rename patterns in relevant store paths.
+- Native `.prism` saves use temporary-file/rename patterns in relevant store paths.
 - `AuthorizedWorkspace` holds independent read and write directory capabilities for remote
   automation.
 - Absolute paths, parent traversal, alternate separators, drive/device/stream prefixes, reserved
@@ -22,7 +22,7 @@ Remote automation paths are untrusted relative names resolved beneath explicitly
 
 ## Known limitations
 
-- Directory `.pcraft` bundles have not been documented as resistant to link replacement or time-of-check/time-of-use races.
+- Directory `.prism` bundles have not been documented as resistant to link replacement or time-of-check/time-of-use races.
 - Root grants are process launch configuration, not per-document grants.
 - General method capabilities and structured filesystem audit events are not implemented.
 - Existing hard links inside a granted root are trusted root contents; the path policy cannot

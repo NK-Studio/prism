@@ -4,23 +4,23 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{DocId, Document};
-use photocraft_format::*;
+use prism_color::{ColorMode, SampleType};
+use prism_doc::{DocId, Document};
+use prism_format::*;
 
 #[test]
 fn autosave_then_recover() {
     let dir = temp_dir("recovery");
     let doc = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U16));
     let saver = Autosaver::new(&dir, "doc-1");
-    saver.request(doc.clone(), 7, Some("/work/a.pcraft".into()), SaveOptions::default());
+    saver.request(doc.clone(), 7, Some("/work/a.prism".into()), SaveOptions::default());
     let r = saver.flush().expect("a save ran");
     let stats = r.unwrap();
     assert!(stats.tiles_written > 0);
     let entries = list_recovery(&dir);
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].info.revision, 7);
-    assert_eq!(entries[0].info.original_path.as_deref(), Some("/work/a.pcraft"));
+    assert_eq!(entries[0].info.original_path.as_deref(), Some("/work/a.prism"));
     assert_eq!(entries[0].info.document_name, "Rich");
     assert_eq!(recover(&entries[0]).unwrap(), *doc);
     discard_recovery(&dir, &entries[0]).unwrap();
@@ -148,7 +148,7 @@ fn recovered_entries_survive_a_second_crash_until_saved_or_closed() {
     {
         let mut launch = RecoveryStore::new(&dir);
         launch.autosave(&Arc::new(a.clone()), 4, None);
-        launch.autosave(&Arc::new(b.clone()), 6, Some("/work/b.pcraft".into()));
+        launch.autosave(&Arc::new(b.clone()), 6, Some("/work/b.prism".into()));
     }
     assert_eq!(list_recovery(&dir).len(), 2);
     // Launch 2 recovers both and crashes before its first autosave: nothing may be lost.
@@ -234,5 +234,27 @@ fn sidecars_cannot_point_at_other_bundles() {
     std::fs::write(inner.join("escape.json"), info.replace("\"k\"", "\"../outside\"")).unwrap();
     let entries = list_recovery(&inner);
     assert_eq!(entries.iter().map(|e| e.info.key.as_str()).collect::<Vec<_>>(), ["k"]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn legacy_recovery_is_readable_until_new_autosave_replaces_it() {
+    let dir = temp_dir("legacy-recovery");
+    let doc = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U16));
+    let saver = Autosaver::new(&dir, "legacy");
+    saver.request(doc.clone(), 7, Some("old.pcraft".into()), SaveOptions::default());
+    saver.flush().unwrap().unwrap();
+    std::fs::rename(dir.join("legacy.prism"), dir.join("legacy.pcraft")).unwrap();
+    let entry = list_recovery(&dir).pop().unwrap();
+    assert!(entry.bundle.ends_with("legacy.pcraft"));
+    assert_eq!(recover(&entry).unwrap(), *doc);
+    let saver = Autosaver::new(&dir, "legacy");
+    saver.request(doc.clone(), 8, Some("new.prism".into()), SaveOptions::default());
+    saver.flush().unwrap().unwrap();
+    let entry = list_recovery(&dir).pop().unwrap();
+    assert!(entry.bundle.ends_with("legacy.prism"));
+    assert_eq!(recover(&entry).unwrap(), *doc);
+    discard_recovery(&dir, &entry).unwrap();
+    assert!(!dir.join("legacy.pcraft").exists() && !dir.join("legacy.prism").exists());
     std::fs::remove_dir_all(dir).unwrap();
 }

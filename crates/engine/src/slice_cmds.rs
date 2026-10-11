@@ -3,16 +3,16 @@
 //! View › Clear Slices.
 //!
 //! The document stores user and layer-based slices (`Document::slices`); auto slices are derived
-//! (`photocraft_doc::slices::resolve`). Layer-based slices follow their layer: after every
+//! (`prism_doc::slices::resolve`). Layer-based slices follow their layer: after every
 //! command [`refresh`] re-fits them to the layer's bounds including layer effects, plus outsets,
 //! without a history step of their own (the change is implied by the edit that moved the layer).
 //! Slices are addressed by stored id (`"slice"`) or by their displayed number (`"number"`).
 
 use std::sync::Arc;
 
-use photocraft_doc::slices::{self, ResolvedSlice, Slice, SliceKind, SliceOrigin};
-use photocraft_doc::{Document, Layer, LayerContent};
-use photocraft_geom::Rect;
+use prism_doc::slices::{self, ResolvedSlice, Slice, SliceKind, SliceOrigin};
+use prism_doc::{Document, Layer, LayerContent};
+use prism_geom::Rect;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, layer_param};
@@ -76,12 +76,12 @@ pub fn layer_bounds(l: &Layer) -> Rect {
                 }
             }),
         },
-        _ => photocraft_doc::comps::position_bounds(l),
+        _ => prism_doc::comps::position_bounds(l),
     };
-    if own.is_empty() || !photocraft_compose::effects::has_effects(l) {
+    if own.is_empty() || !prism_compose::effects::has_effects(l) {
         return own;
     }
-    own.inflate(photocraft_compose::effects::margin(l))
+    own.inflate(prism_compose::effects::margin(l))
 }
 
 fn layer_slice_rect(doc: &Document, s: &Slice) -> Option<Rect> {

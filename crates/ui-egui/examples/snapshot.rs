@@ -1,7 +1,7 @@
-//! Render the full Photocraft UI offscreen (no window, no focus stealing) and save a PNG.
+//! Render the full Prism UI offscreen (no window, no focus stealing) and save a PNG.
 //!
 //! ```sh
-//! cargo run --release -p photocraft-ui-egui --example snapshot -- \
+//! cargo run --release -p prism-ui-egui --example snapshot -- \
 //!     --out ui.png --size 1440x900 --scale 2 --open photo.jpg \
 //!     --script '[["ui.set", {"tool": "type"}], ["ui.menu.invoke", {"id": "image.imageSize"}]]'
 //! ```
@@ -17,10 +17,11 @@
 //! `--right-click-at X,Y` opens a screen-space context menu after the script, including panel
 //! and document-tab menus that are outside the document-coordinate control pointer.
 //! `--drag-from X,Y --drag-to X,Y` holds a screen-space drag for transient-preview QA.
+//! `--cursor-pack DIR --hover-at X,Y` paints optional cursor artwork for offscreen review.
 //! `--click-at X,Y` opens a screen-space menu (for example the top Select menu) after the script.
 
-use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
-use photocraft_ui_egui::{PhotocraftApp, Services};
+use prism_ui_egui::control::{ControlRequest, Outcome, handle};
+use prism_ui_egui::{PrismApp, Services};
 use serde_json::Value;
 
 fn arg(args: &[String], name: &str) -> Option<String> {
@@ -38,9 +39,9 @@ fn main() {
         arg(&args, "--script").map(|s| serde_json::from_str::<Vec<(String, Value)>>(&s).expect("--script must be [[method, params], …]")).unwrap_or_default();
 
     let services = Services {
-        import: Some(Box::new(|name: &str, bytes: &[u8]| photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))),
-        export: Some(Box::new(|doc: &photocraft_doc::Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
-            let mut opts = photocraft_io::ExportOptions::default();
+        import: Some(Box::new(|name: &str, bytes: &[u8]| prism_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))),
+        export: Some(Box::new(|doc: &prism_doc::Document, path: &str, settings: &prism_ui_egui::ExportSettings| {
+            let mut opts = prism_io::ExportOptions::default();
             if let Some(q) = settings.jpeg_quality {
                 opts.encode.jpeg_quality = q;
             }
@@ -48,12 +49,13 @@ fn main() {
             if let Some(q) = settings.webp_quality {
                 opts.encode.webp_quality = q;
             }
-            photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
+            prism_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
         })),
-        write: Some(Box::new(|path: &str, bytes: &[u8]| photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string()))),
+        write: Some(Box::new(|path: &str, bytes: &[u8]| prism_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string()))),
         ..Default::default()
     };
     let open = arg(&args, "--open");
+    let cursor_pack = arg(&args, "--cursor-pack");
     let safe_gpu = args.iter().any(|a| a == "--safe-gpu");
     // `--background-jobs`: long commands run as background jobs, as in the desktop app (#210).
     let background_jobs = args.iter().any(|a| a == "--background-jobs");
@@ -62,8 +64,13 @@ fn main() {
     let settle_ms: u64 = arg(&args, "--settle-ms").and_then(|s| s.parse().ok()).unwrap_or(0);
     let mut harness =
         egui_kittest::Harness::builder().with_size(egui::vec2(w, h)).with_pixels_per_point(scale).with_max_steps(64).wgpu().build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            PrismApp::setup_context(&cc.egui_ctx, Default::default());
+            if let Some(path) = &cursor_pack
+                && let Err(error) = prism_ui_egui::cursor_pack::install(&cc.egui_ctx, std::path::Path::new(path), true)
+            {
+                eprintln!("cursor pack: {error}");
+            }
+            let mut app = PrismApp::new(prism_engine::Session::new(), services);
             app.background_jobs = background_jobs;
             app.custom_titlebar = custom_titlebar;
             // `--safe-gpu`: the CPU canvas, as the desktop app's `--safe-gpu` launch.
@@ -130,6 +137,10 @@ fn main() {
         harness.event(egui::Event::PointerButton { pos, button, pressed: false, modifiers: egui::Modifiers::NONE });
         harness.run_steps(4);
     }
+    if let Some((x, y)) = arg(&args, "--hover-at").and_then(|s| s.split_once(',').and_then(|(x, y)| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))) {
+        harness.event(egui::Event::PointerMoved(egui::pos2(x, y)));
+        harness.run_steps(3);
+    }
     // Hold a real tab drag for visual review of its detach placeholder; release is deliberately
     // omitted, so the offscreen snapshot captures the same transient frame as a mouse drag.
     if let Some((x, y)) = arg(&args, "--drag-to").and_then(|s| s.split_once(',').and_then(|(x, y)| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?))))
@@ -157,7 +168,7 @@ fn main() {
     }
     println!(
         "language: {}",
-        serde_json::json!({"preference": harness.state().session.prefs().interface.language, "resolved": photocraft_ui_egui::i18n::current().code()})
+        serde_json::json!({"preference": harness.state().session.prefs().interface.language, "resolved": prism_ui_egui::i18n::current().code()})
     );
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");

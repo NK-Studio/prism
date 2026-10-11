@@ -1,0 +1,4 @@
+Annotation arrow icon
+Copyright 2026 NK Studio
+Licensed under either the MIT license or Apache License 2.0, at your option.
+See ../../LICENSE-MIT and ../../LICENSE-APACHE for full license texts.

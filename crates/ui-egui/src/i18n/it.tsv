@@ -9,7 +9,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Italian computing vocabulary (livello, pennello, selezione, tela ...). No proprietary localisation
 # resource, string table or product UI was consulted or copied; add entries the same way.
-# Product and technology names (Prism, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
+# Product and technology names (Prism, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing … of dialog commands is kept.
 	File	File
 	Edit	Modifica
@@ -698,8 +698,6 @@
 	About Prism	Informazioni su Prism
 	Prism Website	Sito web Prism
 	Prism on GitHub	Prism su GitHub
-	ArtCraft Website	Sito web ArtCraft
-	Join the ArtCraft Discord…	Unisciti al Discord di ArtCraft…
 	Report an Issue…	Segnala un problema…
 	WIA Support…	Supporto WIA…
 	Apply	Applica
@@ -960,7 +958,6 @@
 	Diffusion	Diffusione
 	Discard the embedded profile (don't color manage)	Scarta profilo incorporato (non gestire colore)
 	Discontiguous	Non contiguo
-	Discord	Discord
 	Dismiss	Chiudi
 	Display P3	Display P3
 	Display Text	Testo display
@@ -1085,7 +1082,6 @@
 	Invert All	Inverti tutto
 	Invert has no settings.	Inverti non ha impostazioni.
 	Italic	Corsivo
-	Join us on Discord	Unisciti al nostro Discord
 	Justify all	Giustifica tutto
 	Justify last centered	Giustifica ultimo centrato
 	Justify last left	Giustifica ultimo a sinistra
@@ -1476,7 +1472,6 @@
 	Apple Watch 45mm	Apple Watch 45mm
 	Aqua	Acqua
 	Art & Illustration	Arte e illustrazione
-	ArtCraft	ArtCraft
 	Background Eraser Tool	Strumento Gomma per sfondo
 	Bevel & Emboss	Smusso ed effetto rilievo
 	Blend Mode	Metodo di fusione
@@ -2323,3 +2318,51 @@ fontWeight	Italic	Corsivo
 	Preparing preview…	Preparazione anteprima…
 	Columns	Colonne
 	Duplicate	Duplica
+
+	Load Font File…	Carica file di font…
+	Favorite	Aggiungi ai preferiti
+	Unfavorite	Rimuovi dai preferiti
+	TTF, OTF, TTC, OTC — available until Prism exits	TTF, OTF, TTC, OTC — disponibili fino alla chiusura di Prism
+	Loaded font (this session)	Font caricato (questa sessione)
+	Favorite fonts	Font preferiti
+
+	All fonts	Tutti i font
+	Korean only	Solo coreano
+	No preview	Nessuna anteprima
+
+# Prism About introduction and footer.
+	Turn ideas into images.	Trasforma le idee in immagini.
+	Prism is a desktop image editor by NK Studio.	Prism è un editor di immagini desktop di NK Studio.
+	Refine layers, color, and typography to bring your vision to life.	Perfeziona livelli, colori e tipografia per dare vita alla tua visione.
+	All rights reserved.	Tutti i diritti riservati.
+	Built for creative expression.	Pensato per l’espressione creativa.
+
+	Arrow Tool	Strumento Freccia
+	Arrow	Freccia
+	Arrow color	Colore della freccia
+	Thickness	Spessore
+	Arrowhead	Dimensione della punta
+	Corners	Angoli
+	Angular	Spigolosi
+	Rounded	Arrotondati
+
+	Arrowhead length	Lunghezza della punta
+
+	Arrowhead angle	Angolo della punta
+
+	Line tips	Estremità
+
+	Square tips	Estremità quadrate
+
+	Round tips	Estremità arrotondate
+	Make:	Crea:
+	Selection…	Selezione…
+	Align To:	Allinea a:
+	Rubber Band	Elastico
+	Auto Add/Delete	Aggiungi/elimina automaticamente
+	Align Edges	Allinea bordi
+	Path Operations	Operazioni tracciato
+	Path Alignment	Allineamento tracciato
+	Path Arrangement	Disposizione tracciato
+	New Layer	Nuovo livello
+	Settings	Impostazioni

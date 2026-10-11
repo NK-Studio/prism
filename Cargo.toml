@@ -2,40 +2,40 @@
 resolver = "3"
 exclude = ["vendor/eframe"]
 members = ["crates/*", "apps/*", "xtask"]
-default-members = ["crates/*", "apps/photocraft", "apps/photocraft-cli", "xtask"]
+default-members = ["crates/*", "apps/prism", "apps/prism-cli", "xtask"]
 
 [workspace.package]
-version = "0.5.0"
+version = "1.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 
 [workspace.dependencies]
 # internal
-photocraft-geom = { path = "crates/geom" }
-photocraft-color = { path = "crates/color" }
-photocraft-cms = { path = "crates/cms" }
-photocraft-raster = { path = "crates/raster" }
-photocraft-doc = { path = "crates/doc" }
-photocraft-ops = { path = "crates/ops" }
-photocraft-psd = { path = "crates/psd" }
-photocraft-codecs = { path = "crates/codecs" }
-photocraft-raw = { path = "crates/raw" }
-photocraft-affinity = { path = "crates/affinity" }
-photocraft-compose = { path = "crates/compose" }
-photocraft-gpu = { path = "crates/gpu" }
-photocraft-paint = { path = "crates/paint" }
-photocraft-algo = { path = "crates/algo" }
-photocraft-io = { path = "crates/io" }
-photocraft-text = { path = "crates/text" }
-photocraft-vector = { path = "crates/vector" }
-photocraft-format = { path = "crates/format" }
-photocraft-automation = { path = "crates/automation" }
-photocraft-plugins = { path = "crates/plugins" }
-photocraft-engine = { path = "crates/engine" }
-photocraft-ui-egui = { path = "crates/ui-egui" }
-photocraft-testkit = { path = "crates/testkit" }
-photocraft-tablet = { path = "crates/tablet" }
+prism-geom = { path = "crates/geom" }
+prism-color = { path = "crates/color" }
+prism-cms = { path = "crates/cms" }
+prism-raster = { path = "crates/raster" }
+prism-doc = { path = "crates/doc" }
+prism-ops = { path = "crates/ops" }
+prism-psd = { path = "crates/psd" }
+prism-codecs = { path = "crates/codecs" }
+prism-raw = { path = "crates/raw" }
+prism-affinity = { path = "crates/affinity" }
+prism-compose = { path = "crates/compose" }
+prism-gpu = { path = "crates/gpu" }
+prism-paint = { path = "crates/paint" }
+prism-algo = { path = "crates/algo" }
+prism-io = { path = "crates/io" }
+prism-text = { path = "crates/text" }
+prism-vector = { path = "crates/vector" }
+prism-format = { path = "crates/format" }
+prism-automation = { path = "crates/automation" }
+prism-plugins = { path = "crates/plugins" }
+prism-engine = { path = "crates/engine" }
+prism-ui-egui = { path = "crates/ui-egui" }
+prism-testkit = { path = "crates/testkit" }
+prism-tablet = { path = "crates/tablet" }
 
 # external
 thiserror = "2"

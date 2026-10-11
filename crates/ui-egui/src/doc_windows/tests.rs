@@ -5,23 +5,23 @@ fn legacy_window_defaults_to_additional() {
     assert_eq!(w.kind, DocWindowKind::Additional);
 }
 
-fn app(count: usize) -> PhotocraftApp {
-    let mut session = photocraft_engine::Session::new();
+fn app(count: usize) -> PrismApp {
+    let mut session = prism_engine::Session::new();
     for i in 0..count {
         session.add_document(
-            photocraft_doc::Document::with_background(
+            prism_doc::Document::with_background(
                 format!("Document {i}"),
-                photocraft_doc::Size::new(80, 60),
-                photocraft_doc::ColorMode::Rgb,
-                photocraft_doc::SampleType::U8,
-                photocraft_color::Color::WHITE,
+                prism_doc::Size::new(80, 60),
+                prism_doc::ColorMode::Rgb,
+                prism_doc::SampleType::U8,
+                prism_color::Color::WHITE,
             ),
-            Some(format!("doc{i}.pcraft")),
+            Some(format!("doc{i}.prism")),
         );
     }
-    PhotocraftApp::new(session, Default::default())
+    PrismApp::new(session, Default::default())
 }
-fn call(a: &mut PhotocraftApp, ctx: &Context, method: &str, p: Value) -> Value {
+fn call(a: &mut PrismApp, ctx: &Context, method: &str, p: Value) -> Value {
     let (req, _) = crate::control::ControlRequest::new(method, p);
     match crate::control::handle(a, ctx, &req) {
         crate::control::Outcome::Done(v) => v,
@@ -45,7 +45,7 @@ fn detach_attach_keep_identity_pixels_path_history_and_camera() {
     assert_eq!(a.ui.active_window, Some(window));
     assert_eq!(a.view(0), Some(&camera));
     assert!(std::sync::Arc::ptr_eq(&original, &a.session.active().unwrap().doc));
-    assert_eq!(a.session.active().unwrap().path.as_deref(), Some("doc0.pcraft"));
+    assert_eq!(a.session.active().unwrap().path.as_deref(), Some("doc0.prism"));
     crate::menus::invoke(&mut a, &ctx, "view.zoomIn", json!({})).unwrap();
     assert!(a.view(0).unwrap().zoom > camera.zoom);
     assert_eq!(a.ui.views[0], camera, "floating camera must not change the docked camera");
@@ -147,7 +147,7 @@ fn invalid_window_control_is_atomic_and_duplicate_detach_reuses_window() {
 
 /// Feed separate native viewport passes in the headless harness, using the same input hook and
 /// immediate callback as eframe. This catches focus, keyboard routing and camera ownership bugs.
-fn native_harness(a: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn native_harness(a: PrismApp) -> egui_kittest::Harness<'static, PrismApp> {
     Context::set_immediate_viewport_renderer(|ctx, mut v| {
         let mut raw = egui::RawInput {
             viewport_id: v.ids.this,
@@ -170,7 +170,7 @@ fn native_harness(a: PhotocraftApp) -> egui_kittest::Harness<'static, Photocraft
         output.textures_delta.clear();
     });
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 850.0)).with_max_steps(64).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::Pro);
+        PrismApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::Pro);
         cc.egui_ctx.set_embed_viewports(false);
         a
     });
@@ -203,7 +203,7 @@ fn native_child_keyboard_edits_and_navigation_target_only_the_focused_document()
         json!({"window":window,"events":[{"kind":"down","x":10,"y":10},{"kind":"move","x":40,"y":35},{"kind":"up","x":40,"y":35}]}),
     );
     h.run_steps(3);
-    assert!(matches!(h.state().session.active().unwrap().doc.layers.last().unwrap().content, photocraft_doc::LayerContent::Shape(_)));
+    assert!(matches!(h.state().session.active().unwrap().doc.layers.last().unwrap().content, prism_doc::LayerContent::Shape(_)));
     let history = h.state().session.active().unwrap().history.past_len();
     assert_eq!(history, 1);
     call(h.state_mut(), &ctx, "ui.key", json!({"window":window,"key":"Z","command":true}));
@@ -220,6 +220,12 @@ fn a_dialog_opened_for_a_detached_document_keeps_its_window_host() {
     let dialog = crate::color_picker_ui::open(&mut a, "foreground");
     assert_eq!(a.ui.dialog_mut(dialog).unwrap().window, Some(window));
     assert!(!dialogs_here(&a, &ctx));
+    // It floats in an OS window of its own (not clipped to the document window), above the
+    // documents, and automation can address it by id.
+    let d = a.ui.dialog_mut(dialog).unwrap().clone();
+    assert!(crate::dialogs::floats(&d) && crate::native_dialogs::own_window(&d));
+    assert_eq!(window_level(&a, &ctx), egui::viewport::WindowLevel::Normal);
+    assert!(crate::native_dialogs::focus(&a, &ctx, dialog).is_ok());
     a.ui.close_dialog(dialog);
     assert!(a.ui.dialogs.is_empty());
 }
@@ -282,6 +288,7 @@ fn escape_cancels_a_native_tab_drag_without_a_document_or_history_change() {
 fn native_detached_close_save_discard_cancel_and_write_failure() {
     for (key, fails, retained) in [("Escape", false, true), ("D", false, false), ("S", false, false), ("S", true, true)] {
         let mut a = app(1);
+        a.services.application_active = Some(Box::new(|| true));
         a.run("layer.new.layer", json!({})).unwrap();
         a.services.export = Some(Box::new(|_, _, _| Ok((vec![1], Vec::new()))));
         a.services.write = Some(Box::new(move |_, _| if fails { Err("disk full".into()) } else { Ok(()) }));
@@ -292,6 +299,8 @@ fn native_detached_close_save_discard_cancel_and_write_failure() {
         call(h.state_mut(), &ctx, "ui.window.close", json!({"window":window}));
         h.run_steps(3);
         assert!(h.state().discard.is_some());
+        // The prompt floats above the documents, which stay on top of the editor.
+        assert_eq!(window_level(h.state(), &ctx), egui::viewport::WindowLevel::AlwaysOnTop);
         call(h.state_mut(), &ctx, "ui.key", json!({"window":window,"key":key}));
         h.run_steps(8);
         assert_eq!(!h.state().ui.windows.is_empty(), retained, "{key}, failure={fails}");
@@ -299,6 +308,9 @@ fn native_detached_close_save_discard_cancel_and_write_failure() {
         if fails {
             assert!(h.state().discard.is_some());
             assert!(h.state().ui.status.contains("disk full"));
+            assert_eq!(window_level(h.state(), &ctx), egui::viewport::WindowLevel::AlwaysOnTop);
+        } else if retained {
+            assert_eq!(window_level(h.state(), &ctx), egui::viewport::WindowLevel::AlwaysOnTop);
         }
     }
 }
@@ -350,6 +362,34 @@ fn floating_window_level_tracks_application_activation_instead_of_panel_focus() 
         assert!(output.viewport_output[&ViewportId::ROOT].commands.iter().any(|c| matches!(c,egui::ViewportCommand::WindowLevel(l) if *l==want)));
         output.textures_delta.clear();
     }
+}
+
+#[test]
+fn quit_prompt_floats_above_detached_canvases_and_cancel_keeps_them() {
+    let mut a = app(1);
+    a.services.application_active = Some(Box::new(|| true));
+    a.run("layer.new.layer", json!({})).unwrap();
+    let window = detach(&mut a, &Context::default(), 0, None).unwrap()["window"].as_u64().unwrap();
+    let mut h = native_harness(a);
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    let ctx = h.ctx.clone();
+    crate::discard_ui::intercept(h.state_mut(), "file.exit", &serde_json::Value::Null);
+    h.run_steps(3);
+    let out = h.output();
+    // Its own always-on-top window; the documents stay visible on top of the editor under it.
+    let prompt = &out.viewport_output[&crate::discard_ui::viewport()];
+    assert_eq!(prompt.builder.window_level, Some(egui::viewport::WindowLevel::AlwaysOnTop));
+    assert!(prompt.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Focus)), "the prompt takes focus");
+    assert_eq!(out.viewport_output[&viewport(Some(window))].builder.window_level, Some(egui::viewport::WindowLevel::AlwaysOnTop));
+    assert!(!crate::discard_ui::here(h.state(), &ctx), "every Prism window is blocked behind it");
+    let document = h.state().session.active().unwrap().doc.clone();
+    call(h.state_mut(), &ctx, "ui.key", json!({"key":"Escape"}));
+    h.run_steps(6);
+    assert!(h.state().discard.is_none());
+    assert!(!h.state().allow_close);
+    assert_eq!(h.state().ui.windows.len(), 1);
+    assert!(std::sync::Arc::ptr_eq(&document, &h.state().session.active().unwrap().doc));
+    assert_eq!(window_level(h.state(), &ctx), egui::viewport::WindowLevel::AlwaysOnTop);
 }
 
 #[test]

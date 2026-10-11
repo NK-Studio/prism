@@ -1165,7 +1165,6 @@
 	Custom Pixel Aspect Ratio	Προσαρμοσμένη αναλογία εικονοστοιχείων
 	32-bit Preview Options	Επιλογές προεπισκόπησης 32 bit
 	New Guide	Νέος οδηγός
-	Join the ArtCraft Discord	Συμμετοχή στο Discord του ArtCraft
 	Report an Issue	Αναφορά προβλήματος
 	Load Files into Stack	Φόρτωση αρχείων σε στοίβα
 	Statistics	Στατιστικά
@@ -1945,7 +1944,6 @@
 	Arc	Τόξο
 	Arch	Καμάρα
 	Art & Illustration	Τέχνη και εικονογράφηση
-	ArtCraft Website	Ιστότοπος ArtCraft
 	Artboard Background Color	Χρώμα φόντου πίνακα σχεδίασης
 	Artboard Guides	Οδηγοί πίνακα σχεδίασης
 	Artboard from Group	Πίνακας σχεδίασης από ομάδα
@@ -2420,8 +2418,6 @@
 	Iris Blur…	Θόλωση ίριδας…
 	Italic	Πλάγια
 	Jag	Οδοντωτό
-	Join the ArtCraft Discord…	Συμμετοχή στο Discord του ArtCraft…
-	Join us on Discord	Ελάτε στην κοινότητά μας στο Discord
 	Jpeg quality	Ποιότητα JPEG
 	Justification	Πλήρης στοίχιση
 	Justify	Πλήρης στοίχιση
@@ -3225,7 +3221,6 @@ cameraRaw	Yellow	Κίτρινο
 	Add to Swatches	Προσθήκη στα δείγματα χρωμάτων
 	Alt	Alt
 	Anamorphic 2:1 (2)	Αναμορφικό 2:1 (2)
-	ArtCraft	ArtCraft
 	Blend If:	Ανάμειξη υπό όρους:
 	Channels:	Κανάλια:
 	Click a red pupil to neutralize it	Κάντε κλικ σε μια κόκκινη κόρη για να την εξουδετερώσετε
@@ -3240,7 +3235,6 @@ cameraRaw	Yellow	Κίτρινο
 	D1/DV PAL Widescreen (1.46)	D1/DV PAL ευρεία οθόνη (1.46)
 	DVCPRO HD 1080/HDV 1080 (1.5)	DVCPRO HD 1080/HDV 1080 (1.5)
 	Darken Amount	Ποσότητα σκουρέματος
-	Discord	Discord
 	Display P3	Display P3
 	Edit › Paste	Επεξεργασία › Επικόλληση
 	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	Οι αλλαγές που επηρεάζουν όλο το έγγραφο, όπως η λειτουργία ανάμειξης, η αδιαφάνεια ή η ορατότητα ενός επιπέδου, το επανασχεδιάζουν ολόκληρο.
@@ -3362,3 +3356,47 @@ fontWeight	Thin	Πολύ λεπτά
 	{name} copy	{name} αντίγραφο
 	Duplicate Image	Αντιγραφή εικόνας
 	Preparing preview…	Προετοιμασία προεπισκόπησης…
+
+	Load Font File…	Φόρτωση αρχείου γραμματοσειράς…
+	Favorite	Προσθήκη στα αγαπημένα
+	Unfavorite	Αφαίρεση από τα αγαπημένα
+	TTF, OTF, TTC, OTC — available until Prism exits	TTF, OTF, TTC, OTC — διαθέσιμα μέχρι να κλείσει το Prism
+	Loaded font (this session)	Η γραμματοσειρά φορτώθηκε (αυτή η συνεδρία)
+	Favorite fonts	Αγαπημένες γραμματοσειρές
+
+	All fonts	Όλες οι γραμματοσειρές
+	Korean only	Μόνο κορεατικά
+	No preview	Χωρίς προεπισκόπηση
+
+# Prism About introduction and footer.
+	Turn ideas into images.	Μετατρέψτε τις ιδέες σε εικόνες.
+	Prism is a desktop image editor by NK Studio.	Το Prism είναι ένα πρόγραμμα επεξεργασίας εικόνων για υπολογιστές από το NK Studio.
+	Refine layers, color, and typography to bring your vision to life.	Βελτιώστε επίπεδα, χρώματα και τυπογραφία για να ζωντανέψετε το όραμά σας.
+	All rights reserved.	Με επιφύλαξη παντός δικαιώματος.
+	Built for creative expression.	Φτιαγμένο για δημιουργική έκφραση.
+
+	Arrow Tool	Εργαλείο βέλους
+	Arrow	Βέλος
+	Arrow color	Χρώμα βέλους
+	Arrowhead	Μέγεθος αιχμής
+	Angular	Οξείες
+	Rounded	Στρογγυλεμένες
+
+	Arrowhead length	Arrowhead length
+
+	Arrowhead angle	Arrowhead angle
+
+	Line tips	Άκρα γραμμής
+
+	Square tips	Τετράγωνα άκρα
+
+	Round tips	Στρογγυλά άκρα
+	Make:	Δημιουργία:
+	Selection…	Επιλογή…
+	Align To:	Στοίχιση σε:
+	Rubber Band	Ελαστική ζώνη
+	Auto Add/Delete	Αυτόματη προσθήκη/διαγραφή
+	Align Edges	Στοίχιση ακμών
+	Path Operations	Λειτουργίες διαδρομής
+	Path Alignment	Στοίχιση διαδρομής
+	Path Arrangement	Διάταξη διαδρομής

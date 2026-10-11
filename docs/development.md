@@ -31,8 +31,8 @@ building locally; the downloaded app is still subject to Windows application-con
 ## Build and run
 
 ```sh
-cargo run --release -p photocraft -- path/to/image.psd      # desktop app
-cargo run --release -p photocraft -- --control 7878 --control-token-file .private/control.token \
+cargo run --release -p prism -- path/to/image.psd      # desktop app
+cargo run --release -p prism -- --control 7878 --control-token-file .private/control.token \
   --automation-read-root work --automation-write-root work
 cargo test --workspace                                     # everything
 cargo xtask ci                                             # fmt + clippy + tests + layers
@@ -68,7 +68,7 @@ generate installers or change release signing.
 Use `cargo build-fast` to build the desktop app, or `cargo run-fast -- image.psd` to run it.
 The `fast` profile keeps optimization at level 2, disables LTO, uses 16 code-generation units,
 and enables incremental compilation. It keeps `panic = "unwind"` for the crash guard.
-The executable is `target/fast/photocraft` (`photocraft.exe` on Windows). Release packaging
+The executable is `target/fast/prism` (`prism.exe` on Windows). Release packaging
 continues to use the existing `release` profile. The first fast build creates a separate cache;
 subsequent edits reuse it. Avoid running multiple Cargo builds against the same target directory:
 the build lock makes them wait for each other.
@@ -95,12 +95,14 @@ craft-fonts is an **optional build input**, never a Cargo dependency:
 
 ```sh
 git clone https://github.com/storytold/craft-fonts ../craft-fonts
-CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p photocraft
+CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p prism
 CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo test --workspace     # runs the Japanese font tests too
 ```
 
 - Use an absolute path (`$PWD/...`): `build.rs` runs in `crates/text`, so a relative `CRAFT_FONTS_DIR` would resolve from there.
-- `crates/text/build.rs` reads `$CRAFT_FONTS_DIR/fonts/manifest.txt` and embeds the fonts as `photocraft_text::CRAFT_FONTS` (`crates/text/src/craft_fonts.rs`). Unset, `CRAFT_FONTS` is empty and the build is unchanged. A bad path is a build warning, or an error with `CRAFT_FONTS_REQUIRED=1` (release builds set both).
+- `crates/text/build.rs` reads `$CRAFT_FONTS_DIR/fonts/manifest.txt` and embeds the fonts as `prism_text::CRAFT_FONTS` (`crates/text/src/craft_fonts.rs`). Unset, `CRAFT_FONTS` is empty and the build is unchanged. A bad path is a build warning, or an error with `CRAFT_FONTS_REQUIRED=1` (release builds set both).
+- **Prism About:** uses `MaruBuri | Regular` and `MaruBuri | SemiBold` for philosophy text, plus `Pretendard | Regular` and `Pretendard | Bold` for branding. Register these faces in the external `fonts/manifest.txt` (`family | style | file | Kore`) and retain each family's `fonts/<family>/OFL.txt`. These named stacks do not replace editor UI fonts. Without the optional faces the card uses the existing UI fallback. Development bundles copy the licenses alongside the embedded fonts.
+
 - **UI:** the Japanese fonts (BIZ UDPGothic Regular first) are the first Japanese fallback in the lazy CJK loader (`crates/ui-egui/src/cjk_fonts.rs`), ahead of the system Japanese fonts and in the same locale script order, appended last to every egui family with the usual baseline alignment.
 - **Type tool:** the text engine registers them in `FontDb::new` (so also with no system fonts) and puts them first in the Japanese slot of the locale-ordered fallback list: BIZ UDPGothic for sans runs, Shippori Mincho / BIZ UDMincho for serif runs.
 - Tests that need the fonts skip with a message when `CRAFT_FONTS` is empty; CI's macOS job runs the tests a second time with `CRAFT_FONTS_DIR` set. Desktop releases check out craft-fonts at the commit pinned in `.github/workflows/release.yml` (`CRAFT_FONTS_REF`; ci.yml pins the same commit) and ship each font's `OFL.txt` as `OFL-<family>.txt`.
@@ -109,7 +111,7 @@ CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo test --workspace     # runs the Japa
 
 `--safe-gpu` starts with the CPU renderer for one launch (no GPU canvas; a software adapter for the window where the platform has one: WARP on Windows). Before creating the wgpu device the app writes and locks `gpu-starting.json` in the config directory; it clears it once the first frames have rendered. A launch that finds an unlocked marker knows the previous start died inside the graphics driver (#4) and uses the next safer backend (Windows: Vulkan → DX12 → CPU; FreeBSD: Vulkan → GL → CPU; macOS: Metal → CPU), remembering it in `performance.gpuBackend` (Preferences › Performance › GPU Backend, with **Reset GPU Backend**). With `auto`, Intel adapters on Windows use DX12. Help › System Info shows the adapter, backend, driver and fallback state.
 
-On DX12 the shader compiler is FXC (`d3dcompiler_47.dll`, part of Windows), or a `dxcompiler.dll` placed beside `photocraft.exe`, loaded by its full path. wgpu's default looks `dxcompiler.dll` up by name, which reaches the current directory and `PATH` and loaded other programs' incompatible builds (#712).
+On DX12 the shader compiler is FXC (`d3dcompiler_47.dll`, part of Windows), or a `dxcompiler.dll` placed beside `prism.exe`, loaded by its full path. wgpu's default looks `dxcompiler.dll` up by name, which reaches the current directory and `PATH` and loaded other programs' incompatible builds (#712).
 
 Handled windowing and app initialization errors clear this launch's startup marker, restoring any
 prior crash evidence without changing the next launch's graphics backend. Renderer initialization errors and driver crashes still
@@ -119,29 +121,29 @@ If the device is lost while running (#243), every GPU entry point checks the dev
 
 ## Logs
 
-The desktop app writes its `log` records to standard error and to `logs/photocraft.log` in the settings directory (macOS `~/Library/Application Support/Photocraft/logs/`, Windows `%APPDATA%\Photocraft\logs\`, or under `PHOTOCRAFT_CONFIG_DIR` / the portable data folder). A start launched from a desktop menu or the Dock has no terminal, so this file is what to attach to a bug report: GPU startup fallbacks, a lost device and the crash guard's panic report all land there. Each launch moves the previous log to `photocraft.1.log` (and that one to `photocraft.2.log`), so the log of a run that crashed survives the next start. The file stops growing at 16 MiB. `--version` and command-line errors write no file.
+The desktop app writes its `log` records to standard error and to `logs/prism.log` in the settings directory (macOS `~/Library/Application Support/Prism/logs/`, Windows `%APPDATA%\Prism\logs\`, or under `PRISM_CONFIG_DIR` / the portable data folder). A start launched from a desktop menu or the Dock has no terminal, so this file is what to attach to a bug report: GPU startup fallbacks, a lost device and the crash guard's panic report all land there. Each launch moves the previous log to `prism.1.log` (and that one to `prism.2.log`), so the log of a run that crashed survives the next start. The file stops growing at 16 MiB. `--version` and command-line errors write no file.
 
-By default Prism's own crates log at `info` and everything else at `warn`. `RUST_LOG` replaces that with env_logger-style directives, for example `RUST_LOG=debug`, `RUST_LOG=warn,photocraft_gpu=trace` or `RUST_LOG=info,wgpu_core=warn`; a directive ending in `*` covers every target starting with it (`photocraft*=debug`). The logger is `apps/photocraft/src/logging.rs`.
+By default Prism's own crates log at `info` and everything else at `warn`. `RUST_LOG` replaces that with env_logger-style directives, for example `RUST_LOG=debug`, `RUST_LOG=warn,prism_gpu=trace` or `RUST_LOG=info,wgpu_core=warn`; a directive ending in `*` covers every target starting with it (`prism*=debug`). The logger is `apps/prism/src/logging.rs`.
 
 ## Environment variables
 
 | Variable | Effect |
 |---|---|
-| `PHOTOCRAFT_CONTROL_PORT` | Same as `--control <port>` |
+| `PRISM_CONTROL_PORT` | Same as `--control <port>` |
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
-| `PHOTOCRAFT_CONTROL_TOKEN` | 64-hex bearer token for control TCP (avoid on shared systems where environment inspection is possible) |
-| `PHOTOCRAFT_CONTROL_TOKEN_FILE` | Read, or create for a server, the control bearer-token file |
-| `PHOTOCRAFT_AUTOMATION_READ_ROOT` | Desktop app only: automation read root. Headless CLI modes require the `--automation-read-root` flag |
-| `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` | Desktop app only: automation write root. Headless CLI modes require the `--automation-write-root` flag |
-| `PHOTOCRAFT_CPU_CANVAS=1` | Force the CPU canvas path instead of the wgpu shader canvas |
+| `PRISM_CONTROL_TOKEN` | 64-hex bearer token for control TCP (avoid on shared systems where environment inspection is possible) |
+| `PRISM_CONTROL_TOKEN_FILE` | Read, or create for a server, the control bearer-token file |
+| `PRISM_AUTOMATION_READ_ROOT` | Desktop app only: automation read root. Headless CLI modes require the `--automation-read-root` flag |
+| `PRISM_AUTOMATION_WRITE_ROOT` | Desktop app only: automation write root. Headless CLI modes require the `--automation-write-root` flag |
+| `PRISM_CPU_CANVAS=1` | Force the CPU canvas path instead of the wgpu shader canvas |
 | `WGPU_BACKEND=dx12` | Pick the wgpu backend(s) (`vulkan`, `dx12`, `metal`, `gl`); overrides `performance.gpuBackend` and the startup fallback |
 | `WGPU_DX12_COMPILER=fxc` | DX12 shader compiler (`fxc`, `dxc`, `auto`); `dxc` and `auto` look `dxcompiler.dll` up through the DLL search path |
-| `PHOTOCRAFT_GPU_TILE=2048` | Force GPU canvas tiling (tests tile seams) |
-| `PHOTOCRAFT_FX_NOCACHE=1` | Bypass the CPU layer-effect map cache (`compose::effect_maps`) |
-| `PHOTOCRAFT_CPU_COMPOSE=1` | Keep the wgpu canvas but composite on the CPU (compare GPU vs CPU renders, e.g. with the snapshot example) |
-| `PHOTOCRAFT_LOCALE` | Override Auto's native UI language for this launch; unsupported tags use English. See [system language detection](localization.md#first-launch-and-system-language). |
-| `PHOTOCRAFT_FX_TRACE=1` | Print the CPU time spent on GPU effect shapes and distance fields per rebuild |
-| `PHOTOCRAFT_THEME_FILE=tokens.json` | **Debug builds only:** live design-token overrides, re-read on change |
+| `PRISM_GPU_TILE=2048` | Force GPU canvas tiling (tests tile seams) |
+| `PRISM_FX_NOCACHE=1` | Bypass the CPU layer-effect map cache (`compose::effect_maps`) |
+| `PRISM_CPU_COMPOSE=1` | Keep the wgpu canvas but composite on the CPU (compare GPU vs CPU renders, e.g. with the snapshot example) |
+| `PRISM_LOCALE` | Override Auto's native UI language for this launch; unsupported tags use English. See [system language detection](localization.md#first-launch-and-system-language). |
+| `PRISM_FX_TRACE=1` | Print the CPU time spent on GPU effect shapes and distance fields per rebuild |
+| `PRISM_THEME_FILE=tokens.json` | **Debug builds only:** live design-token overrides, re-read on change |
 
 ### Live design tokens
 
@@ -170,21 +172,21 @@ See `docs/control-protocol.md` for every method. Tips:
 
 ## Headless CLI
 
-`apps/photocraft-cli` builds the binary `photocraft-cli`:
+`apps/prism-cli` builds the binary `prism-cli`:
 
 ```sh
-cargo run -p photocraft-cli -- convert in.psd out.pcraft               # any supported format -> any
-cargo run -p photocraft-cli -- info out.pcraft                          # JSON: size, mode, depth, layer tree
-cargo run -p photocraft-cli -- run in.png --cmd layer.new.layer --params '{"name":"Ink"}' \
+cargo run -p prism-cli -- convert in.psd out.prism               # any supported format -> any
+cargo run -p prism-cli -- info out.prism                          # JSON: size, mode, depth, layer tree
+cargo run -p prism-cli -- run in.png --cmd layer.new.layer --params '{"name":"Ink"}' \
                                           --cmd filter.blur.gaussianBlur --params '{"radius":3}' --out out.psd
-cargo run -p photocraft-cli -- run --new '{"width":800,"height":600}' --cmd document.inspect
-cargo run -p photocraft-cli -- batch --actions actions.json --in photos/ --out done/ --format jpg
-cargo run -p photocraft-cli -- commands --filter blur                    # the command registry
+cargo run -p prism-cli -- run --new '{"width":800,"height":600}' --cmd document.inspect
+cargo run -p prism-cli -- batch --actions actions.json --in photos/ --out done/ --format jpg
+cargo run -p prism-cli -- commands --filter blur                    # the command registry
 ```
 
 `actions.json` holds the steps of a recorded action: `[["<id>", {…}], …]`, `[{"command": "<id>", "params": {…}}, …]` or bare ids, as a list or wrapped in `{"actions": …}` or `{"steps": …}`; a droplet file works too. `batch` refuses an `--out` folder that is the `--in` folder, since the results would replace the originals, unless `--in-place` is given. `run` prints one JSON line per command result.
 
-## Native format (.pcraft)
+## Native format (.prism)
 
 `crates/format` defines the lossless native bundle. It is either a ZIP of STORE entries or a directory with the same layout:
 
@@ -192,18 +194,18 @@ cargo run -p photocraft-cli -- commands --filter blur                    # the c
 - `tiles/<blake3>.zst` and `blobs/<blake3>.zst`: zstd-compressed objects, content-addressed by the BLAKE3 hash of their uncompressed bytes.
 - `thumb.png` and `composite/preview.png`: previews.
 
-Keep one `PcraftWriter` per open document: re-saving then only compresses and writes tiles that changed. Directory bundles verify objects on first encounter in a folder; later saves reuse them while their file size and modification time are unchanged, and re-verify changed objects, repair missing or damaged objects, and garbage-collect unreferenced ones. `format::Autosaver` writes snapshots into a recovery directory on a background thread. `list_recovery` / `recover` / `discard_recovery` implement crash recovery, and `format::RecoveryStore` is the lifecycle the desktop app uses: new documents autosave under per-launch keys (document ids restart every launch, so they never overwrite an older entry), and a recovered document adopts the entry it came from. That entry is replaced in place by the next autosave and removed only when the document is saved or closed, never just because it was recovered, so a second crash loses nothing.
+Keep one `PrismWriter` per open document: re-saving then only compresses and writes tiles that changed. Directory bundles verify objects on first encounter in a folder; later saves reuse them while their file size and modification time are unchanged, and re-verify changed objects, repair missing or damaged objects, and garbage-collect unreferenced ones. `format::Autosaver` writes snapshots into a recovery directory on a background thread. `list_recovery` / `recover` / `discard_recovery` implement crash recovery, and `format::RecoveryStore` is the lifecycle the desktop app uses: new documents autosave under per-launch keys (document ids restart every launch, so they never overwrite an older entry), and a recovered document adopts the entry it came from. That entry is replaced in place by the next autosave and removed only when the document is saved or closed, never just because it was recovered, so a second crash loses nothing.
 
-`photocraft-io` routes `.pcraft` through this crate in `import`/`export`, detecting it by magic or by extension.
+`prism-io` routes `.prism` through this crate in `import`/`export`, detecting it by magic or by extension.
 
 ## MCP (agents)
 
-`photocraft-cli mcp` serves MCP on stdio using `crates/automation`, which is built on `rmcp`:
+`prism-cli mcp` serves MCP on stdio using `crates/automation`, which is built on `rmcp`:
 
-- **Headless:** `photocraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>`. It drives an in-process engine session and has no file authority when a root is omitted.
-- **Live app:** start `photocraft --control 7878 --control-token-file <private-path> --automation-read-root <dir> --automation-write-root <dir>`, then run `photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <private-path>`. The desktop process owns the roots. See `docs/control-protocol.md#mcp-bridge`.
+- **Headless:** `prism-cli mcp --automation-read-root <dir> --automation-write-root <dir>`. It drives an in-process engine session and has no file authority when a root is omitted.
+- **Live app:** start `prism --control 7878 --control-token-file <private-path> --automation-read-root <dir> --automation-write-root <dir>`, then run `prism-cli mcp --bridge 127.0.0.1:7878 --control-token-file <private-path>`. The desktop process owns the roots. See `docs/control-protocol.md#mcp-bridge`.
 
-For headless MCP clients, pass absolute paths to deliberately chosen trusted workspace directories in the launch arguments. Desktop `PHOTOCRAFT_AUTOMATION_READ_ROOT` and `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` environment variables do **not** grant headless CLI access. Omitting a root flag deliberately denies that direction of access.
+For headless MCP clients, pass absolute paths to deliberately chosen trusted workspace directories in the launch arguments. Desktop `PRISM_AUTOMATION_READ_ROOT` and `PRISM_AUTOMATION_WRITE_ROOT` environment variables do **not** grant headless CLI access. Omitting a root flag deliberately denies that direction of access.
 
 Tools:
 
@@ -218,24 +220,24 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
 ```json
 {
   "mcpServers": {
-    "photocraft": {
-      "command": "/path/to/photocraft/target/release/photocraft-cli",
+    "prism": {
+      "command": "/path/to/prism/target/release/prism-cli",
       "args": ["mcp", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
     },
-    "photocraft-live": {
-      "command": "/path/to/photocraft/target/release/photocraft-cli",
-      "args": ["mcp", "--bridge", "127.0.0.1:7878", "--control-token-file", "/private/path/photocraft-control.token"]
+    "prism-live": {
+      "command": "/path/to/prism/target/release/prism-cli",
+      "args": ["mcp", "--bridge", "127.0.0.1:7878", "--control-token-file", "/private/path/prism-control.token"]
     }
   }
 }
 ```
 
 ```sh
-cargo build --release -p photocraft-cli
-mkdir -p "$PWD/photocraft-work"
-claude mcp add photocraft -- "$PWD/target/release/photocraft-cli" mcp \
-  --automation-read-root "$PWD/photocraft-work" \
-  --automation-write-root "$PWD/photocraft-work"
+cargo build --release -p prism-cli
+mkdir -p "$PWD/prism-work"
+claude mcp add prism -- "$PWD/target/release/prism-cli" mcp \
+  --automation-read-root "$PWD/prism-work" \
+  --automation-write-root "$PWD/prism-work"
 ```
 
 `doc_inspect` (and the engine command `document.inspect`) reports the layer tree with kinds,
@@ -245,7 +247,7 @@ screenshot. `crates/automation/tests/agent_tasks.rs` is the reference: ten reali
 (title card, colour grade, undo/redo, editable smart blur, masks, saved selections, align,
 capability-scoped export, resize/crop, CMYK + native save) driven purely over MCP.
 
-Without MCP, `photocraft-cli serve [--port N]` keeps a headless session open and answers JSON lines
+Without MCP, `prism-cli serve [--port N]` keeps a headless session open and answers JSON lines
 (see `docs/control-protocol.md#headless-server`).
 
 A typical agent loop (place inputs under the configured read root and outputs under the write root):
@@ -254,7 +256,7 @@ A typical agent loop (place inputs under the configured read root and outputs un
 2. `command_list {filter:"blur"}`
 3. `command_run {id:"filter.blur.gaussianBlur", params:{radius:4}}`
 4. `doc_render_preview` to check the result
-5. `doc_save {path:"out.pcraft"}`
+5. `doc_save {path:"out.prism"}`
 
 ## Colour management
 
@@ -266,7 +268,7 @@ intents, black point compensation). It ships CC0 built-in profiles, including a 
   and `edit.convertToProfile` change it. Mode changes (`image.mode.*`) convert through cms.
 - **Proof Colors** (⌘Y), **Proof Setup** and **Gamut Warning** (⇧⌘Y) bake a 3D LUT
   (`cms::Lut3d`) that the canvas shader applies; the document pixels never change.
-- Convert colours with `photocraft_cms::transform::cached(src, dst, opts)`: transforms are cached
+- Convert colours with `prism_cms::transform::cached(src, dst, opts)`: transforms are cached
   process-wide and integer buffers use precomputed tables or a device link.
 
 ## Menu parity
@@ -296,14 +298,14 @@ translations do not affect the denominator. Unregistered locale TSV files are ig
 ## Performance notes
 
 - The canvas is presented by a custom WGSL shader (`ui-egui/src/gpu_canvas.rs`): mip-mapped/nearest sampling, procedural checkerboard, pixel grid, tiling. Brush strokes upload only their damage rect.
-- **The canvas composites on the GPU** (`photocraft-gpu`, driven from `gpu_canvas.rs`), layer effects included. What the planner can't express returns `Unsupported` and the canvas falls back to the CPU compositor (`photocraft-compose`, also the reference for export and tests): Multichannel documents, and documents or effect regions over the texture limit. Pieces the GPU can't derive itself are rasterised once on the CPU and cached (`compose::masks` for vector masks, `compose::shape_split` for stroked shapes with clipped layers, effect distance fields). Timings of the interactive paths: `cargo run --release -p photocraft-ui-egui --example interactive_bench`; effects: `--example fx_bench` (`--compare files…` for GPU vs CPU); large documents (open, refresh, thumbnails, a filter, a stroke, saves; one operation per run so `/usr/bin/time -l` gives its peak memory): `--example large_image_bench -- --size 14000x14000 --op psd`. The app requests the adapter's own texture limit (egui's default is 8192 px; see `gpu_canvas::use_adapter_limits`); beyond it the CPU fallback composites and uploads in bands (`compose::render_bands`), and exports, thumbnails and flattening stream bands too, so no full-size float composite is ever held. Rendering fidelity: `cargo run --release -p photocraft-io --example oracle_diff -- corpus/psd` (the whole PSD oracle table in seconds). `ui.inspect` → `perf.timings.gpuFallback` names the reason (`null` on the GPU path).
-- **Layer effects on the GPU** (`gpu/src/fx.rs`, kernels in `gpu/src/compose.wgsl`). Every enabled effect becomes a *map program* over the layer's effect region (shift, dilate, Gaussian blur, glow ramp, bevel height and shading, contour, stroke band), mirroring `compose::effects` step by step; the chunked composite then paints through the maps, clipped to that region, and copies the result back into the backdrop in place, so a small text layer costs only its own pixels. The layer's shape (`compose::layer_shape`) and its distance fields (`compose::effects::distance_field`: a sequential transform whose tie-breaking a parallel GPU pass can't reproduce bit for bit) come from compose on the CPU, computed in parallel bands. Everything is cached per layer state: an unrelated edit, or an effect's colour or opacity, rebuilds nothing; a brush dab recomputes the touched 256² tiles grown by the effect reach; changing one effect's geometry rebuilds that effect only. Cache budget `gpu::FX_BUDGET` (1.5 GB, least recently drawn layers evicted first). `PHOTOCRAFT_FX_TRACE=1` prints the CPU time of each rebuild.
+- **The canvas composites on the GPU** (`prism-gpu`, driven from `gpu_canvas.rs`), layer effects included. What the planner can't express returns `Unsupported` and the canvas falls back to the CPU compositor (`prism-compose`, also the reference for export and tests): Multichannel documents, and documents or effect regions over the texture limit. Pieces the GPU can't derive itself are rasterised once on the CPU and cached (`compose::masks` for vector masks, `compose::shape_split` for stroked shapes with clipped layers, effect distance fields). Timings of the interactive paths: `cargo run --release -p prism-ui-egui --example interactive_bench`; effects: `--example fx_bench` (`--compare files…` for GPU vs CPU); large documents (open, refresh, thumbnails, a filter, a stroke, saves; one operation per run so `/usr/bin/time -l` gives its peak memory): `--example large_image_bench -- --size 14000x14000 --op psd`. The app requests the adapter's own texture limit (egui's default is 8192 px; see `gpu_canvas::use_adapter_limits`); beyond it the CPU fallback composites and uploads in bands (`compose::render_bands`), and exports, thumbnails and flattening stream bands too, so no full-size float composite is ever held. Rendering fidelity: `cargo run --release -p prism-io --example oracle_diff -- corpus/psd` (the whole PSD oracle table in seconds). `ui.inspect` → `perf.timings.gpuFallback` names the reason (`null` on the GPU path).
+- **Layer effects on the GPU** (`gpu/src/fx.rs`, kernels in `gpu/src/compose.wgsl`). Every enabled effect becomes a *map program* over the layer's effect region (shift, dilate, Gaussian blur, glow ramp, bevel height and shading, contour, stroke band), mirroring `compose::effects` step by step; the chunked composite then paints through the maps, clipped to that region, and copies the result back into the backdrop in place, so a small text layer costs only its own pixels. The layer's shape (`compose::layer_shape`) and its distance fields (`compose::effects::distance_field`: a sequential transform whose tie-breaking a parallel GPU pass can't reproduce bit for bit) come from compose on the CPU, computed in parallel bands. Everything is cached per layer state: an unrelated edit, or an effect's colour or opacity, rebuilds nothing; a brush dab recomputes the touched 256² tiles grown by the effect reach; changing one effect's geometry rebuilds that effect only. Cache budget `gpu::FX_BUDGET` (1.5 GB, least recently drawn layers evicted first). `PRISM_FX_TRACE=1` prints the CPU time of each rebuild.
 - The canvas grows a stroke's damage rect by the effect reach of the layers around it (`canvas::effect_reach`), so effects beyond the dab refresh too (on both paths).
-- **Numbers** (7360 × 4912, 8 text layers + one painted layer with drop shadow + stroke + bevel, Hue/Saturation on top; M4 Pro; `cargo run --release -p photocraft-ui-egui --example fx_bench`), CPU fallback → GPU: full refresh with warm effect maps 5.7 s → 47 ms; Hue/Saturation tweak above the effects 4.7 s → 31 ms; brush dab on a plain layer 32 → 1.7 ms; brush dab on the effect layer (its maps rebuilt around the dab) 659 → 3.7 ms; first refresh (all maps built) 6.4 s → 0.39 s. With the CPU ~14× oversubscribed by parallel builds (min of 7 runs): 8.1 s → 0.33 s, 9.9 s → 0.28 s, 28 → 2.2 ms, 1.7 s → 89 ms; moving a text layer 7 px 336 → 13 ms. `fx_bench --compare corpus/psd/…/*.psd` reports the GPU vs CPU difference on real files (30 of the 31 corpus files with effects render on the GPU, worst 0.12/255).
+- **Numbers** (7360 × 4912, 8 text layers + one painted layer with drop shadow + stroke + bevel, Hue/Saturation on top; M4 Pro; `cargo run --release -p prism-ui-egui --example fx_bench`), CPU fallback → GPU: full refresh with warm effect maps 5.7 s → 47 ms; Hue/Saturation tweak above the effects 4.7 s → 31 ms; brush dab on a plain layer 32 → 1.7 ms; brush dab on the effect layer (its maps rebuilt around the dab) 659 → 3.7 ms; first refresh (all maps built) 6.4 s → 0.39 s. With the CPU ~14× oversubscribed by parallel builds (min of 7 runs): 8.1 s → 0.33 s, 9.9 s → 0.28 s, 28 → 2.2 ms, 1.7 s → 89 ms; moving a text layer 7 px 336 → 13 ms. `fx_bench --compare corpus/psd/…/*.psd` reports the GPU vs CPU difference on real files (30 of the 31 corpus files with effects render on the GPU, worst 0.12/255).
 - On the CPU path `compose::effect_maps` caches shadow, glow, bevel and satin maps per layer state (LRU, 768 MB budget).
 - Live adjustment previews on large documents use a downsampled proxy (`ui-egui/src/proxy.rs`).
 - `ui.inspect` returns `perf` timings (UI ms per frame, composite ms, upload ms).
-- Never scan full surfaces per frame. Cache per document revision (`PhotocraftApp::cached_bounds`). An uncached `content_bounds()` on a 36 MP layer once cost 77 ms per frame.
+- Never scan full surfaces per frame. Cache per document revision (`PrismApp::cached_bounds`). An uncached `content_bounds()` on a 36 MP layer once cost 77 ms per frame.
 
 ## Scorecard and performance budgets
 
@@ -339,7 +341,7 @@ cargo xtask perf --update-baseline   # also write perf/baseline.json from this r
 **Perf runs.** `xtask perf` builds the benches in release (`perf_scenarios`, `interactive_bench`,
 `fx_bench`, `type_bench`, `large_image_bench`, and `layout_bench` once it exists), runs each with
 `--json`, and merges the reports into `target/perf/results.json` keyed by scenario id, with p50,
-p95 and max (nearest rank over the samples), peak RSS measured in-process (`photocraft-testkit`'s
+p95 and max (nearest rank over the samples), peak RSS measured in-process (`prism-testkit`'s
 `perf::RssSampler`), GPU bytes held by the canvas, and the load average before and after each
 bench. `target/perf/summary.md` is the Markdown table. It exits non-zero when an enforced budget
 breaks, when a scenario's p50 regresses more than 15 % (`--threshold`, or `regression_pct`)
@@ -349,7 +351,7 @@ quick baseline. Machines that run other work give noisy numbers: check the load 
 summary before trusting a regression, and record it next to any number you quote.
 
 **Adding a scenario.** Add a row to a bench (keep its name stable: it is the key), give the
-bench `--json` support through `photocraft_testkit::perf::{row, report, write_report}`, then add a
+bench `--json` support through `prism_testkit::perf::{row, report, write_report}`, then add a
 `[[scenario]]` to `perf/budgets.toml` and run `cargo xtask scorecard`.
 
 **CI.** `ci.yml` runs `cargo xtask scorecard --check`. `perf-nightly.yml` runs `cargo xtask perf`
@@ -366,7 +368,7 @@ window would be occluded (macOS doesn't render occluded windows, so live `ui.scr
 the window and steal focus):
 
 ```sh
-cargo run --release -p photocraft-ui-egui --example snapshot -- \
+cargo run --release -p prism-ui-egui --example snapshot -- \
     --out ui.png --size 1440x900 --scale 2 --open photo.jpg \
     --script '[["ui.set", {"tool": "type"}], ["ui.menu.invoke", {"id": "image.canvasSize"}]]'
 ```
@@ -405,9 +407,9 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
 
 **Opt-in locally, strict when opted in, always in CI.**
 
-- The corpus tests sit behind the `corpus` cargo feature of `photocraft-psd`, `photocraft-codecs`,
-  `photocraft-io` and `photocraft-engine`, so plain `cargo test` neither compiles nor needs them.
-  The HEIF ones also need the `heif` feature of `photocraft-codecs`/`photocraft-io` (test-corpus
+- The corpus tests sit behind the `corpus` cargo feature of `prism-psd`, `prism-codecs`,
+  `prism-io` and `prism-engine`, so plain `cargo test` neither compiles nor needs them.
+  The HEIF ones also need the `heif` feature of `prism-codecs`/`prism-io` (test-corpus
   turns it on).
 - With the feature on, a missing corpus is a failure ("run `cargo xtask corpus --all`"), never a
   silent skip, and every floor is enforced.
@@ -426,11 +428,11 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
 - **Consuming copy:** `corpus/photoshop/` here. It is a plain directory: the pinned snapshot
   (downloaded as the codeload tarball of the pinned commit, then verified).
 - **Local mode:** `cargo xtask corpus --photoshop --local` copies `photoshop/` from
-  `../photocraft-corpus` (or `PHOTOCRAFT_CORPUS_REPO=<path>`) instead of downloading. It warns when
+  `../photocraft-corpus` (or `PRISM_CORPUS_REPO=<path>`) instead of downloading. It warns when
   the clone's HEAD isn't the pin or its files differ from the manifest. Use it to test regenerated
   files before pushing: `cargo xtask test-corpus --local` copies them and runs every corpus test.
 - **Bumping the pin:** commit and push in photocraft-corpus, then in a PR here set
-  `PHOTOCRAFT_CORPUS_COMMIT` in `corpus_pins.rs`, run
+  `PRISM_CORPUS_COMMIT` in `corpus_pins.rs`, run
   `cargo xtask corpus --photoshop --update-manifest`, commit the manifest diff, run
   `cargo xtask test-corpus`, and raise floors that improved.
 - **Not a submodule or a subtree:** a subtree would put the binaries back into this repository's
@@ -455,7 +457,7 @@ improve; never lower them. Synthetic reproductions of corpus findings live in
 `crates/io/tests/corpus_regressions.rs` (corpus files are never committed). To dig into one file:
 
 ```sh
-cargo run --release -p photocraft-io --example oracle_diff -- corpus/psd/<file>.psd 0 png /tmp/diff.png
+cargo run --release -p prism-io --example oracle_diff -- corpus/psd/<file>.psd 0 png /tmp/diff.png
 ```
 
 writes ours | Photoshop | a diff heatmap side by side; `col`, `row`, `worst [n]`, `grid x0 y0 x1 y1 [ch]`,
@@ -467,3 +469,55 @@ stroke is drawn above its clipped layers; linked effect patterns tile from the l
 reference point; stroke distances follow a 5 × 5 chamfer metric (1, √2, √5) seeded at sub-pixel
 edge offsets; interior effects keep the layer's alpha; outside strokes blend onto the backdrop with
 their own modes, an upper stroke covering lower ones.
+
+### Optional local cursor pack
+
+Prism can load an optional personal cursor pack at startup from `<settings directory>/cursor-pack`
+or `PRISM_CURSOR_PACK_DIR`. The pack is runtime input, independent of Photoshop installation or
+builds, and is not included in releases or Git. Missing artwork retains the original Prism cursor.
+An invalid pack logs an error and retains all original cursors instead of partially installing it.
+
+`manifest.json` has `version: 1` and a `cursors` array of `{id, images}`; each image has
+`file`, `scale` (1 or 2), `size` and `hotspot` in pixels. Filenames are exactly
+`Alpha_<id>-<scale>x.png`. A 1× image is required; 2× is optional. PNGs must be 8-bit RGB or
+Gray with optional alpha, at most 256 pixels per side and 64 KiB compressed. There are at most
+512 cursor entries and a 32 MiB decoded pack budget. The importer validates names, PNG sizes,
+hotspots, duplicate resources and scales before installing the pack.
+
+Standard cursors cover all 52 implemented tool slots, selection combination states, panning,
+sampling, zoom direction, Pen start/continue/close, guides, transform scaling/rotation and Type
+skew. Dynamic brush outlines, sampling comparison rings, precision settings and widget cursors
+keep priority. Unsupported Photoshop modes do not become new tools by importing their artwork.
+
+AppKit receives PNG pixel representations with explicit point size and hotspot, preserving
+Retina detail without doubling the displayed cursor. The 1× bitmap remains the native fallback;
+Windows uses cached resampling at the viewport DPI, including fractional scales. Source windows
+have separate cursor requests, and leaving a canvas or hovering a widget restores the stock cursor.
+`ui.inspect.cursorResource` reports the resource in the current viewport's last completed pass.
+
+Offscreen inspection uses `snapshot --cursor-pack DIR --hover-at X,Y` to paint the cursor; native
+OS cursors are excluded from ordinary GPU screenshots. The painter uses the same logical geometry.
+
+## Prism name migration
+
+The NK Studio desktop app and headless CLI are now `prism` and `prism-cli`;
+workspace crates and Rust imports use `prism-*` and `prism_*`. The application
+identifier is `com.nkstudio.prism`. New native documents use `.prism`; existing
+`.pcraft` documents still open and save with their layers intact. The native
+manifest schema and plug-in ABI entry points are unchanged.
+
+On the first launch, legacy per-user settings are copied into `Prism`
+(`~/Library/Application Support/Prism` on macOS, `%APPDATA%\Prism` on Windows,
+`$XDG_CONFIG_HOME/prism` or `~/.config/prism` on FreeBSD). Preferences, presets,
+UI state and recovery bundles are copied together. The original directory is
+retained, and an existing Prism directory is never overwritten. If migration
+fails, the app reports the failure and continues using the original settings.
+Portable installations use `PrismData`; the old portable marker and data folder
+are accepted for migration.
+
+`PRISM_CONFIG_DIR` overrides automatic migration. Runtime automation variables
+use `PRISM_*`; legacy `PHOTOCRAFT_*` control, authentication, settings,
+startup and locale variables remain accepted when the corresponding new variable
+is absent. New names take precedence. Build tooling
+and documentation use the new names. Original copyright, licenses and upstream
+corpus provenance are retained in their attribution files.

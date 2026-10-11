@@ -7,7 +7,7 @@
 //! Widgets read [`Tokens::get`] instead of hard-coding colours, so every theme applies everywhere.
 
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
-use photocraft_engine::prefs::UiFontSize;
+use prism_engine::prefs::UiFontSize;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -121,6 +121,12 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    /// Shape-kind overlays sit on arbitrary thumbnail pixels, so retain a neutral tile in
+    /// every theme rather than borrowing the selected/hovered row's colour.
+    pub(crate) fn shape_thumbnail_badge() -> [Color32; 2] {
+        [Color32::from_gray(112), Color32::from_gray(238)]
+    }
+
     /// Tool outlines need contrast on arbitrary document pixels, independently of UI theme.
     pub(crate) fn cursor_outline() -> [Color32; 2] {
         [Color32::from_black_alpha(160), Color32::from_white_alpha(235)]
@@ -287,7 +293,7 @@ impl Tokens {
 
     /// Tokens for the active theme (stored in egui's context data by [`apply`]).
     pub fn get(ctx: &egui::Context) -> Tokens {
-        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("photocraft-theme"))).unwrap_or_else(|| Tokens::for_kind(ThemeKind::Studio))
+        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("prism-theme"))).unwrap_or_else(|| Tokens::for_kind(ThemeKind::Studio))
     }
 
     /// Thin RGB outlines; the filled bands use the same hues with subdued coverage.
@@ -301,8 +307,8 @@ impl Tokens {
     }
 
     /// Semantic label hues stay recognisable across themes; None keeps the normal row surface.
-    pub fn layer_label_colors(&self, label: photocraft_doc::LabelColor) -> Option<(Color32, Color32)> {
-        use photocraft_doc::LabelColor;
+    pub fn layer_label_colors(&self, label: prism_doc::LabelColor) -> Option<(Color32, Color32)> {
+        use prism_doc::LabelColor;
         let (swatch, eye) = match label {
             LabelColor::None => return None,
             LabelColor::Red => ([0xFC, 0x5D, 0x5B], [0x9F, 0x2F, 0x30]),
@@ -321,8 +327,8 @@ impl Tokens {
         Some((rgb(swatch), rgb(eye)))
     }
 
-    pub fn layer_label_icon(&self, label: photocraft_doc::LabelColor) -> Color32 {
-        if label == photocraft_doc::LabelColor::None { self.icon } else { Color32::from_gray(226) }
+    pub fn layer_label_icon(&self, label: prism_doc::LabelColor) -> Color32 {
+        if label == prism_doc::LabelColor::None { self.icon } else { Color32::from_gray(226) }
     }
 
     /// Analysis colours are semantic hues, independent of the application accent palette.
@@ -355,10 +361,10 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
     };
-    add(&mut fonts, "Inter", photocraft_text::fonts::INTER_REGULAR);
-    add(&mut fonts, "Inter-Medium", photocraft_text::fonts::INTER_MEDIUM);
-    add(&mut fonts, "Inter-SemiBold", photocraft_text::fonts::INTER_SEMIBOLD);
-    add(&mut fonts, "JetBrainsMono", photocraft_text::fonts::JETBRAINS_MONO_REGULAR);
+    add(&mut fonts, "Inter", prism_text::fonts::INTER_REGULAR);
+    add(&mut fonts, "Inter-Medium", prism_text::fonts::INTER_MEDIUM);
+    add(&mut fonts, "Inter-SemiBold", prism_text::fonts::INTER_SEMIBOLD);
+    add(&mut fonts, "JetBrainsMono", prism_text::fonts::JETBRAINS_MONO_REGULAR);
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "Inter".to_owned());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
     // Named weights fall back to the default stack for missing glyphs.
@@ -368,6 +374,7 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
         stack.extend(fallback.iter().cloned());
         fonts.families.insert(FontFamily::Name(fam.into()), stack);
     }
+    crate::about_ui::install_fonts(&mut fonts);
     let size = ui_font_size(ctx);
     for (name, data) in &mut fonts.font_data {
         size_ui_font(ctx, name, Arc::make_mut(data));
@@ -397,7 +404,7 @@ fn ui_fonts_active(ctx: &egui::Context) -> bool {
 }
 
 fn ui_fonts_id() -> egui::Id {
-    egui::Id::new("photocraft-ui-fonts")
+    egui::Id::new("prism-ui-fonts")
 }
 
 fn ui_font_size(ctx: &egui::Context) -> UiFontSize {
@@ -441,7 +448,7 @@ struct UiFontSizePlugin {
 
 impl egui::Plugin for UiFontSizePlugin {
     fn debug_name(&self) -> &'static str {
-        "photocraft-ui-font-size"
+        "prism-ui-font-size"
     }
 
     fn output_hook(&mut self, ctx: &egui::Context, _output: &mut egui::FullOutput) {
@@ -483,7 +490,7 @@ pub fn mono(size: f32) -> FontId {
 /// Apply a theme to egui's global style and publish its tokens.
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     let t = Tokens::for_kind(kind);
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("photocraft-theme"), t));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("prism-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.chrome;
     v.window_fill = t.card;
@@ -678,7 +685,7 @@ mod tests {
 
 /// Development feature: live design-token overrides.
 ///
-/// Set `PHOTOCRAFT_THEME_FILE=/path/tokens.json` in a debug build; the file is polled and applied
+/// Set `PRISM_THEME_FILE=/path/tokens.json` in a debug build; the file is polled and applied
 /// on change, so colours, radii and sizes can be tuned without recompiling. Keys are `Tokens` field
 /// names; values are `"#rrggbb"`, `"#rrggbbaa"` or numbers. Compiled out of release builds.
 #[cfg(debug_assertions)]
@@ -696,7 +703,7 @@ pub mod live {
 
     impl LiveTokens {
         pub fn from_env() -> Self {
-            Self { path: std::env::var_os("PHOTOCRAFT_THEME_FILE").map(Into::into), ..Default::default() }
+            Self { path: std::env::var_os("PRISM_THEME_FILE").map(Into::into), ..Default::default() }
         }
 
         /// Re-apply overrides if the file changed. Returns true when tokens were updated.
@@ -721,7 +728,7 @@ pub mod live {
                     super::apply(ctx, kind);
                     let mut t = Tokens::get(ctx);
                     let unknown = apply_overrides(&mut t, &v);
-                    ctx.data_mut(|d| d.insert_temp(egui::Id::new("photocraft-theme"), t));
+                    ctx.data_mut(|d| d.insert_temp(egui::Id::new("prism-theme"), t));
                     if !unknown.is_empty() {
                         log::warn!("unknown token keys: {unknown:?}");
                     }

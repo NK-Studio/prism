@@ -10,20 +10,20 @@
 //! ```
 //!
 //! A knot given as `[x, y]` is a corner with retracted handles; `in`/`out` default to the
-//! anchor. The serde form of `photocraft_doc::Path` is accepted too. Colours are `"#rrggbb"`,
+//! anchor. The serde form of `prism_doc::Path` is accepted too. Colours are `"#rrggbb"`,
 //! `"#rrggbbaa"` or `[r,g,b,a]` (0..1); opacities are percentages (0..100).
 //!
-//! Every edit re-renders the shape layer's cache with `photocraft-vector` in one undoable step.
-//! PSD blocks stay byte-identical while they still decode to the model (see `photocraft-io`).
+//! Every edit re-renders the shape layer's cache with `prism-vector` in one undoable step.
+//! PSD blocks stay byte-identical while they still decode to the model (see `prism-io`).
 
-use photocraft_algo::selection::{self as sel, SelectionMode};
-use photocraft_color::{BlendMode, Color};
-use photocraft_doc::{
+use prism_algo::selection::{self as sel, SelectionMode};
+use prism_color::{BlendMode, Color};
+use prism_doc::{
     ClippingPath, Document, Fill, FillRule, GradientStyle, Knot, Layer, LayerContent, LayerId, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp,
     ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask,
 };
-use photocraft_geom::{Affine, Point, Rect};
-use photocraft_vector as vector;
+use prism_geom::{Affine, Point, Rect};
+use prism_vector as vector;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, blend_from_str};
@@ -173,7 +173,7 @@ fn hex(c: &Color) -> String {
     if c.alpha < 1.0 { format!("#{:02x}{:02x}{:02x}{:02x}", q(r), q(g), q(b), q(c.alpha)) } else { format!("#{:02x}{:02x}{:02x}", q(r), q(g), q(b)) }
 }
 
-fn op_from(s: &str) -> Option<PathOp> {
+pub(crate) fn op_from(s: &str) -> Option<PathOp> {
     Some(match s.to_ascii_lowercase().as_str() {
         "combine" | "add" | "union" => PathOp::Combine,
         "subtract" | "minus" => PathOp::Subtract,
@@ -310,6 +310,21 @@ fn parse_stroke(v: &Value, base: Option<ShapeStroke>, fg: Color) -> std::result:
     if v.is_null() || v.as_bool() == Some(false) {
         return Ok(None);
     }
+    if !v.is_object() {
+        return Err("stroke must be an object or null".into());
+    }
+    for (key, low, high) in [("width", 0.0, 10000.0), ("opacity", 0.0, 100.0), ("miterLimit", 1.0, 1000.0), ("dashOffset", -1_000_000.0, 1_000_000.0)] {
+        if let Some(value) = v.get(key)
+            && value.as_f64().is_none_or(|n| !n.is_finite() || n < low || n > high)
+        {
+            return Err(format!("stroke `{key}` must be finite in {low}..{high}"));
+        }
+    }
+    for key in ["cap", "join", "align"] {
+        if v.get(key).is_some_and(|v| !v.is_string()) {
+            return Err(format!("stroke `{key}` must be a string"));
+        }
+    }
     let mut s = base.unwrap_or(ShapeStroke { paint: Fill::Solid(fg), ..Default::default() });
     if let Some(w) = f64p(v, "width") {
         s.width = w.max(0.0) as f32;
@@ -396,16 +411,60 @@ fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&LiveShape>) 
             let ratio = f64p(p, "starRatio").map_or(if kind == "star" && pr >= 1.0 { 0.5 } else { pr }, |v| v.clamp(0.01, 1.0));
             LiveShape::Polygon { rect: rect()?, sides, star_ratio: if kind == "polygon" && f64p(p, "starRatio").is_none() { 1.0 } else { ratio } }
         }
-        "line" => {
-            let (pf, pto, pw) = match prev {
-                Some(LiveShape::Line { from, to, weight }) => (Some(*from), Some(*to), *weight),
-                _ => (None, None, 1.0),
+        "arrow" => {
+            let (pf, pt, ph, pa) = match prev {
+                Some(LiveShape::Arrow { from, to, head_size, head_angle }) => (Some(*from), Some(*to), *head_size, *head_angle),
+                _ => (None, None, 16.0, 60.0),
             };
-            LiveShape::Line {
-                from: nums::<2>(p, "from").or(pf).ok_or_else(|| bad(cmd, "`from`: [x, y] is required"))?,
-                to: nums::<2>(p, "to").or(pto).ok_or_else(|| bad(cmd, "`to`: [x, y] is required"))?,
-                weight: f64p(p, "weight").unwrap_or(pw).max(0.0),
+            let point = |key, old| -> Result<[f64; 2]> {
+                let value = if let Some(v) = p.get(key) { v.as_array().filter(|a| a.len() == 2).and_then(|_| nums::<2>(p, key)) } else { old };
+                value
+                    .filter(|v| v.iter().all(|x| x.is_finite() && x.abs() <= 1_000_000.0))
+                    .ok_or_else(|| bad(cmd, format!("`{key}` must be two finite coordinates within ±1000000")))
+            };
+            let from = point("from", pf)?;
+            let to = point("to", pt)?;
+            let head_size = match p.get("headSize") {
+                Some(v) => v
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v > 0.0 && *v <= 10000.0)
+                    .ok_or_else(|| bad(cmd, "`headSize` must be greater than 0 and at most 10000 px"))?,
+                None => ph,
+            };
+            if (to[0] - from[0]).hypot(to[1] - from[1]) < 1e-6 {
+                return Err(bad(cmd, "arrow endpoints must be distinct"));
             }
+            let head_angle = match p.get("headAngle") {
+                Some(v) => v.as_f64().filter(|v| v.is_finite() && (10.0..=160.0).contains(v)).ok_or_else(|| bad(cmd, "`headAngle` must be 10–160 degrees"))?,
+                None => pa,
+            };
+            LiveShape::Arrow { from, to, head_size, head_angle }
+        }
+        "line" => {
+            let (pf, pto, pw, pr) = match prev {
+                Some(LiveShape::Line { from, to, weight, round_tips }) => (Some(*from), Some(*to), *weight, *round_tips),
+                _ => (None, None, 1.0, false),
+            };
+            let round_tips = match p.get("roundTips") {
+                Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`roundTips` must be a boolean"))?,
+                None => pr,
+            };
+            let point = |key: &str, old: Option<[f64; 2]>| -> Result<[f64; 2]> {
+                let value = if let Some(v) = p.get(key) { v.as_array().filter(|a| a.len() == 2).and_then(|_| nums::<2>(p, key)) } else { old };
+                value
+                    .filter(|v| v.iter().all(|x| x.is_finite() && x.abs() <= 1_000_000.0))
+                    .ok_or_else(|| bad(cmd, format!("`{key}` must be two finite coordinates within ±1000000")))
+            };
+            let from = point("from", pf)?;
+            let to = point("to", pto)?;
+            let weight = match p.get("weight") {
+                Some(v) => v.as_f64().filter(|v| v.is_finite() && (0.0..=10000.0).contains(v)).ok_or_else(|| bad(cmd, "`weight` must be 0–10000 px"))?,
+                None => pw,
+            };
+            if !from.iter().chain(to.iter()).all(|v| v.is_finite() && v.abs() <= 1e6) {
+                return Err(bad(cmd, "line coordinates must be finite and within ±1000000"));
+            }
+            LiveShape::Line { from, to, weight, round_tips }
         }
         o => return Err(bad(cmd, format!("unknown kind `{o}`"))),
     })
@@ -425,6 +484,7 @@ fn live_kind(l: &LiveShape) -> &'static str {
         LiveShape::Polygon { star_ratio, .. } if *star_ratio < 1.0 => "star",
         LiveShape::Polygon { .. } => "polygon",
         LiveShape::Line { .. } => "line",
+        LiveShape::Arrow { .. } => "arrow",
     }
 }
 
@@ -461,19 +521,42 @@ pub fn translate_vectors(doc: &Document, l: &mut Layer, dx: f64, dy: f64) {
 pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
     sh.path = sh.path.transform(a);
     let [m0, m1, m2, m3, tx, ty] = a.m;
+    if let Some(LiveShape::Arrow { from, to, head_size, head_angle }) = sh.live.as_ref() {
+        let (sx, sy) = (m0.hypot(m1), m2.hypot(m3));
+        let similarity = a.m.iter().all(|v| v.is_finite()) && sx > 1e-9 && (sx - sy).abs() <= sx * 1e-9 && (m0 * m2 + m1 * m3).abs() <= sx * sy * 1e-9;
+        let pt = |p: [f64; 2]| [m0 * p[0] + m2 * p[1] + tx, m1 * p[0] + m3 * p[1] + ty];
+        sh.live = similarity.then(|| LiveShape::Arrow { from: pt(*from), to: pt(*to), head_size: head_size * sx, head_angle: *head_angle });
+        if similarity && let Some(stroke) = sh.stroke.as_mut() {
+            stroke.width *= sx as f32;
+        }
+        sh.psd_raw = None;
+        return;
+    }
+    if let Some(LiveShape::Line { from, to, weight, round_tips: true }) = sh.live.as_ref() {
+        let (sx, sy) = (m0.hypot(m1), m2.hypot(m3));
+        let similarity = a.m.iter().all(|v| v.is_finite()) && sx > 1e-9 && (sx - sy).abs() <= sx * 1e-9 && (m0 * m2 + m1 * m3).abs() <= sx * sy * 1e-9;
+        let pt = |p: [f64; 2]| [m0 * p[0] + m2 * p[1] + tx, m1 * p[0] + m3 * p[1] + ty];
+        sh.live = similarity.then(|| LiveShape::Line { from: pt(*from), to: pt(*to), weight: weight * sx, round_tips: true });
+        if similarity && let Some(stroke) = sh.stroke.as_mut() {
+            stroke.width *= sx as f32;
+        }
+        sh.psd_raw = None;
+        return;
+    }
     let axis_aligned = m1.abs() < 1e-12 && m2.abs() < 1e-12 && m0 > 0.0 && m3 > 0.0;
     sh.live = match (sh.live.take(), axis_aligned) {
         (Some(l), true) => {
             let r = |r: [f64; 4]| [r[0] * m0 + tx, r[1] * m3 + ty, r[2] * m0, r[3] * m3];
             let pt = |p: [f64; 2]| [p[0] * m0 + tx, p[1] * m3 + ty];
             Some(match l {
+                LiveShape::Arrow { .. } => return, // handled above
                 LiveShape::Rect { rect, radii } => {
                     let k = m0.min(m3);
                     LiveShape::Rect { rect: r(rect), radii: radii.map(|v| v * k) }
                 }
                 LiveShape::Ellipse { rect } => LiveShape::Ellipse { rect: r(rect) },
                 LiveShape::Polygon { rect, sides, star_ratio } => LiveShape::Polygon { rect: r(rect), sides, star_ratio },
-                LiveShape::Line { from, to, weight } => LiveShape::Line { from: pt(from), to: pt(to), weight },
+                LiveShape::Line { from, to, weight, round_tips } => LiveShape::Line { from: pt(from), to: pt(to), weight, round_tips },
             })
         }
         // Flips and 90° turns keep rectangles, ellipses and lines live (Image Rotation): the new
@@ -490,7 +573,7 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
                     Some(LiveShape::Rect { rect: r(rect), radii: radii.map(|v| v * k) })
                 }
                 LiveShape::Ellipse { rect } => Some(LiveShape::Ellipse { rect: r(rect) }),
-                LiveShape::Line { from, to, weight } => Some(LiveShape::Line { from: pt(from), to: pt(to), weight: weight * k }),
+                LiveShape::Line { from, to, weight, round_tips } => Some(LiveShape::Line { from: pt(from), to: pt(to), weight: weight * k, round_tips }),
                 _ => None,
             }
         }
@@ -520,6 +603,7 @@ fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
 
 pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>) -> Result<R> {
     s.edit(label, |doc, _| {
+        crate::commands::check_pixels_unlocked(doc, id)?;
         let snapshot = doc.clone();
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if !matches!(l.content, LayerContent::Shape(_)) {
@@ -543,6 +627,7 @@ fn default_name(kind: &str) -> &'static str {
         "polygon" => "Polygon",
         "star" => "Star",
         "line" => "Line",
+        "arrow" => "Arrow",
         _ => "Shape",
     }
 }
@@ -561,11 +646,14 @@ fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
     let fill = match p.get("fill") {
         Some(v) => parse_fill(v).map_err(|e| bad(CMD, e))?,
+        None if kind == "arrow" => None,
         None => Some(Fill::Solid(fgc)),
     };
+    let default_stroke =
+        (kind == "arrow").then(|| ShapeStroke { width: 3.0, paint: Fill::Solid(fgc), cap: LineCap::Round, join: LineJoin::Round, ..Default::default() });
     let stroke = match p.get("stroke") {
-        Some(v) => parse_stroke(v, None, fgc).map_err(|e| bad(CMD, e))?,
-        None => None,
+        Some(v) => parse_stroke(v, default_stroke, fgc).map_err(|e| bad(CMD, e))?,
+        None => default_stroke,
     };
     // Add to an existing shape layer with a path operation (Shape tool in combine/subtract… mode).
     if let Some(target) = p.get("addTo").and_then(Value::as_u64) {
@@ -606,7 +694,7 @@ fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
             sh.live = None;
             sh.psd_raw = None;
         }
-        let geom_keys = ["kind", "rect", "radii", "radius", "sides", "starRatio", "from", "to", "weight"];
+        let geom_keys = ["kind", "rect", "radii", "radius", "sides", "starRatio", "from", "to", "weight", "headSize", "headAngle", "roundTips"];
         if geom_keys.iter().any(|k| p.get(*k).is_some()) {
             let kind = p.get("kind").and_then(Value::as_str).map(str::to_string).or_else(|| sh.live.as_ref().map(|l| live_kind(l).to_string()));
             let kind = kind.ok_or_else(|| bad(CMD, "this shape has no live-shape parameters; pass `kind` or `path`"))?;
@@ -661,7 +749,7 @@ fn shape_rasterize(s: &mut Session, p: &Value) -> Result<Value> {
             refresh_shape(&snapshot, sh);
         }
         let fmt = snapshot.pixel_format();
-        let surface = sh.cache.take().unwrap_or_else(|| photocraft_raster::Surface::new(fmt));
+        let surface = sh.cache.take().unwrap_or_else(|| prism_raster::Surface::new(fmt));
         let surface = if surface.format() == fmt { surface } else { surface.convert(fmt) };
         l.content = LayerContent::Raster(surface);
         l.psd_blocks.retain(|(k, _)| !SHAPE_BLOCKS.contains(&k));
@@ -763,6 +851,44 @@ fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     let path = resolve_path(s, name.as_deref())?;
     Ok(json!({ "name": name.unwrap_or_else(|| "work".into()), "path": path_json(&path) }))
+}
+
+/// Pen options bar › Make: Shape. A shape layer from a path, filled with the foreground colour
+/// by default; the work path becomes the layer's path (as in Photoshop), a saved path stays.
+fn path_make_shape(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.makeShape";
+    let name = p.get("name").and_then(Value::as_str).map(str::to_string);
+    let work = is_work(name.as_deref());
+    let path = if work {
+        s.active().ok_or(EngineError::NoDocument)?.doc.work_path.clone().ok_or_else(|| EngineError::Other("no work path".into()))?
+    } else {
+        resolve_path(s, name.as_deref())?
+    };
+    if path.is_empty() {
+        return Err(bad(CMD, "the path has no anchor points"));
+    }
+    let fg = s.tools.foreground;
+    let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+    let fill = match p.get("fill") {
+        Some(v) => parse_fill(v).map_err(|e| bad(CMD, e))?,
+        None => Some(Fill::Solid(fgc)),
+    };
+    let stroke = match p.get("stroke") {
+        Some(v) => parse_stroke(v, None, fgc).map_err(|e| bad(CMD, e))?,
+        None => None,
+    };
+    let mut sh = ShapeLayer { path, fill, stroke, ..Default::default() };
+    let id = s.edit("New Shape Layer", |doc, active| {
+        refresh_shape(doc, &mut sh);
+        let name = doc.next_layer_name(default_name("path"));
+        let id = doc.insert_above(*active, Layer::new(name, LayerContent::Shape(sh)));
+        *active = Some(id);
+        if work {
+            doc.work_path = None;
+        }
+        Ok(id)
+    })?;
+    shape_info(s, id)
 }
 
 fn path_delete(s: &mut Session, p: &Value) -> Result<Value> {
@@ -978,7 +1104,7 @@ fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Composites `src` × coverage onto a surface over `area` (any pixel format).
-fn paint_coverage(surf: &mut photocraft_raster::Surface, area: Rect, cov: &[f32], src: [f32; 4], opacity: f32, mode: BlendMode, lock_alpha: bool) {
+fn paint_coverage(surf: &mut prism_raster::Surface, area: Rect, cov: &[f32], src: [f32; 4], opacity: f32, mode: BlendMode, lock_alpha: bool) {
     let fmt = surf.format();
     let ch = fmt.channels();
     let mut vals = surf.read_region(area);
@@ -986,12 +1112,12 @@ fn paint_coverage(surf: &mut photocraft_raster::Surface, area: Rect, cov: &[f32]
         if *c <= 0.0 {
             continue;
         }
-        let dst = photocraft_raster::to_rgba(&fmt, px);
-        let mut out = photocraft_compose::psblend::composite(mode, dst, [src[0], src[1], src[2], src[3] * c], opacity);
+        let dst = prism_raster::to_rgba(&fmt, px);
+        let mut out = prism_compose::psblend::composite(mode, dst, [src[0], src[1], src[2], src[3] * c], opacity);
         if lock_alpha {
             out[3] = dst[3];
         }
-        photocraft_raster::from_rgba_into(&fmt, out, px);
+        prism_raster::from_rgba_into(&fmt, out, px);
     }
     surf.write_region(area, &vals);
     surf.prune();
@@ -1002,7 +1128,7 @@ fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let tool = p.get("tool").and_then(Value::as_str).unwrap_or("brush");
     let base = s.tools.brush.clone();
     let fg = s.tools.foreground;
-    let mut brush = photocraft_paint::BrushSettings {
+    let mut brush = prism_paint::BrushSettings {
         size: f64p(p, "size").map_or(base.size, |v| v as f32),
         hardness: f64p(p, "hardness").map_or(base.hardness, |v| v as f32),
         opacity: f64p(p, "opacity").map_or(base.opacity, |v| (v / 100.0) as f32),
@@ -1037,7 +1163,7 @@ fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let mut dmg = Rect::EMPTY;
         for pl in &lines {
-            let mut pts: Vec<photocraft_paint::StrokePoint> = pl.pts.iter().map(|&(x, y)| photocraft_paint::StrokePoint::new(x, y, 1.0)).collect();
+            let mut pts: Vec<prism_paint::StrokePoint> = pl.pts.iter().map(|&(x, y)| prism_paint::StrokePoint::new(x, y, 1.0)).collect();
             if pl.closed
                 && let Some(first) = pts.first().copied()
             {
@@ -1046,7 +1172,7 @@ fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
             if pts.is_empty() {
                 continue;
             }
-            let r = photocraft_paint::apply_stroke(surf, &photocraft_paint::Stroke { brush: brush.clone(), points: pts }, sel.as_ref(), lock);
+            let r = prism_paint::apply_stroke(surf, &prism_paint::Stroke { brush: brush.clone(), points: pts }, sel.as_ref(), lock);
             dmg = if dmg.is_empty() { r } else { dmg.union(&r) };
         }
         Ok(dmg)
@@ -1154,9 +1280,8 @@ fn vector_mask_rasterize(s: &mut Session, p: &Value) -> Result<Value> {
         let vm = l.vector_mask.take().ok_or_else(|| EngineError::Other("layer has no vector mask".into()))?;
         let vals = vector::vector_mask_values(&vm, area);
         let mut mask = l.mask.take().unwrap_or_else(|| {
-            let mut m = photocraft_doc::LayerMask::reveal_all();
-            m.surface =
-                photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, depth, false), &[1.0]);
+            let mut m = prism_doc::LayerMask::reveal_all();
+            m.surface = prism_raster::Surface::with_default(prism_color::PixelFormat::new(prism_color::ColorMode::Grayscale, depth, false), &[1.0]);
             m
         });
         // Outside the canvas the vector mask is 0 unless it is empty/inverted; keep the old default there.
@@ -1193,26 +1318,31 @@ fn merge_components(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_id(s, p)?;
     let tol = f64p(p, "tolerance").unwrap_or(0.1).clamp(0.05, 10.0);
     with_shape(s, id, "Merge Shape Components", |sh, _| {
-        // Trace at 4× resolution so the fitted outline follows the anti-aliased edge closely.
-        const K: f64 = 4.0;
-        let up = sh.path.transform(&Affine::scale(K));
-        let r = vector::fill_rasterizer(&up, vector::DEFAULT_TOLERANCE);
-        let Some(b) = r.pixel_bounds() else {
-            sh.path.subpaths.clear();
-            return Ok(());
-        };
-        let b = b.inflate(2);
-        if u64::from(b.width()) * u64::from(b.height()) > 400_000_000 {
-            return Err(EngineError::Other("shape too large to merge".into()));
-        }
-        let cov = r.render(b);
-        let traced = vector::trace::trace_mask(&cov, b, 0.0, tol * K);
-        sh.path = traced.transform(&Affine::scale(1.0 / K));
+        sh.path = merged_path(&sh.path, tol).map_err(EngineError::Other)?;
         sh.live = None;
         sh.psd_raw = None;
         Ok(())
     })?;
     shape_info(s, id)
+}
+
+/// `path` with its components merged into the outline of the area they fill together (traced
+/// with `tol`); empty when they fill nothing.
+pub(crate) fn merged_path(path: &Path, tol: f64) -> std::result::Result<Path, String> {
+    // Trace at 4× resolution so the fitted outline follows the anti-aliased edge closely.
+    const K: f64 = 4.0;
+    let up = path.transform(&Affine::scale(K));
+    let r = vector::fill_rasterizer(&up, vector::DEFAULT_TOLERANCE);
+    let Some(b) = r.pixel_bounds() else {
+        return Ok(Path { subpaths: Vec::new(), ..path.clone() });
+    };
+    let b = b.inflate(2);
+    if u64::from(b.width()) * u64::from(b.height()) > 400_000_000 {
+        return Err("shape too large to merge".into());
+    }
+    let cov = r.render(b);
+    let traced = vector::trace::trace_mask(&cov, b, 0.0, tol * K);
+    Ok(traced.transform(&Affine::scale(1.0 / K)))
 }
 
 fn selection_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1255,7 +1385,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Shape Layer",
             ["Layer", "New"],
             leak(format!(
-                r##"{{"kind":"rect|roundedRect|ellipse|polygon|star|line|path"="rect","rect":[x,y,w,h] (rect/roundedRect/ellipse/polygon/star),"radii":[tl,tr,br,bl]|r (roundedRect=10),"sides":3..100=5,"starRatio":0..1 (star=0.5),"from":[x,y],"to":[x,y],"weight":px=1 (line),"path":{{…}} (kind path),{fill}=foreground,{stroke}=none,"name":str?,"addTo":layerId? + "op":"combine|subtract|intersect|exclude" (append to an existing shape layer)}} → shape.info. {PATH_FORM}"##
+                r##"{{"kind":"rect|roundedRect|ellipse|polygon|star|line|arrow|path"="rect","rect":[x,y,w,h] (rect/roundedRect/ellipse/polygon/star),"radii":[tl,tr,br,bl]|r (roundedRect=10),"sides":3..100=5,"starRatio":0..1 (star=0.5),"from":[x,y],"to":[x,y],"weight":px=1 (line),"roundTips":bool=false (line),"headSize":px=16 (arrow wing length; 0 < size <= 10000),"headAngle":10..160=60,"path":{{…}} (kind path),{fill}=foreground,{stroke}=none,"name":str?,"addTo":layerId? + "op":"combine|subtract|intersect|exclude" (append to an existing shape layer)}} → shape.info. Arrow defaults: no fill, foreground 3px round-cap/round-join stroke. {PATH_FORM}"##
             )),
             has_doc,
             shape_create
@@ -1265,7 +1395,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Shape",
             [],
             leak(format!(
-                r##"{{"layer":id?,"path":{{…}}? (replaces; drops live shape),"kind":str?,"rect":[x,y,w,h]?,"radii":[tl,tr,br,bl]|r?,"sides":n?,"starRatio":r?,"from":[x,y]?,"to":[x,y]?,"weight":px? (live-shape params regenerate the path),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"op":"combine|…"? + "subpath":index? (default all but the first),"fillRule":"nonzero|evenodd"?,{fill}?,{stroke}? (merged into the current stroke),"name":str?}} → shape.info"##
+                r##"{{"layer":id?,"path":{{…}}? (replaces; drops live shape),"kind":str?,"rect":[x,y,w,h]?,"radii":[tl,tr,br,bl]|r?,"sides":n?,"starRatio":r?,"from":[x,y]?,"to":[x,y]?,"weight":px?,"roundTips":bool?,"headSize":px?,"headAngle":degrees? (live-shape params regenerate the path),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"op":"combine|…"? + "subpath":index? (default all but the first),"fillRule":"nonzero|evenodd"?,{fill}?,{stroke}? (merged into the current stroke),"name":str?}} → shape.info"##
             )),
             has_layer,
             shape_edit
@@ -1319,6 +1449,16 @@ pub fn specs() -> Vec<CommandSpec> {
             path_set
         ),
         spec!("path.delete", "Delete Path", [], r##"{"name":str|"work"="work"}"##, has_doc, path_delete),
+        spec!(
+            "path.makeShape",
+            "Make Shape",
+            [],
+            leak(format!(
+                r##"{{"name":str|"work"|"layer"="work" (the work path becomes the new layer's path; a saved path stays),{fill}=foreground,{stroke}=none}} → shape.info (Pen options bar › Make: Shape)"##
+            )),
+            has_doc,
+            path_make_shape
+        ),
         spec!(
             "path.transform",
             "Free Transform Path",

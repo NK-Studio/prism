@@ -111,13 +111,14 @@ pub enum Tool {
     Triangle,
     Polygon,
     Line,
+    Arrow,
     CustomShape,
     Slice,
     SliceSelect,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 52] = [
+    pub const ALL: [Tool; 53] = [
         Tool::Move,
         Tool::RectMarquee,
         Tool::EllipseMarquee,
@@ -167,6 +168,7 @@ impl Tool {
         Tool::Triangle,
         Tool::Polygon,
         Tool::Line,
+        Tool::Arrow,
         Tool::CustomShape,
         Tool::Slice,
         Tool::SliceSelect,
@@ -225,6 +227,7 @@ impl Tool {
             Tool::Triangle => "Triangle Tool",
             Tool::Polygon => "Polygon Tool",
             Tool::Line => "Line Tool",
+            Tool::Arrow => "Arrow Tool",
             Tool::CustomShape => "Custom Shape Tool",
         }
     }
@@ -278,7 +281,7 @@ impl Tool {
             Tool::QuickSelection | Tool::ObjectSelection => 'W',
             Tool::Pen => 'P',
             Tool::PathSelection | Tool::DirectSelection => 'A',
-            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => 'U',
+            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::Arrow | Tool::CustomShape => 'U',
         }
     }
     /// Glyph drawn in the toolbar (vector icons come later).
@@ -364,7 +367,7 @@ pub struct Dialog {
     #[serde(default)]
     pub presentation: DialogPresentation,
     #[serde(default)]
-    pub source_document: Option<photocraft_doc::DocId>,
+    pub source_document: Option<prism_doc::DocId>,
     #[serde(default)]
     pub source_revision: Option<u64>,
     #[serde(default)]
@@ -384,7 +387,7 @@ pub enum DialogPresentation {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DocumentContextMenu {
-    pub document: photocraft_doc::DocId,
+    pub document: prism_doc::DocId,
     pub window: Option<u64>,
 }
 
@@ -466,12 +469,13 @@ pub struct ToolOptions {
     /// true = "Classic gradient" (paints the pixels).
     pub gradient_classic: bool,
     /// Blend mode used by both live and classic gradient drags.
-    pub gradient_blend_mode: photocraft_color::BlendMode,
+    pub gradient_blend_mode: prism_color::BlendMode,
     pub fill_opacity: f32,
     /// Paint Bucket fill source: false = Foreground colour, true = Pattern (Patterns panel selection).
     pub bucket_fill_pattern: bool,
     /// Type tool: family, style name, size (pt), anti-aliasing and paragraph alignment.
     pub type_font: String,
+    pub type_font_filter: TypeFontFilter,
     pub type_style: String,
     pub type_size: f32,
     pub type_aa: String,
@@ -511,6 +515,19 @@ pub struct ToolOptions {
     pub enhance_edge: bool,
     /// Pen: "path" (work path) or "shape" (shape layer).
     pub vector_mode: String,
+    /// Pen options bar › Path Operations for the next subpath: in Path mode
+    /// "combine|subtract|intersect|exclude"; in Shape mode also "new" (a new shape layer; the
+    /// others add to the selected shape layer).
+    pub pen_path_op: String,
+    pub pen_shape_op: String,
+    /// Pen gear menu › Rubber Band: preview the next segment while moving the pointer.
+    pub pen_rubber_band: bool,
+    /// Pen: clicking a path segment adds an anchor point, clicking an anchor deletes it.
+    pub pen_auto_add_delete: bool,
+    /// Pen in Shape mode: snap anchor points to the pixel grid.
+    pub pen_align_edges: bool,
+    /// Pen › Path Alignment › Align To: the canvas (else the components' own bounds).
+    pub pen_align_canvas: bool,
     /// Shape tools: fill with the foreground colour, stroke width (0 = none), rectangle corner
     /// radius, polygon sides, line weight.
     pub shape_fill: bool,
@@ -518,6 +535,8 @@ pub struct ToolOptions {
     pub corner_radius: f32,
     pub polygon_sides: u32,
     pub line_weight: f32,
+    pub line_round_tips: bool,
+    pub arrow: ArrowOptions,
     /// Marquee options bar: "normal" | "fixedRatio" | "fixedSize", with the ratio or size.
     #[serde(default = "default_marquee_style")]
     pub marquee_style: String,
@@ -604,10 +623,11 @@ impl Default for ToolOptions {
             gradient_reverse: false,
             gradient_dither: true,
             gradient_classic: false,
-            gradient_blend_mode: photocraft_color::BlendMode::Normal,
+            gradient_blend_mode: prism_color::BlendMode::Normal,
             fill_opacity: 100.0,
             bucket_fill_pattern: false,
             type_font: "Inter".into(),
+            type_font_filter: TypeFontFilter::All,
             type_style: "Regular".into(),
             type_size: 48.0,
             type_aa: "sharp".into(),
@@ -633,11 +653,19 @@ impl Default for ToolOptions {
             finger_painting: false,
             enhance_edge: false,
             vector_mode: "path".into(),
+            pen_path_op: "combine".into(),
+            pen_shape_op: "new".into(),
+            pen_rubber_band: false,
+            pen_auto_add_delete: true,
+            pen_align_edges: true,
+            pen_align_canvas: false,
             shape_fill: true,
             stroke_width: 0.0,
             corner_radius: 0.0,
             polygon_sides: 5,
             line_weight: 3.0,
+            line_round_tips: false,
+            arrow: ArrowOptions::default(),
             marquee_style: default_marquee_style(),
             marquee_width: 1.0,
             marquee_height: 1.0,
@@ -704,7 +732,7 @@ pub struct TransformSession {
     pub interpolation: String,
     /// Warp mode (Edit › Transform › Warp): the warp being edited over `rect`, in document px.
     #[serde(default)]
-    pub warp: Option<photocraft_geom::warp::Warp>,
+    pub warp: Option<prism_geom::warp::Warp>,
     /// Select › Transform Selection: the box transforms the selection outline, not pixels.
     #[serde(default)]
     pub selection: bool,
@@ -757,7 +785,7 @@ pub struct TextEdit {
 pub struct TypeTransform {
     pub document: u64,
     pub revision: u64,
-    pub original: photocraft_geom::Affine,
+    pub original: prism_geom::Affine,
     pub frame: TransformSession,
     pub(crate) gesture: crate::transform_tool::Gesture,
 }
@@ -794,12 +822,24 @@ pub struct DockTabs {
     pub character: usize,
 }
 
+/// Color panel presentation; tool colours remain in the engine.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ColorPanelMode {
+    #[default]
+    HueCube,
+    BrightnessCube,
+    ColorWheel,
+    HsbSliders,
+}
+
 /// Color panel state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ColorPanelState {
     /// The panel edits the background colour (its chip was clicked), not the foreground.
     pub background: bool,
+    pub mode: ColorPanelMode,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -855,7 +895,7 @@ pub struct UiState {
     #[serde(default = "default_brush_tool")]
     pub brush_tool: Tool,
     #[serde(default)]
-    pub tool_brushes: Vec<(Tool, photocraft_engine::paint::BrushSettings)>,
+    pub tool_brushes: Vec<(Tool, prism_engine::paint::BrushSettings)>,
     /// Pen path under construction.
     #[serde(default)]
     pub pen: Option<crate::vector_ui::PenPath>,
@@ -865,6 +905,9 @@ pub struct UiState {
     /// Live rectangle corner gesture, exposed to automation but never restored as a held pointer.
     #[serde(default, skip_deserializing)]
     pub shape_corners: Option<crate::shape_corners_ui::CornerDrag>,
+    /// Live arrow gesture, inspectable but never restored as a held pointer.
+    #[serde(default, skip_deserializing)]
+    pub arrow_handles: Option<crate::arrow_handles_ui::ArrowDrag>,
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
@@ -908,7 +951,7 @@ pub struct UiState {
     pub windows: Vec<DocWindow>,
     /// Last document displayed in the main workspace; panels can follow a different window.
     #[serde(default)]
-    pub main_document: Option<photocraft_doc::DocId>,
+    pub main_document: Option<prism_doc::DocId>,
     #[serde(default)]
     pub active_window: Option<u64>,
     pub theme: crate::theme::ThemeKind,
@@ -1005,6 +1048,7 @@ impl Default for UiState {
             pen: None,
             direct_selection: Default::default(),
             shape_corners: None,
+            arrow_handles: None,
             selected_path: None,
             panels: Panels::default(),
             views: Vec::new(),
@@ -1095,7 +1139,9 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 52);
+        assert_eq!(Tool::ALL.len(), 53);
+        assert_eq!(Tool::from_name("arrow"), Some(Tool::Arrow));
+        assert_eq!(Tool::Arrow.key(), 'U');
         assert_eq!(Tool::from_name("RotateView"), Some(Tool::RotateView));
         assert_eq!(Tool::from_name("Rotate View Tool"), Some(Tool::RotateView));
         assert_eq!(Tool::RotateView.key(), 'R');
@@ -1143,5 +1189,39 @@ mod tests {
         assert_eq!(v["tool"], "Brush");
         let back: UiState = serde_json::from_value(v).unwrap();
         assert_eq!(back, s);
+    }
+}
+
+/// Font menu view filter; canonical family identifiers remain unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeFontFilter {
+    #[default]
+    All,
+    Korean,
+}
+
+/// Persistent defaults for the annotation arrow tool (document pixels).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArrowOptions {
+    pub width: f32,
+    pub head_size: f32,
+    pub head_angle: f32,
+    pub rounded: bool,
+}
+impl Default for ArrowOptions {
+    fn default() -> Self {
+        Self { width: 3.0, head_size: 16.0, head_angle: 60.0, rounded: true }
+    }
+}
+impl ArrowOptions {
+    pub(crate) fn valid(&self) -> bool {
+        self.width.is_finite()
+            && (0.1..=1000.0).contains(&self.width)
+            && self.head_size.is_finite()
+            && (0.1..=10000.0).contains(&self.head_size)
+            && self.head_angle.is_finite()
+            && (10.0..=160.0).contains(&self.head_angle)
     }
 }

@@ -1,5 +1,5 @@
 [package]
-name = "photocraft-heif"
+name = "prism-heif"
 description = "Optional HEIF/HEIC still-image decoder for Prism (a thin, panic-guarded wrapper around heic-rs)"
 version.workspace = true
 edition.workspace = true

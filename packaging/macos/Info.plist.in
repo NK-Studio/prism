@@ -13,7 +13,7 @@
   <key>CFBundleExecutable</key>
   <string>Prism</string>
   <key>CFBundleIdentifier</key>
-  <string>ai.storyteller.photocraft</string>
+  <string>com.nkstudio.prism</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundlePackageType</key>
@@ -24,9 +24,9 @@
   <string>@SHORT_VERSION@</string>
   <key>CFBundleVersion</key>
   <string>@SHORT_VERSION@</string>
-  <key>PhotoCraftVersion</key>
+  <key>PrismVersion</key>
   <string>@VERSION@</string>
-  <key>PhotoCraftBuildCommit</key>
+  <key>PrismBuildCommit</key>
   <string>@BUILD_SHA@</string>
   <key>CFBundleIconFile</key>
   <string>Prism</string>
@@ -43,14 +43,14 @@
   <key>NSRequiresAquaSystemAppearance</key>
   <false/>
   <key>NSHumanReadableCopyright</key>
-  <string>Copyright © the PhotoCraft authors. MIT OR Apache-2.0.</string>
+  <string>Copyright © 2026 NK Studio.</string>
 
-  <!-- Photocraft's own format. -->
+  <!-- Prism's own format. -->
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>
       <key>UTTypeIdentifier</key>
-      <string>ai.storyteller.photocraft.document</string>
+      <string>com.nkstudio.prism.document</string>
       <key>UTTypeDescription</key>
       <string>Prism Document</string>
       <key>UTTypeConformsTo</key>
@@ -63,15 +63,24 @@
       <key>UTTypeTagSpecification</key>
       <dict>
         <key>public.filename-extension</key>
-        <array><string>pcraft</string></array>
+        <array><string>prism</string><string>pcraft</string></array>
         <key>public.mime-type</key>
-        <array><string>application/x-photocraft</string></array>
+        <array><string>application/x-prism</string></array>
       </dict>
     </dict>
   </array>
   <!-- Types macOS may not know; the system's own declaration wins when it has one. -->
   <key>UTImportedTypeDeclarations</key>
   <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>ai.storyteller.photocraft.document</string>
+      <key>UTTypeDescription</key><string>Prism Document (Legacy)</string>
+      <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+      <key>UTTypeTagSpecification</key><dict>
+        <key>public.filename-extension</key><array><string>pcraft</string></array>
+        <key>public.mime-type</key><array><string>application/x-photocraft</string></array>
+      </dict>
+    </dict>
     <dict>
       <key>UTTypeIdentifier</key>
       <string>com.adobe.photoshop-large-image</string>
@@ -90,7 +99,7 @@
     </dict>
     <dict>
       <key>UTTypeIdentifier</key>
-      <string>ai.storyteller.photocraft.qoi</string>
+      <string>com.nkstudio.prism.qoi</string>
       <key>UTTypeDescription</key>
       <string>QOI Image</string>
       <key>UTTypeConformsTo</key>
@@ -118,7 +127,7 @@
       <key>CFBundleTypeIconFile</key>
       <string>Prism</string>
       <key>LSItemContentTypes</key>
-      <array><string>ai.storyteller.photocraft.document</string></array>
+      <array><string>com.nkstudio.prism.document</string><string>ai.storyteller.photocraft.document</string></array>
     </dict>
     <dict>
       <key>CFBundleTypeName</key>
@@ -154,7 +163,7 @@
         <string>com.ilm.openexr-image</string>
         <string>public.radiance</string>
         <string>public.avif</string>
-        <string>ai.storyteller.photocraft.qoi</string>
+        <string>com.nkstudio.prism.qoi</string>
       </array>
     </dict>
   </array>

@@ -56,7 +56,7 @@ jobs:
         if: runner.os == 'macOS'
         run: cargo fmt --all -- --check
 
-      # `--features heif`: official builds open HEIC photos via the optional photocraft-heif crate.
+      # `--features heif`: official builds open HEIC photos via the optional prism-heif crate.
       - name: Test
         run: cargo test --workspace --locked --features heif
 
@@ -64,13 +64,13 @@ jobs:
       # error for distributors who leave it out.
       - name: Test without heif
         if: runner.os == 'macOS'
-        run: cargo test -p photocraft-heif -p photocraft-codecs -p photocraft-io --locked
+        run: cargo test -p prism-heif -p prism-codecs -p prism-io --locked
 
       # The same tests built with the optional craft-fonts input (crates/text/build.rs), so the
       # Japanese font tests that skip without it run here. macOS only. Keep the exact `--workspace
       # --features heif` of the Test step: any other package or feature selection resolves a
       # different feature set, recompiles the whole dependency graph into the same target dir and
-      # runs the runner out of disk (as `-p photocraft-text -p photocraft-ui-egui` did after #800).
+      # runs the runner out of disk (as `-p prism-text -p prism-ui-egui` did after #800).
       - name: Check out craft-fonts
         if: runner.os == 'macOS'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

@@ -73,49 +73,49 @@ The test is simple: **adding 64-bit float, a new colour model, or a new file for
 ## 2. Workspace layout
 
 ```text
-photocraft/
+prism/
 ├─ Cargo.toml                  # [workspace], shared deps, lints, profiles
 ├─ crates/
 │  │  ── foundation (no_std-friendly where practical, portable) ──
-│  ├─ geom/                    photocraft-geom      points, rects, affine/perspective, tile coords, bezier (kurbo)
-│  ├─ cms/                     photocraft-cms       pure-Rust ICC colour management: profiles, transforms, intents, BPC, soft proof, 3D LUTs
-│  ├─ color/                   photocraft-color     pixel formats, color spaces, blend-mode math (scalar reference); conversions via cms
-│  ├─ raster/                  photocraft-raster    tiled COW surfaces, masks, mip pyramids, damage regions, pixel iterators
+│  ├─ geom/                    prism-geom      points, rects, affine/perspective, tile coords, bezier (kurbo)
+│  ├─ cms/                     prism-cms       pure-Rust ICC colour management: profiles, transforms, intents, BPC, soft proof, 3D LUTs
+│  ├─ color/                   prism-color     pixel formats, color spaces, blend-mode math (scalar reference); conversions via cms
+│  ├─ raster/                  prism-raster    tiled COW surfaces, masks, mip pyramids, damage regions, pixel iterators
 │  │  ── document ──
-│  ├─ doc/                     photocraft-doc       document model: layer tree, masks, effects, channels, paths, guides, metadata (pure data + serde)
-│  ├─ ops/                     photocraft-ops       reversible operations on a doc + transactions + history/undo
+│  ├─ doc/                     prism-doc       document model: layer tree, masks, effects, channels, paths, guides, metadata (pure data + serde)
+│  ├─ ops/                     prism-ops       reversible operations on a doc + transactions + history/undo
 │  │  ── algorithms (CPU reference impls, rayon, portable) ──
-│  ├─ algo/                    photocraft-algo      adjustments, filters, selection, inpaint/heal, warp/transform, resampling
-│  ├─ paint/                   photocraft-paint     brush engine: dabs, dynamics, stroke smoothing, brush presets (.abr import later)
-│  ├─ text/                    photocraft-text      font DB trait, shaping + layout (parley/skrifa/harfrust), text-layer rasterization
-│  ├─ vector/                  photocraft-vector    shapes, paths, strokes → coverage (vello_cpu / kurbo)
+│  ├─ algo/                    prism-algo      adjustments, filters, selection, inpaint/heal, warp/transform, resampling
+│  ├─ paint/                   prism-paint     brush engine: dabs, dynamics, stroke smoothing, brush presets (.abr import later)
+│  ├─ text/                    prism-text      font DB trait, shaping + layout (parley/skrifa/harfrust), text-layer rasterization
+│  ├─ vector/                  prism-vector    shapes, paths, strokes → coverage (vello_cpu / kurbo)
 │  │  ── rendering ──
-│  ├─ compose/                 photocraft-compose   layer tree → DrawOp plan; CPU compositor (reference + export)
-│  ├─ gpu/                     photocraft-gpu       wgpu backend for the DrawOp plan + GPU kernels (WGSL), residency cache, memory budget
-│  ├─ viewport/                photocraft-viewport  camera (zoom/pan/rotate), visible tiles/mips, renders a doc into a wgpu texture; toolkit-agnostic
+│  ├─ compose/                 prism-compose   layer tree → DrawOp plan; CPU compositor (reference + export)
+│  ├─ gpu/                     prism-gpu       wgpu backend for the DrawOp plan + GPU kernels (WGSL), residency cache, memory budget
+│  ├─ viewport/                prism-viewport  camera (zoom/pan/rotate), visible tiles/mips, renders a doc into a wgpu texture; toolkit-agnostic
 │  │  ── I/O ──
-│  ├─ psd/                     photocraft-psd       PSD/PSB read + write; its OWN format-level model; depends on nothing in this workspace
-│  ├─ adobe-assets/            photocraft-adobe-assets  .abr .asl .aco/.ase .grd .pat .csh .atn .cube/.3dl, ACR .xmp presets (standalone, like psd)
-│  ├─ codecs/                  photocraft-codecs    png/jpeg/tiff/webp/gif/bmp/avif decode/encode, heif/heic decode (feature `heif`)
-│  ├─ heif/                    photocraft-heif      optional HEIF/HEIC decoder (heic-rs, pure Rust); used only by codecs behind its `heif` feature (standalone)
-│  ├─ affinity/                photocraft-affinity  bounded native Affinity reader: archive, object stream, layers, vectors, text, pixels (standalone; read only)
-│  ├─ raw/                     photocraft-raw       clean-room camera RAW decode (DNG, CR2, TIFF/EP) + develop pipeline (standalone, like psd)
-│  ├─ format/                  photocraft-format    native document format (.pcraft bundle): manifest + content-addressed tiles
-│  ├─ io/                      photocraft-io        import/export orchestration; doc ⇄ PSD mapping; PDF/SVG import (features)
+│  ├─ psd/                     prism-psd       PSD/PSB read + write; its OWN format-level model; depends on nothing in this workspace
+│  ├─ adobe-assets/            prism-adobe-assets  .abr .asl .aco/.ase .grd .pat .csh .atn .cube/.3dl, ACR .xmp presets (standalone, like psd)
+│  ├─ codecs/                  prism-codecs    png/jpeg/tiff/webp/gif/bmp/avif decode/encode, heif/heic decode (feature `heif`)
+│  ├─ heif/                    prism-heif      optional HEIF/HEIC decoder (heic-rs, pure Rust); used only by codecs behind its `heif` feature (standalone)
+│  ├─ affinity/                prism-affinity  bounded native Affinity reader: archive, object stream, layers, vectors, text, pixels (standalone; read only)
+│  ├─ raw/                     prism-raw       clean-room camera RAW decode (DNG, CR2, TIFF/EP) + develop pipeline (standalone, like psd)
+│  ├─ format/                  prism-format    native document format (.prism bundle): manifest + content-addressed tiles
+│  ├─ io/                      prism-io        import/export orchestration; doc ⇄ PSD mapping; PDF/SVG import (features)
 │  │  ── intelligence ──
-│  ├─ ml/                      photocraft-ml        model registry + InferenceBackend trait (ort native); SAM2, matting, depth, sky
-│  ├─ plugins/                 photocraft-plugins   sandboxed WebAssembly filter plug-ins (wasmi host, limits, ABI v1, registry)
+│  ├─ ml/                      prism-ml        model registry + InferenceBackend trait (ort native); SAM2, matting, depth, sky
+│  ├─ plugins/                 prism-plugins   sandboxed WebAssembly filter plug-ins (wasmi host, limits, ABI v1, registry)
 │  │  ── the façade every frontend talks to ──
-│  ├─ tools/                   photocraft-tools     tool state machines (move, marquee, lasso, brush, clone, gradient, crop, transform, pen, text…)
-│  ├─ engine/                  photocraft-engine    Session: open docs, command registry + dispatch, jobs, events, view-models, preferences
+│  ├─ tools/                   prism-tools     tool state machines (move, marquee, lasso, brush, clone, gradient, crop, transform, pen, text…)
+│  ├─ engine/                  prism-engine    Session: open docs, command registry + dispatch, jobs, events, view-models, preferences
 │  │  ── platform + frontends ──
-│  ├─ platform/                photocraft-platform  traits: file dialogs, clipboard, fonts, tablet input, menus, storage; native impls
-│  ├─ ui-egui/                 photocraft-ui-egui   the (first) GUI shell: panels, dialogs, canvas widget, theme
-│  ├─ automation/              photocraft-automation  MCP server (rmcp) + JSON-RPC over the command registry
-│  └─ testkit/                 photocraft-testkit   golden images, perceptual diff, fixtures, PSD corpus helpers
+│  ├─ platform/                prism-platform  traits: file dialogs, clipboard, fonts, tablet input, menus, storage; native impls
+│  ├─ ui-egui/                 prism-ui-egui   the (first) GUI shell: panels, dialogs, canvas widget, theme
+│  ├─ automation/              prism-automation  MCP server (rmcp) + JSON-RPC over the command registry
+│  └─ testkit/                 prism-testkit   golden images, perceptual diff, fixtures, PSD corpus helpers
 ├─ apps/
-│  ├─ photocraft/              desktop binary (winit + wgpu + ui-egui + platform-native)
-│  ├─ photocraft-cli/          headless batch CLI (open → commands → export), also hosts `mcp` subcommand
+│  ├─ prism/              desktop binary (winit + wgpu + ui-egui + platform-native)
+│  ├─ prism-cli/          headless batch CLI (open → commands → export), also hosts `mcp` subcommand
 ├─ shaders/                    (or inside gpu/) WGSL, with generated struct headers
 ├─ assets/                     icons, bundled fonts, default brushes/swatches/presets
 ├─ fuzz/                       cargo-fuzz targets (psd, codecs, format)
@@ -127,7 +127,7 @@ photocraft/
 
 **Crate granularity:** start with the crates above. Split `algo` into `-adjust`, `-filters`, `-select`, `-inpaint` and `-warp` once any module passes about 10k lines, or once compile times hurt. Its internal module boundaries should already follow those lines.
 
-**Naming:** directories are short and packages are prefixed `photocraft-`. `photocraft-psd` gets a neutral, publishable name (such as `psd-rw`) if we release it to crates.io.
+**Naming:** directories are short and packages are prefixed `prism-`. `prism-psd` gets a neutral, publishable name (such as `psd-rw`) if we release it to crates.io.
 
 ---
 
@@ -148,7 +148,7 @@ photocraft/
 
 1. A crate may depend only on crates in **lower** layers. No cycles and no sideways dependencies, except where listed.
 2. **Nothing below L6 may depend on any UI toolkit, winit, or a `platform` implementation.** Platform services reach the engine through traits defined in `engine` (or in `platform`'s trait-only core), and are injected at startup.
-3. **`photocraft-psd` depends on no workspace crate.** The doc ⇄ PSD mapping lives in `io`. This keeps the PSD crate publishable and reusable by other projects. The same holds for every standalone crate, with one documented exception: `codecs` → `heif` (both standalone and publishable; `STANDALONE_EXCEPTIONS` in `xtask/src/layers.rs`).
+3. **`prism-psd` depends on no workspace crate.** The doc ⇄ PSD mapping lives in `io`. This keeps the PSD crate publishable and reusable by other projects. The same holds for every standalone crate, with one documented exception: `codecs` → `heif` (both standalone and publishable; `STANDALONE_EXCEPTIONS` in `xtask/src/layers.rs`).
 4. **Native targets:** build and test the desktop app on macOS, Windows and FreeBSD.
 5. `gpu` is optional for `engine`. Engine features are `gpu` (default on) and `cpu-only`, and `cpu-only` builds are what the headless CLI and CI tests use.
 6. **C dependencies** (optional LibRaw, pdfium) only behind features, only in `codecs`, `raw` or `io`.
@@ -162,7 +162,7 @@ A frontend needs exactly five things from the core. Keeping these small and data
 ### 4.1 `Session`: commands in, events out
 
 ```rust
-// photocraft-engine
+// prism-engine
 pub struct Session { /* docs, registry, job pool, prefs, services */ }
 
 impl Session {
@@ -189,13 +189,13 @@ Each command registers the following:
 **Consumers:**
 - The GUI builds the menu bar, the ⌘K palette and the shortcut editor from it.
 - `automation` exposes the registry as MCP tools.
-- `photocraft-cli` exposes `photocraft-cli run in.psd --cmd filter.blur.gaussianBlur --params '{"radius":4}' --out out.png`.
+- `prism-cli` exposes `prism-cli run in.psd --cmd filter.blur.gaussianBlur --params '{"radius":4}' --out out.png`.
 - Action recording is simply `Vec<CommandInvocation>`.
 
 ### 4.3 Tools: pointer events in, ops and overlays out
 
 ```rust
-// photocraft-tools
+// prism-tools
 pub struct PointerEvent { pub pos_doc: Point, pub pressure: f32, pub tilt: Vector, pub twist: f32,
                           pub time_us: u64, pub buttons: Buttons, pub mods: Modifiers, pub kind: PointerKind /* mouse|pen|eraser|touch */ }
 
@@ -218,7 +218,7 @@ Coalesced high-rate pen samples come from `platform` and are handed to tools as 
 ### 4.4 Viewport: document to pixels
 
 ```rust
-// photocraft-viewport
+// prism-viewport
 pub struct Viewport { pub camera: Camera /* zoom, pan, rotation, dpr */, /* tile/mip cache */ }
 impl Viewport {
     pub fn render_gpu(&mut self, snap: &DocSnapshot, gpu: &GpuContext, target: &wgpu::TextureView, damage: &Region);
@@ -235,11 +235,11 @@ impl Viewport {
 - Panels (Layers, History, Channels, Paths, Properties, Navigator, Histogram, Swatches) read plain structs produced from a snapshot, such as `LayersModel { rows: Vec<LayerRow{ id, name, kind, depth, visible, locked, thumb: ThumbHandle, blend, opacity, has_mask, effects: Vec<..> }> }`. Thumbnails are `ThumbHandle`s that the UI resolves to textures through an engine thumbnail cache.
 - Dialogs are generated from command `params` schemas. A toolkit may register *custom* dialog widgets for a few complex commands: Curves, Levels, Camera Raw, Liquify, Layer Style.
 
-**Litmus test for the seam:** `apps/photocraft-cli` and the automation server must be able to do *everything* the GUI does, except pointer painting, which they do by replaying `PointerEvent` streams through tools.
+**Litmus test for the seam:** `apps/prism-cli` and the automation server must be able to do *everything* the GUI does, except pointer painting, which they do by replaying `PointerEvent` streams through tools.
 
 ---
 
-## 5. Document model (`photocraft-doc`)
+## 5. Document model (`prism-doc`)
 
 ```rust
 pub struct Document {
@@ -276,7 +276,7 @@ pub enum LayerContent {
 
 ---
 
-## 6. Operations and history (`photocraft-ops`)
+## 6. Operations and history (`prism-ops`)
 
 - **Every mutation is an `Op`**, such as `SetLayerProps`, `PaintTiles{layer, tiles_before, tiles_after}`, `AddLayer`, `MoveLayer` or `ApplyFilter`.
 - **A command produces a `Transaction` of ops** with a label ("Gaussian Blur").
@@ -317,7 +317,7 @@ Both backends consume the same plan. This is the only place that encodes Photosh
 ### 7.3 Color
 
 - Blending happens in document space by default, which is Photoshop-compatible. A per-document "linear light blending" option is also available.
-- **Display transform** (`engine/src/display_color.rs`): the canvas is always colour-managed, document profile → monitor profile (relative colorimetric + BPC), cached per (document profile, mode, monitor). On the GPU canvas the transform, plus Proof Colors / Gamut Warning / 32-bit preview, is baked into a 33³ 3D LUT the canvas shader's final pass applies; the CPU canvas runs an 8-bit `photocraft-cms` transform on the composite. When the document profile matches the monitor (sRGB on sRGB) there is no LUT and no transform. Linear composites (EXR/HDR, tagged linear sRGB on import) are stored sRGB-encoded in the 8-bit canvas texture. CMYK documents are read through their embedded CMYK profile (`photocraft_color::convert::with_cmyk_space`, entered by the compositors and composite exports).
+- **Display transform** (`engine/src/display_color.rs`): the canvas is always colour-managed, document profile → monitor profile (relative colorimetric + BPC), cached per (document profile, mode, monitor). On the GPU canvas the transform, plus Proof Colors / Gamut Warning / 32-bit preview, is baked into a 33³ 3D LUT the canvas shader's final pass applies; the CPU canvas runs an 8-bit `prism-cms` transform on the composite. When the document profile matches the monitor (sRGB on sRGB) there is no LUT and no transform. Linear composites (EXR/HDR, tagged linear sRGB on import) are stored sRGB-encoded in the 8-bit canvas texture. CMYK documents are read through their embedded CMYK profile (`prism_color::convert::with_cmyk_space`, entered by the compositors and composite exports).
 - **Monitor profile:** Edit › Color Settings › Monitor Profile: `auto`, a built-in RGB profile or an `.icc` path. In `auto` each window uses the profile of the display it is on (#569): the desktop app reads every display's id, name, frame and ICC profile (macOS: AppKit `NSScreen` through `osascript`, no FFI) at launch and again when the app comes back to the front, when any window is on an unknown or resized display (at most every 30 s; a trigger inside that window is deferred) and when Edit › Color Settings opens (`ui-egui/src/monitor_status.rs`; the helper is stopped after 10 s). There is deliberately no periodic re-read (#569 decision: a read costs about 0.2 s of CPU), so a profile reassigned while Prism stays in front with no window moving is picked up at the next return to the front or Color Settings, and each window picks the display it overlaps most (`display_color::display_at`, AppKit's `NSWindow.screen` rule). Elsewhere `auto` is sRGB. The GPU canvas keeps one texture per document and a display LUT per (document, display); CPU canvas textures are per (document, display). `ColorState::monitor_status_for` says what is applied per display: `auto`, `manual`, or `fallback` to sRGB with the reason (missing, unreadable, non-RGB or unusable as a destination), and whether the reading is an earlier one kept after a failed re-read; `edit.colorSettings` (`monitorStatus`, `displays`), Help › System Info and the Color Settings dialog show it, and a fallback in `auto` posts a notice. Letting macOS colour-match the canvas instead is #581 (an architecture decision).
 - **HDR/EDR output** (an `rgba16float` surface with an extended-range colorspace) is a later-phase feature. The interfaces already carry `f32` pixels.
 
@@ -327,7 +327,7 @@ Both backends consume the same plan. This is the only place that encodes Photosh
 
 ---
 
-## 8. `photocraft-psd`: standalone PSD/PSB crate
+## 8. `prism-psd`: standalone PSD/PSB crate
 
 **Scope:** faithful, format-level read and write of PSD (v1) and PSB (v2, 64-bit lengths). It has no dependency on our document model.
 
@@ -360,7 +360,7 @@ psd/src/
      placed-layer data (`SoLd`: file id, transform quad, warp), the smart filter stack
      (`filterFX`: modelled filters become their Prism command and params; any other filter
      stays verbatim and is listed as not editable) and the filter mask (global `FEid`). Export
-     writes `PlLd` + `SoLd`, embeds the source in `lnk2` (a `.pcraft` source becomes a PSB of the
+     writes `PlLd` + `SoLd`, embeds the source in `lnk2` (a `.prism` source becomes a PSB of the
      nested document, written by our own PSD writer) and a filter cache with the unfiltered
      pixels and the mask in `FEid`; unedited imported smart objects stay byte-identical.
   7. Vector masks and shape layers.
@@ -375,15 +375,15 @@ psd/src/
 
 ---
 
-## 9. Native file format (`photocraft-format`)
+## 9. Native file format (`prism-format`)
 
-- **Format:** a `.pcraft` file is a zip (store mode) or directory bundle.
+- **Format:** a `.prism` file is a zip (store mode) or directory bundle.
   - `manifest.json`: a versioned document tree with serde, including `format_version` and migrations.
   - `tiles/<blake3>.zst`: content-addressed tiles, zstd-compressed.
   - `thumb.png` and `composite/` mips for quick look and previews.
 - **Saving is incremental.** Tiles are content-addressed, so a save writes only new tiles plus the manifest, and garbage-collects unreferenced ones.
 - **Autosave and crash recovery** reuse the same writer into a recovery directory, reading from a snapshot on a background thread.
-- **PSD is the interchange format,** and `.pcraft` is the lossless native one.
+- **PSD is the interchange format,** and `.prism` is the lossless native one.
 
 ---
 
@@ -444,7 +444,7 @@ psd/src/
     access fail closed at the automation boundary.
 - **Actions:** recorded `Vec<CommandInvocation>`, replayable in batch (File → Automate → Batch).
 - **Scripting (later):** embed a scripting language over the same registry. Options are Rhai, or Lua via mlua (C). JS via QuickJS is possible if we want Photoshop-script familiarity.
-- **Plugins:** sandboxed WebAssembly filter plug-ins (`photocraft-plugins`, L4) run by `wasmi`, a pure-Rust interpreter, with fuel, memory, stack and wall-time limits and no host imports. They are driven by the `plugin.*` commands and listed under Filter › Plug-ins; the ABI is in [`plugins.md`](plugins.md). Native Photoshop `.8BF`/CEP/UXP hosting is out of scope (it needs unsafe FFI). Panel plug-ins are later.
+- **Plugins:** sandboxed WebAssembly filter plug-ins (`prism-plugins`, L4) run by `wasmi`, a pure-Rust interpreter, with fuel, memory, stack and wall-time limits and no host imports. They are driven by the `plugin.*` commands and listed under Filter › Plug-ins; the ABI is in [`plugins.md`](plugins.md). Native Photoshop `.8BF`/CEP/UXP hosting is out of scope (it needs unsafe FFI). Panel plug-ins are later.
 
 ---
 
@@ -496,7 +496,7 @@ schemars = "1"
 blake3 = "1"
 zstd = "*"           # native
 # color / codecs
-# ICC: our own photocraft-cms (pure Rust)
+# ICC: our own prism-cms (pure Rust)
 image = { version = "*", default-features = false }
 jxl-oxide = "*"
 # gpu
@@ -532,7 +532,7 @@ Each phase ends with a demoable build and green CI on all targets. Phases 8–10
 | Phase | Scope | Done when |
 |---|---|---|
 | **0. Skeleton** (1–2 wk) | workspace, all crates stubbed, layering check, native CI matrix, testkit, xtask | `cargo xtask ci` green on 3 OS |
-| **1. Viewer** | raster doc, tiles, codecs (png/jpeg/tiff/webp), viewport pan/zoom/rotate on GPU + CPU fallback, `.pcraft` save/open, CLI `convert` | open a 100 MP JPEG, pan at refresh rate, save/reopen losslessly |
+| **1. Viewer** | raster doc, tiles, codecs (png/jpeg/tiff/webp), viewport pan/zoom/rotate on GPU + CPU fallback, `.prism` save/open, CLI `convert` | open a 100 MP JPEG, pan at refresh rate, save/reopen losslessly |
 | **2. Layers** | layer tree, all 27 blend modes, opacity/fill, masks, groups, clipping; planner + CPU/GPU compositors + parity tests; history; **PSD read** fidelity 1–3 | composite-oracle suite ≥ 95% within tolerance on the corpus |
 | **3. Paint and select** | platform tablet input, brush engine + presets, eraser, marquee/lasso/wand, move, free transform, crop | draw with pen pressure at <1 frame latency; selection-restricted painting |
 | **4. Adjust and filter** | adjustment layers (first 10), first 20 filters with schema-generated dialogs + live preview; **PSD write**; actions recording | PSD open → edit → save opens correctly in Photoshop/Photopea |
@@ -546,7 +546,7 @@ Each phase ends with a demoable build and green CI on all targets. Phases 8–10
 
 1. **UI toolkit.** The leading option is egui on winit + wgpu. Bevy, Slint and Qt are the alternatives (see `rust-framework-options.md`). This plan works with any of them.
 2. **License.** MIT/Apache-2.0 is maximally reusable. GPL-3.0 is the Krita/GIMP model and protects against proprietary forks. Note that some candidate deps are LGPL (rawler) or GPL-or-commercial (Slint), and MIT/Apache would constrain which of them we can use.
-3. **Project name.** `photocraft` (the repo name) is assumed.
+3. **Project name.** `prism` (the repo name) is assumed.
 4. **PSD crate.** Build our own, or adopt or fork `ag-psd`/`psd`. Decide after the week-1 spike.
 5. **Default working depth and blending.** 8-bit + gamma-space blending matches Photoshop. 16-bit/float + linear is the modern default. The proposal is to follow Photoshop by default and make the other a per-document option.
 6. **Scope of Photoshop plugin compatibility.** Decided: no native `.8BF` hosting; a sandboxed WebAssembly plug-in API instead (see [`plugins.md`](plugins.md)).

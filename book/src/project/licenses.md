@@ -1,6 +1,6 @@
 # Licenses
 
-Prism source, derived from PhotoCraft, is dual-licensed under MIT or Apache-2.0 at the user's option. The authoritative terms are the repository files:
+Prism source is dual-licensed under MIT or Apache-2.0 at the user's option. The authoritative terms are the repository files:
 
 - [`LICENSE-MIT`](https://github.com/NK-Studio/prism/blob/main/LICENSE-MIT)
 - [`LICENSE-APACHE`](https://github.com/NK-Studio/prism/blob/main/LICENSE-APACHE)

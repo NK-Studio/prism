@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build, sign and (optionally) notarize the macOS release artifacts:
 #
-#   $DIST/photocraft-<version>-macos-<arch>.dmg          Prism.app on a drag-to-Applications DMG
-#   $DIST/photocraft-cli-<version>-macos-<arch>.zip      the headless CLI
+#   $DIST/prism-<version>-macos-<arch>.dmg          Prism.app on a drag-to-Applications DMG
+#   $DIST/prism-cli-<version>-macos-<arch>.zip      the headless CLI
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
 #
@@ -40,8 +40,8 @@ IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
 APP="$WORK/Prism.app"
-DMG="$DIST/photocraft-$VERSION-macos-$ARCH.dmg"
-CLI_ZIP="$DIST/photocraft-cli-$VERSION-macos-$ARCH.zip"
+DMG="$DIST/prism-$VERSION-macos-$ARCH.dmg"
+CLI_ZIP="$DIST/prism-cli-$VERSION-macos-$ARCH.zip"
 
 NOTARIZE=0
 if [ "$IDENTITY" = "-" ]; then
@@ -58,12 +58,12 @@ echo "==> Prism $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTA
 if [ "$SKIP_BUILD" = 0 ]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p photocraft -p photocraft-cli --features heif "${args[@]}")
+  (cd "$ROOT" && cargo build --release --locked -p prism -p prism-cli --features heif "${args[@]}")
 fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
-for bin in photocraft photocraft-cli; do
+for bin in prism prism-cli; do
   inputs=()
   for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
@@ -101,15 +101,15 @@ notarize() {
 echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
-cp "$WORK/bin/photocraft" "$APP/Contents/MacOS/Prism"
-cp "$ROOT/assets/app-icon/photocraft.icns" "$APP/Contents/Resources/Prism.icns"
+cp "$WORK/bin/prism" "$APP/Contents/MacOS/Prism"
+cp "$ROOT/assets/app-icon/prism.icns" "$APP/Contents/Resources/Prism.icns"
 # Licences of the embedded craft-fonts fonts (only when built with CRAFT_FONTS_DIR).
 if [ -n "${CRAFT_FONTS_DIR:-}" ]; then
   mkdir -p "$APP/Contents/Resources/Licenses"
   copy_font_licences "$APP/Contents/Resources/Licenses"
 fi
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
-  -e "s/@BUILD_SHA@/${PHOTOCRAFT_BUILD_SHA:-unknown}/g" \
+  -e "s/@BUILD_SHA@/${PRISM_BUILD_SHA:-unknown}/g" \
   "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
@@ -156,20 +156,20 @@ fi
 
 # ---- CLI ---------------------------------------------------------------------------------------
 echo "==> building $CLI_ZIP"
-CLI_DIR="$WORK/photocraft-cli-$VERSION-macos-$ARCH"
+CLI_DIR="$WORK/prism-cli-$VERSION-macos-$ARCH"
 mkdir -p "$CLI_DIR"
-cp "$WORK/bin/photocraft-cli" "$CLI_DIR/"
+cp "$WORK/bin/prism-cli" "$CLI_DIR/"
 copy_docs "$CLI_DIR"
 # Same Developer ID and hardened runtime as the app, with an explicit reverse-DNS identifier
 # (codesign would otherwise use the bare file name).
-sign --options runtime --identifier ai.storyteller.photocraft-cli "$CLI_DIR/photocraft-cli"
-codesign --verify --strict --verbose=2 "$CLI_DIR/photocraft-cli"
+sign --options runtime --identifier com.nkstudio.prism-cli "$CLI_DIR/prism-cli"
+codesign --verify --strict --verbose=2 "$CLI_DIR/prism-cli"
 rm -f "$CLI_ZIP"
 ditto -c -k --keepParent "$CLI_DIR" "$CLI_ZIP"
 # notarytool accepts a zip of the bare binary. A bare Mach-O can't carry a stapled ticket, so
 # Gatekeeper looks the notarization up online when a quarantined copy first runs.
 if [ "$NOTARIZE" = 1 ]; then notarize "$CLI_ZIP"; fi
 
-"$WORK/bin/photocraft-cli" --version
+"$WORK/bin/prism-cli" --version
 echo "==> done (check the artifacts as shipped with packaging/macos/verify.sh --arch $ARCH)"
 ls -lh "$DMG" "$CLI_ZIP"
