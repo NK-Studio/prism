@@ -605,6 +605,9 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.spacing.icon_width = 14.0;
         s.visuals.indent_has_left_vline = false;
         s.interaction.tooltip_delay = TOOLTIP_DELAY;
+        // No animations, as in Photoshop: popups and menus appear at once (egui fades them in,
+        // which over checkerboards looked like gradients filling in) and sections open at once.
+        s.animation_time = 0.0;
         // Thin overlay scrollbars that appear on hover (Photoshop/macOS style).
         s.spacing.scroll = if t.bevel { egui::style::ScrollStyle::solid() } else { egui::style::ScrollStyle::thin() };
         s.spacing.tooltip_width = 280.0;
@@ -625,6 +628,17 @@ pub fn canvas_bg(t: &Tokens) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every theme turns egui's animations off: popups and menus appear at once, as in Photoshop.
+    #[test]
+    fn themes_turn_animations_off() {
+        for kind in ThemeKind::ALL {
+            let ctx = egui::Context::default();
+            assert!(ctx.global_style().animation_time > 0.0, "egui animates by default");
+            apply(&ctx, kind);
+            assert_eq!(ctx.global_style().animation_time, 0.0, "{kind:?}");
+        }
+    }
 
     #[test]
     fn layout_changes_density_but_never_colours() {

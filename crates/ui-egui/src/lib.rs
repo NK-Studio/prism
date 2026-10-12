@@ -1048,7 +1048,7 @@ impl PrismApp {
                 control::Outcome::AfterInput => self.input_waiters.push(reply),
                 control::Outcome::AfterJob(job) => self.jobs.waiters.push((job, reply)),
                 control::Outcome::Screenshot { token, path, window, dialog } => {
-                    // Wait out egui's fade animations (~83 ms) and a few rendered frames first.
+                    // Wait out egui's animations (off in Prism's theme) and a few rendered frames first.
                     let settle = ctx.global_style().animation_time as f64 * 2000.0 + 60.0;
                     self.queued_screenshots.push((
                         token,
