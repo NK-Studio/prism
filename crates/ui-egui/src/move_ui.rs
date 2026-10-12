@@ -131,6 +131,12 @@ pub(crate) fn display_doc(app: &mut PrismApp, idx: usize) -> Option<(Arc<Documen
         let t0 = crate::gpu_canvas::now_ms();
         match prism_engine::layer_multi_cmds::moved(&doc, &p.ids, offset.0, offset.1) {
             Ok(d) => {
+                // A shape reaching past the canvas renders again where it moves, bringing in what
+                // the edge cut off: grow the area to what it covers now, or that part of the
+                // canvas would keep the earlier frames.
+                let canvas = d.bounds();
+                let now = p.ids.iter().try_fold(Rect::EMPTY, |acc, id| Some(acc.union(&prism_compose::change_bounds(d.layer(*id)?, canvas)?)));
+                p.bounds = p.bounds.zip(now).map(|(b, n)| b.union(&n.translate(-offset.0, -offset.1)));
                 // Duotone documents display through their inks.
                 let d = prism_engine::mode_cmds::display_document(&d).unwrap_or(d);
                 p.shown = Some(Arc::new(d));
@@ -262,6 +268,38 @@ mod tests {
         // From +10 to +20 the strip x 0..10 shows pixels that were off the canvas a frame ago.
         let r = super::damage(&app, st.doc.id, st.revision, keys[0], keys[1]).unwrap();
         assert_eq!(r, Rect::new(0, 0, 64, 64));
+    }
+
+    /// A shape past the canvas edge is cut there and renders again as it moves in: the damage
+    /// between frames covers what it covers now, not the cut shape moved, or the strips it
+    /// brings in keep earlier frames (ghosts on the canvas).
+    #[test]
+    fn dragging_a_shape_past_the_edge_redraws_what_it_brings_in() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 100, "height": 60, "background": "transparent"})).unwrap();
+        app.sync_views();
+        // 30 px of the 80 px wide shape are past the right edge.
+        app.session.execute("shape.create", json!({"kind": "roundedRect", "rect": [50, 10, 80, 40], "radii": 10, "fill": "#000000"})).unwrap();
+        app.ui.tool = Tool::Move;
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 30.0, pressure: 1.0 }, m);
+        // What the shape covers on the canvas in each frame, by key (0 = the document).
+        let covers = |d: &prism_doc::Document| prism_compose::change_bounds(d.layer(d.layers.last().unwrap().id).unwrap(), d.bounds()).unwrap();
+        let mut frames = vec![(0, covers(&app.session.active().unwrap().doc))];
+        for x in [40.0, 20.0] {
+            crate::canvas::tool_event(&mut app, ToolEvent::Move { x, y: 30.0, pressure: 1.0 }, m);
+            let (d, key) = super::display_doc(&mut app, 0).unwrap();
+            frames.push((key, covers(&d)));
+        }
+        assert_eq!(frames[2].1.x1, 90, "moved 40 px left, the shape ends at 130 − 40: {frames:?}");
+        let st = app.session.active().unwrap();
+        for (a, b) in [(0, 1), (1, 2), (2, 1), (0, 2)] {
+            let ((ka, ra), (kb, rb)) = (frames[a], frames[b]);
+            let r = super::damage(&app, st.doc.id, st.revision, ka, kb).unwrap();
+            assert!(r.contains_rect(&ra) && r.contains_rect(&rb), "frame {a} → {b}: {r:?} misses {ra:?} or {rb:?}");
+        }
     }
 
     /// Mid-drag on a painted layer: is the layer shown at the pointer?
