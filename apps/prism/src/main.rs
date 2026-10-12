@@ -31,6 +31,8 @@ mod control_server;
 mod crash_guard;
 mod cursor;
 mod gpu_startup;
+#[cfg(target_os = "macos")]
+mod location_panel;
 mod logging;
 #[cfg(target_os = "macos")]
 mod mac_menu;

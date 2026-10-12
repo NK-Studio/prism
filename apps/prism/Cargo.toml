@@ -55,8 +55,11 @@ fmv-macos-events = "=0.1.0"
 # pointer is when files are dropped (cursor.rs; winit 0.30 drops carry no position). Already in
 # Cargo.lock (winit, prism-tablet); pinned exactly to the same versions.
 objc2 = "=0.6.4"
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSGeometry", "NSProcessInfo", "NSString"] }
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSApplicationScripting", "NSEvent", "NSResponder", "NSScreen", "NSView", "NSWindow"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSGeometry", "NSProcessInfo", "NSString", "NSURL"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSApplicationScripting", "NSEvent", "NSOpenPanel", "NSPanel", "NSResponder", "NSSavePanel", "NSScreen", "NSView", "NSWindow"] }
+# The Save window's Other Location… panel (location_panel.rs) takes a completion block. Already in
+# Cargo.lock (objc2-app-kit); pinned exactly to the same version.
+block2 = { version = "=0.6.2", default-features = false, features = ["std"] }
 # The macOS menu bar (mac_menu.rs): a standalone native menu crate (from the tauri-apps org, but
 # not Tauri: no webview, no JS), AppKit menus behind a safe API (no GTK with default features off). Pinned exactly: review the diff before bumping.
 muda = { version = "=0.21.1", default-features = false }

@@ -44,13 +44,11 @@ pub(crate) fn application_active(app: &PrismApp, ctx: &Context) -> bool {
 }
 
 /// Floating documents stay above the editor while Prism is active. Two exceptions use ordinary
-/// stacking: the unsaved-changes prompt's native save picker (a root-window panel an always-on-top
-/// canvas could cover; the prompt itself floats above them), and a floating dialog
-/// ([`crate::dialogs::floats`]), the one window kept on top so clicking its document to pan the
-/// preview cannot bury it.
+/// stacking: a system file panel (open, save, folder: an always-on-top window, such as the Save
+/// window that asked for it, would cover it), and a floating dialog ([`crate::dialogs::floats`]),
+/// the one window kept on top so clicking its document to pan the preview cannot bury it.
 pub(crate) fn window_level(app: &PrismApp, ctx: &Context) -> egui::viewport::WindowLevel {
-    let save_picker = app.discard.is_some() && app.file_dialog_open();
-    if !save_picker && !app.ui.dialogs.iter().any(crate::dialogs::floats) && application_active(app, ctx) {
+    if !app.file_dialog_open() && !app.ui.dialogs.iter().any(crate::dialogs::floats) && application_active(app, ctx) {
         egui::viewport::WindowLevel::AlwaysOnTop
     } else {
         egui::viewport::WindowLevel::Normal

@@ -101,6 +101,27 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&prism_ui_egui::F
             let picked = dialog.save_file();
             Box::pin(async move { picked.await.map(|file| FileDialogAnswer::SaveTo(path_of(&file))) })
         }
+        // macOS: an Open panel that chooses a file or a folder, where ⌘⇧G with a file's path
+        // selects it (the save panel's Go to Folder only goes to folders).
+        #[cfg(target_os = "macos")]
+        FileDialogRequest::Location { suggested } => {
+            crate::location_panel::show(&suggested, reply);
+            return;
+        }
+        // No file types: with them the panel greys out files of other types, and the point is
+        // to click any existing file to overwrite it (the Save window then follows its format).
+        #[cfg(not(target_os = "macos"))]
+        FileDialogRequest::Location { suggested } => {
+            let path = Path::new(&suggested);
+            if let Some(dir) = path.parent().filter(|d| d.is_dir()) {
+                dialog = dialog.set_directory(dir);
+            }
+            if let Some(name) = path.file_name() {
+                dialog = dialog.set_file_name(name.to_string_lossy());
+            }
+            let picked = dialog.save_file();
+            Box::pin(async move { picked.await.map(|file| FileDialogAnswer::SaveTo(path_of(&file))) })
+        }
     };
     // Without the thread the reply is dropped unanswered, which the app takes as Cancel.
     if let Err(e) = std::thread::Builder::new().name("file dialog".into()).spawn(move || reply.send(block_on(answer))) {

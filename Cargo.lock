@@ -4160,6 +4160,7 @@ name = "prism"
 version = "1.0.0"
 dependencies = [
  "arboard",
+ "block2 0.6.2",
  "core-graphics2",
  "dispatch2",
  "eframe",

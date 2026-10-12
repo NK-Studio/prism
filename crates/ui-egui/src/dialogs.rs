@@ -418,6 +418,12 @@ pub fn title(d: &Dialog) -> String {
 
 /// Confirm a dialog: run its action and close it. Used by the OK button and by automation.
 pub fn confirm(app: &mut PrismApp, id: u64) -> Result<Value, String> {
+    // A full path left in the Save window's Name (Enter pressed while typing it) is its location.
+    if let Some(dm) = app.ui.dialog_mut(id)
+        && crate::save_ui::owns(&dm.fields)
+    {
+        crate::save_ui::take_typed_path(&mut dm.fields);
+    }
     let d = app.ui.dialogs.iter().find(|d| d.id == id).cloned().ok_or_else(|| format!("no dialog {id}"))?;
     // The Save window stays open, showing why, until its fields can be saved.
     if crate::save_ui::owns(&d.fields)

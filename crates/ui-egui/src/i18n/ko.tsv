@@ -2925,6 +2925,9 @@ fontWeight	Italic	기울임
 	Original (editable)	원본 (편집 가능)
 	Original formats keep everything, so there is nothing to set.	원본 형식은 모든 정보를 보존해서 따로 정할 게 없어요.
 	Other Folder…	다른 폴더…
+	Other Location…	다른 위치…
+	Prism can't write .{ext} files	Prism은 .{ext} 파일로 저장할 수 없어요
+	This file is open in Prism; that tab won't update.	이 파일은 Prism에서 열려 있어요. 그 탭은 바뀌지 않습니다.
 	PNG is lossless: the image looks the same. Only the size and saving time change.	PNG는 무손실이라 화질은 같아요. 저장 속도와 크기만 달라집니다.
 	Photos, small files	사진 · 작은 용량
 	Print, can keep layers	인쇄 · 레이어 선택
