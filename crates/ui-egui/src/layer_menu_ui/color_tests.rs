@@ -88,7 +88,16 @@ fn layer_color_background_is_confined_to_the_eye_column_in_every_theme() {
         }
     }
     for kind in crate::theme::ThemeKind::ALL {
-        let (mut h, red, _) = harness(kind, 1.0);
+        let (mut h, red, other) = harness(kind, 1.0);
+        let selected = row(&h, other);
+        let t = crate::theme::Tokens::get(&h.ctx);
+        let mut highlights = Vec::new();
+        for s in &h.output().shapes {
+            rects(&s.shape, if t.pro { t.row_selected } else { t.hover }, &mut highlights);
+        }
+        let content = egui::Rect::from_min_max(pos2(selected.left() + 30.0, selected.top()), selected.right_bottom());
+        assert!(highlights.contains(&content), "selected content in {kind:?}");
+        assert!(!highlights.contains(&selected), "eye column is never selected in {kind:?}");
         for visible in [true, false] {
             h.state_mut().run("layer.setProps", json!({"layer": red.0, "visible": visible})).unwrap();
             h.run_steps(4);

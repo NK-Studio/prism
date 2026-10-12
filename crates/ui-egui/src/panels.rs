@@ -1771,6 +1771,12 @@ struct EyeSweep {
     swept: Vec<u64>,
 }
 
+/// The empty box a hidden layer or effect shows in the eye column, centred in `cell`.
+fn hidden_box(ui: &egui::Ui, cell: Rect, icon_size: f32, t: &Tokens) {
+    let r = Rect::from_center_size(cell.center(), vec2(icon_size, icon_size));
+    ui.painter().rect_stroke(r, t.radius_sm.min(1.0), Stroke::new(1.0, t.hidden_layer_outline()), StrokeKind::Inside);
+}
+
 /// Starts an eye-column sweep from `eye`, or applies a running one to the row `row` of `l`.
 fn eye_sweep(ctx: &egui::Context, l: &Layer, row: Rect, eye: &egui::Response, actions: &mut Vec<(String, Value)>) {
     let id = egui::Id::new("layer-eye-sweep");
@@ -1832,19 +1838,21 @@ fn layer_row(
     }
     let painter = ui.painter_at(rect.expand(1.0));
     let hovered = !selected && resp.contains_pointer() && app.ui.dialogs.is_empty() && app.discard.is_none();
+    let eye_right = (rect.left() + 30.0).min(rect.right());
+    let content = Rect::from_min_max(pos2(eye_right, rect.top()), rect.right_bottom());
+    let eye_cell = Rect::from_min_max(rect.left_top(), pos2(eye_right, rect.bottom()));
     if t.pro {
         if selected {
-            painter.rect_filled(rect, 0.0, t.row_selected);
+            painter.rect_filled(content, 0.0, t.row_selected);
         } else if hovered {
-            painter.rect_filled(Rect::from_min_max(pos2((rect.left() + 30.0).min(rect.right()), rect.top()), rect.right_bottom()), 0.0, t.layer_hover);
+            painter.rect_filled(content, 0.0, t.layer_hover);
         }
     } else if selected {
-        painter.rect_filled(rect, t.radius, t.hover);
-        painter.rect_stroke(rect, t.radius, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
+        painter.rect_filled(content, t.radius, t.hover);
+        painter.rect_stroke(content, t.radius, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     } else if hovered {
-        painter.rect_filled(rect, t.radius, t.layer_hover);
+        painter.rect_filled(content, t.radius, t.layer_hover);
     }
-    let eye_cell = Rect::from_min_max(rect.left_top(), pos2((rect.left() + 30.0).min(rect.right()), rect.bottom()));
     if let Some((_, background)) = t.layer_label_colors(l.label) {
         painter.rect_filled(eye_cell, 0.0, background);
     }
@@ -1858,10 +1866,12 @@ fn layer_row(
     // The eye takes drags too (so a drag starting on it never reorders the row): dragging down
     // the eyes gives every row swept over the visibility the first eye toggled to.
     let eye_resp = ui.interact(eye, ui.id().with(("eye", l.id.0)), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::PointingHand);
-    // A hidden layer's eye box is left empty (still clickable).
     if l.visible {
         // Centre the drawing in the column while preserving the visibility hit area.
         icons::paint(ui, eye_cell, "eye", 15.0, t.layer_label_icon(l.label));
+    } else {
+        // A hidden layer shows an empty box where the eye was (still clickable), as in Photoshop.
+        hidden_box(ui, eye_cell, 13.5, &t);
     }
     eye_sweep(ctx, l, rect, &eye_resp, actions);
     if eye_resp.clicked() {
@@ -2698,9 +2708,11 @@ fn effect_rows(app: &mut PrismApp, ui: &mut egui::Ui, l: &Layer, depth: usize, a
             ui.painter().line_segment([pos2(rect.left() + 30.0, rect.top()), pos2(rect.left() + 30.0, rect.bottom())], Stroke::new(1.0, t.separator));
         }
         let eye = Rect::from_min_size(pos2(rect.left() + 6.0, rect.center().y - 9.0), vec2(18.0, 18.0));
-        // A hidden effect's eye box is left empty (still clickable), like a hidden layer's.
+        // A hidden effect shows an empty box (still clickable), like a hidden layer.
         if on {
             icons::paint(ui, eye, "eye", 12.0, t.icon);
+        } else {
+            hidden_box(ui, eye, 10.5, &t);
         }
         // The whole eye column of the row takes the click, so it never opens the Layer Style dialog.
         let eye_cell = Rect::from_min_max(rect.left_top(), pos2((rect.left() + 30.0).min(rect.right()), rect.bottom()));
@@ -2754,6 +2766,33 @@ fn selection_mode_buttons(app: &mut PrismApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod color_tests {
     use super::*;
+
+    #[test]
+    fn hidden_eye_boxes_scale_with_layer_and_effect_icons() {
+        for kind in crate::theme::ThemeKind::ALL {
+            for scale in [1.0, 2.0] {
+                for size in [13.5, 10.5] {
+                    let t = Tokens::for_kind(kind);
+                    let mut h = egui_kittest::Harness::builder().with_pixels_per_point(scale).build_ui(|ui| {
+                        hidden_box(ui, Rect::from_center_size(pos2(40.0, 40.0), vec2(30.0, 24.0)), size, &t);
+                    });
+                    h.run();
+                    let outline = h
+                        .output()
+                        .shapes
+                        .iter()
+                        .find_map(|s| match &s.shape {
+                            egui::Shape::Rect(r) if r.stroke.color == t.hidden_layer_outline() => Some(r),
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(outline.rect.center(), pos2(40.0, 40.0));
+                    assert_eq!(outline.rect.size(), vec2(size, size));
+                    assert_eq!(outline.fill, Color32::TRANSPARENT);
+                }
+            }
+        }
+    }
 
     #[test]
     fn srgb_hsva_roundtrip() {

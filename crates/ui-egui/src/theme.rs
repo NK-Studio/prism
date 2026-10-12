@@ -121,6 +121,12 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    /// Quiet, darker outline for the empty eye slot of hidden layers and effects.
+    pub(crate) fn hidden_layer_outline(self) -> Color32 {
+        let (c, shade) = if self.kind == ThemeKind::StudioLight { (self.text_faint, 0.65) } else { (self.card, 0.82) };
+        Color32::from_rgb((f32::from(c.r()) * shade) as u8, (f32::from(c.g()) * shade) as u8, (f32::from(c.b()) * shade) as u8)
+    }
+
     /// Shape-kind overlays sit on arbitrary thumbnail pixels, so retain a neutral tile in
     /// every theme rather than borrowing the selected/hovered row's colour.
     pub(crate) fn shape_thumbnail_badge() -> [Color32; 2] {
@@ -628,7 +634,11 @@ mod tests {
             for layout in [Layout::Compact, Layout::Comfortable] {
                 let t = Tokens::for_kind(kind).with_layout(layout);
                 assert_eq!(t.pro, layout == Layout::Compact, "{kind:?} {layout:?}");
-                assert_eq!((t.chrome, t.canvas, t.dock, t.text, t.accent, t.field), (native.chrome, native.canvas, native.dock, native.text, native.accent, native.field), "{kind:?} {layout:?}: colours stay");
+                assert_eq!(
+                    (t.chrome, t.canvas, t.dock, t.text, t.accent, t.field),
+                    (native.chrome, native.canvas, native.dock, native.text, native.accent, native.field),
+                    "{kind:?} {layout:?}: colours stay"
+                );
                 assert_eq!(t.radius, if layout == Layout::Compact { 4.0 } else { 8.0 });
             }
         }
