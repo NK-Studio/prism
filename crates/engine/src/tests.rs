@@ -1240,3 +1240,42 @@ fn document_inspect_and_activate_invalid_index() {
     let err_act = s.execute("document.activate", json!({"document": 9})).unwrap_err();
     assert_eq!(err_act.to_string(), "no document at index 9");
 }
+
+/// Merge Down bakes layer effects as they look: a drop shadow reaching past the layers' pixels
+/// used to be cut off at their edge, and its angle came from a blank document's global light
+/// instead of this one's. On the shape layer above, the raster layer below, or both.
+#[test]
+fn merge_down_keeps_layer_effects_as_they_look() {
+    use prism_doc::Effect;
+    for depth in [8, 16, 32] {
+        for (what, upper_fx, lower_fx) in [("upper", true, false), ("lower", false, true), ("both", true, true)] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 120, "height": 90, "depth": depth, "background": "transparent"})).unwrap();
+            s.execute("layer.new.layer", json!({})).unwrap();
+            s.execute("select.rect", json!({"x": 10, "y": 10, "width": 30, "height": 30})).unwrap();
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            s.execute("select.deselect", json!({})).unwrap();
+            s.execute("shape.create", json!({"kind": "rect", "rect": [50, 20, 30, 30], "fill": "#0000ff"})).unwrap();
+            s.edit("fx", |doc, _| {
+                doc.global_light.angle = 30.0;
+                let mut fx = Effect::default_drop_shadow();
+                if let Effect::DropShadow(sh) = &mut fx {
+                    (sh.distance, sh.size, sh.common.opacity) = (20.0, 6.0, 1.0);
+                }
+                let n = doc.layers.len();
+                for (i, on) in [(n - 1, upper_fx), (n - 2, lower_fx)] {
+                    if on {
+                        doc.layers[i].effects.items = vec![fx.clone()];
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+            let before = prism_compose::flatten(&s.active().unwrap().doc);
+            s.execute("layer.mergeDown", json!({})).unwrap();
+            let after = prism_compose::flatten(&s.active().unwrap().doc);
+            let differ = before.px.iter().zip(&after.px).filter(|(a, b)| (0..4).any(|k| (a[k] - b[k]).abs() > 2.0 / 255.0)).count();
+            assert_eq!(differ, 0, "{depth}-bit, effects on {what}: {differ} px changed");
+        }
+    }
+}
