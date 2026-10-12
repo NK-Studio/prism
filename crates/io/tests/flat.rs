@@ -140,10 +140,11 @@ fn sample_icc() -> Vec<u8> {
 }
 
 #[test]
-fn layered_to_png_warns_flatten() {
+fn layered_to_png_flattens_without_a_warning() {
     let d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS);
     let r = export(&d, "out.png", &ExportOptions::default()).unwrap();
-    assert!(r.warnings.iter().any(|w| w.contains("flattened")), "{:?}", r.warnings);
+    // A PNG is the composite by definition: flattening is no loss to warn about.
+    assert!(!r.warnings.iter().any(|w| w.contains("flattened")), "{:?}", r.warnings);
     let back = import("out.png", &r.bytes).unwrap().document;
     // Composite equals our flatten.
     let flat = prism_compose::flatten(&d).px;

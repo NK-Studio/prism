@@ -10,35 +10,34 @@ fn lang(code: &str) -> Lang {
 
 #[test]
 fn requested_languages_resolve_regional_preferences() {
-    for (tag, code) in [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("ru-RU", "ru"), ("fr-CA", "fr"), ("id-ID", "id")] {
+    for (tag, code) in [("en-US", "en"), ("en-GB", "en"), ("ko-KR", "ko"), ("KO-kr", "ko")] {
         assert_eq!(Lang::from_pref(tag), lang(code), "{tag}");
     }
     assert_eq!(lang_from_tag("ko_KR.UTF-8"), Some(lang("ko")));
-    assert_eq!(lang_from_tag("FR-fr"), Some(lang("fr")));
     assert_eq!(lang_from_tag("ko"), Some(lang("ko")));
 }
 
 #[test]
-fn french_and_korean_plural_messages_keep_placeholders() {
-    for (n, expected) in [(0, "0 élément"), (1, "1 élément"), (2, "2 éléments"), (21, "21 éléments")] {
-        assert_eq!(trn(lang("fr"), n, "{n} item", "{n} items"), expected);
+fn english_and_korean_plural_messages_keep_placeholders() {
+    for (n, expected) in [(0, "0 items"), (1, "1 item"), (2, "2 items"), (21, "21 items")] {
+        assert_eq!(trn(Lang::EN, n, "{n} item", "{n} items"), expected);
     }
     for n in [0, 1, 2, 21, u64::MAX] {
         assert_eq!(trn(lang("ko"), n, "{n} item", "{n} items"), format!("항목 {n}개"));
     }
     assert_eq!(fmt(tr(lang("ko"), "Version {version}"), &[("version", "0.2.0")]), "버전 0.2.0");
-    assert_eq!(tr(lang("fr"), "unknown translation"), "unknown translation");
+    assert_eq!(tr(lang("ko"), "unknown translation"), "unknown translation");
 }
 
 #[test]
 fn scoped_preview_restores_language_even_after_a_panic() {
     with_language(Lang::EN, || {
-        with_language(lang("fr"), || {
-            assert_eq!(t("Layer"), "Calque");
-            with_language(lang("ko"), || assert_eq!(t("Layer"), "레이어"));
-            assert_eq!(t("Layer"), "Calque");
+        with_language(lang("ko"), || {
+            assert_eq!(t("Layer"), "레이어");
+            with_language(Lang::EN, || assert_eq!(t("Layer"), "Layer"));
+            assert_eq!(t("Layer"), "레이어");
         });
-        let result = std::panic::catch_unwind(|| with_language(lang("ja"), || panic!("test unwind")));
+        let result = std::panic::catch_unwind(|| with_language(lang("ko"), || panic!("test unwind")));
         assert!(result.is_err());
         assert_eq!(current(), Lang::EN);
     });
@@ -46,13 +45,13 @@ fn scoped_preview_restores_language_even_after_a_panic() {
 
 #[test]
 fn drawing_languages_are_isolated_between_threads() {
-    with_language(lang("fr"), || {
+    with_language(lang("ko"), || {
         let thread = std::thread::spawn(|| {
             assert_eq!(current(), Lang::EN);
             with_language(lang("ko"), || assert_eq!(t("Layer"), "레이어"));
         });
         thread.join().expect("language thread");
-        assert_eq!(t("Layer"), "Calque");
+        assert_eq!(t("Layer"), "레이어");
     });
 }
 
@@ -65,11 +64,12 @@ fn dynamic_brush_sections_have_translations_and_draw_in_the_selected_language() 
     }
     with_language(Lang::EN, || {
         let mut h = harness();
-        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "zh-hans"})).expect("language");
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "ko"})).expect("language");
         h.state_mut().ui.panels.brush_settings = true;
         h.run_steps(4);
         let text = drawn_text(&h);
-        assert!(text.iter().filter(|text| text.as_str() == "画笔笔尖形状").count() >= 2, "both the section row and heading must be translated");
+        let tip = tr(lang("ko"), "Brush Tip Shape");
+        assert!(text.iter().filter(|text| text.as_str() == tip).count() >= 2, "both the section row and heading must be translated");
         assert!(!text.iter().any(|text| text == "Brush Tip Shape"));
     });
 }
@@ -86,12 +86,14 @@ fn fill_dialog_and_contour_choices_have_translations_and_draw_in_the_selected_la
     }
     with_language(Lang::EN, || {
         let mut h = harness();
-        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "pt-br"})).expect("language");
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "ko"})).expect("language");
         let ctx = h.ctx.clone();
         crate::menus::invoke(h.state_mut(), &ctx, crate::fill_ui::COMMAND, json!({})).expect("fill dialog");
         h.run_steps(4);
         let text = drawn_text(&h);
-        for want in ["Conteúdo:", "Cor de primeiro plano", "Modo:", "Opacidade:"] {
+        for source in ["Contents:", "Foreground Color", "Mode:", "Opacity:"] {
+            let want = tr(lang("ko"), source);
+            assert_ne!(want, source, "{source} has a Korean translation");
             assert!(text.iter().any(|text| text == want), "missing {want}");
         }
         assert!(!text.iter().any(|text| text == "Contents:" || text == "Foreground Color"));
@@ -101,12 +103,10 @@ fn fill_dialog_and_contour_choices_have_translations_and_draw_in_the_selected_la
 #[test]
 fn cjk_font_order_follows_the_selected_language() {
     use prism_text::cjk::CjkScript;
-    for (code, script) in [("zh-hans", CjkScript::SimplifiedChinese), ("ja", CjkScript::Japanese), ("ko", CjkScript::Korean)] {
-        with_language(lang(code), || {
-            let mut fallback = crate::cjk_fonts::CjkFallback::new(crate::cjk_fonts::Sources::system());
-            assert_eq!(fallback.order().first(), Some(&script), "{code}");
-        });
-    }
+    with_language(lang("ko"), || {
+        let mut fallback = crate::cjk_fonts::CjkFallback::new(crate::cjk_fonts::Sources::system());
+        assert_eq!(fallback.order().first(), Some(&CjkScript::Korean));
+    });
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn korean_glyphs_remain_available_after_repeated_language_switches() {
     with_language(Lang::EN, || {
         let mut h = harness();
         let glyphs: std::collections::BTreeSet<_> = lang("ko").0.source.chars().filter(|c| cjk::classify(*c) == Some(CjkChar::Hangul)).collect();
-        for code in ["zh-hans", "ja", "ko", "fr", "ko"] {
+        for code in ["en", "ko", "en", "ko"] {
             h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": code})).expect("language");
             h.run_steps(12);
             if code == "ko" {
@@ -153,7 +153,8 @@ fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, P
 
 #[test]
 fn first_launch_renders_the_system_language_without_overwriting_auto() {
-    for (tag, code) in [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("ru-RU", "ru"), ("fr-CA", "fr")] {
+    // A system language Prism doesn't speak (Japanese, French) starts in English.
+    for (tag, code) in [("en-US", "en"), ("ko-KR", "ko"), ("ja-JP", "en"), ("fr-CA", "en")] {
         system::with_system_tags(&[tag], || {
             with_language(Lang::EN, || {
                 let h = harness();
@@ -181,30 +182,30 @@ fn missing_or_unsupported_system_languages_render_english() {
 
 #[test]
 fn older_preferences_without_a_language_follow_the_system() {
-    system::with_system_tags(&["fr-CA"], || {
+    system::with_system_tags(&["ko-KR"], || {
         with_language(Lang::EN, || {
             let services = Services { load_prefs: Some(Box::new(|| Some(r#"{"interface":{"uiScale":"125"}}"#.into()))), ..Default::default() };
             let h = harness_with_services(services);
             assert_eq!(h.state().session.prefs().interface.language, "auto");
             assert_eq!(h.state().session.prefs().interface.ui_scale, prism_engine::prefs::UiScale::P125);
-            assert_eq!(current(), lang("fr"));
+            assert_eq!(current(), lang("ko"));
         });
     });
 }
 
 #[test]
 fn an_explicit_language_survives_restart_on_a_different_system_language() {
-    let saved = system::with_system_tags(&["ja-JP"], || {
+    let saved = system::with_system_tags(&["en-US"], || {
         with_language(Lang::EN, || {
             let mut h = harness();
-            assert_eq!(current(), lang("ja"));
+            assert_eq!(current(), Lang::EN);
             h.state_mut().run("prefs.set", json!({"path":"interface.language","value":"ko"})).expect("choose language");
             h.step();
             assert_eq!(current(), lang("ko"));
             h.state().session.prefs_to_json()
         })
     });
-    system::with_system_tags(&["fr-FR"], || {
+    system::with_system_tags(&["en-GB"], || {
         with_language(Lang::EN, || {
             let services = Services { load_prefs: Some(Box::new(move || Some(saved.clone()))), ..Default::default() };
             let h = harness_with_services(services);
@@ -220,7 +221,7 @@ fn a_control_request_changes_the_drawing_language_in_the_same_frame() {
     with_language(Lang::EN, || {
         let mut h = harness();
         let document = h.state().session.active().expect("document").doc.clone();
-        for code in ["zh-hans", "ja", "ko", "ru", "fr", "id", "en"] {
+        for code in ["ko", "en", "ko", "en"] {
             let (tx, rx) = std::sync::mpsc::channel();
             h.state_mut().control_rx = Some(rx);
             let (request, reply) =
@@ -244,11 +245,11 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
         let mut h = harness();
         let id = crate::prefs_ui::open_preferences(h.state_mut(), "interface");
         let dialog = h.state_mut().ui.dialog_mut(id).expect("preferences");
-        dialog.fields.get_mut("values").expect("values")["interface"]["language"] = json!("fr");
+        dialog.fields.get_mut("values").expect("values")["interface"]["language"] = json!("ko");
         h.run_steps(3);
         let text = drawn_text(&h);
-        assert!(text.iter().any(|text| text == "Langue"), "the draft language must translate the actual dialog");
-        assert!(text.iter().any(|text| text == "Annuler"), "the dialog buttons must preview the language too");
+        assert!(text.iter().any(|text| text == tr(lang("ko"), "Language")), "the draft language must translate the actual dialog");
+        assert!(text.iter().any(|text| text == "취소"), "the dialog buttons must preview the language too");
         assert!(text.iter().any(|text| text == "File"), "the main window keeps its committed language");
         assert_eq!(h.state().session.prefs().interface.language, "auto");
         assert_eq!(current(), Lang::EN, "preview must not leak to the main window");
@@ -271,17 +272,17 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
 fn keyboard_shortcuts_list_commands_in_the_selected_language() {
     with_language(Lang::EN, || {
         let mut h = harness();
-        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "pt-br"})).expect("language");
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "ko"})).expect("language");
         h.step();
         let ctx = h.ctx.clone();
         let id = crate::menus::invoke(h.state_mut(), &ctx, "edit.keyboardShortcuts", json!({})).expect("dialog")["dialog"].as_u64().expect("id");
         // Search matches the translated label and the English one.
-        for filter in ["salvar como", "save as"] {
+        for filter in ["다른 이름", "save as"] {
             h.state_mut().ui.dialog_mut(id).expect("shortcuts").fields.insert("filter".into(), json!(filter));
             h.run_steps(3);
             let text = drawn_text(&h);
-            assert!(text.iter().any(|text| text == "Arquivo"), "{filter}: the menu heading must be translated");
-            assert!(text.iter().any(|text| text.trim() == "Salvar como…"), "{filter}: the command must be translated: {text:?}");
+            assert!(text.iter().any(|text| text == "파일"), "{filter}: the menu heading must be translated");
+            assert!(text.iter().any(|text| text.trim() == "다른 이름으로 저장…"), "{filter}: the command must be translated: {text:?}");
             assert!(!text.iter().any(|text| text.trim() == "Save As…"), "{filter}: no English command labels");
         }
     });

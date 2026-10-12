@@ -517,14 +517,28 @@ pub(crate) fn hides_canvas(ctx: &Context, document: DocId) -> bool {
 
 /// Moving the native viewport directly keeps pointer capture in egui. OS StartDrag enters a
 /// platform move loop that can swallow the move/up events needed for docking and Escape.
-pub(crate) fn move_window(ctx: &Context, window: u64) {
-    if let Some(drag) = ctx.data(|d| d.get_temp::<TabDrag>(drag_key()))
+///
+/// `screen` is the OS pointer on the desktop (physical pixels) when the platform can read it.
+/// It wins over the pointer events: those are relative to the window as it was when they were
+/// sent, but placed with its position now, so while the window moves under the pointer each
+/// lagging event read as the pointer jumping back and the window shook.
+pub(crate) fn move_window(ctx: &Context, window: u64, screen: Option<Pos2>) {
+    if let Some(mut drag) = ctx.data(|d| d.get_temp::<TabDrag>(drag_key()))
         && drag.window == Some(window)
         && !drag.released
         && let Some(origin) = drag.window_origin
     {
+        if let Some(screen) = screen.filter(|p| !drag.automated && p.x.is_finite() && p.y.is_finite()) {
+            drag.pointer = screen;
+            ctx.data_mut(|d| d.insert_temp(drag_key(), drag.clone()));
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition((origin + (drag.pointer - drag.start)) / drag.scale));
     }
+}
+
+/// Whether `window` is being dragged by its tab (read the OS pointer only then).
+pub(crate) fn moving(ctx: &Context, window: u64) -> bool {
+    ctx.data(|d| d.get_temp::<TabDrag>(drag_key())).is_some_and(|d| d.window == Some(window) && !d.released && !d.automated)
 }
 
 /// Fade the entire native window, never overlay black on the document. Called every source

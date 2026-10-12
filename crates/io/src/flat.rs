@@ -178,8 +178,8 @@ pub fn document_to_image(doc: &Document, warnings: &mut Vec<String>) -> Result<I
         }
         Image::from_raw(w, h, layout, csample(fmt.sample), data)?
     } else {
-        let count = doc.layer_count();
-        warnings.push(format!("{count} layer(s) flattened; layers, masks and blend modes are not kept"));
+        // A flat format holds the composite by definition: flattening is what was asked for, not
+        // a loss to warn about (Photoshop doesn't either). Real losses (depth, profile, mode) are.
         // The compositor works in RGB; write RGB/gray.
         let gray = fmt.mode == ColorMode::Grayscale;
         if fmt.mode == ColorMode::Cmyk || fmt.mode == ColorMode::Lab {
@@ -467,7 +467,6 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
             shown.icc_profile = None;
             shown.duotone = None;
             let mut r = export_flat(&shown, format, opts)?;
-            r.warnings.retain(|w| !w.contains("flattened"));
             r.warnings.push(format!("Duotone ({} inks) written as RGB", d.inks.len()));
             Ok(Some(r))
         }

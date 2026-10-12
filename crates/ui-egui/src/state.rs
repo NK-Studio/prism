@@ -1016,6 +1016,9 @@ pub struct UiState {
     /// Non-blocking notices (import/export warnings, files that couldn't open), newest last.
     #[serde(default)]
     pub notices: Vec<crate::notices::Notice>,
+    /// A short confirmation at the bottom of the window ("Saved a.png"), gone after a moment.
+    #[serde(default)]
+    pub toast: Option<crate::notices::Toast>,
     /// Pending GPU fallback warning, visible to automation.
     #[serde(default)]
     pub gpu_fallback_notice: Option<String>,
@@ -1094,6 +1097,7 @@ impl Default for UiState {
             status: String::new(),
             status_error: false,
             notices: Vec::new(),
+            toast: None,
             gpu_fallback_notice: None,
             slow_refresh_noticed: Vec::new(),
             chrome: Default::default(),

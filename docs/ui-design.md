@@ -121,25 +121,13 @@ fonts use the same size, including fonts loaded after the preference changes.
 ## Localisation
 
 Strings in code stay English and are the default lookup keys. `crates/ui-egui/src/i18n` maps them
-to display text at render time from one catalog per language (`i18n/<code>.tsv`; the format is
-documented in the header of `ja.tsv`). Command ids, menu paths used for logic, the control channel,
-the CLI and MCP always use the English ids and labels.
+to display text at render time from the Korean catalog (`i18n/ko.tsv`; its header documents the
+format). Command ids, menu paths used for logic, the control channel, the CLI and MCP always use
+the English ids and labels.
 
-Languages shipped (`complete_menus` marks a catalog that covers every menu string and `tl!` literal;
-the tests enforce it):
-
-- English (`en`), the source language.
-- Japanese (`ja`), complete.
-- Simplified Chinese (`zh-hans`; see [`localization-zh-hans.md`](localization-zh-hans.md)), complete.
-- Traditional Chinese (`zh-hant`), complete, in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`,
-  `zh-MO` and `zh-Hant-*` locales all resolve to it. The resolver distinguishes the two Chinese
-  scripts, so neither catalog is shown to the other script's locales.
-- Spanish (`es`), complete.
-- Russian (`ru`), complete, with three plural forms (`one|few|many`, see `plural_russian`).
-- Korean (`ko`), complete, with one plural form.
-- French (`fr`), complete, with two plural forms (0 and 1 use the singular).
-- Czech (`cs`), complete, with three plural forms.
-- Indonesian (`id`), complete, with one plural form.
+Prism speaks English (`en`, the source language) and Korean (`ko`, one plural form). The Korean
+catalog must cover every menu string and `tl!` literal (`complete_menus`; the tests enforce it).
+Other system languages show English.
 
 - `tr(lang, s)` plain strings; `tr_ctx` when one English word needs different translations;
   `tr_id(lang, command_id, label)` for menu items (keyed by command id, English label as the

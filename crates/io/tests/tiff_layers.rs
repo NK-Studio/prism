@@ -148,7 +148,7 @@ fn discard_layers_writes_a_flat_file() {
     let d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS);
     let r = tiff(&d, false);
     assert_eq!(tags(&r.bytes), (None, None));
-    assert!(r.warnings.iter().any(|w| w.contains("flattened")), "{:?}", r.warnings);
+    assert!(!r.warnings.iter().any(|w| w.contains("flattened")), "{:?}", r.warnings);
     let back = import("x.tif", &r.bytes).unwrap().document;
     assert_eq!(back.layers.len(), 1);
     assert!(!tiff_layers::would_write_layers(&back));

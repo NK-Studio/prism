@@ -65,6 +65,7 @@ pub mod file_open;
 pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
+pub mod first_run_ui;
 pub mod floating_window;
 pub mod save_ui;
 pub mod gallery_ui;
@@ -261,6 +262,9 @@ pub type QuitFn = Box<dyn FnMut()>;
 /// Where the OS pointer is now, in egui points within the window; `None` when unknown.
 pub type WindowOpacityFn = Box<dyn FnMut(&egui::Context, f32) -> bool>;
 pub type CursorPosFn = Box<dyn FnMut(&egui::Context) -> Option<egui::Pos2>>;
+/// Where the OS pointer is now on the desktop, in physical pixels (winit's window positions);
+/// `None` when unknown.
+pub type ScreenCursorFn = Box<dyn FnMut(&egui::Context) -> Option<egui::Pos2>>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
@@ -313,6 +317,10 @@ pub struct Services {
     /// The pointer position read from the OS (desktop): winit 0.30's file drops carry none, and
     /// the window gets no pointer events during an OS drag (see `file_open::DropTarget`).
     pub cursor_pos: Option<CursorPosFn>,
+    /// The pointer on the desktop, read from the OS: a floating document window dragged by its
+    /// tab follows it (pointer events plus the window's reported position lag the move and
+    /// made the window shake).
+    pub screen_cursor: Option<ScreenCursorFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `prism_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only (tests).
@@ -435,6 +443,8 @@ pub struct PrismApp {
     /// makes shortcut- and dialog-triggered commands pass the same policy as
     /// direct control calls.
     pub(crate) automation_input: bool,
+    /// The native menu added key equivalents to this frame's input (see `native_menu`).
+    menu_keys: bool,
     /// Levels/Curves histogram cache: (document, adjustment layer, revision it is valid for).
     pub(crate) tone_hist: Option<(DocId, prism_doc::LayerId, u64, std::sync::Arc<tone::Histograms>)>,
     /// Histogram panel cache: (document, revision, computed at ms, histograms).
@@ -519,6 +529,15 @@ pub struct PrismApp {
 }
 
 impl PrismApp {
+    /// The main window's shortcuts: while it has the focus, under automation, or for native
+    /// menu key equivalents, which land here even when a floating document window is the focused
+    /// one (its document is active by then: `doc_windows::focus_native`). ⌘W closes it.
+    fn root_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.focused) || self.automation_input || std::mem::take(&mut self.menu_keys) {
+            shortcuts::handle(self, ctx);
+        }
+    }
+
     pub fn new(session: Session, services: Services) -> Self {
         let mut app = Self {
             session,
@@ -574,6 +593,7 @@ impl PrismApp {
             synthetic_window: None,
             synthetic_dialog: None,
             automation_input: false,
+            menu_keys: false,
             channel_thumbs: None,
             channel_views: HashMap::new(),
             type_layout: None,
@@ -980,7 +1000,11 @@ impl PrismApp {
             self.ui.status = format!("Saved {path}; {} image assets in {}", r["files"].as_array().map_or(0, Vec::len), r["dir"].as_str().unwrap_or(""));
         }
         self.ui.status_error = false;
-        notices::io_warnings(self, &format!("Saved {}", file_open::display_name(&path)), &warnings);
+        let name = file_open::display_name(&path);
+        notices::io_warnings(self, &format!("Saved {name}"), &warnings);
+        if warnings.is_empty() {
+            notices::saved(self, &name);
+        }
         self.sync_views();
         Ok((path, warnings))
     }
@@ -1131,9 +1155,7 @@ impl eframe::App for PrismApp {
         // shortcuts see Esc).
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
-            if ctx.input(|i| i.focused) || self.automation_input {
-                shortcuts::handle(self, ctx);
-            }
+            self.root_shortcuts(ctx);
         }
         // Finder double-click / Open With / Dock drops (macOS open-documents events).
         self.drain_os_events(ctx);
@@ -1159,7 +1181,7 @@ impl eframe::App for PrismApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // Native menu key equivalents become the key presses they were (see `native_menu`).
         if let Some(menu) = self.services.native_menu.as_mut() {
-            menu.raw_input(raw_input);
+            self.menu_keys = menu.raw_input(raw_input);
         }
         shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
         // Windows sends a touchpad pinch as Ctrl + wheel; make it a pinch again (wheel_nav.rs).
@@ -1251,6 +1273,10 @@ impl eframe::App for PrismApp {
         }
         canvas::extra_windows(self, &ctx);
         notices::show(self, &ctx);
+        // The toast shows where the work is: here unless a floating document window is active.
+        if self.ui.active_window.is_none() {
+            notices::show_toast(self, &ctx);
+        }
         gpu_status::show_fallback(self, &ctx);
         if self.custom_titlebar {
             titlebar::resize_zones(ui);

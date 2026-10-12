@@ -71,6 +71,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("help.github", "Prism on GitHub", &["Help"], None),
     ("help.reportIssue", "Report an Issue…", &["Help"], None),
     ("help.systemInfo", "System Info…", &["Help"], None),
+    ("help.firstRunSetup", "First-Run Setup…", &["Help"], None),
     ("help.about", "About Prism", &["Help"], None),
 ];
 
@@ -298,6 +299,7 @@ pub(crate) fn invoke_unguarded(app: &mut PrismApp, ctx: &egui::Context, id: &str
             Ok(Value::Null)
         }
         "help.about" => Ok(json!({"dialog": app.ui.open_dialog(DialogKind::About, Default::default())})),
+        "help.firstRunSetup" => Ok(json!({"dialog": crate::first_run_ui::open(app)})),
         "help.systemInfo" => {
             let mut fields = serde_json::Map::new();
             fields.insert("systemInfo".into(), json!(true));
@@ -505,7 +507,7 @@ pub fn is_enabled(app: &PrismApp, id: &str) -> bool {
         return e;
     }
     match id {
-        "file.open" | "file.exit" | "file.clearRecent" | "help.about" | "help.systemInfo" | "edit.search" => true,
+        "file.open" | "file.exit" | "file.clearRecent" | "help.about" | "help.systemInfo" | "help.firstRunSetup" | "edit.search" => true,
         i if i.starts_with("file.openRecent.") => true,
         i if crate::links::url_for(i).is_some() => true,
         i if i.starts_with("window.theme.") => true,
@@ -1331,9 +1333,9 @@ mod tests {
     fn help_search_matches_the_ui_language_and_english() {
         let app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let items = menu_items(&app);
-        let Some(fr) = crate::i18n::Lang::from_code("fr") else { return };
-        let ids = |q: &str| search_items(&items, q, fr).iter().map(|i| i.id.clone()).collect::<Vec<_>>();
-        assert!(!ids("calque").is_empty(), "French menu name");
+        let Some(ko) = crate::i18n::Lang::from_code("ko") else { return };
+        let ids = |q: &str| search_items(&items, q, ko).iter().map(|i| i.id.clone()).collect::<Vec<_>>();
+        assert!(!ids("레이어").is_empty(), "Korean menu name");
         assert!(ids("distort").contains(&"edit.transform.distort".to_string()), "English still matches");
         assert!(ids("zzzzqqq").is_empty());
     }
@@ -1604,9 +1606,9 @@ mod quick_export_label_tests {
             assert_eq!(quick.len(), 1, "the catalogue and UI command must not create duplicate items");
             let shown_format = { expected };
             assert_eq!(quick[0].label, format!("Quick Export as {shown_format}"));
-            let id = crate::i18n::Lang::from_code("id").unwrap();
-            let localized = translated_menu_label(id, quick[0]);
-            assert_eq!(localized, format!("Ekspor Cepat ke {shown_format}"));
+            let ko = crate::i18n::Lang::from_code("ko").unwrap();
+            let localized = translated_menu_label(ko, quick[0]);
+            assert_eq!(localized, format!("{shown_format}로 빠르게 내보내기"));
             let layer = items.iter().find(|i| i.id == "layer.quickExportAsPng").unwrap();
             assert_eq!(layer.label, "Quick Export as PNG", "layer export always creates PNG");
         }

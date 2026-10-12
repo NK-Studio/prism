@@ -416,6 +416,7 @@ fn main() -> eframe::Result {
             let _ = in_window_menus;
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
+            app.services.screen_cursor = cursor::screen_service();
             #[cfg(target_os = "windows")]
             {
                 app.services.window_opacity = Some(window_opacity::service());

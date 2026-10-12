@@ -208,7 +208,7 @@ fn snap_slot<'a>(s: &'a mut SnapTo, key: &str) -> Option<&'a mut bool> {
 
 /// Window › <panel>: (panel, dock tab) for panels that live as tabs of a dock card.
 fn panel_tab(app: &PrismApp, id: &str) -> Option<(&'static str, usize)> {
-    let pro = matches!(app.ui.theme, crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
+    let pro = crate::prefs_ui::layout(app) == crate::theme::Layout::Compact;
     Some(match id {
         "window.panel.info" => ("navigator", 2),
         "window.panel.histogram" => ("navigator", 1),

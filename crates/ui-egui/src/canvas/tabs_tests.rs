@@ -17,7 +17,9 @@ fn harness(docs: usize, theme: ThemeKind) -> Harness<'static, PrismApp> {
         PrismApp::setup_context(&cc.egui_ctx, theme);
         let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         // The theme is an interface preference, applied on the first frame: set the preference.
-        app.run("prefs.set", json!({"values": {"interface.theme": theme.id()}})).unwrap();
+        // Layout is its own preference: a Studio theme here also means its roomy layout.
+        let layout = if crate::theme::Layout::native(theme) == crate::theme::Layout::Compact { "compact" } else { "comfortable" };
+        app.run("prefs.set", json!({"values": {"interface.theme": theme.id(), "interface.layout": layout}})).unwrap();
         for n in 1..=docs {
             app.run("file.new", json!({"width": 400, "height": 300, "name": format!("ch1-p{n:02}.png")})).unwrap();
         }

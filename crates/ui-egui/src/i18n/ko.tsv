@@ -2932,6 +2932,7 @@ fontWeight	Italic	기울임
 	Prism native file	Prism 전용 파일
 	Save each layer as a file	레이어별로 저장 (폴더에 파일로)
 	Saved {count} files in {folder}	{folder}에 파일 {count}개를 저장했습니다
+	Saved {name}	{name} 저장 완료
 	Saves {count} layers as separate files in this folder	레이어 {count}개를 이 폴더에 각각 파일로 저장합니다
 	Search formats: png, jpg, layers…	형식 검색: png, jpg, 원본…
 	Selected layers	선택한 레이어
@@ -2951,3 +2952,17 @@ fontWeight	Italic	기울임
 	Highest	최고
 	For web	웹용
 	Each layer is saved as an image: pick an image format	레이어별 저장은 이미지로만 저장돼요. 이미지 형식을 고르세요
+# First-run setup (first_run_ui.rs)
+	Welcome to Prism	프리즘에 오신 것을 환영합니다
+	Next	다음
+	Get Started	시작하기
+	Skip	건너뛰기
+	Back	이전
+	Choose your language	언어를 고르세요
+	Prism starts in the language your system uses.	시스템에서 쓰는 언어가 미리 선택돼 있어요.
+	Choose a theme	테마를 고르세요
+	Pick the brightness you like to work in.	작업하기 편한 밝기를 고르세요.
+	You can change these later in Preferences.	나중에 환경설정에서 언제든 바꿀 수 있어요.
+	First-Run Setup…	초기 설정…
+	Compact (Photoshop-style)	촘촘하게 (포토샵식)
+	Comfortable	여유 있게

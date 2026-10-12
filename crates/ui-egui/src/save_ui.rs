@@ -921,6 +921,7 @@ pub fn confirm(app: &mut PrismApp, f: &Map<String, Value>) -> Result<Value, Stri
             let count = r["files"].as_array().map_or(0, Vec::len);
             app.ui.status = crate::i18n::fmt(tl!("Saved {count} files in {folder}"), &[("count", &count.to_string()), ("folder", &target(f))]);
             app.ui.status_error = false;
+            crate::notices::toast(app, app.ui.status.clone());
             r
         })
     } else {

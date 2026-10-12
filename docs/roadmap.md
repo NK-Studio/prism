@@ -97,7 +97,7 @@ Confidence: moderate — the next users of 0.2.x will move these numbers either 
 | AI / generative | none | ~0% | Deferred by decision (#41). |
 | Ecosystem | Sandboxed WebAssembly plug-ins instead of .8BF; no ExtendScript/UXP/.atn; no Adobe Fonts/Libraries/cloud docs | low | By design for 8BF; scripting compatibility open. |
 | Platforms | macOS (notarized), Windows; separate FreeBSD packaging | medium-high | Linux support removed 2026-10-10; Windows signing material pending. |
-| Localisation | 2026-10-07: 10 UI languages; menu, `tl!`, blend mode, preference and brush-section coverage enforced by tests; live switching and scoped Preferences previews | medium | Engine errors/status messages still partly English; RTL remains open. |
+| Localisation | 2026-10-12: English and Korean only (other catalogs removed); menu, `tl!`, blend mode, preference and brush-section coverage enforced by tests; live switching and scoped Preferences previews | medium | Engine errors/status messages still partly English; RTL remains open. |
 
 2026-10-08: Motion Blur adds adaptive FFT convolution for wide streaks while retaining the
 row kernel merged in [#902](https://github.com/storytold/photocraft/pull/902) for shorter

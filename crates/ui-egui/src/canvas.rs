@@ -3912,7 +3912,8 @@ pub fn extra_windows(app: &mut PrismApp, ctx: &egui::Context) {
                 }
                 view = canvas_view(app, ui, w.document, rect, view.clone(), interactive);
             });
-            crate::doc_windows::move_window(&child, w.id);
+            let screen = if crate::doc_windows::moving(&child, w.id) { app.services.screen_cursor.as_mut().and_then(|f| f(&child)) } else { None };
+            crate::doc_windows::move_window(&child, w.id, screen);
             crate::doc_windows::fade_window(app, &child, w.id);
             if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
                 win.view = view;
@@ -3931,6 +3932,9 @@ pub fn extra_windows(app: &mut PrismApp, ctx: &egui::Context) {
                 let at = app.services.cursor_pos.as_mut().and_then(|f| f(&child));
                 app.open_dropped(&child, dropped, at);
                 app.place_next_dropped(&child);
+            }
+            if app.ui.active_window == Some(w.id) {
+                crate::notices::show_toast(app, &child);
             }
             crate::paint_mouse::show_picker(app, &child);
             crate::dialogs::show(app, &child);

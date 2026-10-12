@@ -487,9 +487,56 @@ pub fn mono(size: f32) -> FontId {
     FontId::monospace(size)
 }
 
+/// Interface density, chosen apart from the colour theme (`interface.layout`): Photoshop's
+/// compact panels (the Pro themes' own) or roomier ones with rounder corners (the Studio themes').
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Layout {
+    #[default]
+    Compact,
+    Comfortable,
+}
+
+impl Layout {
+    /// The layout a theme was designed with (used until a layout is chosen).
+    pub fn native(kind: ThemeKind) -> Layout {
+        if Tokens::for_kind(kind).pro { Layout::Compact } else { Layout::Comfortable }
+    }
+}
+
+fn layout_key() -> egui::Id {
+    egui::Id::new("prism-layout")
+}
+
+impl Tokens {
+    /// These colours with `layout`'s density and corners: any theme works with either layout.
+    pub fn with_layout(mut self, layout: Layout) -> Tokens {
+        let compact = layout == Layout::Compact;
+        if compact == self.pro {
+            return self;
+        }
+        self.pro = compact;
+        (self.radius_sm, self.radius, self.radius_lg) = if compact { (3.0, 4.0, 6.0) } else { (6.0, 8.0, 12.0) };
+        // The compact layout draws its tab strips on their own band; the roomy one doesn't.
+        self.tab_strip = if compact { self.chrome } else { Color32::TRANSPARENT };
+        self
+    }
+}
+
+/// Use `layout` from now on, whatever the theme (`None`: each theme's own layout). Reapplies the
+/// current theme.
+pub fn set_layout(ctx: &egui::Context, layout: Option<Layout>) {
+    let current = ctx.data(|d| d.get_temp::<Option<Layout>>(layout_key())).flatten();
+    if current == layout {
+        return;
+    }
+    ctx.data_mut(|d| d.insert_temp(layout_key(), layout));
+    apply(ctx, Tokens::get(ctx).kind);
+}
+
 /// Apply a theme to egui's global style and publish its tokens.
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
-    let t = Tokens::for_kind(kind);
+    let layout = ctx.data(|d| d.get_temp::<Option<Layout>>(layout_key())).flatten().unwrap_or(Layout::native(kind));
+    let t = Tokens::for_kind(kind).with_layout(layout);
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("prism-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.chrome;
@@ -572,6 +619,34 @@ pub fn canvas_bg(t: &Tokens) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layout_changes_density_but_never_colours() {
+        for kind in ThemeKind::ALL {
+            let native = Tokens::for_kind(kind);
+            assert_eq!(native.with_layout(Layout::native(kind)), native, "{kind:?}: its own layout changes nothing");
+            for layout in [Layout::Compact, Layout::Comfortable] {
+                let t = Tokens::for_kind(kind).with_layout(layout);
+                assert_eq!(t.pro, layout == Layout::Compact, "{kind:?} {layout:?}");
+                assert_eq!((t.chrome, t.canvas, t.dock, t.text, t.accent, t.field), (native.chrome, native.canvas, native.dock, native.text, native.accent, native.field), "{kind:?} {layout:?}: colours stay");
+                assert_eq!(t.radius, if layout == Layout::Compact { 4.0 } else { 8.0 });
+            }
+        }
+    }
+
+    #[test]
+    fn a_chosen_layout_survives_theme_changes() {
+        let ctx = egui::Context::default();
+        apply(&ctx, ThemeKind::Studio);
+        assert!(!Tokens::get(&ctx).pro, "no layout chosen: the theme's own");
+        set_layout(&ctx, Some(Layout::Compact));
+        assert!(Tokens::get(&ctx).pro && Tokens::get(&ctx).kind == ThemeKind::Studio, "Studio colours, compact panels");
+        apply(&ctx, ThemeKind::StudioLight);
+        assert!(Tokens::get(&ctx).pro, "switching the theme keeps the layout");
+        set_layout(&ctx, Some(Layout::Comfortable));
+        apply(&ctx, ThemeKind::ProMedium);
+        assert!(!Tokens::get(&ctx).pro && Tokens::get(&ctx).kind == ThemeKind::ProMedium);
+    }
 
     fn text_sizes(ctx: &egui::Context) -> Vec<egui::Vec2> {
         let mut sizes = Vec::new();
