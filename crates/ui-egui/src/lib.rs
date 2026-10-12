@@ -753,6 +753,7 @@ impl PrismApp {
         if r.is_ok() && id == "select.toWorkPath" {
             // Make Work Path selects the new work path in the Paths panel, as in Photoshop.
             self.ui.selected_path = Some("work".into());
+            self.ui.hidden_work_path = None;
         }
         if r.is_ok() && path_mask {
             // The new layer's vector mask becomes the active path, as in Photoshop: the path it

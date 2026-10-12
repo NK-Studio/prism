@@ -276,6 +276,63 @@ pub fn pen_up(app: &mut PrismApp) {
     }
 }
 
+/// A fingerprint of `path`'s geometry, to tell whether a hidden work path has changed since.
+fn path_fingerprint(path: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (path.inverted, format!("{:?}", path.fill_rule)).hash(&mut h);
+    for sp in &path.subpaths {
+        (sp.closed, format!("{:?}", sp.op), sp.knots.len()).hash(&mut h);
+        for k in &sp.knots {
+            for p in [k.anchor, k.in_ctrl, k.out_ctrl] {
+                (p.x.to_bits(), p.y.to_bits()).hash(&mut h);
+            }
+        }
+    }
+    h.finish()
+}
+
+/// Whether `doc`'s work path is the one hidden with ↩ (unchanged since). A hidden work path stays
+/// in the Paths panel but isn't drawn, and the path tools don't edit it, as in Photoshop.
+pub(crate) fn work_path_hidden(app: &PrismApp, doc: &Document) -> bool {
+    match (app.ui.hidden_work_path, &doc.work_path) {
+        (Some((id, print)), Some(wp)) => id == doc.id.0 && print == path_fingerprint(wp),
+        _ => false,
+    }
+}
+
+/// The active document's work path, unless hidden.
+pub(crate) fn shown_work_path(app: &PrismApp) -> Option<Path> {
+    let st = app.session.active()?;
+    (!work_path_hidden(app, &st.doc)).then(|| st.doc.work_path.clone()).flatten()
+}
+
+/// Hides the active document's work path from the canvas and deselects it in the Paths panel
+/// (the Pen's ↩, as in Photoshop). Whether there was one to hide.
+pub(crate) fn hide_work_path(app: &mut PrismApp) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let Some(wp) = st.doc.work_path.as_ref().filter(|_| !work_path_hidden(app, &st.doc)) else { return false };
+    app.ui.hidden_work_path = Some((st.doc.id.0, path_fingerprint(wp)));
+    if app.ui.selected_path.as_deref() == Some("work") {
+        app.ui.selected_path = None;
+    }
+    true
+}
+
+/// ↩ with the Pen: ends a path being drawn and, in Path mode, deselects it, so it leaves the
+/// canvas (it stays the work path in the Paths panel), as in Photoshop; with no path being
+/// drawn it hides the work path. Whether it did anything.
+pub(crate) fn pen_enter(app: &mut PrismApp) -> bool {
+    let drawing = app.ui.pen.is_some();
+    // Shape mode and a targeted vector mask finish into a layer: nothing to hide.
+    let path_mode = app.ui.tool_options.vector_mode != "shape" && targeted_vector_mask(app).is_none();
+    if drawing {
+        pen_commit(app, false);
+    }
+    let hid = path_mode && hide_work_path(app);
+    drawing || hid
+}
+
 /// Does a finished Pen subpath join the work path rather than replace it? While the work path is
 /// selected in the Paths panel.
 fn appends_to_work_path(app: &PrismApp) -> bool {
@@ -321,7 +378,10 @@ pub fn pen_commit(app: &mut PrismApp, closed: bool) {
             q["op"] = json!(op);
         }
         // The drawn work path is selected in the Paths panel, as in Photoshop.
-        app.run("path.set", q).inspect(|_| app.ui.selected_path = Some("work".into()))
+        app.run("path.set", q).inspect(|_| {
+            app.ui.selected_path = Some("work".into());
+            app.ui.hidden_work_path = None;
+        })
     };
     if let Err(e) = r {
         app.ui.status = e;
@@ -430,7 +490,7 @@ fn target_path(app: &PrismApp) -> Option<(PathTarget, Path)> {
     if let Some((id, p)) = active_shape_path(app) {
         return Some((PathTarget::Shape(id), p));
     }
-    app.session.active()?.doc.work_path.clone().map(|p| (PathTarget::Work, p))
+    shown_work_path(app).map(|p| (PathTarget::Work, p))
 }
 
 pub fn path_selection_finish(app: &mut PrismApp, start: [f64; 2], end: [f64; 2]) {
@@ -533,7 +593,7 @@ pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform, doc
         crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);
     } else if paths {
         if vector_tool {
-            if let Some(wp) = &doc.work_path {
+            if let Some(wp) = doc.work_path.as_ref().filter(|_| !work_path_hidden(app, doc)) {
                 draw_path(wp, tool == Tool::PathSelection);
             }
             let st = app.session.active();
@@ -1367,6 +1427,10 @@ pub fn paths_panel(app: &mut PrismApp, ui: &mut egui::Ui) {
                 ui.painter().galley(pos2(r.left() + 46.0, r.center().y - g.size().y / 2.0), g, t.text);
                 if resp.clicked() {
                     app.ui.selected_path = Some(key.clone());
+                    // Picking the work path shows it again.
+                    if *kind == PathRow::Work {
+                        app.ui.hidden_work_path = None;
+                    }
                 }
                 // Double-clicking the Work Path saves it (Photoshop's "Save Path").
                 if resp.double_clicked() && *kind == PathRow::Work {

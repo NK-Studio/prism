@@ -311,7 +311,17 @@ pub fn handle(app: &mut PrismApp, ctx: &egui::Context) {
         }
         return;
     }
-    // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769).
+    // Pen: ↩ ends the path being drawn as an open path and, in Path mode, deselects it so it
+    // leaves the canvas (it stays the work path), as in Photoshop; with nothing being drawn it
+    // hides the work path. Esc ends a path and keeps it shown (#1769).
+    if app.ui.tool == Tool::Pen
+        && focus == Focus::None
+        && (app.ui.pen.is_some() || crate::vector_ui::shown_work_path(app).is_some())
+        && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter))
+    {
+        crate::vector_ui::pen_enter(app);
+        return;
+    }
     if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::NONE, Key::Escape)) {
         crate::vector_ui::pen_commit(app, false);
         return;

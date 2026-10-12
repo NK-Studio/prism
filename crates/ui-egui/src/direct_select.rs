@@ -118,7 +118,8 @@ pub fn shows(app: &PrismApp, mods: Modifiers) -> bool {
 /// layer's path, then the work path.
 pub(crate) fn candidates(app: &PrismApp) -> Vec<(PathRef, Path)> {
     let layer = crate::vector_ui::targeted_vector_mask(app).or_else(|| crate::vector_ui::active_shape_path(app));
-    let work = app.session.active().and_then(|st| st.doc.work_path.clone());
+    // A work path hidden with the Pen's ↩ isn't edited until it shows again.
+    let work = crate::vector_ui::shown_work_path(app);
     layer.map(|(id, p)| (PathRef::Layer(id), p)).into_iter().chain(work.map(|p| (PathRef::Work, p))).collect()
 }
 

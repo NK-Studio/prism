@@ -931,6 +931,11 @@ pub struct UiState {
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
+    /// The work path hidden from the canvas (↩ with the Pen, as in Photoshop): its document and
+    /// a fingerprint of its geometry. It shows again once it changes or is picked in the Paths
+    /// panel (`vector_ui::work_path_hidden`).
+    #[serde(default)]
+    pub hidden_work_path: Option<(u64, u64)>,
     /// Layers panel kind filter ("pixel", "adjustment", "type", "shape", "smart"); empty = all.
     #[serde(default)]
     pub layer_filter: Vec<String>,
@@ -1074,6 +1079,7 @@ impl Default for UiState {
             shape_corners: None,
             arrow_handles: None,
             selected_path: None,
+            hidden_work_path: None,
             panels: Panels::default(),
             views: Vec::new(),
             dialogs: Vec::new(),
