@@ -57,12 +57,16 @@ pub(crate) struct Runtime {
     native_press: bool,
 }
 
+/// Tools that show the widgets: the Rectangle tool, the path selection tools and the Move tool
+/// (as the arrow handles do).
 fn allowed(tool: Tool) -> bool {
-    matches!(tool, Tool::Rectangle | Tool::PathSelection | Tool::DirectSelection)
+    matches!(tool, Tool::Rectangle | Tool::Move | Tool::PathSelection | Tool::DirectSelection)
 }
 
 fn rectangle(app: &PrismApp) -> Option<(LayerId, [f64; 4], [f64; 4])> {
     if !allowed(app.ui.tool)
+        // Hidden while the Move tool drags the layer, back on release (as the arrow handles).
+        || app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move)
         || app.ui.transform.is_some()
         || app.ui.mask_target
         || app.ui.vector_mask_target
