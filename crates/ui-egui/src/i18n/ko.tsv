@@ -865,6 +865,10 @@
 	Copyright and Contact Info	저작권 및 연락처 정보
 	Corner Crop Marks	모서리 자르기 표시
 	Corner radius	모서리 반경
+	Link corner radius values	모서리 반경 값 연결
+	Unlink corner radius values	모서리 반경 값 연결 해제
+	Rounded corners	둥근 모서리
+	Chamfered corners	각진 모서리
 	Correction	보정
 	Count Jitter	개수 지터
 	Create	만들기
@@ -2969,3 +2973,7 @@ fontWeight	Italic	기울임
 	First-Run Setup…	초기 설정…
 	Compact (Photoshop-style)	촘촘하게 (포토샵식)
 	Comfortable	여유 있게
+	Top-left corner radius	왼쪽 상단 모퉁이 반경
+	Top-right corner radius	오른쪽 상단 모퉁이 반경
+	Bottom-right corner radius	오른쪽 하단 모퉁이 반경
+	Bottom-left corner radius	왼쪽 하단 모퉁이 반경

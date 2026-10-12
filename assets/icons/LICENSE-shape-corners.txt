@@ -1,0 +1,5 @@
+Shape corner icons
+Copyright 2026 NK Studio
+Original geometric artwork illustrating one rounded or chamfered corner of a rectangle.
+Licensed under either the MIT license or Apache License 2.0, at your option.
+See ../../LICENSE-MIT and ../../LICENSE-APACHE for full license texts.

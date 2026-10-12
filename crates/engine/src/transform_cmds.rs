@@ -345,6 +345,15 @@ pub(crate) fn composite_over(dst: &mut Surface, top: &Surface) {
     dst.write_region(b, &d);
 }
 
+/// The affine part of `h`, or None for Distort and Perspective (a projective map). Free
+/// Transform's live previews use it too, so they show what the commit does.
+pub fn affine_of(h: &Homography) -> Option<Affine> {
+    let m = h.0;
+    let ok = m[6].abs() < 1e-12 && m[7].abs() < 1e-12 && m[8].abs() > 1e-12;
+    let a = Affine { m: [m[0] / m[8], m[3] / m[8], m[1] / m[8], m[4] / m[8], m[2] / m[8], m[5] / m[8]] };
+    (ok && a.m.iter().all(|v| v.is_finite())).then_some(a)
+}
+
 fn quad_param(p: &Value) -> Option<[[f64; 2]; 4]> {
     let a = p.get("quad")?.as_array()?;
     if a.len() != 4 {
@@ -402,9 +411,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     if h.inverse().is_none() {
         return Err(bad("the transform collapses the layer"));
     }
-    let m = h.0;
-    let affine =
-        (m[6].abs() < 1e-12 && m[7].abs() < 1e-12).then(|| Affine { m: [m[0] / m[8], m[3] / m[8], m[1] / m[8], m[4] / m[8], m[2] / m[8], m[5] / m[8]] });
+    let affine = affine_of(&h);
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
     let lone = lone.is_some();
     s.edit("Free Transform", |doc, _| {

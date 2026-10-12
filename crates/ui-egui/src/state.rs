@@ -533,6 +533,8 @@ pub struct ToolOptions {
     pub shape_fill: bool,
     pub stroke_width: f32,
     pub corner_radius: f32,
+    /// Rectangle corners: round arcs or straight (chamfer) cuts of `corner_radius`.
+    pub corner_style: prism_doc::CornerStyle,
     pub polygon_sides: u32,
     pub line_weight: f32,
     pub line_round_tips: bool,
@@ -662,6 +664,7 @@ impl Default for ToolOptions {
             shape_fill: true,
             stroke_width: 0.0,
             corner_radius: 0.0,
+            corner_style: prism_doc::CornerStyle::Round,
             polygon_sides: 5,
             line_weight: 3.0,
             line_round_tips: false,
