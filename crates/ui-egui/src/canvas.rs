@@ -2631,6 +2631,10 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         } else if let Some(c) = response.hover_pos().filter(|_| tool != Tool::Hand).and_then(|p| crate::shape_corners_ui::cursor(app, xf.to_doc(p))) {
             let c = response.hover_pos().map_or(c, |p| crate::cursor_pack::stock(&ctx, p, c));
             ui.ctx().set_cursor_icon(c);
+        } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Gradient).and_then(|p| crate::gradient_ui::cursor(app, xf.to_doc(p))) {
+            // The live gradient's handles, stops and line (Photoshop's move and add-stop cursors).
+            let c = response.hover_pos().map_or(c, |p| crate::cursor_pack::stock(&ctx, p, c));
+            ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().filter(|_| tool.is_type()).and_then(|p| {
             let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
             crate::type_transform::cursor(app, &ctx, &xf, p, mods)

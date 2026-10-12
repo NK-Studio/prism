@@ -260,7 +260,9 @@ pub(crate) fn browser(
         let mut done = None;
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0));
+            // One field per item renamed: renaming another (a new preset or group made meanwhile)
+            // must not read as this one losing focus, which cancels it.
+            let r = ui.add(egui::TextEdit::singleline(&mut text).id(ui.id().with(("rename", &key))).desired_width(ui.available_width() - 4.0));
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
             }
@@ -287,6 +289,8 @@ pub(crate) fn browser(
         for (gi, g) in groups.iter().enumerate() {
             let open = group_open(st, panel, gi, &g.name);
             let (hr, hresp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+            // Named for screen readers and the control channel: a group opens like a tree item.
+            hresp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, &g.name));
             if hresp.hovered() {
                 ui.painter().rect_filled(hr, 2.0, t.hover.gamma_multiply(0.5));
             }
@@ -412,15 +416,21 @@ pub(crate) fn browser(
             st.sizes.insert(panel.to_string(), s);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "trash", 24.0, false, tl!("Delete")).clicked()
+            // Icon buttons named by their tooltips, for screen readers and the control channel.
+            let button = |ui: &mut egui::Ui, icon: &str, tip: &str| {
+                let r = crate::icons::button(ui, icon, 24.0, false, tip);
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(tip)));
+                r.clicked()
+            };
+            if button(ui, "trash", "Delete")
                 && let Some(k) = selected.clone()
             {
                 ev.push(Ev::Delete(k));
             }
-            if crate::icons::button(ui, "plus", 24.0, false, new_tip).clicked() {
+            if button(ui, "plus", new_tip) {
                 ev.push(Ev::New);
             }
-            if crate::icons::button(ui, "folder-plus", 24.0, false, tl!("Create new group")).clicked() {
+            if button(ui, "folder-plus", "Create new group") {
                 ev.push(Ev::NewGroup);
             }
         });
@@ -482,6 +492,24 @@ fn doc_point(app: &PrismApp, pos: Pos2) -> Option<[f64; 2]> {
 // ------------------------------------------------------------------ Gradients
 
 pub fn gradients_panel(app: &mut PrismApp, ui: &mut egui::Ui) {
+    gradients_browser(app, ui, GradientsHost::Panel);
+}
+
+/// Where the Gradients browser is shown.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GradientsHost {
+    /// The Gradients panel: its list takes the room the panel has left, and a double-click
+    /// adds a Gradient Fill layer of the preset.
+    Panel,
+    /// The options bar's picker popup: a list at most `max_h` tall (inside a popup the available
+    /// height follows the popup's last size, which shrank it a little on every repaint), and a
+    /// double-click chooses the preset.
+    Picker { max_h: f32 },
+}
+
+/// The Gradients browser. Returns whether a preset was chosen by double-click in the picker
+/// (which then closes).
+pub fn gradients_browser(app: &mut PrismApp, ui: &mut egui::Ui, host: GradientsHost) -> bool {
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
     let groups_src = app.session.presets.gradients.clone();
     // Current gradient (what the Gradient tool paints), like the panel's top "recent" row.
@@ -490,13 +518,17 @@ pub fn gradients_panel(app: &mut PrismApp, ui: &mut egui::Ui) {
     paint_gradient(ui, r, &cur.resolve(fg, bg));
     ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, Tokens::get(ui.ctx()).card_border), egui::StrokeKind::Inside);
     ui.add_space(4.0);
+    let max_h = match host {
+        GradientsHost::Panel => (ui.available_height() - 40.0).clamp(90.0, 260.0),
+        GradientsHost::Picker { max_h } => max_h,
+    };
+    let mut chosen = false;
     let groups: Vec<GroupView> = groups_src
         .iter()
         .map(|g| GroupView { name: g.name.clone(), items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone() }).collect() })
         .collect();
     let canvas = app.last_canvas_rect;
     let mut st = std::mem::take(&mut app.ui.presets_ui);
-    let max_h = (ui.available_height() - 40.0).clamp(90.0, 260.0);
     let events = browser(ui, &mut st, "gradients", &groups, Place { canvas, max_h, new_tip: tl!("Create new gradient") }, &mut |ui, r, gi, ii| {
         let stops = groups_src[gi].items[ii].resolve(fg, bg);
         paint_gradient(ui, r, &stops);
@@ -508,6 +540,11 @@ pub fn gradients_panel(app: &mut PrismApp, ui: &mut egui::Ui) {
                 app.ui.presets_ui.selected.insert("gradients".into(), k.clone());
                 run(app, "gradient.presets.select", json!({"preset": k}));
             }
+            // In the picker a double-click picks the gradient for the tool, as in Photoshop.
+            Ev::Activate(k) if host != GradientsHost::Panel => {
+                app.ui.presets_ui.selected.insert("gradients".into(), k.clone());
+                chosen = run(app, "gradient.presets.select", json!({"preset": k})).is_some();
+            }
             Ev::Activate(k) | Ev::Drop(k, _) => {
                 app.ui.presets_ui.selected.insert("gradients".into(), k.clone());
                 run(app, "gradient.presets.apply", json!({"preset": k}));
@@ -517,6 +554,7 @@ pub fn gradients_panel(app: &mut PrismApp, ui: &mut egui::Ui) {
             }
         }
     }
+    chosen
 }
 
 // ------------------------------------------------------------------ Patterns
