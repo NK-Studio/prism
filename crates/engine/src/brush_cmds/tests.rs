@@ -28,7 +28,9 @@ fn stroke_backwards_compatible() {
     assert_eq!(rgba(&s, 30, 30)[3], 0.0);
     // [x, y, pressure] with the default pressure-size brush: light pressure → thinner line.
     s.execute("paint.stroke", json!({"points": [[4, 5, 0.2], [60, 5, 0.2]], "size": 10})).unwrap();
-    assert!(rgba(&s, 30, 5)[3] > 0.9 && rgba(&s, 30, 8)[3] < 0.01);
+    // A 2 px line on the row boundary y = 5 paints the two rows beside it (partly: their
+    // anti-aliased edges) and nothing three rows away.
+    assert!(rgba(&s, 30, 4)[3] > 0.5 && rgba(&s, 30, 5)[3] > 0.5 && rgba(&s, 30, 8)[3] < 0.01);
 }
 
 #[test]

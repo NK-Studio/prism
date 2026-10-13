@@ -19,6 +19,13 @@ pub const SPEED_SPACING_MS: f64 = 8.0;
 
 /// Densest speed spacing, in pixels between dabs (a slow, long stroke never floods the buffer).
 const MIN_SPEED_STEP: f64 = 0.5;
+
+/// Smallest distance between dabs along the path, in pixels, whatever the Spacing percentage:
+/// Photoshop lays the dabs of a 1–100 px tip no closer than about 1 px (measured: a 20 px tip at
+/// 1–5 % spacing paints the same density as at 1 px; `cargo xtask brush-compare`, `spc-*` cases).
+/// Denser dabs would build flow and the anti-aliased edge up further than Photoshop does, which
+/// made thin lines too dark.
+pub const MIN_DAB_STEP: f64 = 1.0;
 /// Maximum airbrush catch-up dabs for one input segment.
 const MAX_AIRBRUSH_DABS_PER_SEGMENT: usize = 512;
 
@@ -398,7 +405,7 @@ impl DabBuilder {
     pub fn step_len(&self, p: &StrokePoint) -> f64 {
         let s = StepInput { point: *p, direction: 0.0, initial_direction: 0.0, step: 0 };
         let d = base_diameter(&self.brush, &s).max(1.0);
-        f64::from(d * self.brush.spacing.max(0.01)).max(0.5)
+        f64::from(d * self.brush.spacing.max(0.01)).max(MIN_DAB_STEP)
     }
 
     pub fn build(&mut self, s: &StepInput, out: &mut Vec<Dab>) {
@@ -527,7 +534,7 @@ impl DualBuilder {
     }
     pub fn step_len(&self, _p: &StrokePoint) -> f64 {
         let d = &self.brush.dual_brush;
-        f64::from(d.size.max(1.0) * d.spacing.max(0.01)).max(0.5)
+        f64::from(d.size.max(1.0) * d.spacing.max(0.01)).max(MIN_DAB_STEP)
     }
     pub fn build(&mut self, s: &StepInput, out: &mut Vec<Dab>) {
         let d = &self.brush.dual_brush;
