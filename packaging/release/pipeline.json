@@ -24,9 +24,9 @@
       "id": "build-macos",
       "title": "Build the macOS packages",
       "do": [
-        "RustRover: run \"Prism Package (macOS)\" (Apple silicon only), or for Apple silicon + Intel: `rustup target add x86_64-apple-darwin` once, then `packaging/macos/package.sh --arch universal`.",
+        "RustRover: run \"Prism Package (macOS)\" with ▶ (not the hammer, which only builds the binary). Terminal: `packaging/macos/package.sh --arch aarch64`. Prism ships for Apple silicon only.",
         "With a Developer ID set (MACOS_SIGN_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID) the app is signed and notarized; without, it is ad-hoc signed (fine for in-app updates, blocked by Gatekeeper when downloaded from the web).",
-        "Output: dist/release/prism-{version}-macos-<arch>.dmg and .app.zip."
+        "Output: dist/release/prism-{version}-macos-aarch64.dmg and .app.zip."
       ],
       "verify": [
         { "kind": "files", "paths": ["dist/release/prism-{version}-macos-*.app.zip", "dist/release/prism-{version}-macos-*.dmg"] }
@@ -59,15 +59,14 @@
       "verify": [{ "kind": "command", "run": "git rev-parse -q --verify refs/tags/v{version}" }]
     },
     {
-      "id": "github-release",
-      "title": "Upload the installers",
-      "optional": true,
+      "id": "confluence",
+      "title": "Share the installer on Confluence",
       "do": [
-        "Put the .dmg (and .msi) where people download Prism, for example a GitHub Release:",
-        "`GH_TOKEN=$(gh auth token --user NK-Studio) gh release create v{version} --repo NK-Studio/prism --title \"Prism v{version}\" dist/release/prism-{version}-*.dmg dist/release/prism-cli-{version}-*.zip`",
-        "Skip if installers are shared another way."
+        "Attach dist/release/prism-{version}-macos-aarch64.dmg (and the .msi, if built) to the internal Confluence download page. First-time installs come only from there; it is not public.",
+        "Note on the page: Apple silicon Macs only; with an ad-hoc signed build, open it the first time with right-click › Open.",
+        "Copies that already have in-app updates don't need it: the next step reaches them."
       ],
-      "verify": [{ "kind": "command", "run": "GH_TOKEN=$(gh auth token --user NK-Studio 2>/dev/null) gh release view v{version} --repo NK-Studio/prism --json tagName" }]
+      "verify": []
     },
     {
       "id": "publish-feed",

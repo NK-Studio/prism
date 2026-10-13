@@ -45,8 +45,11 @@ previous step (repeat to go further back).
 
 ## Background the steps rely on
 
-- Builds are local (GitHub Actions is off for billing reasons). macOS: RustRover "Prism Package
-  (macOS)" or `packaging/macos/package.sh`. Windows needs a Windows PC (`packaging/windows/package.ps1`).
+- Builds are local (GitHub Actions is off for billing reasons). macOS is Apple silicon only:
+  RustRover "Prism Package (macOS)" with ▶ (the hammer only builds the binary) or
+  `packaging/macos/package.sh --arch aarch64`. Windows needs a Windows PC (`packaging/windows/package.ps1`).
+- First-time installers (.dmg) are shared only on the internal Confluence page, never publicly.
+  The `confluence` step has no automatic check: mark it done when the maintainer says it's attached.
 - Without Developer ID secrets the app is ad-hoc signed: in-app updates work, but a .dmg
   downloaded from the web is blocked by Gatekeeper. Once users have a Developer ID–signed build,
   later updates must use the same Team ID or Prism refuses them.
