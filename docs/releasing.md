@@ -233,6 +233,20 @@ versions and pushes; Vercel deploys. Locally the same step is:
 cargo xtask update publish --site ../prism-updates --base-url https://<site> --secret ~/prism-update.key
 ```
 
+**Without GitHub Actions** (local builds): `packaging/publish-update.sh` does the same as the
+workflow from this machine. It clones `../prism-updates`, publishes `dist/release` with
+`~/prism-update.key`, force-pushes a single commit (as the `NK-Studio` gh account) and waits for
+the live feed. Add `--dry-run` to only print the feed. RustRover has *Prism Publish Update* and
+*Prism Publish Update (dry run)* for it.
+
+**Release checklist:** `cargo xtask release start X.Y.Z` walks a release step by step: version,
+commit, macOS build, smoke test, Windows build, tag, installers, feed, update check. The steps
+and their checks live in `packaging/release/pipeline.json`, and progress in
+`log/release/state.json`. `cargo xtask release status` shows the current step, and
+`cargo xtask release done` checks it and moves on. `skip` passes an optional step, `back`
+reopens the previous one. The `release` Claude skill (`.claude/skills/release/`) drives the same
+commands from a conversation ("what's next?" / "done").
+
 **Testing locally:** build a package with a throwaway key and a local feed, serve it, and run
 Help › Check for Updates… from the installed copy:
 

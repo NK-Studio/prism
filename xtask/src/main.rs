@@ -11,6 +11,7 @@ mod ico;
 mod layers;
 mod perf;
 mod pinned;
+mod release;
 mod scorecard;
 mod sha256;
 mod stats;
@@ -46,6 +47,9 @@ commands:
                   regenerate docs/scorecard.md (--check: fail if it is stale)
   version [set X.Y.Z[-pre]]
                   print the workspace version, or set it (Cargo.toml + Cargo.lock)
+  release start X.Y.Z | status [--json] | check | done [--note T] | skip | back
+                  local release conveyor belt (packaging/release/pipeline.json,
+                  progress in log/release/state.json; see xtask/src/release.rs)
   update keygen --secret PATH | update publish --site DIR --base-url URL [...]
                   in-app update signing keys, and the signed update feed for the Vercel site
                   (see xtask/src/update.rs)
@@ -70,6 +74,7 @@ fn main() -> ExitCode {
         Some("version") => version::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
         Some("update") => update::run(&root(), &rest),
+        Some("release") => release::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
