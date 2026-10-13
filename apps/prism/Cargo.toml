@@ -33,6 +33,8 @@ prism-io = { workspace = true }
 prism-format = { workspace = true }
 prism-automation = { workspace = true }
 prism-ui-egui = { workspace = true }
+# In-app updates: signed feed, verified download, whole-app replacement.
+prism-updater = { workspace = true }
 # Pen tablet pressure/tilt on macOS (the workspace's one isolated unsafe helper crate).
 prism-tablet = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence"] }

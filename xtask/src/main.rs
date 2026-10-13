@@ -14,6 +14,7 @@ mod pinned;
 mod scorecard;
 mod sha256;
 mod stats;
+mod update;
 mod version;
 
 use std::path::{Path, PathBuf};
@@ -45,6 +46,9 @@ commands:
                   regenerate docs/scorecard.md (--check: fail if it is stale)
   version [set X.Y.Z[-pre]]
                   print the workspace version, or set it (Cargo.toml + Cargo.lock)
+  update keygen --secret PATH | update publish --site DIR --base-url URL [...]
+                  in-app update signing keys, and the signed update feed for the Vercel site
+                  (see xtask/src/update.rs)
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
 ";
@@ -65,6 +69,7 @@ fn main() -> ExitCode {
         Some("scorecard") => scorecard::run(&root(), &rest),
         Some("version") => version::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
+        Some("update") => update::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())

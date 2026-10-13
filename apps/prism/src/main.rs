@@ -48,6 +48,7 @@ mod window_opacity;
 #[cfg(any(target_os = "macos", test))]
 mod tablet;
 mod ui_state;
+mod updates;
 
 use prism_engine::Session;
 use prism_ui_egui::PrismApp;
@@ -307,6 +308,7 @@ fn main() -> eframe::Result {
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
             services.preset_store = presets;
+            services.updater = Some(Box::new(updates::DesktopUpdater::new(cc.egui_ctx.clone())));
             // Personal cursor artwork is optional runtime input, never bundled or compiled in.
             let cursor_dir = prism_automation::security::environment("PRISM_CURSOR_PACK_DIR")
                 .map(std::path::PathBuf::from)

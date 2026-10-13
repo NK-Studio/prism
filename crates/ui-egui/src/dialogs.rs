@@ -231,6 +231,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 DialogKind::Command if crate::file_ui::owns(&fields) => crate::file_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::save_ui::owns(&fields) => crate::save_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::first_run_ui::owns(&fields) => crate::first_run_ui::body(app, ui, &mut fields),
+                DialogKind::Command if crate::update_ui::owns(&fields) => crate::update_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::color_picker_ui::owns(&fields) => {
                     outcome = crate::color_picker_ui::body(ui, &mut fields);
                     crate::color_picker_ui::take_add_swatch(app, &mut fields);
@@ -271,6 +272,19 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                     } else if matches!(d.kind, DialogKind::About | DialogKind::Error) {
                         if dialog_buttons(ui, &[DialogButton::new(ButtonRole::Default, tl!("OK"), 84.0)]).is_some() {
                             outcome = Some(false);
+                        }
+                    } else if crate::update_ui::owns(&fields) {
+                        let b = crate::update_ui::buttons(&fields);
+                        let mut row = vec![DialogButton::new(ButtonRole::Default, b.ok, 84.0).enabled(b.ok_enabled)];
+                        if let Some(cancel) = b.cancel {
+                            row.push(DialogButton::new(ButtonRole::Cancel, cancel, 84.0));
+                        }
+                        let enter = b.ok_enabled && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        match dialog_buttons(ui, &row) {
+                            Some(ButtonRole::Default) => outcome = Some(true),
+                            Some(_) => outcome = Some(false),
+                            None if enter => outcome = Some(true),
+                            None => {}
                         }
                     } else {
                         let ok_label = if d.kind == DialogKind::NewDocument {
@@ -383,6 +397,9 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 if crate::first_run_ui::owns(&d.fields) {
                     crate::first_run_ui::finish(app);
                 }
+                if crate::update_ui::owns(&d.fields) {
+                    crate::update_ui::cancel(app);
+                }
             }
             None => {}
         }
@@ -478,6 +495,7 @@ fn confirm_inner(app: &mut PrismApp, id: u64) -> Result<Value, String> {
         DialogKind::Command if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::save_ui::owns(&d.fields) => crate::save_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::first_run_ui::owns(&d.fields) => crate::first_run_ui::confirm(app, &d.fields),
+        DialogKind::Command if crate::update_ui::owns(&d.fields) => crate::update_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::color_picker_ui::owns(&d.fields) => crate::color_picker_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::prefs_ui::owns(&d.fields) => crate::prefs_ui::confirm(app, &d.fields),

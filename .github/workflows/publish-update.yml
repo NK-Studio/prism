@@ -1,0 +1,93 @@
+# Publish a released version to the in-app update feed (Vercel). Run by hand after the GitHub
+# Release is published: Actions → Publish update → Run workflow. See docs/releasing.md › In-app updates.
+#
+# Takes the update packages from the published release (prism-<v>-macos-*.app.zip,
+# prism-<v>-windows-*.msi), copies them into the site repository under releases/<v>/, writes and
+# signs stable/latest.json, keeps only the newest three version folders, and pushes. Vercel
+# deploys the site repository on push.
+#
+# Needs, in the `release` environment:
+#   secrets.PRISM_UPDATE_SECRET_KEY  the minisign secret key (`cargo xtask update keygen`)
+#   secrets.UPDATE_SITE_TOKEN        a token that can push to the site repository
+#   vars.UPDATE_SITE_REPO            owner/name of the site repository
+#   vars.UPDATE_BASE_URL             the site's public URL, e.g. https://prism-updates.vercel.app
+name: Publish update
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Released version to publish, e.g. 1.2.0"
+        type: string
+        required: true
+      min_supported:
+        description: "Oldest version that may update in place (empty: any)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-update
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to the update feed
+    runs-on: ubuntu-latest
+    environment: release
+    env:
+      VERSION: ${{ inputs.version }}
+      MIN_SUPPORTED: ${{ inputs.min_supported }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PRISM_UPDATE_SECRET_KEY: ${{ secrets.PRISM_UPDATE_SECRET_KEY }}
+      UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check the release is published
+        run: |
+          draft="$(gh release view "v$VERSION" --json isDraft --jq .isDraft)"
+          if [ "$draft" != "false" ]; then
+            echo "::error::Release v$VERSION isn't published yet. Publish it first."
+            exit 1
+          fi
+      - name: Download the update packages
+        run: |
+          mkdir -p packages
+          gh release download "v$VERSION" --dir packages --pattern "prism-$VERSION-macos-*.app.zip" --pattern "prism-$VERSION-windows-*.msi"
+          ls -l packages
+      - name: Check out the site
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.UPDATE_SITE_REPO }}
+          token: ${{ secrets.UPDATE_SITE_TOKEN }}
+          path: site
+      - name: Write and sign the feed
+        run: |
+          args=(--site site --base-url "$UPDATE_BASE_URL" --dist packages --version "$VERSION" --keep 3
+                --notes-url "https://github.com/$GH_REPO/releases/tag/v$VERSION"
+                --download-url "https://github.com/$GH_REPO/releases/tag/v$VERSION")
+          if [ -n "$MIN_SUPPORTED" ]; then args+=(--min-supported "$MIN_SUPPORTED"); fi
+          cargo xtask update publish "${args[@]}"
+      - name: Push
+        working-directory: site
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # One commit, force-pushed: the repository holds only the files being served (at most
+          # three versions of packages), never a growing history of old binaries.
+          branch="$(git rev-parse --abbrev-ref HEAD)"
+          git checkout --orphan publish
+          git add -A
+          git commit -m "Prism $VERSION"
+          git push --force origin "publish:$branch"
+          {
+            echo "Published **Prism $VERSION** to the update feed:"
+            echo
+            echo '```json'
+            cat stable/latest.json
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

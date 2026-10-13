@@ -185,6 +185,69 @@ on PRs that touch `packaging/freebsd/`, `freebsd.yml` or `release.yml`), so the 
 isn't the first place it runs. Locally, on any OS, `packaging/freebsd/package.sh --dry-run` stages the tree from stub binaries
 and lists the tarball, which checks the layout without a FreeBSD machine.
 
+## In-app updates
+
+Installed copies find new versions through a signed feed on a Vercel site (`crates/updater`,
+`crates/ui-egui/src/update_ui.rs`). Help › Check for Updates… checks on demand. With
+*Preferences › Integrations › Check for updates* on (the default), Prism also checks once a day
+at launch. It announces a new version unless the user chose *Skip This Version*.
+
+**How it stays safe.** `stable/latest.json` lists each platform's package with its URL, size and
+SHA-256. It is signed with a minisign (Ed25519) key whose public half is compiled into Prism, so a
+compromised site can't make Prism install anything else. Downloads are checked against the signed
+size and hash. On macOS the new `Prism.app` must also pass `codesign --verify --deep --strict` and
+carry the same Team ID. The whole bundle is swapped after Prism quits (two renames, rolled back on
+failure). Prism never patches files inside it, which would break the signature. On Windows the
+MSI (a major upgrade) is run with `msiexec /passive` after Prism quits. Portable copies, FreeBSD
+and copies that can't write their own folder get a download link instead.
+
+**Site layout** (the Vercel project, a separate repository):
+
+```text
+stable/latest.json            the feed (never cached; vercel.json is written by the publish step)
+stable/latest.json.minisig    its signature
+releases/<version>/           update packages: prism-<v>-macos-<arch>.app.zip, prism-<v>-windows-<arch>.msi
+```
+
+Only the newest three version folders are kept. To roll back, point `latest.json` at an older
+kept version (Prism never downgrades on its own, so this only stops further updates to the bad
+one). `min_supported` sends anything older to the download page.
+
+**One-time setup:**
+
+1. `cargo xtask update keygen --secret ~/prism-update.key` writes `packaging/update/public.key`
+   (commit it) and the secret key outside the repository. Store the secret key's text as the
+   `PRISM_UPDATE_SECRET_KEY` secret in the `release` environment, and keep an offline copy:
+   losing it means shipping a new public key by hand.
+2. Put the feed URL (`https://<site>/stable/latest.json`) in `packaging/update/feed-url.txt` and
+   commit it. Builds without the key or the URL simply have updates turned off.
+3. Create the site repository, connect it to Vercel (deploys on push), and set
+   `vars.UPDATE_SITE_REPO`, `vars.UPDATE_BASE_URL` and `secrets.UPDATE_SITE_TOKEN` (a token that
+   can push to it) in the `release` environment.
+
+**Each release:** after publishing the GitHub Release, run *Actions → Publish update* with the
+version. It copies the release's update packages into the site, signs the feed, prunes old
+versions and pushes; Vercel deploys. Locally the same step is:
+
+```sh
+cargo xtask update publish --site ../prism-updates --base-url https://<site> --secret ~/prism-update.key
+```
+
+**Testing locally:** build a package with a throwaway key and a local feed, serve it, and run
+Help › Check for Updates… from the installed copy:
+
+```sh
+cargo xtask update keygen --secret /tmp/test.key --public /tmp/test.pub
+PRISM_UPDATE_URL=http://127.0.0.1:8765/stable/latest.json PRISM_UPDATE_PUBKEY="$(tail -1 /tmp/test.pub)" \
+  DIST=/tmp/prism-dist packaging/macos/package.sh --arch aarch64
+cargo xtask update publish --site /tmp/site --base-url http://127.0.0.1:8765 --dist /tmp/prism-dist --version 9.9.9 --secret /tmp/test.key
+python3 -m http.server 8765 --directory /tmp/site
+```
+
+The publish step looks for `prism-9.9.9-*` files, so first copy the package under that name.
+Debug builds also accept `PRISM_UPDATE_PUBKEY` at run time. `PRISM_UPDATE_URL` overrides the
+feed URL at run time in any build, which is harmless because the signature is still checked.
+
 ## Secrets
 
 All secrets live in the repository's **`release` environment** (*Settings → Environments →

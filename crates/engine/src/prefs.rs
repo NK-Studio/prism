@@ -729,12 +729,24 @@ pub struct Integrations {
     pub allow_agent_control: bool,
     /// Default control port (0 = only when `--control` is given).
     pub control_port: u32,
+    /// Look for a new Prism version once a day (Help › Check for Updates… works either way).
+    pub check_for_updates: bool,
 }
 
 impl Default for Integrations {
     fn default() -> Self {
-        Self { allow_agent_control: true, control_port: 0 }
+        Self { allow_agent_control: true, control_port: 0, check_for_updates: true }
     }
+}
+
+/// In-app update bookkeeping (not a Preferences-dialog section).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UpdateState {
+    /// The version the user chose to skip ("Skip This Version"); empty for none.
+    pub skipped_version: String,
+    /// UTC date (`YYYY-MM-DD`) of the last automatic check; empty before the first.
+    pub last_check: String,
 }
 
 /// Edit › Menus: hidden items and item colours, by command id.
@@ -802,6 +814,8 @@ pub struct Preferences {
     /// people who already use Prism never see it. Not a Preferences-dialog setting.
     #[serde(default = "setup_was_done")]
     pub setup_complete: bool,
+    /// In-app updates: skipped version and the last automatic check.
+    pub updates: UpdateState,
 }
 
 /// Older preferences files predate the first-run setup: their owners have already set Prism up.

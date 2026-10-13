@@ -67,6 +67,7 @@ pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
 pub mod first_run_ui;
+pub mod update_ui;
 pub mod floating_window;
 pub mod save_ui;
 pub mod gallery_ui;
@@ -336,6 +337,9 @@ pub struct Services {
     /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
     /// Without one, eframe closes the window and the app ends with it.
     pub quit: Option<QuitFn>,
+    /// In-app updates (desktop; `prism-updater`). Without one, Help › Check for Updates… says
+    /// updates aren't available.
+    pub updater: Option<Box<dyn update_ui::Updater>>,
 }
 
 /// A document histogram being computed off the UI thread: (document, revision, receiver of
@@ -1168,6 +1172,7 @@ impl eframe::App for PrismApp {
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
         prefs_ui::tick(self, ctx);
+        update_ui::tick(self, ctx);
         monitor_status::poll(self, ctx);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);

@@ -36,6 +36,7 @@ prism-engine = { path = "crates/engine" }
 prism-ui-egui = { path = "crates/ui-egui" }
 prism-testkit = { path = "crates/testkit" }
 prism-tablet = { path = "crates/tablet" }
+prism-updater = { path = "crates/updater" }
 
 # external
 thiserror = "2"

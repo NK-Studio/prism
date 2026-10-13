@@ -3,6 +3,7 @@
 #
 #   $DIST/prism-<version>-macos-<arch>.dmg          Prism.app on a drag-to-Applications DMG
 #   $DIST/prism-cli-<version>-macos-<arch>.zip      the headless CLI
+#   $DIST/prism-<version>-macos-<arch>.app.zip      Prism.app for in-app updates (crates/updater)
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
 #
@@ -42,6 +43,7 @@ WORK="$CARGO_TARGET_DIR/macos-package"
 APP="$WORK/Prism.app"
 DMG="$DIST/prism-$VERSION-macos-$ARCH.dmg"
 CLI_ZIP="$DIST/prism-cli-$VERSION-macos-$ARCH.zip"
+UPDATE_ZIP="$DIST/prism-$VERSION-macos-$ARCH.app.zip"
 
 NOTARIZE=0
 if [ "$IDENTITY" = "-" ]; then
@@ -128,6 +130,13 @@ if [ "$NOTARIZE" = 1 ]; then
   spctl --assess --type execute -vvv "$APP"
 fi
 
+# ---- update package ----------------------------------------------------------------------------
+# The signed (and, in CI, notarized and stapled) bundle, zipped with ditto so signatures and
+# extended attributes survive. The in-app updater unpacks it with ditto and swaps the whole bundle.
+echo "==> building $UPDATE_ZIP"
+rm -f "$UPDATE_ZIP"
+ditto -c -k --keepParent "$APP" "$UPDATE_ZIP"
+
 # ---- DMG ---------------------------------------------------------------------------------------
 echo "==> building $DMG"
 STAGE="$WORK/dmg"
@@ -172,4 +181,4 @@ if [ "$NOTARIZE" = 1 ]; then notarize "$CLI_ZIP"; fi
 
 "$WORK/bin/prism-cli" --version
 echo "==> done (check the artifacts as shipped with packaging/macos/verify.sh --arch $ARCH)"
-ls -lh "$DMG" "$CLI_ZIP"
+ls -lh "$DMG" "$CLI_ZIP" "$UPDATE_ZIP"

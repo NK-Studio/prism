@@ -1040,6 +1040,9 @@ pub struct UiState {
     pub camera_raw_scope: CameraRawScopeState,
     #[serde(default)]
     pub camera_raw_preview: CameraRawPreviewState,
+    /// Software update check, download and install (`update_ui`). Live state, never restored.
+    #[serde(default, skip_deserializing)]
+    pub update: crate::update_ui::UpdateUi,
 }
 
 impl Default for UiState {
@@ -1112,6 +1115,7 @@ impl Default for UiState {
             chrome: Default::default(),
             camera_raw_scope: Default::default(),
             camera_raw_preview: Default::default(),
+            update: Default::default(),
         }
     }
 }
