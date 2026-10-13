@@ -157,35 +157,104 @@ pub fn edge_coverage(sd: f32) -> f32 {
     1.0 - x * x * (3.0 - 2.0 * x)
 }
 
-/// Coverage of a computed tip at relative radius `q` (0 = centre, 1 = nominal edge) and signed
-/// distance `sd` in pixels from the nominal edge: the hardness falloff, which scales with the
-/// tip, times the anti-aliased edge, which is a fixed width in pixels at every tip size.
-#[inline]
-pub fn tip_coverage(q: f32, sd: f32, hardness: f32) -> f32 {
-    if sd >= EDGE_REACH {
-        return 0.0;
-    }
-    edge_coverage(sd) * tip_falloff(q, hardness)
+/// Photoshop's hardness falloff for computed tips, as `(hardness, a, s)`: coverage is full out to
+/// relative radius `a` (1 = nominal radius), then falls as the Gaussian tail exp(−((q − a) / s)²),
+/// which paints past the nominal radius (hardness 0 still lays 10 % there and stops near 1.6
+/// radii). Measured with `cargo xtask brush-compare` (`soft-*` and `dab-h*` cases): the shape
+/// scales with the tip from 20 to 200 px, and the tail fits every measured hardness to ~0.01.
+/// Hardnesses in between interpolate linearly; 1 is the hard tip ([`edge_coverage`]).
+const FALLOFF: [(f32, f32, f32); 9] = [
+    (0.0, 0.0, 0.654),
+    (0.1, 0.152, 0.570),
+    (0.25, 0.361, 0.452),
+    (0.4, 0.537, 0.343),
+    (0.5, 0.651, 0.276),
+    (0.6, 0.738, 0.214),
+    (0.75, 0.847, 0.136),
+    (0.9, 0.942, 0.060),
+    (1.0, 1.0, 0.0),
+];
+/// Narrowest falloff tail, in pixels: a sharper one would alias. Its 90 % → 10 % width (≈ 1.19 ×)
+/// matches the hard edge's ~1.55 px.
+pub const MIN_TAIL_PX: f32 = 1.3;
+/// Where the tail is cut off, in tail widths: exp(−2.5²) ≈ 0.0019, half an 8-bit level. Hardness 0
+/// then stops at 1.64 radii, where Photoshop's does (it paints 0.001 at 1.6 and nothing at 1.7).
+const TAIL_CUTOFF: f32 = 2.5;
+/// √ln 2: the tail reaches 50 % this many tail widths beyond `a`.
+const TAIL_HALF: f32 = 0.832_555;
+
+/// A computed tip's radial profile for one dab size: hard (the anti-aliased edge at the nominal
+/// radius) or soft (full out to `a`, then a Gaussian tail of width `s`, both relative to the radius).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Falloff {
+    hard: bool,
+    a: f32,
+    s: f32,
 }
 
-/// The hardness falloff alone, at relative radius `q` (1 = nominal edge).
-#[inline]
-pub fn tip_falloff(q: f32, hardness: f32) -> f32 {
-    let h = hardness.clamp(0.0, 1.0);
-    if q <= h || 1.0 - h < 1e-3 {
-        1.0
-    } else {
-        let t = ((q - h) / (1.0 - h)).clamp(0.0, 1.0);
-        // smoothstep falloff
-        1.0 - t * t * (3.0 - 2.0 * t)
+impl Falloff {
+    /// The profile of a tip with this hardness whose radius is `radius` pixels (for an ellipse, the
+    /// minor radius: the tail is never sharper than [`MIN_TAIL_PX`] there).
+    pub fn new(hardness: f32, radius: f32) -> Self {
+        let h = if hardness.is_finite() { hardness.clamp(0.0, 1.0) } else { 1.0 };
+        if h >= 1.0 {
+            return Self { hard: true, a: 1.0, s: 0.0 };
+        }
+        let i = FALLOFF.iter().rposition(|e| e.0 <= h).unwrap_or(0);
+        let (Some(&(h0, a0, s0)), Some(&(h1, a1, s1))) = (FALLOFF.get(i), FALLOFF.get(i + 1)) else {
+            return Self { hard: true, a: 1.0, s: 0.0 };
+        };
+        let t = (h - h0) / (h1 - h0);
+        let (a, s) = (a0 + (a1 - a0) * t, s0 + (s1 - s0) * t);
+        // Widen a tail sharper than the minimum about its 50 % point.
+        let s_min = MIN_TAIL_PX / radius.max(0.5);
+        if s < s_min {
+            let half = a + TAIL_HALF * s;
+            return Self { hard: false, a: half - TAIL_HALF * s_min, s: s_min };
+        }
+        Self { hard: false, a, s }
     }
+
+    pub fn is_hard(&self) -> bool {
+        self.hard
+    }
+
+    /// Relative radius out to which coverage is full (for a hard tip: the nominal radius, before
+    /// the anti-aliased edge).
+    pub fn full_to(&self) -> f32 {
+        self.a
+    }
+
+    /// Relative radius beyond which a soft tip paints nothing (1 for a hard tip, whose edge reach
+    /// is in pixels: [`EDGE_REACH`]).
+    pub fn reach(&self) -> f32 {
+        if self.hard { 1.0 } else { self.a + TAIL_CUTOFF * self.s }
+    }
+
+    /// Soft coverage at relative radius `q` (a hard tip is full: its edge is [`edge_coverage`]).
+    #[inline]
+    pub fn at(&self, q: f32) -> f32 {
+        if self.hard || q <= self.a {
+            return 1.0;
+        }
+        let t = (q - self.a) / self.s;
+        if t >= TAIL_CUTOFF { 0.0 } else { (-t * t).exp() }
+    }
+}
+
+/// Coverage of a computed tip at relative radius `q` (0 = centre, 1 = nominal edge) and signed
+/// distance `sd` in pixels from the nominal edge: a hard tip's anti-aliased edge, a fixed width in
+/// pixels at every size, or a soft tip's falloff, which scales with the tip.
+#[inline]
+pub fn tip_coverage(q: f32, sd: f32, falloff: &Falloff) -> f32 {
+    if falloff.hard { if sd >= EDGE_REACH { 0.0 } else { edge_coverage(sd) } } else { falloff.at(q) }
 }
 
 /// Coverage of a round dab at distance `d` from its centre (anti-aliased edge, hardness falloff).
 #[inline]
 pub fn dab_coverage(d: f32, radius: f32, hardness: f32) -> f32 {
     let r = radius.max(1e-3);
-    tip_coverage(d / r, d - r, hardness)
+    tip_coverage(d / r, d - r, &Falloff::new(hardness, r))
 }
 
 /// Rasterize a stroke onto `target`, optionally limited by a selection (grayscale coverage surface).

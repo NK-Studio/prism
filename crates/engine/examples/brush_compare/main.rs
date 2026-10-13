@@ -601,7 +601,8 @@ fn diff_case(case: &Case, out: &Path) -> R<Row> {
     let pr = load_coverage(&out.join("prism").join(format!("{}.png", case.id)))?;
     let probe = case.probe();
     let centre = case.points.first().copied().unwrap_or_default();
-    let max_r = f64::from(case.size) / 2.0 + 4.0;
+    // Out to the diameter: Photoshop's soft tips paint well beyond their nominal radius.
+    let max_r = f64::from(case.size) + 4.0;
     let (rad_ps, rad_prism) =
         (ps.as_ref().filter(|_| case.radial).map(|c| radial(c, centre, max_r)), pr.as_ref().filter(|_| case.radial).map(|c| radial(c, centre, max_r)));
     row.edge_ps = rad_ps.as_deref().and_then(edge);

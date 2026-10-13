@@ -19,7 +19,7 @@ use crate::dynamics::DabGenerator;
 use crate::retouch::{Footprint, alpha_index, over_native};
 use crate::rng::hash2;
 use crate::tile::{Mips, PatternImage};
-use crate::{Dab, EDGE_INNER, EDGE_REACH, StrokePoint, tip_coverage, tip_falloff};
+use crate::{Dab, EDGE_INNER, EDGE_REACH, Falloff, StrokePoint, tip_coverage};
 
 /// Edge of a stroke-buffer tile.
 pub const COV_TILE: i32 = 64;
@@ -109,6 +109,21 @@ fn prepare_pattern(b: &BrushSettings) -> Option<Arc<PatternImage>> {
     Some(Arc::new(img))
 }
 
+/// A computed tip's roundness and minor radius, as the rasterizer uses them.
+fn tip_axes(d: &Dab) -> (f32, f32) {
+    let ro = d.roundness.max(0.5 / d.radius).min(1.0);
+    (ro, (d.radius * ro).max(0.5))
+}
+
+/// How far from its centre, in pixels, a computed tip paints: its major radius plus the
+/// anti-aliased edge (hard), or out to the end of its falloff tail (soft).
+pub(crate) fn round_reach(d: &Dab, hardness: f32) -> f32 {
+    let (ro, rm) = tip_axes(d);
+    let major = rm / ro;
+    let falloff = Falloff::new(hardness, rm);
+    if falloff.is_hard() { major + EDGE_REACH } else { major * falloff.reach() }
+}
+
 /// The pixel rectangle `reach` (plus 1 px of anti-aliasing slack) around a dab's centre. The casts
 /// saturate and the arithmetic saturates, so a far or non-finite centre or reach from a direct
 /// caller gives a (possibly empty) rectangle instead of an `i32` overflow (#977).
@@ -150,10 +165,12 @@ impl BrushContext {
         a + (b - a) * ty
     }
 
-    /// Bounding rectangle of a dab (rotated sampled tips need the corner reach).
+    /// Bounding rectangle of a dab (rotated sampled tips need the corner reach; computed tips their
+    /// anti-aliased edge or soft tail).
     pub fn dab_rect(&self, d: &Dab, dual: bool) -> Rect {
-        let sampled = if dual { self.dual_tip.is_some() } else { self.tip.is_some() };
-        let reach = if sampled { d.radius * std::f32::consts::SQRT_2 } else { d.radius + EDGE_REACH };
+        let b = &self.brush;
+        let (sampled, hardness) = if dual { (self.dual_tip.is_some(), b.dual_brush.hardness) } else { (self.tip.is_some(), b.hardness) };
+        let reach = if sampled { d.radius * std::f32::consts::SQRT_2 } else { round_reach(d, hardness) };
         rect_around(d, reach)
     }
 
@@ -178,16 +195,17 @@ impl BrushContext {
             (pc, ps, 1.0 / d.proj_scale.max(0.05) - 1.0)
         });
         let r = d.radius;
-        let ro = d.roundness.max(0.5 / r).min(1.0);
-        let rm = (r * ro).max(0.5);
+        let (ro, rm) = tip_axes(d);
         let (inv_major, inv_minor) = (ro / rm, 1.0 / rm);
+        let falloff = Falloff::new(hardness, rm);
         // In q² (relative radius squared): beyond `outside_q2` nothing paints; within `inside_q2`
-        // the anti-aliased edge is fully on (none of a tip narrower than the edge is: -1).
-        let outside_q2 = (1.0 + EDGE_REACH / rm).powi(2);
-        let inside = 1.0 - EDGE_INNER / rm;
-        let inside_q2 = if inside > 0.0 { inside * inside } else { -1.0 };
-        // A hard tip is fully on inside the edge; only Wet Edges reads the relative radius there.
-        let hard_inside = hardness >= 1.0 && !wet;
+        // coverage is full (-1: nowhere, for a tip narrower than its edge or tail).
+        let positive_sq = |v: f32| if v > 0.0 { v * v } else { -1.0 };
+        let (outside_q2, inside_q2) = if falloff.is_hard() {
+            ((1.0 + EDGE_REACH / rm).powi(2), positive_sq(1.0 - EDGE_INNER / rm))
+        } else {
+            (falloff.reach().powi(2), positive_sq(falloff.full_to()))
+        };
         // Sampled-tip mapping.
         let (level, inv_scale, tw, th) = match mips {
             Some(m) => {
@@ -221,29 +239,32 @@ impl BrushContext {
                         (1.0, d2.sqrt() / rm)
                     }
                     None => {
-                        // Relative radius on the ellipse (semi-axes `major` along u, `rm` along v),
-                        // and the signed distance to its edge in pixels, to first order
-                        // (q − 1) / |∇q| (exact on a circle). Measuring the edge in pixels keeps
-                        // its anti-aliasing the same width all round a flattened tip, instead of
-                        // stretching it by 1 / roundness along the long axis.
+                        // Relative radius on the ellipse (semi-axes `major` along u, `rm` along v).
+                        // A soft tip's falloff scales with the tip. A hard tip's edge is measured in
+                        // pixels, by the first-order signed distance (q − 1) / |∇q| (exact on a
+                        // circle), so its anti-aliasing is the same width all round a flattened
+                        // tip instead of stretching by 1 / roundness along the long axis.
                         let (qu, qv) = (u * inv_major, v * inv_minor);
                         let q2 = qu * qu + qv * qv;
-                        // |∇q| ≤ 1 / rm, so |sd| ≥ |q − 1|·rm: these bounds skip the gradient
-                        // exactly where it can't change the result.
+                        // |∇q| ≤ 1 / rm, so |sd| ≥ |q − 1|·rm: these bounds skip work exactly where
+                        // it can't change the result.
                         if q2 >= outside_q2 {
                             continue;
                         }
-                        if q2 <= inside_q2 && hard_inside {
+                        if q2 <= inside_q2 && !wet {
+                            // Full coverage; only Wet Edges reads the relative radius here.
                             (1.0, 0.0)
                         } else {
                             let q = q2.sqrt();
                             if q2 <= inside_q2 {
-                                (tip_falloff(q, hardness), q)
+                                (1.0, q)
+                            } else if !falloff.is_hard() {
+                                (falloff.at(q), q)
                             } else {
                                 let (gu, gv) = (qu * inv_major, qv * inv_minor);
                                 let g = if q > 1e-6 { (gu * gu + gv * gv).sqrt() / q } else { 0.0 };
                                 let sd = if g > 0.0 { (q - 1.0) / g } else { -rm };
-                                (tip_coverage(q, sd, hardness), q)
+                                (tip_coverage(q, sd, &falloff), q)
                             }
                         }
                     }

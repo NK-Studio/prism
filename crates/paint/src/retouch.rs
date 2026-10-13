@@ -95,14 +95,18 @@ impl Footprint {
     }
 }
 
-/// Bounding rectangle of a dab (its anti-aliased edge included).
-pub fn dab_rect(d: &Dab) -> Rect {
-    crate::render::rect_around(d, d.radius + crate::EDGE_REACH)
+/// Bounding rectangle of a round dab of this hardness, as [`footprint`] rasterizes it (its
+/// anti-aliased edge or soft tail included).
+pub fn dab_rect(d: &Dab, hardness: f32) -> Rect {
+    let r = d.radius.max(1e-3);
+    let falloff = crate::Falloff::new(hardness, r);
+    let reach = if falloff.is_hard() { r + crate::EDGE_REACH } else { r * falloff.reach() };
+    crate::render::rect_around(d, reach)
 }
 
 /// Rasterize one dab's coverage.
 pub fn footprint(d: &Dab, index: usize, hardness: f32) -> Footprint {
-    let rect = dab_rect(d);
+    let rect = dab_rect(d, hardness);
     let (cx, cy) = (d.center.x as f32, d.center.y as f32);
     let mut cov = Vec::with_capacity(rect.width() as usize * rect.height() as usize);
     for y in rect.y0..rect.y1 {
@@ -115,8 +119,8 @@ pub fn footprint(d: &Dab, index: usize, hardness: f32) -> Footprint {
 }
 
 /// Union of the dabs' rectangles.
-pub fn stroke_bounds(ds: &[Dab]) -> Rect {
-    ds.iter().fold(Rect::EMPTY, |r, d| r.union(&dab_rect(d)))
+pub fn stroke_bounds(ds: &[Dab], hardness: f32) -> Rect {
+    ds.iter().fold(Rect::EMPTY, |r, d| r.union(&dab_rect(d, hardness)))
 }
 
 /// Accumulated coverage of a whole stroke: dabs build up (`c ← c + d·(ceil − c)`, "flow"), capped at

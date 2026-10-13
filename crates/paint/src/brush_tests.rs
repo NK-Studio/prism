@@ -30,7 +30,11 @@ fn raster(b: &BrushSettings, d: &Dab) -> (Rect, Vec<f32>) {
     (r, v)
 }
 
+/// A rasterized dab's value at a pixel; nothing outside its rectangle.
 fn at(r: &(Rect, Vec<f32>), x: i32, y: i32) -> f32 {
+    if !r.0.contains(x, y) {
+        return 0.0;
+    }
     r.1[((y - r.0.y0) * r.0.width() as i32 + (x - r.0.x0)) as usize]
 }
 
@@ -80,10 +84,13 @@ fn hardness_profile_is_monotonic() {
     for h in [0.0f32, 0.5, 1.0] {
         let b = BrushSettings { hardness: h, ..brush() };
         let r = raster(&b, &Dab::round(Point::new(50.0, 50.0), 20.0, 1.0));
-        let prof: Vec<f32> = (0..22).map(|i| at(&r, 50 + i, 50)).collect();
+        let prof: Vec<f32> = (0..36).map(|i| at(&r, 50 + i, 50)).collect();
         assert!(prof.windows(2).all(|w| w[1] <= w[0] + 1e-6), "h={h} {prof:?}");
         assert!(prof[0] > 0.99);
-        assert_eq!(prof[21], 0.0);
+        // Like Photoshop's, a soft tip's tail paints past the radius (20 px), and every tip stops
+        // before 1.7 radii.
+        assert_eq!(prof[21] > 0.03, h < 1.0, "h={h} {prof:?}");
+        assert_eq!(prof[35], 0.0);
         let mid = at(&r, 60, 50);
         if h == 1.0 {
             assert!(mid > 0.99);
@@ -1001,13 +1008,15 @@ fn dab_rect_of_a_far_or_non_finite_centre_does_not_overflow() {
     let ctx = BrushContext::new(&brush());
     for c in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 1e300, -1e300, f64::from(i32::MAX), f64::from(i32::MIN)] {
         let d = Dab::round(Point::new(c, c), 10.0, 1.0);
-        for r in [ctx.dab_rect(&d, false), ctx.dab_rect(&d, true), crate::retouch::dab_rect(&d)] {
+        for r in [ctx.dab_rect(&d, false), ctx.dab_rect(&d, true), crate::retouch::dab_rect(&d, 1.0), crate::retouch::dab_rect(&d, 0.0)] {
             assert!(r.x0 <= r.x1 && r.y0 <= r.y1, "centre {c}: {r:?}");
         }
     }
     let huge = Dab::round(Point::new(5.0, 5.0), f32::INFINITY, 1.0);
-    let r = crate::retouch::dab_rect(&huge);
-    assert!(r.x0 <= r.x1 && r.y0 <= r.y1, "{r:?}");
+    for hardness in [1.0, 0.0] {
+        let r = crate::retouch::dab_rect(&huge, hardness);
+        assert!(r.x0 <= r.x1 && r.y0 <= r.y1, "{r:?}");
+    }
 }
 
 /// The rasterizer's shortcuts for computed tips (skip pixels beyond the edge, skip the gradient
@@ -1038,7 +1047,7 @@ fn computed_tip_shortcuts_match_the_edge_model() {
                 let q = (qu * qu + qv * qv).sqrt();
                 let g = if q > 1e-6 { ((qu / major).powi(2) + (qv / rm).powi(2)).sqrt() / q } else { 0.0 };
                 let sd = if g > 0.0 { (q - 1.0) / g } else { -rm };
-                let want = crate::tip_coverage(q, sd, hardness);
+                let want = crate::tip_coverage(q, sd, &crate::Falloff::new(hardness, rm));
                 assert!((v - want).abs() < 1e-5, "size {size} round {roundness} at {centre:?} pixel ({x}, {y}): {v} vs {want}");
             }
         }

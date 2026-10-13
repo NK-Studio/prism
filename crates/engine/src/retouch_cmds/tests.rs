@@ -1217,8 +1217,9 @@ fn live_dodge_matches_the_commit_across_cells() {
         for x in 0..200 {
             let (got, want) = (a.rgba(x, y), b.rgba(x, y));
             changed |= (want[0] - texture(x, y)[0]).abs() > 0.02;
-            // The commit also lays the stroke's last dab, which the live stroke shows on release.
-            if (x - 150).pow(2) + (y - 70).pow(2) > 25 * 25 {
+            // The commit also lays the stroke's last dab, which the live stroke shows on release:
+            // a 40 px tip at hardness 30 paints out to ~1.5 radii (its soft tail), plus slack.
+            if (x - 150).pow(2) + (y - 70).pow(2) > 36 * 36 {
                 worst = (0..4).map(|c| (got[c] - want[c]).abs()).fold(worst, f32::max);
             }
         }
