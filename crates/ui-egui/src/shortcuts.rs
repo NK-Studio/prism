@@ -296,6 +296,11 @@ pub fn handle(app: &mut PrismApp, ctx: &egui::Context) {
             return;
         }
     }
+    // Path Selection with components selected: ⌫ deletes them (not Edit › Clear's pixels), the
+    // arrows nudge them.
+    if focus == Focus::None && crate::path_select::keys(app, ctx) {
+        return;
+    }
     // Move tool / Free Transform: arrows nudge (⇧ ×10, ⌥ duplicates first).
     if focus == Focus::None && crate::move_mods::arrow_keys(app, ctx) {
         return;

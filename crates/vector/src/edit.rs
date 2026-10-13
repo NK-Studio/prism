@@ -444,6 +444,45 @@ pub fn arrange_components(path: &mut Path, subs: &[usize], to: Arrange) -> Resul
     Ok(moved)
 }
 
+/// Removes the components holding subpaths `subs` (Path Selection's Delete): every subpath of
+/// each, so a custom shape's holes go with it.
+pub fn delete_components(path: &mut Path, subs: &[usize]) -> Result<(), String> {
+    let picked = components_of(path, subs)?;
+    if picked.is_empty() {
+        return Err("no path components to delete".into());
+    }
+    let old = std::mem::take(&mut path.subpaths);
+    path.subpaths = old.into_iter().enumerate().filter(|(i, _)| !picked.iter().any(|r| r.contains(i))).map(|(_, s)| s).collect();
+    Ok(())
+}
+
+/// Adds copies of the components holding subpaths `subs`, moved by `d`, on top of the rest
+/// (Path Selection's ⌥-drag). Returns the copies' subpath indices.
+pub fn duplicate_components(path: &mut Path, subs: &[usize], d: [f64; 2]) -> Result<Vec<usize>, String> {
+    let picked = components_of(path, subs)?;
+    if picked.is_empty() {
+        return Err("no path components to duplicate".into());
+    }
+    let mut copies = Vec::new();
+    for r in picked {
+        let start = path.subpaths.len();
+        let mut parts: Vec<_> = r.filter_map(|s| path.subpaths.get(s).cloned()).collect();
+        // Each copy starts a component of its own, never joined to the one before it.
+        if let Some(first) = parts.first_mut()
+            && first.op == prism_doc::PathOp::Join
+        {
+            first.op = prism_doc::PathOp::Combine;
+        }
+        path.subpaths.extend(parts);
+        copies.extend(start..path.subpaths.len());
+    }
+    let anchors: Vec<[usize; 2]> = copies.iter().flat_map(|&s| subpath_anchors(path, s)).collect();
+    if d != [0.0, 0.0] && !anchors.is_empty() {
+        move_anchors(path, &anchors, d)?;
+    }
+    Ok(copies)
+}
+
 /// Sets the path operation of the components holding subpaths `subs` (their first subpath's;
 /// the rest of a component stays joined to it).
 pub fn set_operation(path: &mut Path, subs: &[usize], op: prism_doc::PathOp) -> Result<(), String> {

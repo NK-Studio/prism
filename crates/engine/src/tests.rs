@@ -1279,3 +1279,48 @@ fn merge_down_keeps_layer_effects_as_they_look() {
         }
     }
 }
+
+/// Shape layers merged stay a shape layer, as in Photoshop: Merge Down keeps the lower layer
+/// (its name and fill) with both paths, Merge Layers the top one with every path; a pixel or
+/// masked layer among them merges as pixels, as before. One undoable step.
+#[test]
+fn merging_shape_layers_keeps_a_shape_layer() {
+    use prism_doc::{LayerContent, LayerId};
+    let shape = |s: &Session, id: u64| match &s.active().unwrap().doc.layer(LayerId(id)).unwrap().content {
+        LayerContent::Shape(sh) => Some((sh.path.subpaths.len(), sh.fill.clone(), sh.cache.as_ref().map(|c| c.content_bounds()))),
+        _ => None,
+    };
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 120, "height": 90, "background": "transparent"})).unwrap();
+    let a = s.execute("shape.create", json!({"kind": "rect", "rect": [10, 10, 20, 20], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+    let b = s.execute("shape.create", json!({"kind": "ellipse", "rect": [60, 40, 30, 30], "fill": "#0000ff"})).unwrap()["layer"].as_u64().unwrap();
+    let before = s.active().unwrap().doc.layers.len();
+    let lower_fill = shape(&s, a).unwrap().1;
+    s.execute("layer.mergeDown", json!({})).unwrap();
+    let (subs, fill, bounds) = shape(&s, a).expect("still a shape layer");
+    assert_eq!((subs, fill), (2, lower_fill), "both paths, in the lower layer's fill");
+    let bounds = bounds.unwrap();
+    assert!(bounds.x0 <= 10 && bounds.x1 >= 90, "both drawn: {bounds:?}");
+    assert_eq!(s.active().unwrap().doc.layers.len(), before - 1);
+    assert!(s.active().unwrap().doc.layer(LayerId(b)).is_none());
+    assert!(s.undo());
+    assert!(shape(&s, b).is_some());
+    // Merge Layers: three shapes into the top one.
+    let c = s.execute("shape.create", json!({"kind": "rect", "rect": [80, 5, 10, 10], "fill": "#00ff00"})).unwrap()["layer"].as_u64().unwrap();
+    for (i, id) in [a, b, c].into_iter().enumerate() {
+        s.execute("layer.select", json!({"layer": id, "mode": if i == 0 { "replace" } else { "add" }})).unwrap();
+    }
+    let top_name = s.active().unwrap().doc.layer(LayerId(c)).unwrap().name.clone();
+    let r = s.execute("layer.mergeLayers", json!({})).unwrap();
+    let id = r["layer"].as_u64().unwrap();
+    assert_eq!(id, c, "the top layer stays");
+    assert_eq!(shape(&s, id).unwrap().0, 3);
+    assert_eq!(s.active().unwrap().doc.layer(LayerId(id)).unwrap().name, top_name);
+    assert!(s.undo());
+    // A pixel layer among them: pixels, as before.
+    s.execute("layer.select", json!({"layer": c})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("layer.mergeDown", json!({})).unwrap();
+    let st = s.active().unwrap();
+    assert!(matches!(st.doc.layer(st.active_layer.unwrap()).unwrap().content, LayerContent::Raster(_)), "shape + pixels = pixels");
+}

@@ -487,6 +487,10 @@ pub fn is_enabled(app: &PrismApp, id: &str) -> bool {
     if let Some(e) = crate::transform_tool::is_enabled(app, id) {
         return e;
     }
+    // A path being drawn with the Pen owns Undo / Redo while it has steps.
+    if let Some(e) = crate::vector_ui::pen_is_enabled(app, id) {
+        return e;
+    }
     // Photoshop greys these for the Background layer, other layer kinds or single-layer documents.
     if crate::enable_rules::disabled(app, id) {
         return false;

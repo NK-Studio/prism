@@ -535,6 +535,41 @@ fn corner_scale(sx: f64, sy: f64) -> f64 {
     if k.is_finite() { k } else { 1.0 }
 }
 
+/// Shape layers merged as one shape layer (Merge Down / Merge Layers when every layer is a shape
+/// layer, as in Photoshop): their paths in stacking order (`layers` bottom first), each layer's
+/// path joining as new components combined with what's below, on `survivor` (its id, name,
+/// fill, stroke, effects and layer settings). `None` when they can't merge as vectors (a layer
+/// that isn't a visible, unmasked, unclipped shape layer, or paths with different fill rules or
+/// inverted), which then merge as pixels.
+pub(crate) fn merged_shape(doc: &Document, layers: &[&Layer], survivor: &Layer) -> Option<Layer> {
+    if layers.len() < 2 {
+        return None;
+    }
+    let LayerContent::Shape(base) = &survivor.content else { return None };
+    let rule = base.path.fill_rule;
+    let mut subpaths: Vec<Subpath> = Vec::new();
+    for l in layers {
+        let LayerContent::Shape(sh) = &l.content else { return None };
+        if !l.visible || l.clipped || l.mask.is_some() || l.vector_mask.is_some() || sh.path.inverted || sh.path.fill_rule != rule {
+            return None;
+        }
+        let start = subpaths.len();
+        subpaths.extend(sh.path.subpaths.iter().cloned());
+        // Each layer's path starts a component of its own, added to the ones below.
+        if start > 0
+            && let Some(first) = subpaths.get_mut(start)
+        {
+            first.op = PathOp::Combine;
+        }
+    }
+    let mut sh = ShapeLayer { path: Path { subpaths, ..base.path.clone() }, live: None, psd_raw: None, cache: None, ..base.clone() };
+    refresh_shape(doc, &mut sh);
+    let mut out = survivor.clone();
+    out.visible = true;
+    out.content = LayerContent::Shape(sh);
+    Some(out)
+}
+
 /// Applies an affine transform to a shape's path, keeping the live shape when the transform
 /// is a translation plus axis-aligned scale (otherwise the shape stops being parametric).
 pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
@@ -905,8 +940,27 @@ fn path_make_shape(s: &mut Session, p: &Value) -> Result<Value> {
     let mut sh = ShapeLayer { path, fill, stroke, ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
-        let name = doc.next_layer_name(default_name("path"));
-        let id = doc.insert_above(*active, Layer::new(name, LayerContent::Shape(sh)));
+        // An empty pixel layer becomes the shape layer itself (nothing on it is lost); anything
+        // else gets a new shape layer above it.
+        let convert = active.filter(|id| {
+            let locks = doc.effective_locks(*id);
+            doc.layer(*id).is_some_and(|l| {
+                matches!(&l.content, LayerContent::Raster(surf) if surf.content_bounds().is_empty())
+                    && !crate::extra_cmds::is_background(l)
+                    && !(locks.all || locks.pixels || locks.transparency)
+            })
+        });
+        let id = match convert {
+            Some(id) => {
+                let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+                l.content = LayerContent::Shape(std::mem::take(&mut sh));
+                id
+            }
+            None => {
+                let name = doc.next_layer_name(default_name("path"));
+                doc.insert_above(*active, Layer::new(name, LayerContent::Shape(std::mem::take(&mut sh))))
+            }
+        };
         *active = Some(id);
         if work {
             doc.work_path = None;
@@ -1479,7 +1533,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Make Shape",
             [],
             leak(format!(
-                r##"{{"name":str|"work"|"layer"="work" (the work path becomes the new layer's path; a saved path stays),{fill}=foreground,{stroke}=none}} → shape.info (Pen options bar › Make: Shape)"##
+                r##"{{"name":str|"work"|"layer"="work" (the work path becomes the shape's path; a saved path stays),{fill}=foreground,{stroke}=none}} → shape.info (Pen options bar › Make: Shape). An empty, unlocked pixel layer selected becomes the shape layer itself; otherwise a new shape layer goes above the active one"##
             )),
             has_doc,
             path_make_shape

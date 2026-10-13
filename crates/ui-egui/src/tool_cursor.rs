@@ -13,6 +13,15 @@ enum Shape {
     Circle { radius: f32, centre: bool },
     Crosshair { length: f32, gap: f32 },
     Move,
+    /// A plain arrow: black (Path Selection) or white (Direct Selection).
+    Arrow { white: bool },
+}
+
+impl Shape {
+    /// An arrow cursor (its hotspot is the tip, its fallback the standard pointer).
+    fn is_arrow(self) -> bool {
+        matches!(self, Shape::Move | Shape::Arrow { .. })
+    }
 }
 
 #[derive(Clone)]
@@ -77,6 +86,15 @@ pub(crate) fn crosshair(painter: &Painter, at: Pos2, length: f32, gap: f32) -> C
     show(painter, at, Shape::Crosshair { length, gap })
 }
 
+/// The path tools' arrows, as in Photoshop: black for Path Selection, white for Direct
+/// Selection (`direct`). The hotspot is the tip.
+pub(crate) fn path_tool(painter: &Painter, at: Pos2, direct: bool) -> CursorIcon {
+    if let Some(icon) = crate::cursor_pack::show(painter.ctx(), at, if direct { 1500 } else { 1057 }, CursorIcon::Default) {
+        return icon;
+    }
+    show(painter, at, Shape::Arrow { white: direct })
+}
+
 /// A clean-room arrow with a four-way move badge. The hotspot is the arrow's tip.
 pub(crate) fn move_tool(painter: &Painter, at: Pos2, dragging: bool) -> CursorIcon {
     if let Some(icon) = crate::cursor_pack::show(painter.ctx(), at, if dragging { 1004 } else { 1059 }, CursorIcon::Default) {
@@ -88,14 +106,15 @@ pub(crate) fn move_tool(painter: &Painter, at: Pos2, dragging: bool) -> CursorIc
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
     let ctx = painter.ctx();
     let fallback_key = fallback_key(ctx);
-    ctx.data_mut(|d| d.insert_temp(fallback_key, if shape == Shape::Move { CursorIcon::Default } else { CursorIcon::Crosshair }));
+    let fallback = if shape.is_arrow() { CursorIcon::Default } else { CursorIcon::Crosshair };
+    ctx.data_mut(|d| d.insert_temp(fallback_key, fallback));
     // The native backend uploads cursor images in root and immediate document viewports.
     // Unsupported/oversize artwork retains the painter fallback below.
-    if cfg!(target_os = "windows") || shape == Shape::Move {
+    if cfg!(target_os = "windows") || shape.is_arrow() {
         let scale = native_raster_scale(ctx.pixels_per_point());
         if let Some(image) = cached_image(ctx, shape, scale) {
             ctx.set_cursor_image(Some(image));
-            ctx.data_mut(|d| d.insert_temp(fallback_key, if shape == Shape::Move { CursorIcon::Default } else { CursorIcon::Crosshair }));
+            ctx.data_mut(|d| d.insert_temp(fallback_key, fallback));
             return CursorIcon::None;
         }
         // An enormous tip cannot fit an OS cursor. Preserve its full-size outline, with an OS
@@ -132,15 +151,15 @@ fn cached_image(ctx: &egui::Context, shape: Shape, scale: f32) -> Option<CustomC
 }
 
 fn paint(painter: &Painter, at: Pos2, shape: Shape) {
-    if shape == Shape::Move {
+    if shape.is_arrow() {
         let ctx = painter.ctx();
         let scale = ctx.pixels_per_point();
-        let id = egui::Id::new("move-cursor-texture");
+        let id = egui::Id::new(("arrow-cursor-texture", format!("{shape:?}")));
         let cached = ctx.data(|d| d.get_temp::<(f32, egui::TextureHandle)>(id));
         let texture = cached.filter(|(s, _)| *s == scale).map(|(_, t)| t).or_else(|| {
-            let image = rasterize_move(scale)?;
+            let image = rasterize(shape, scale)?;
             let tex = ctx.load_texture(
-                "move-cursor",
+                "arrow-cursor",
                 egui::ColorImage::from_rgba_unmultiplied([usize::from(image.size[0]), usize::from(image.size[1])], &image.rgba),
                 egui::TextureOptions::LINEAR,
             );
@@ -172,7 +191,7 @@ fn paint(painter: &Painter, at: Pos2, shape: Shape) {
                 }
             }
             Shape::Crosshair { length, gap } => paint_crosshair(painter, at, length, gap, stroke),
-            Shape::Move => {}
+            Shape::Move | Shape::Arrow { .. } => {}
         }
     }
 }
@@ -204,13 +223,15 @@ fn extent(shape: Shape) -> Option<f32> {
             }
             length
         }
-        Shape::Move => 30.0,
+        Shape::Move | Shape::Arrow { .. } => 30.0,
     })
 }
 
 fn rasterize(shape: Shape, scale: f32) -> Option<CustomCursorImage> {
-    if shape == Shape::Move {
-        return rasterize_move(scale);
+    match shape {
+        Shape::Move => return rasterize_arrow(scale, true, false),
+        Shape::Arrow { white } => return rasterize_arrow(scale, false, white),
+        _ => {}
     }
     if !scale.is_finite() || scale <= 0.0 {
         return None;
@@ -237,7 +258,7 @@ fn rasterize(shape: Shape, scale: f32) -> Option<CustomCursorImage> {
                     if centre { ring.min(cross_distance(x, y, 3.0 * scale, 0.0)) } else { ring }
                 }
                 Shape::Crosshair { length, gap } => cross_distance(x, y, length * scale, gap * scale),
-                Shape::Move => 0.0,
+                Shape::Move | Shape::Arrow { .. } => 0.0,
             };
             let a_dark = (1.5 * scale + 0.5 - distance).clamp(0.0, 1.0) * f32::from(dark.a()) / 255.0;
             let a_light = (0.5 * scale + 0.5 - distance).clamp(0.0, 1.0) * f32::from(light.a()) / 255.0;
@@ -270,7 +291,9 @@ fn polygon_distance(p: [f32; 2], vertices: &[[f32; 2]]) -> f32 {
     if inside { -nearest } else { nearest }
 }
 
-fn rasterize_move(scale: f32) -> Option<CustomCursorImage> {
+/// The arrow, with the Move tool's four-way badge (`badge`), dark with a light outline, or
+/// light with a dark outline (`white`, Direct Selection's).
+fn rasterize_arrow(scale: f32, badge_on: bool, white: bool) -> Option<CustomCursorImage> {
     if !scale.is_finite() || scale <= 0.0 || 32.0 * scale > f32::from(MAX_SIDE) {
         return None;
     }
@@ -305,10 +328,13 @@ fn rasterize_move(scale: f32) -> Option<CustomCursorImage> {
         [22.5, 18.5],
     ];
     let [dark, light] = crate::theme::Tokens::cursor_outline();
+    // Inside, then the outline.
+    let (dark, light) = if white { (light, dark) } else { (dark, light) };
     for y in 0..side {
         for x in 0..side {
             let p = [(f32::from(x) - f32::from(hotspot)) / scale, (f32::from(y) - f32::from(hotspot)) / scale];
-            let distance = polygon_distance(p, &arrow).min(polygon_distance(p, &badge));
+            let arrow_d = polygon_distance(p, &arrow);
+            let distance = if badge_on { arrow_d.min(polygon_distance(p, &badge)) } else { arrow_d };
             let alpha = ((1.25 - distance) * scale + 0.5).clamp(0.0, 1.0);
             let edge = ((0.55 - distance.abs()) * scale + 0.5).clamp(0.0, 1.0);
             let value = |a: u8, b: u8| (f32::from(a) * (1.0 - edge) + f32::from(b) * edge).round() as u8;

@@ -840,4 +840,38 @@ mod tests {
         app.ui.tool = Tool::Brush;
         assert_eq!(cursor(&app, [60.0, 40.0]), None);
     }
+
+    /// Undo after a crop (committed with ↩) shows the document as it was before the crop: no
+    /// crop frame darkening the canvas around it, which looked like a step of the crop being
+    /// undone. A press brings the frame back.
+    #[test]
+    fn undoing_a_crop_shows_the_document_without_a_crop_frame() {
+        let mut a = app(SampleType::U8);
+        ensure_frame(&mut a);
+        drag(&mut a, &[[50.0, 20.0], [90.0, 52.0]], NONE);
+        let mut h = egui_kittest::Harness::new_ui_state(
+            |ui, a: &mut PrismApp| {
+                ensure_frame(a);
+                crate::shortcuts::handle(a, ui.ctx());
+            },
+            a,
+        );
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().doc.size, Size::new(40, 32));
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        h.run_steps(3);
+        let a = h.state();
+        assert_eq!(a.session.active().unwrap().doc.size, Size::new(200, 100));
+        assert!(a.ui.crop_rect.is_none() && !shows_beyond_canvas(a), "no frame over the restored document: {:?}", a.ui.crop_rect);
+        assert_eq!(a.ui.tool, Tool::Crop);
+        // Redo, then a new drag crops as usual.
+        h.state_mut().run("edit.redo", json!({})).unwrap();
+        h.run_steps(2);
+        assert!(h.state().ui.crop_rect.is_none());
+        drag(h.state_mut(), &[[5.0, 4.0], [25.0, 20.0]], NONE);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().doc.size, Size::new(20, 16));
+    }
 }

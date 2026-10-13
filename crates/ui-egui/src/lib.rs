@@ -50,6 +50,7 @@ pub mod crop_ui;
 pub mod cursor_pack;
 pub mod dialogs;
 pub mod direct_select;
+pub(crate) mod path_select;
 pub mod discard_ui;
 pub mod distort_ui;
 pub mod doc_props_ui;
@@ -493,6 +494,9 @@ pub struct PrismApp {
     /// Type tool layout cache: ((doc, revision, layer), layout).
     pub(crate) type_layout: Option<((u64, u64, u64), std::sync::Arc<prism_text::TextLayout>)>,
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
+    /// The shape the Pen is drawing, as the canvas shows it (`vector_ui::pen_display_doc`):
+    /// its fingerprint and the document shown.
+    pub(crate) pen_preview: Option<(u64, std::sync::Arc<prism_doc::Document>)>,
     /// Channel thumbnails for one document snapshot; view-only revisions reuse their pixels.
     channel_thumbs: Option<(DocId, std::sync::Weak<Document>, Vec<egui::TextureHandle>)>,
     /// Channels panel overlays / channel views drawn over the canvas, per document id.
@@ -598,6 +602,7 @@ impl PrismApp {
             channel_views: HashMap::new(),
             type_layout: None,
             type_transform_preview: None,
+            pen_preview: None,
             guide_drag: None,
             crop: Default::default(),
             shape_corner_runtime: Default::default(),
@@ -722,6 +727,9 @@ impl PrismApp {
         if let Some(r) = transform_tool::intercept(self, id) {
             return r;
         }
+        if let Some(r) = vector_ui::pen_intercept(self, id) {
+            return r;
+        }
         let suppress_events = self.automation_input && self.session.prefs().script_events.enabled;
         if suppress_events {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
@@ -743,6 +751,8 @@ impl PrismApp {
         let params = self.with_mask_target(id, params);
         let params = vector_ui::with_active_path(self, id, params);
         let path_mask = vector_ui::takes_path_mask(id) && params.get("path").is_some_and(|v| !v.is_null());
+        // Make: Shape from the work path moves it into the new layer whole (same subpaths).
+        let shape_from_work = id == "path.makeShape" && params.get("name").and_then(Value::as_str).is_none_or(|n| n == "work");
         let r = if id == "actions.play" {
             actions::play(self, &params)
         } else if prism_engine::actions_cmds::shell_view_command(id) {
@@ -750,6 +760,19 @@ impl PrismApp {
         } else {
             jobs_ui::run(self, id, params)
         };
+        if shape_from_work
+            && let Ok(v) = &r
+            && let Some(layer) = v.get("layer").and_then(Value::as_u64)
+            && self.ui.direct_selection.target == Some(direct_select::PathRef::Work)
+        {
+            // Its selected anchors stay selected, now on the shape layer's path (as in Photoshop).
+            self.ui.direct_selection.target = Some(direct_select::PathRef::Layer(layer));
+        }
+        if r.is_ok() && matches!(id, "edit.undo" | "edit.redo" | "edit.stepBackward" | "edit.toggleLastState") && self.ui.tool == state::Tool::Crop {
+            // Stepping the history (back over a crop, say) shows the document as it was, not a
+            // crop frame over it: the frame comes back with the next press, as in Photoshop.
+            crop_ui::dismiss_frame(self);
+        }
         if r.is_ok() && id == "select.toWorkPath" {
             // Make Work Path selects the new work path in the Paths panel, as in Photoshop.
             self.ui.selected_path = Some("work".into());
