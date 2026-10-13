@@ -53,6 +53,9 @@ pub struct DirectSelection {
     pub anchors: Vec<[usize; 2]>,
     /// A clicked segment (`[subpath, knot]` it leaves): its two handles show.
     pub segment: Option<[usize; 2]>,
+    /// The subpaths of a component made active by a click inside it (the Pen with ⌘, or Direct
+    /// Selection): its anchors show, none selected, as in Photoshop.
+    pub shown: Vec<usize>,
     #[serde(skip)]
     pub drag: Option<Drag>,
 }
@@ -61,8 +64,12 @@ pub struct DirectSelection {
 pub enum Drag {
     /// Editing `target`: `base` is its path at the press, `preview` the edit so far.
     Edit { target: PathRef, base: Path, edit: Edit, start: [f64; 2], end: [f64; 2], preview: Option<Path> },
-    /// Marquee-selecting anchors (⇧ adds to the selection).
+    /// Marquee-selecting anchors (⇧ adds to the selection), with either tool: Path Selection's
+    /// marquee also picks anchors, as Direct Selection's does (as in Photoshop).
     Marquee { start: [f64; 2], end: [f64; 2], add: bool },
+    /// Path Selection moving (⌥: copying) whole components: subpaths `subs` of `target`'s
+    /// `base` path, moved by whole pixels on a shape layer (`whole_px`).
+    Components { target: PathRef, base: Path, subs: Vec<usize>, start: [f64; 2], end: [f64; 2], duplicate: bool, whole_px: bool, preview: Option<Path> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -104,21 +111,54 @@ impl Edit {
     }
 }
 
-/// Is Direct Selection what the pointer does now: its own tool, or the Pen with ⌘/Ctrl held.
+/// Is Direct Selection what the pointer does now: its own tool, or the Pen or Path Selection
+/// with ⌘/Ctrl held (Direct Selection with ⌘ is Path Selection), as in Photoshop.
 fn direct(tool: Tool, mods: Modifiers) -> bool {
-    tool == Tool::DirectSelection || (tool == Tool::Pen && mods.command)
+    (tool == Tool::DirectSelection && !mods.command) || (matches!(tool, Tool::Pen | Tool::PathSelection) && mods.command)
 }
 
-/// Does the canvas draw Direct Selection's overlay instead of the plain path outlines?
+/// Whether the path tools' pointer is Direct Selection's white arrow (else Path Selection's
+/// black one): what a press does now, or what the drag under way does.
+pub(crate) fn direct_cursor(app: &PrismApp, mods: Modifiers) -> bool {
+    match &app.ui.direct_selection.drag {
+        // A Pen + ⌥ drag keeps Convert Point's cursor.
+        Some(Drag::Components { .. } | Drag::Edit { edit: Edit::Convert(_), .. }) => false,
+        Some(Drag::Edit { .. }) => true,
+        _ => direct(app.ui.tool, mods),
+    }
+}
+
+/// Does the canvas draw this overlay (Direct or Path Selection's) instead of the plain path
+/// outlines?
 pub fn shows(app: &PrismApp, mods: Modifiers) -> bool {
-    direct(app.ui.tool, mods) || app.ui.direct_selection.drag.is_some()
+    // The Pen shows the paths' anchors too, as in Photoshop: what Auto Add/Delete, ⌥ (Convert
+    // Point) and ⌘ act on.
+    direct(app.ui.tool, mods)
+        || matches!(app.ui.tool, Tool::PathSelection | Tool::DirectSelection | Tool::Pen)
+        || app.ui.direct_selection.drag.is_some()
+}
+
+/// The direction handles the overlay draws on `path`: those of the selection (none for Path
+/// Selection's whole components), and both of an anchor being converted (Pen + ⌥ drag), which
+/// show while they are pulled out.
+fn overlay_handles(ds: &DirectSelection, r: PathRef, path: &Path, whole: bool) -> Vec<([usize; 2], Handle)> {
+    let mut out = if ds.target == Some(r) && !whole { shown_handles(ds, path) } else { Vec::new() };
+    if let Some(Drag::Edit { target, edit: Edit::Convert(k), .. }) = &ds.drag
+        && *target == r
+    {
+        out.extend([(*k, Handle::In), (*k, Handle::Out)]);
+    }
+    let knot = |r: [usize; 2]| path.subpaths.get(r[0]).and_then(|s| s.knots.get(r[1]));
+    out.retain(|&(k, h)| knot(k).is_some_and(|kn| !retracted(kn, h)));
+    out
 }
 
 /// The paths Direct Selection edits, front first: the targeted vector mask or the active shape
 /// layer's path, then the work path.
 pub(crate) fn candidates(app: &PrismApp) -> Vec<(PathRef, Path)> {
     let layer = crate::vector_ui::targeted_vector_mask(app).or_else(|| crate::vector_ui::active_shape_path(app));
-    let work = app.session.active().and_then(|st| st.doc.work_path.clone());
+    // A work path hidden with the Pen's ↩ isn't edited until it shows again.
+    let work = crate::vector_ui::shown_work_path(app);
     layer.map(|(id, p)| (PathRef::Layer(id), p)).into_iter().chain(work.map(|p| (PathRef::Work, p))).collect()
 }
 
@@ -150,6 +190,9 @@ pub fn pointer(app: &mut PrismApp, ev: ToolEvent, mods: Modifiers) -> bool {
     let tool = app.ui.tool;
     match ev {
         ToolEvent::Down { x, y, .. } => {
+            if crate::path_select::applies(tool, mods) {
+                return crate::path_select::press(app, [x, y], mods);
+            }
             let pen_idle = app.ui.pen.is_none();
             // Pen + ⌥ is Convert Point only while no path is being drawn.
             let convert = tool == Tool::Pen && mods.alt && !mods.command && pen_idle;
@@ -160,7 +203,17 @@ pub fn pointer(app: &mut PrismApp, ev: ToolEvent, mods: Modifiers) -> bool {
                 // ⌘-click ends the path being drawn, which becomes editable, as in Photoshop.
                 crate::vector_ui::pen_commit(app, false);
             }
-            press(app, [x, y], mods, convert)
+            // Path Selection or the Pen with ⌘: a press on an anchor selects just that one, even
+            // within a selected component (⇧ still adds), as in Photoshop.
+            if matches!(tool, Tool::PathSelection | Tool::Pen) && mods.command && !mods.shift && !mods.alt {
+                pick_only_anchor(app, [x, y]);
+            }
+            let used = press(app, [x, y], mods, convert);
+            // ... and switches to the Direct Selection tool for good (its drag carries on).
+            if tool == Tool::PathSelection && matches!(&app.ui.direct_selection.drag, Some(Drag::Edit { edit: Edit::Anchors(_), .. })) {
+                app.ui.tool = Tool::DirectSelection;
+            }
+            used
         }
         ToolEvent::Move { x, y, .. } => {
             let ds = &mut app.ui.direct_selection;
@@ -169,8 +222,12 @@ pub fn pointer(app: &mut PrismApp, ev: ToolEvent, mods: Modifiers) -> bool {
                     *end = [x, y];
                     *preview = edit.preview(base, *start, *end);
                 }
+                Some(Drag::Components { base, subs, start, end, duplicate, whole_px, preview, .. }) => {
+                    *end = [x, y];
+                    *preview = crate::path_select::preview(base, subs, *start, *end, *duplicate, *whole_px);
+                }
                 Some(Drag::Marquee { end, .. }) => *end = [x, y],
-                None => return tool == Tool::DirectSelection,
+                None => return matches!(tool, Tool::DirectSelection | Tool::PathSelection),
             }
             true
         }
@@ -179,12 +236,28 @@ pub fn pointer(app: &mut PrismApp, ev: ToolEvent, mods: Modifiers) -> bool {
                 release(app, target, &edit, start, [x, y]);
                 true
             }
+            Some(Drag::Components { target, base, subs, start, duplicate, whole_px, .. }) => {
+                crate::path_select::release(app, target, &base, &subs, start, [x, y], duplicate, whole_px);
+                true
+            }
             Some(Drag::Marquee { start, add, .. }) => {
                 marquee(app, start, [x, y], add);
                 true
             }
-            None => tool == Tool::DirectSelection,
+            None => matches!(tool, Tool::DirectSelection | Tool::PathSelection),
         },
+    }
+}
+
+/// If an anchor is under `p`, makes it the only one selected (its path the target).
+fn pick_only_anchor(app: &mut PrismApp, p: [f64; 2]) {
+    let tol = 6.0 / f64::from(app.current_zoom().max(0.01));
+    let hit = candidates(app).into_iter().find_map(|(r, path)| match edit::hit(&path, Point::new(p[0], p[1]), tol, &[])? {
+        Hit::Anchor(k) => Some((r, k)),
+        _ => None,
+    });
+    if let Some((r, k)) = hit {
+        app.ui.direct_selection = DirectSelection { target: Some(r), anchors: vec![k], ..Default::default() };
     }
 }
 
@@ -260,9 +333,25 @@ fn release(app: &mut PrismApp, target: PathRef, edit: &Edit, start: [f64; 2], en
     if let (Some(p), Some(t)) = (params.as_object_mut(), target.params().as_object()) {
         p.extend(t.clone());
     }
-    if let Err(e) = app.run(id, params) {
-        app.ui.status = e;
-        app.ui.status_error = true;
+    match app.run(id, params) {
+        // A converted anchor joins the selection, so the handles just pulled out keep showing
+        // and can be dragged on; the rest of the selection stays, as in Photoshop (on another
+        // path, that path's anchor is selected instead).
+        Ok(_) => {
+            if let Edit::Convert(k) = edit {
+                let ds = &mut app.ui.direct_selection;
+                if ds.target != Some(target) {
+                    *ds = DirectSelection { target: Some(target), ..Default::default() };
+                }
+                if !ds.anchors.contains(k) {
+                    ds.anchors.push(*k);
+                }
+            }
+        }
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
     }
 }
 
@@ -271,6 +360,10 @@ fn release(app: &mut PrismApp, target: PathRef, edit: &Edit, start: [f64; 2], en
 fn marquee(app: &mut PrismApp, start: [f64; 2], end: [f64; 2], add: bool) {
     let rect = [start[0], start[1], end[0], end[1]];
     let hits = candidates(app).into_iter().map(|(r, path)| (r, edit::anchors_in(&path, rect))).find(|(_, a)| !a.is_empty());
+    // A click (no drag) inside a component makes it the active one: its anchors show, none
+    // selected (Photoshop's ⌘-click with the Pen, or a click with Direct Selection).
+    let click = (end[0] - start[0]).hypot(end[1] - start[1]) * f64::from(app.current_zoom()) < 2.0;
+    let inside = if click && hits.is_none() && !add { crate::path_select::component_at(app, start) } else { None };
     let ds = &mut app.ui.direct_selection;
     match hits {
         Some((r, anchors)) if add && ds.target == Some(r) => {
@@ -283,40 +376,95 @@ fn marquee(app: &mut PrismApp, start: [f64; 2], end: [f64; 2], add: bool) {
         }
         Some((r, anchors)) => *ds = DirectSelection { target: Some(r), anchors, ..Default::default() },
         None if add => {}
-        None => {
-            ds.anchors.clear();
-            ds.segment = None;
-        }
+        None => match inside {
+            Some((r, _, range)) => *ds = DirectSelection { target: Some(r), shown: range.collect(), ..Default::default() },
+            None => {
+                ds.anchors.clear();
+                ds.segment = None;
+                ds.shown.clear();
+            }
+        },
     }
+}
+
+/// The components of `path` (target `r`) whose anchors show: those holding selected anchors,
+/// the clicked segment, or the active component. The rest show their outline only.
+fn visible_components(ds: &DirectSelection, r: PathRef, path: &Path) -> Vec<std::ops::Range<usize>> {
+    if ds.target != Some(r) {
+        return Vec::new();
+    }
+    let subs: Vec<usize> = ds.anchors.iter().map(|a| a[0]).chain(ds.segment.map(|k| k[0])).chain(ds.shown.iter().copied()).collect();
+    path.components().into_iter().filter(|c| subs.iter().any(|s| c.contains(s))).collect()
 }
 
 /// Paths with their anchors (selected ones filled), the shown handles, the drag's preview in
 /// place of its path, and the marquee. `paths` false (View › Show › Target Path off) leaves only
-/// the marquee.
+/// the marquee. Path Selection shows only its selected components' anchors and no handles.
+/// Under the pointer (no drag), Path Selection thickens the component a click would pick and
+/// Direct Selection the anchor, or the subpath of the segment or handle.
 pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32, paths: bool) {
     let ds = &app.ui.direct_selection;
+    let mods = painter.ctx().input(|i| i.modifiers);
+    let whole = crate::path_select::applies(app.ui.tool, mods);
+    // No hover feedback while the Pen draws a path (a press adds to it then).
+    let drawing = app.ui.tool == Tool::Pen && app.ui.pen.is_some() && !mods.command;
+    let hover = app.hover_doc.filter(|_| ds.drag.is_none() && paths && !drawing);
+    let hovered_component = hover.filter(|_| whole).and_then(|p| crate::path_select::component_at(app, p)).map(|(r, _, range)| (r, range));
+    let tol = 6.0 / f64::from(app.current_zoom().max(0.01));
     for (r, path) in if paths { candidates(app) } else { Vec::new() } {
         let path = match &ds.drag {
-            Some(Drag::Edit { target, preview: Some(p), .. }) if *target == r => p.clone(),
+            Some(Drag::Edit { target, preview: Some(p), .. } | Drag::Components { target, preview: Some(p), .. }) if *target == r => p.clone(),
             _ => path,
         };
         crate::vector_ui::draw_outline(painter, &path, to_scr, accent);
         let ours = ds.target == Some(r);
-        for &(k, h) in if ours { shown_handles(ds, &path) } else { Vec::new() }.iter() {
+        if whole {
+            if let Some((_, range)) = hovered_component.as_ref().filter(|(h, _)| *h == r) {
+                draw_subpaths(painter, &path, range.clone(), to_scr, accent);
+            }
+        } else if let Some(hit) = hover.and_then(|p| edit::hit(&path, Point::new(p[0], p[1]), tol, &if ours { shown_handles(ds, &path) } else { Vec::new() })) {
+            match hit {
+                Hit::Anchor([s, k]) => {
+                    if let Some(kn) = path.subpaths.get(s).and_then(|sp| sp.knots.get(k)) {
+                        let c = to_scr([kn.anchor.x, kn.anchor.y]);
+                        painter.rect_stroke(egui::Rect::from_center_size(c, egui::vec2(10.0, 10.0)), 0.0, egui::Stroke::new(1.5, accent), egui::StrokeKind::Inside);
+                    }
+                }
+                Hit::Segment([s, _], _) | Hit::Handle([s, _], _) => draw_subpaths(painter, &path, s..s + 1, to_scr, accent),
+            }
+        }
+        for &(k, h) in &overlay_handles(ds, r, &path, whole) {
             if let Some(kn) = path.subpaths.get(k[0]).and_then(|s| s.knots.get(k[1])) {
                 let c = if h == Handle::In { kn.in_ctrl } else { kn.out_ctrl };
                 crate::vector_ui::draw_handle(painter, to_scr([kn.anchor.x, kn.anchor.y]), to_scr([c.x, c.y]), accent);
             }
         }
+        // Only the selected or active components show anchors (solid when selected), as in
+        // Photoshop; the others show their outline.
+        let touched = visible_components(ds, r, &path);
         for (s, sp) in path.subpaths.iter().enumerate() {
             for (k, kn) in sp.knots.iter().enumerate() {
-                crate::vector_ui::draw_anchor(painter, to_scr([kn.anchor.x, kn.anchor.y]), ours && ds.anchors.contains(&[s, k]), accent);
+                let selected = ours && ds.anchors.contains(&[s, k]);
+                // A copy being ⌥-dragged shows selected, like the components it copies.
+                let copy = matches!(&ds.drag, Some(Drag::Components { target, duplicate: true, base, .. }) if *target == r && s >= base.subpaths.len());
+                if selected || copy || touched.iter().any(|c| c.contains(&s)) {
+                    crate::vector_ui::draw_anchor(painter, to_scr([kn.anchor.x, kn.anchor.y]), selected || copy, accent);
+                }
             }
         }
     }
     if let Some(Drag::Marquee { start, end, .. }) = &ds.drag {
         let pts = [*start, [end[0], start[1]], *end, [start[0], end[1]]].map(to_scr);
         crate::tool_feedback::draw_ants(painter, &pts, true);
+    }
+}
+
+/// Subpaths `range` of `path` drawn thick: the hover feedback.
+fn draw_subpaths(painter: &egui::Painter, path: &Path, range: std::ops::Range<usize>, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32) {
+    let part = Path { subpaths: range.filter_map(|s| path.subpaths.get(s).cloned()).collect(), ..path.clone() };
+    for (pts, closed) in crate::vector_ui::path_lines(&part, to_scr) {
+        let stroke = egui::Stroke::new(2.5, accent);
+        painter.add(if closed { egui::Shape::closed_line(pts, stroke) } else { egui::Shape::line(pts, stroke) });
     }
 }
 

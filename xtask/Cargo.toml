@@ -13,3 +13,5 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 # perf/budgets.toml and scorecard/*.toml (MIT OR Apache-2.0).
 toml = "1"
+# Signs the in-app update feed (MIT).
+minisign = "0.10"

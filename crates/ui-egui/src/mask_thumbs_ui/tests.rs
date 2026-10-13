@@ -332,15 +332,20 @@ fn clicking_the_vector_mask_targets_it_for_the_path_tools() {
     assert!(near(super::brackets(&h.ctx).unwrap(), r.expand(3.0)), "brackets on the vector mask");
     assert_eq!(crate::canvas::paint_target(h.state()), json!("pixels"));
     // Path Selection moves the vector mask.
-    crate::vector_ui::path_selection_finish(h.state_mut(), [30.0, 30.0], [35.0, 32.0]);
+    h.state_mut().ui.tool = crate::state::Tool::PathSelection;
+    for ev in [
+        crate::canvas::ToolEvent::Down { x: 30.0, y: 30.0, pressure: 1.0 },
+        crate::canvas::ToolEvent::Move { x: 35.0, y: 32.0, pressure: 1.0 },
+        crate::canvas::ToolEvent::Up { x: 35.0, y: 32.0 },
+    ] {
+        crate::canvas::tool_event(h.state_mut(), ev, Modifiers::NONE);
+    }
     let k = layer(&h, masked).vector_mask.unwrap().path.subpaths[0].knots[0].anchor;
     assert_eq!((k.x, k.y), (25.0, 12.0));
     // The Pen adds a subpath to it.
     h.state_mut().ui.pen = Some(crate::vector_ui::PenPath {
         knots: vec![[[150.0, 10.0]; 3], [[190.0, 10.0]; 3], [[190.0, 40.0]; 3]],
-        unlinked: Vec::new(),
-        dragging: false,
-        adjusting_last: false,
+        ..Default::default()
     });
     crate::vector_ui::pen_commit(h.state_mut(), true);
     assert_eq!(layer(&h, masked).vector_mask.unwrap().path.subpaths.len(), 2);

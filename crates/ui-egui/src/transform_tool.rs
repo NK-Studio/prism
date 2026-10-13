@@ -72,7 +72,21 @@ pub struct TransformPreview {
     tool: Tool,
     /// Source identity at session start; presets must never act on a replacement target.
     source: Option<Source>,
+    /// A shape layer redrawn for the current box ([`shape_display_doc`]).
+    shape_view: Option<ShapeView>,
 }
+
+/// A shape layer as Free Transform will leave it for one box: re-rendered from its vectors, so
+/// live rectangles keep their corners while W or H changes instead of showing them stretched.
+struct ShapeView {
+    quad: [[f64; 2]; 4],
+    revision: u64,
+    doc: Arc<Document>,
+    key: u64,
+}
+
+/// [`ShapeView`] canvas keys (other previews use the bits below).
+const SHAPE_VIEW_BASE: u64 = 1 << 45;
 
 struct Source {
     revision: u64,
@@ -194,6 +208,7 @@ pub fn begin(app: &mut PrismApp, ctx: &egui::Context) -> Result<(), String> {
         steps: Steps::default(),
         tool: app.ui.tool,
         source: None,
+        shape_view: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -323,6 +338,7 @@ fn begin_lone(app: &mut PrismApp, ctx: &egui::Context, doc: Arc<Document>, surf:
         steps: Steps::default(),
         tool: app.ui.tool,
         source: None,
+        shape_view: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -383,6 +399,7 @@ pub fn begin_selection(app: &mut PrismApp, ctx: &egui::Context) -> Result<(), St
         steps: Steps::default(),
         tool: app.ui.tool,
         source: None,
+        shape_view: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -1268,7 +1285,10 @@ pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform) {
         draw_warp(painter, xf, t, w, pv, guide);
         return;
     }
-    if let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], t.quad) {
+    // Shape layers are redrawn in the document instead ([`shape_display_doc`]).
+    if shape_affine(app).is_none()
+        && let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], t.quad)
+    {
         // A 24×24 grid keeps perspective previews straight.
         let n = 24;
         let (tex, uv) = pv.texture.pick(painter.ctx(), xf.zoom * painter.ctx().pixels_per_point(), quad_scale(t), t.interpolation == "nearest");
@@ -1449,6 +1469,49 @@ fn scale_limit_pct(side: f64) -> f32 {
         return SCALE_LIMIT_PCT;
     }
     ((f64::from(POSITION_LIMIT_PX) / side * 100.0) as f32).clamp(100.0, SCALE_LIMIT_PCT)
+}
+
+/// The transform the commit applies to the shape layer being transformed, when it re-renders
+/// rather than warps pixels: an affine box (not Warp, Distort or Perspective) on a shape layer
+/// without pixel or vector masks, which would stay where they are in a redrawn preview.
+fn shape_affine(app: &PrismApp) -> Option<prism_geom::Affine> {
+    let t = app.ui.transform.as_ref()?;
+    if t.warp.is_some() || t.selection || t.target.is_some() {
+        return None;
+    }
+    let layer = app.session.active()?.doc.layer(LayerId(t.layer))?;
+    if !matches!(layer.content, LayerContent::Shape(_)) || layer.mask.is_some() || layer.vector_mask.is_some() {
+        return None;
+    }
+    let h = Homography::rect_to_quad(t.rect, t.quad)?;
+    h.inverse()?;
+    prism_engine::transform_cmds::affine_of(&h)
+}
+
+/// The document to show while a shape layer is transformed: the layer transformed and redrawn
+/// as `edit.transform` will leave it, cached per box. None falls back to the stretched texture.
+pub(crate) fn shape_display_doc(app: &mut PrismApp, idx: usize) -> Option<(Arc<Document>, u64)> {
+    if app.session.active_index() != Some(idx) {
+        return None;
+    }
+    let a = shape_affine(app)?;
+    let (quad, layer) = app.ui.transform.as_ref().map(|t| (t.quad, LayerId(t.layer)))?;
+    let st = app.session.active()?;
+    let (revision, source) = (st.revision, st.doc.clone());
+    if let Some(v) = app.transform_preview.as_ref()?.shape_view.as_ref()
+        && v.quad == quad
+        && v.revision == revision
+    {
+        return Some((v.doc.clone(), v.key));
+    }
+    let mut shown = (*source).clone();
+    let LayerContent::Shape(sh) = &mut shown.layer_mut(layer)?.content else { return None };
+    prism_engine::vector_cmds::transform_shape(sh, &a);
+    prism_engine::vector_cmds::refresh_shape(&source, sh);
+    let doc = Arc::new(prism_engine::mode_cmds::display_document(&shown).unwrap_or(shown));
+    let key = SHAPE_VIEW_BASE | (app.ui.alloc_id() & (SHAPE_VIEW_BASE - 1));
+    app.transform_preview.as_mut()?.shape_view = Some(ShapeView { quad, revision, doc: doc.clone(), key });
+    Some((doc, key))
 }
 
 /// Options bar while transforming: reference point X/Y, W/H %, angle, interpolation, and, pinned
@@ -2702,5 +2765,46 @@ mod tests {
         begin(&mut app, &ctx).unwrap();
         assert_eq!(app.ui.transform.as_ref().unwrap().target, None);
         assert_eq!(app.ui.transform.as_ref().unwrap().rect, [8.0, 8.0, 24.0, 24.0]);
+    }
+
+    /// ⌘T on a shape layer previews the shape redrawn as the commit leaves it (a live
+    /// rectangle's corners keep their shape while W changes), not the stretched texture; pixel
+    /// layers and perspective keep the texture.
+    #[test]
+    fn shape_layers_preview_the_redrawn_shape() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
+        app.sync_views();
+        let id = app.session.execute("shape.create", json!({"kind": "roundedRect", "rect": [10, 10, 100, 40], "radii": 8, "corners": "chamfer"})).unwrap()["layer"]
+            .as_u64()
+            .unwrap();
+        let ctx = egui::Context::default();
+        begin(&mut app, &ctx).unwrap();
+        let idx = app.session.active_index().unwrap();
+        // Untouched, the layer shows as it is (the preview document hides it for the texture).
+        let (shown, key) = shape_display_doc(&mut app, idx).expect("a shape preview");
+        assert!(shown.layer(LayerId(id)).unwrap().visible);
+        assert_eq!(shape_display_doc(&mut app, idx).unwrap().1, key, "cached while the box stays");
+        scale_about_pivot(&mut app, 4.0, 1.0);
+        let (shown, moved) = shape_display_doc(&mut app, idx).unwrap();
+        assert_ne!(moved, key, "a new box redraws");
+        let LayerContent::Shape(preview) = shown.layer(LayerId(id)).unwrap().content.clone() else { panic!("not a shape") };
+        commit(&mut app);
+        let st = app.session.active().unwrap();
+        let LayerContent::Shape(done) = &st.doc.layer(LayerId(id)).unwrap().content else { panic!("not a shape") };
+        assert_eq!((&preview.live, &preview.path), (&done.live, &done.path), "the preview is the commit");
+        assert!(matches!(done.live, Some(prism_doc::LiveShape::Rect { radii, .. }) if radii.iter().all(|r| (r - 16.0).abs() < 1e-6)), "{:?}", done.live);
+        assert_eq!(preview.cache.map(|c| c.content_bounds()), done.cache.as_ref().map(|c| c.content_bounds()));
+        // Perspective has no affine: the texture stays.
+        begin(&mut app, &ctx).unwrap();
+        app.ui.transform.as_mut().unwrap().quad[1][1] += 30.0;
+        assert!(shape_affine(&app).is_none() && shape_display_doc(&mut app, idx).is_none());
+        cancel(&mut app);
+        // Pixel layers keep the texture.
+        let mut app = app_with_square(32, prism_geom::Rect::new(8, 8, 24, 24));
+        begin(&mut app, &ctx).unwrap();
+        scale_about_pivot(&mut app, 2.0, 1.0);
+        let idx = app.session.active_index().unwrap();
+        assert!(shape_display_doc(&mut app, idx).is_none());
     }
 }

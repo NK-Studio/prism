@@ -19,7 +19,7 @@
 use prism_algo::selection::{self as sel, SelectionMode};
 use prism_color::{BlendMode, Color};
 use prism_doc::{
-    ClippingPath, Document, Fill, FillRule, GradientStyle, Knot, Layer, LayerContent, LayerId, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp,
+    ClippingPath, CornerStyle, Document, Fill, FillRule, GradientStyle, Knot, Layer, LayerContent, LayerId, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp,
     ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask,
 };
 use prism_geom::{Affine, Point, Rect};
@@ -386,20 +386,30 @@ fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&LiveShape>) 
         _ => None,
     };
     let rect = || nums::<4>(p, "rect").or(prev_rect).ok_or_else(|| bad(cmd, "`rect`: [x, y, w, h] is required"));
+    // `corners`: round (default) or chamfer; kept from the shape being edited when not given.
+    let corners = || -> Result<CornerStyle> {
+        match p.get("corners") {
+            None | Some(Value::Null) => Ok(match prev {
+                Some(LiveShape::Rect { corners, .. }) => *corners,
+                _ => CornerStyle::Round,
+            }),
+            Some(v) => v.as_str().and_then(CornerStyle::parse).ok_or_else(|| bad(cmd, "`corners` must be \"round\" or \"chamfer\"")),
+        }
+    };
     Ok(match kind {
         "rect" | "rectangle" => {
             let r = match prev {
                 Some(LiveShape::Rect { radii, .. }) => *radii,
                 _ => [0.0; 4],
             };
-            LiveShape::Rect { rect: rect()?, radii: radii(p).unwrap_or(r) }
+            LiveShape::Rect { rect: rect()?, radii: radii(p).unwrap_or(r), corners: corners()? }
         }
         "roundedRect" | "roundRect" => {
             let r = match prev {
                 Some(LiveShape::Rect { radii, .. }) if radii.iter().any(|v| *v > 0.0) => *radii,
                 _ => [10.0; 4],
             };
-            LiveShape::Rect { rect: rect()?, radii: radii(p).unwrap_or(r) }
+            LiveShape::Rect { rect: rect()?, radii: radii(p).unwrap_or(r), corners: corners()? }
         }
         "ellipse" => LiveShape::Ellipse { rect: rect()? },
         "polygon" | "star" => {
@@ -516,6 +526,50 @@ pub fn translate_vectors(doc: &Document, l: &mut Layer, dx: f64, dy: f64) {
     }
 }
 
+/// How a live rectangle's corner sizes scale when its box scales by `sx` × `sy`: the geometric
+/// mean, so a stretch along one axis grows the corners part of the way and they stay in
+/// proportion to the box. It composes: several transforms give the corners of their total (W 50 %
+/// then W 200 % restores them; the smaller scale would halve them for good).
+fn corner_scale(sx: f64, sy: f64) -> f64 {
+    let k = (sx.abs() * sy.abs()).sqrt();
+    if k.is_finite() { k } else { 1.0 }
+}
+
+/// Shape layers merged as one shape layer (Merge Down / Merge Layers when every layer is a shape
+/// layer, as in Photoshop): their paths in stacking order (`layers` bottom first), each layer's
+/// path joining as new components combined with what's below, on `survivor` (its id, name,
+/// fill, stroke, effects and layer settings). `None` when they can't merge as vectors (a layer
+/// that isn't a visible, unmasked, unclipped shape layer, or paths with different fill rules or
+/// inverted), which then merge as pixels.
+pub(crate) fn merged_shape(doc: &Document, layers: &[&Layer], survivor: &Layer) -> Option<Layer> {
+    if layers.len() < 2 {
+        return None;
+    }
+    let LayerContent::Shape(base) = &survivor.content else { return None };
+    let rule = base.path.fill_rule;
+    let mut subpaths: Vec<Subpath> = Vec::new();
+    for l in layers {
+        let LayerContent::Shape(sh) = &l.content else { return None };
+        if !l.visible || l.clipped || l.mask.is_some() || l.vector_mask.is_some() || sh.path.inverted || sh.path.fill_rule != rule {
+            return None;
+        }
+        let start = subpaths.len();
+        subpaths.extend(sh.path.subpaths.iter().cloned());
+        // Each layer's path starts a component of its own, added to the ones below.
+        if start > 0
+            && let Some(first) = subpaths.get_mut(start)
+        {
+            first.op = PathOp::Combine;
+        }
+    }
+    let mut sh = ShapeLayer { path: Path { subpaths, ..base.path.clone() }, live: None, psd_raw: None, cache: None, ..base.clone() };
+    refresh_shape(doc, &mut sh);
+    let mut out = survivor.clone();
+    out.visible = true;
+    out.content = LayerContent::Shape(sh);
+    Some(out)
+}
+
 /// Applies an affine transform to a shape's path, keeping the live shape when the transform
 /// is a translation plus axis-aligned scale (otherwise the shape stops being parametric).
 pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
@@ -550,10 +604,7 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
             let pt = |p: [f64; 2]| [p[0] * m0 + tx, p[1] * m3 + ty];
             Some(match l {
                 LiveShape::Arrow { .. } => return, // handled above
-                LiveShape::Rect { rect, radii } => {
-                    let k = m0.min(m3);
-                    LiveShape::Rect { rect: r(rect), radii: radii.map(|v| v * k) }
-                }
+                LiveShape::Rect { rect, radii, corners } => LiveShape::Rect { rect: r(rect), radii: radii.map(|v| v * corner_scale(m0, m3)), corners },
                 LiveShape::Ellipse { rect } => LiveShape::Ellipse { rect: r(rect) },
                 LiveShape::Polygon { rect, sides, star_ratio } => LiveShape::Polygon { rect: r(rect), sides, star_ratio },
                 LiveShape::Line { from, to, weight, round_tips } => LiveShape::Line { from: pt(from), to: pt(to), weight, round_tips },
@@ -569,8 +620,9 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
             };
             let k = (m0.abs() + m1.abs()).min(m2.abs() + m3.abs());
             match l {
-                LiveShape::Rect { rect, radii } if radii.iter().all(|v| (v - radii[0]).abs() < 1e-9) => {
-                    Some(LiveShape::Rect { rect: r(rect), radii: radii.map(|v| v * k) })
+                LiveShape::Rect { rect, radii, corners } if radii.iter().all(|v| (v - radii[0]).abs() < 1e-9) => {
+                    let k = corner_scale(m0.abs() + m1.abs(), m2.abs() + m3.abs());
+                    Some(LiveShape::Rect { rect: r(rect), radii: radii.map(|v| v * k), corners })
                 }
                 LiveShape::Ellipse { rect } => Some(LiveShape::Ellipse { rect: r(rect) }),
                 LiveShape::Line { from, to, weight, round_tips } => Some(LiveShape::Line { from: pt(from), to: pt(to), weight: weight * k, round_tips }),
@@ -579,6 +631,12 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
         }
         _ => None,
     };
+    // A rectangle that stays live is redrawn from its new box: its corners keep their shape
+    // (arcs stay circular, chamfers 45°) instead of stretching with a W or H change, and
+    // the path keeps matching the live parameters that later edits regenerate it from.
+    if let Some(l @ LiveShape::Rect { .. }) = &sh.live {
+        sh.path = vector::shapes::live_path(l);
+    }
     sh.psd_raw = None;
 }
 
@@ -671,10 +729,12 @@ fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         return shape_info(s, id);
     }
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
+    // A chamfered rectangle isn't a rounded one: it is named for the tool, like Photoshop's.
+    let base = if matches!(live, Some(LiveShape::Rect { corners: CornerStyle::Chamfer, .. })) { "Rectangle" } else { default_name(kind) };
     let mut sh = ShapeLayer { path, fill, stroke, live, ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
-        let name = name.unwrap_or_else(|| doc.next_layer_name(default_name(kind)));
+        let name = name.unwrap_or_else(|| doc.next_layer_name(base));
         let id = doc.insert_above(*active, Layer::new(name, LayerContent::Shape(sh)));
         *active = Some(id);
         Ok(id)
@@ -694,7 +754,7 @@ fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
             sh.live = None;
             sh.psd_raw = None;
         }
-        let geom_keys = ["kind", "rect", "radii", "radius", "sides", "starRatio", "from", "to", "weight", "headSize", "headAngle", "roundTips"];
+        let geom_keys = ["kind", "rect", "radii", "radius", "corners", "sides", "starRatio", "from", "to", "weight", "headSize", "headAngle", "roundTips"];
         if geom_keys.iter().any(|k| p.get(*k).is_some()) {
             let kind = p.get("kind").and_then(Value::as_str).map(str::to_string).or_else(|| sh.live.as_ref().map(|l| live_kind(l).to_string()));
             let kind = kind.ok_or_else(|| bad(CMD, "this shape has no live-shape parameters; pass `kind` or `path`"))?;
@@ -880,8 +940,27 @@ fn path_make_shape(s: &mut Session, p: &Value) -> Result<Value> {
     let mut sh = ShapeLayer { path, fill, stroke, ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
-        let name = doc.next_layer_name(default_name("path"));
-        let id = doc.insert_above(*active, Layer::new(name, LayerContent::Shape(sh)));
+        // An empty pixel layer becomes the shape layer itself (nothing on it is lost); anything
+        // else gets a new shape layer above it.
+        let convert = active.filter(|id| {
+            let locks = doc.effective_locks(*id);
+            doc.layer(*id).is_some_and(|l| {
+                matches!(&l.content, LayerContent::Raster(surf) if surf.content_bounds().is_empty())
+                    && !crate::extra_cmds::is_background(l)
+                    && !(locks.all || locks.pixels || locks.transparency)
+            })
+        });
+        let id = match convert {
+            Some(id) => {
+                let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+                l.content = LayerContent::Shape(std::mem::take(&mut sh));
+                id
+            }
+            None => {
+                let name = doc.next_layer_name(default_name("path"));
+                doc.insert_above(*active, Layer::new(name, LayerContent::Shape(std::mem::take(&mut sh))))
+            }
+        };
         *active = Some(id);
         if work {
             doc.work_path = None;
@@ -1385,7 +1464,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Shape Layer",
             ["Layer", "New"],
             leak(format!(
-                r##"{{"kind":"rect|roundedRect|ellipse|polygon|star|line|arrow|path"="rect","rect":[x,y,w,h] (rect/roundedRect/ellipse/polygon/star),"radii":[tl,tr,br,bl]|r (roundedRect=10),"sides":3..100=5,"starRatio":0..1 (star=0.5),"from":[x,y],"to":[x,y],"weight":px=1 (line),"roundTips":bool=false (line),"headSize":px=16 (arrow wing length; 0 < size <= 10000),"headAngle":10..160=60,"path":{{…}} (kind path),{fill}=foreground,{stroke}=none,"name":str?,"addTo":layerId? + "op":"combine|subtract|intersect|exclude" (append to an existing shape layer)}} → shape.info. Arrow defaults: no fill, foreground 3px round-cap/round-join stroke. {PATH_FORM}"##
+                r##"{{"kind":"rect|roundedRect|ellipse|polygon|star|line|arrow|path"="rect","rect":[x,y,w,h] (rect/roundedRect/ellipse/polygon/star),"radii":[tl,tr,br,bl]|r (roundedRect=10),"corners":"round|chamfer"="round" (rect/roundedRect; chamfer cuts each corner straight, radii = cut size),"sides":3..100=5,"starRatio":0..1 (star=0.5),"from":[x,y],"to":[x,y],"weight":px=1 (line),"roundTips":bool=false (line),"headSize":px=16 (arrow wing length; 0 < size <= 10000),"headAngle":10..160=60,"path":{{…}} (kind path),{fill}=foreground,{stroke}=none,"name":str?,"addTo":layerId? + "op":"combine|subtract|intersect|exclude" (append to an existing shape layer)}} → shape.info. Arrow defaults: no fill, foreground 3px round-cap/round-join stroke. {PATH_FORM}"##
             )),
             has_doc,
             shape_create
@@ -1395,7 +1474,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Shape",
             [],
             leak(format!(
-                r##"{{"layer":id?,"path":{{…}}? (replaces; drops live shape),"kind":str?,"rect":[x,y,w,h]?,"radii":[tl,tr,br,bl]|r?,"sides":n?,"starRatio":r?,"from":[x,y]?,"to":[x,y]?,"weight":px?,"roundTips":bool?,"headSize":px?,"headAngle":degrees? (live-shape params regenerate the path),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"op":"combine|…"? + "subpath":index? (default all but the first),"fillRule":"nonzero|evenodd"?,{fill}?,{stroke}? (merged into the current stroke),"name":str?}} → shape.info"##
+                r##"{{"layer":id?,"path":{{…}}? (replaces; drops live shape),"kind":str?,"rect":[x,y,w,h]?,"radii":[tl,tr,br,bl]|r?,"corners":"round|chamfer"?,"sides":n?,"starRatio":r?,"from":[x,y]?,"to":[x,y]?,"weight":px?,"roundTips":bool?,"headSize":px?,"headAngle":degrees? (live-shape params regenerate the path),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"op":"combine|…"? + "subpath":index? (default all but the first),"fillRule":"nonzero|evenodd"?,{fill}?,{stroke}? (merged into the current stroke),"name":str?}} → shape.info"##
             )),
             has_layer,
             shape_edit
@@ -1454,7 +1533,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Make Shape",
             [],
             leak(format!(
-                r##"{{"name":str|"work"|"layer"="work" (the work path becomes the new layer's path; a saved path stays),{fill}=foreground,{stroke}=none}} → shape.info (Pen options bar › Make: Shape)"##
+                r##"{{"name":str|"work"|"layer"="work" (the work path becomes the shape's path; a saved path stays),{fill}=foreground,{stroke}=none}} → shape.info (Pen options bar › Make: Shape). An empty, unlocked pixel layer selected becomes the shape layer itself; otherwise a new shape layer goes above the active one"##
             )),
             has_doc,
             path_make_shape

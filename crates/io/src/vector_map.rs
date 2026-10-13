@@ -6,7 +6,7 @@
 //! a preserved block is written back byte-identical while it still decodes to the layer's
 //! current model; otherwise it is regenerated from the model.
 
-use prism_doc::{Fill, FillRule, Knot, LineCap, LineJoin, LiveShape, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask};
+use prism_doc::{CornerStyle, Fill, FillRule, Knot, LineCap, LineJoin, LiveShape, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask};
 use prism_geom::Point;
 use prism_psd::descriptor::{Descriptor, Id, Value, VersionedDescriptor};
 use prism_psd::path::{PathData, PsdKnot, PsdSubpath, VectorMaskBlock};
@@ -372,11 +372,11 @@ pub fn live_from_vogk(data: &[u8]) -> Option<LiveShape> {
         _ => return None,
     };
     match ty {
-        1 => Some(LiveShape::Rect { rect: rect_of(o)?, radii: [0.0; 4] }),
+        1 => Some(LiveShape::Rect { rect: rect_of(o)?, radii: [0.0; 4], corners: CornerStyle::Round }),
         2 => {
             let r = get_desc(o, "keyOriginRRectRadii")?;
             let g = |k: &str| num(r.get(k)).unwrap_or(0.0);
-            Some(LiveShape::Rect { rect: rect_of(o)?, radii: [g("topLeft"), g("topRight"), g("bottomRight"), g("bottomLeft")] })
+            Some(LiveShape::Rect { rect: rect_of(o)?, radii: [g("topLeft"), g("topRight"), g("bottomRight"), g("bottomLeft")], corners: CornerStyle::Round })
         }
         5 => Some(LiveShape::Ellipse { rect: rect_of(o)? }),
         4 => Some(LiveShape::Line {
@@ -407,8 +407,10 @@ pub fn vogk_bytes(s: &LiveShape, dpi: f32) -> Option<Vec<u8>> {
     };
     let base = |ty: i32| Descriptor::new("null").with("keyOriginType", Value::Integer(ty)).with("keyOriginResolution", Value::Double(f64::from(dpi)));
     let o = match s {
-        LiveShape::Rect { rect, radii } if radii.iter().all(|r| *r == 0.0) => base(1).with("keyOriginShapeBBox", bbox(*rect)),
-        LiveShape::Rect { rect, radii } => base(2)
+        LiveShape::Rect { rect, radii, .. } if radii.iter().all(|r| *r == 0.0) => base(1).with("keyOriginShapeBBox", bbox(*rect)),
+        // Photoshop has no chamfered live rectangle: the path alone keeps the shape.
+        LiveShape::Rect { corners: CornerStyle::Chamfer, .. } => return None,
+        LiveShape::Rect { rect, radii, .. } => base(2)
             .with(
                 "keyOriginRRectRadii",
                 Value::Descriptor(
@@ -665,8 +667,8 @@ mod tests {
     #[test]
     fn vogk_roundtrip() {
         for s in [
-            LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [0.0; 4] },
-            LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [1.0, 2.0, 3.0, 4.0] },
+            LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [0.0; 4], corners: CornerStyle::Round },
+            LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [1.0, 2.0, 3.0, 4.0], corners: CornerStyle::Round },
             LiveShape::Ellipse { rect: [5.0, 6.0, 7.0, 8.0] },
             LiveShape::Line { from: [0.0, 10.0], to: [20.0, 0.0], weight: 3.0, round_tips: false },
         ] {
@@ -675,6 +677,11 @@ mod tests {
         }
         assert!(vogk_bytes(&LiveShape::Line { from: [0.0, 10.0], to: [20.0, 0.0], weight: 3.0, round_tips: true }, 72.0).is_none());
         assert!(vogk_bytes(&LiveShape::Polygon { rect: [0.0; 4], sides: 5, star_ratio: 1.0 }, 72.0).is_none());
+        // Photoshop has no chamfered live rectangle: only the path is written. Without cuts it
+        // is a plain rectangle, which Photoshop has.
+        assert!(vogk_bytes(&LiveShape::Rect { rect: [0.0, 0.0, 9.0, 9.0], radii: [2.0; 4], corners: CornerStyle::Chamfer }, 72.0).is_none());
+        let sharp = LiveShape::Rect { rect: [0.0, 0.0, 9.0, 9.0], radii: [0.0; 4], corners: CornerStyle::Chamfer };
+        assert!(matches!(live_from_vogk(&vogk_bytes(&sharp, 72.0).unwrap()), Some(LiveShape::Rect { radii: [0.0, 0.0, 0.0, 0.0], .. })));
     }
 
     #[test]

@@ -72,6 +72,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("help.reportIssue", "Report an Issue…", &["Help"], None),
     ("help.systemInfo", "System Info…", &["Help"], None),
     ("help.firstRunSetup", "First-Run Setup…", &["Help"], None),
+    ("help.checkForUpdates", "Check for Updates…", &["Help"], None),
     ("help.about", "About Prism", &["Help"], None),
 ];
 
@@ -300,6 +301,7 @@ pub(crate) fn invoke_unguarded(app: &mut PrismApp, ctx: &egui::Context, id: &str
         }
         "help.about" => Ok(json!({"dialog": app.ui.open_dialog(DialogKind::About, Default::default())})),
         "help.firstRunSetup" => Ok(json!({"dialog": crate::first_run_ui::open(app)})),
+        "help.checkForUpdates" => crate::update_ui::check_now(app),
         "help.systemInfo" => {
             let mut fields = serde_json::Map::new();
             fields.insert("systemInfo".into(), json!(true));
@@ -487,6 +489,10 @@ pub fn is_enabled(app: &PrismApp, id: &str) -> bool {
     if let Some(e) = crate::transform_tool::is_enabled(app, id) {
         return e;
     }
+    // A path being drawn with the Pen owns Undo / Redo while it has steps.
+    if let Some(e) = crate::vector_ui::pen_is_enabled(app, id) {
+        return e;
+    }
     // Photoshop greys these for the Background layer, other layer kinds or single-layer documents.
     if crate::enable_rules::disabled(app, id) {
         return false;
@@ -507,7 +513,7 @@ pub fn is_enabled(app: &PrismApp, id: &str) -> bool {
         return e;
     }
     match id {
-        "file.open" | "file.exit" | "file.clearRecent" | "help.about" | "help.systemInfo" | "help.firstRunSetup" | "edit.search" => true,
+        "file.open" | "file.exit" | "file.clearRecent" | "help.about" | "help.systemInfo" | "help.firstRunSetup" | "help.checkForUpdates" | "edit.search" => true,
         i if i.starts_with("file.openRecent.") => true,
         i if crate::links::url_for(i).is_some() => true,
         i if i.starts_with("window.theme.") => true,

@@ -1,7 +1,7 @@
 //! Parametric ("live") shapes → paths: rectangles with corner radii, ellipses, polygons, stars
 //! and lines. Knots run clockwise on screen (y down), starting at the top.
 
-use prism_doc::{Knot, LiveShape, Path, Subpath};
+use prism_doc::{CornerStyle, Knot, LiveShape, Path, Subpath};
 use prism_geom::Point;
 
 /// Handle length of a quarter-circle cubic, `4/3·(√2 − 1)`.
@@ -168,14 +168,73 @@ pub fn arrow_with_angle(from: [f64; 2], to: [f64; 2], head_size: f64, head_angle
     ])
 }
 
+/// Rectangle with chamfered corners: each corner cut by a straight line from `size` along one
+/// side to `size` along the other, sizes `[top-left, top-right, bottom-right, bottom-left]`
+/// (clamped like radii, so cuts never overlap).
+pub fn chamfered_rect(x: f64, y: f64, w: f64, h: f64, sizes: [f64; 4]) -> Path {
+    let (w, h) = (w.abs(), h.abs());
+    let [tl, tr, br, bl] = clamp_radii(w, h, sizes);
+    let (x1, y1) = (x + w, y + h);
+    let points = [(x + tl, y), (x1 - tr, y), (x1, y + tr), (x1, y1 - br), (x1 - br, y1), (x + bl, y1), (x, y1 - bl), (x, y + tl)];
+    // Zero-size corners and cuts meeting mid-side give repeated points: keep one of each.
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(points.len());
+    for p in points {
+        if out.last().is_none_or(|q| (q.0 - p.0).abs() > 1e-9 || (q.1 - p.1).abs() > 1e-9) {
+            out.push(p);
+        }
+    }
+    if out.len() > 1 && out.first().zip(out.last()).is_some_and(|(a, b)| (a.0 - b.0).abs() <= 1e-9 && (a.1 - b.1).abs() <= 1e-9) {
+        out.pop();
+    }
+    Path::new(vec![Subpath::polygon(&out)])
+}
+
 /// The path of a live shape.
 pub fn live_path(s: &LiveShape) -> Path {
     match s {
-        LiveShape::Rect { rect: [x, y, w, h], radii } => rounded_rect(*x, *y, *w, *h, *radii),
+        LiveShape::Rect { rect: [x, y, w, h], radii, corners: CornerStyle::Round } => rounded_rect(*x, *y, *w, *h, *radii),
+        LiveShape::Rect { rect: [x, y, w, h], radii, corners: CornerStyle::Chamfer } => chamfered_rect(*x, *y, *w, *h, *radii),
         LiveShape::Ellipse { rect: [x, y, w, h] } => ellipse(*x, *y, *w, *h),
         LiveShape::Polygon { rect: [x, y, w, h], sides, star_ratio } => polygon(*x, *y, *w, *h, *sides, *star_ratio),
         LiveShape::Arrow { from, to, head_size, head_angle } => arrow_with_angle(*from, *to, *head_size, *head_angle),
         LiveShape::Line { from, to, weight, round_tips } => line_with_tips(*from, *to, *weight, *round_tips),
+    }
+}
+
+#[cfg(test)]
+mod chamfer_tests {
+    use super::*;
+
+    fn anchors(p: &Path) -> Vec<(f64, f64)> {
+        p.subpaths[0].knots.iter().map(|k| (k.anchor.x, k.anchor.y)).collect()
+    }
+
+    #[test]
+    fn chamfered_corners_are_straight_cuts() {
+        let p = chamfered_rect(0.0, 0.0, 100.0, 40.0, [10.0; 4]);
+        assert!(p.subpaths[0].closed);
+        assert_eq!(anchors(&p), [(10.0, 0.0), (90.0, 0.0), (100.0, 10.0), (100.0, 30.0), (90.0, 40.0), (10.0, 40.0), (0.0, 30.0), (0.0, 10.0)]);
+        // Straight: every knot is a corner, no curve handles.
+        assert!(p.subpaths[0].knots.iter().all(|k| k.in_ctrl == k.anchor && k.out_ctrl == k.anchor));
+        // Through live_path.
+        let live = LiveShape::Rect { rect: [0.0, 0.0, 100.0, 40.0], radii: [10.0; 4], corners: CornerStyle::Chamfer };
+        assert_eq!(live_path(&live), p);
+    }
+
+    #[test]
+    fn chamfer_sizes_per_corner_and_clamped() {
+        // Only the top-right corner cut: five points.
+        let p = chamfered_rect(0.0, 0.0, 50.0, 50.0, [0.0, 20.0, 0.0, 0.0]);
+        assert_eq!(anchors(&p), [(0.0, 0.0), (30.0, 0.0), (50.0, 20.0), (50.0, 50.0), (0.0, 50.0)]);
+        // No cuts: the plain rectangle's four corners.
+        assert_eq!(anchors(&chamfered_rect(0.0, 0.0, 8.0, 4.0, [0.0; 4])).len(), 4);
+        // Oversized cuts meet mid-side (a diamond on a square), never cross.
+        assert_eq!(anchors(&chamfered_rect(0.0, 0.0, 10.0, 10.0, [100.0; 4])), [(5.0, 0.0), (10.0, 5.0), (5.0, 10.0), (0.0, 5.0)]);
+        // Degenerate input never panics.
+        for r in [[f64::NAN; 4], [-5.0; 4], [f64::INFINITY; 4]] {
+            let _ = chamfered_rect(0.0, 0.0, 10.0, 10.0, r);
+        }
+        let _ = chamfered_rect(0.0, 0.0, 0.0, 0.0, [1.0; 4]);
     }
 }
 

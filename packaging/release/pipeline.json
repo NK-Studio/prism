@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "about": "Local release conveyor belt, driven by `cargo xtask release` (xtask/src/release.rs). Each step says what to do; `done` runs its checks before moving on. {version} is replaced by the release version. Progress lives in log/release/state.json (not committed).",
+  "steps": [
+    {
+      "id": "version",
+      "title": "Set the version",
+      "do": [
+        "Make sure the work for this release is merged into main and checked out.",
+        "Set the version: `cargo xtask version set {version}` (updates Cargo.toml and Cargo.lock)."
+      ],
+      "verify": [{ "kind": "cargoVersion" }]
+    },
+    {
+      "id": "commit",
+      "title": "Commit and push the version bump",
+      "do": [
+        "Commit Cargo.toml and Cargo.lock: `git commit -am \"Prism {version}\"`.",
+        "Push main."
+      ],
+      "verify": [{ "kind": "gitClean", "paths": ["Cargo.toml", "Cargo.lock"] }]
+    },
+    {
+      "id": "build-macos",
+      "title": "Build the macOS packages",
+      "do": [
+        "RustRover: run \"Prism Package (macOS)\" (Apple silicon only), or for Apple silicon + Intel: `rustup target add x86_64-apple-darwin` once, then `packaging/macos/package.sh --arch universal`.",
+        "With a Developer ID set (MACOS_SIGN_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID) the app is signed and notarized; without, it is ad-hoc signed (fine for in-app updates, blocked by Gatekeeper when downloaded from the web).",
+        "Output: dist/release/prism-{version}-macos-<arch>.dmg and .app.zip."
+      ],
+      "verify": [
+        { "kind": "files", "paths": ["dist/release/prism-{version}-macos-*.app.zip", "dist/release/prism-{version}-macos-*.dmg"] }
+      ]
+    },
+    {
+      "id": "smoke-test",
+      "title": "Try the built app",
+      "do": [
+        "Open dist/release/prism-{version}-macos-*.dmg, drag Prism to Applications, launch it.",
+        "Help › About Prism shows {version}. Open a PSD, paint a stroke, save a copy, quit."
+      ],
+      "verify": []
+    },
+    {
+      "id": "build-windows",
+      "title": "Build the Windows installer",
+      "optional": true,
+      "do": [
+        "On a Windows PC with this commit: `pwsh packaging/windows/package.ps1 -Arch x64`.",
+        "Copy dist/release/prism-{version}-windows-x64.msi into this Mac's dist/release/.",
+        "Skip this step (`cargo xtask release skip`) to ship macOS only."
+      ],
+      "verify": [{ "kind": "files", "paths": ["dist/release/prism-{version}-windows-*.msi"] }]
+    },
+    {
+      "id": "tag",
+      "title": "Tag the release",
+      "do": ["`git tag v{version}` on the version commit, then `git push origin v{version}`."],
+      "verify": [{ "kind": "command", "run": "git rev-parse -q --verify refs/tags/v{version}" }]
+    },
+    {
+      "id": "github-release",
+      "title": "Upload the installers",
+      "optional": true,
+      "do": [
+        "Put the .dmg (and .msi) where people download Prism, for example a GitHub Release:",
+        "`GH_TOKEN=$(gh auth token --user NK-Studio) gh release create v{version} --repo NK-Studio/prism --title \"Prism v{version}\" dist/release/prism-{version}-*.dmg dist/release/prism-cli-{version}-*.zip`",
+        "Skip if installers are shared another way."
+      ],
+      "verify": [{ "kind": "command", "run": "GH_TOKEN=$(gh auth token --user NK-Studio 2>/dev/null) gh release view v{version} --repo NK-Studio/prism --json tagName" }]
+    },
+    {
+      "id": "publish-feed",
+      "title": "Publish the in-app update",
+      "do": [
+        "RustRover: run \"Prism Publish Update (dry run)\" and check the printed feed, then run \"Prism Publish Update\".",
+        "Terminal: `packaging/publish-update.sh` (add `--min-supported X.Y.Z` to send older versions to a manual download).",
+        "It signs the feed with ~/prism-update.key, pushes NK-Studio/prism-updates and waits until Vercel serves {version}."
+      ],
+      "verify": [{ "kind": "urlJson", "url": "https://prism-updates.vercel.app/stable/latest.json", "field": "version", "equals": "{version}" }]
+    },
+    {
+      "id": "check-update",
+      "title": "Check the update reaches users",
+      "optional": true,
+      "do": [
+        "On a Mac with the previous Prism (one that has in-app updates): Help › Check for Updates… finds {version}.",
+        "Update → Restart to Update; Prism reopens and Help › About Prism shows {version}.",
+        "Skip for the first release with in-app updates: no installed copy can update yet."
+      ],
+      "verify": []
+    }
+  ]
+}

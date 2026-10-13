@@ -733,6 +733,10 @@ fn display_doc(app: &mut PrismApp, idx: usize) -> (std::sync::Arc<Document>, u64
     if let Some(shown) = crate::shape_corners_ui::display_doc(app, idx) {
         return shown;
     }
+    // The shape the Pen is drawing, filled as it will be.
+    if let Some(shown) = crate::vector_ui::pen_display_doc(app, idx) {
+        return shown;
+    }
     if let Some(shown) = crate::type_transform::display_doc(app, idx) {
         return shown;
     }
@@ -760,10 +764,14 @@ fn display_doc(app: &mut PrismApp, idx: usize) -> (std::sync::Arc<Document>, u64
     if let Some(shown) = crate::blend_preview::display_doc(app, idx) {
         return shown;
     }
-    let st = &app.session.documents()[idx];
     if let Some(l) = live_stroke(app, idx) {
         return (l.stroke.doc().clone(), l.display_key());
     }
+    // Free Transform on a shape layer: redrawn as the commit will leave it.
+    if let Some(shown) = crate::transform_tool::shape_display_doc(app, idx) {
+        return shown;
+    }
+    let st = &app.session.documents()[idx];
     if let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview)
         && app.session.active_index() == Some(idx)
         && st.doc.layer(prism_doc::LayerId(t.layer)).is_some()
@@ -2627,6 +2635,10 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         } else if let Some(c) = response.hover_pos().filter(|_| tool != Tool::Hand).and_then(|p| crate::shape_corners_ui::cursor(app, xf.to_doc(p))) {
             let c = response.hover_pos().map_or(c, |p| crate::cursor_pack::stock(&ctx, p, c));
             ui.ctx().set_cursor_icon(c);
+        } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Gradient).and_then(|p| crate::gradient_ui::cursor(app, xf.to_doc(p))) {
+            // The live gradient's handles, stops and line (Photoshop's move and add-stop cursors).
+            let c = response.hover_pos().map_or(c, |p| crate::cursor_pack::stock(&ctx, p, c));
+            ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().filter(|_| tool.is_type()).and_then(|p| {
             let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
             crate::type_transform::cursor(app, &ctx, &xf, p, mods)
@@ -2746,6 +2758,11 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                     }
                 }
                 Tool::Type | Tool::VerticalType => egui::CursorIcon::Text,
+                // Path Selection's black arrow, Direct Selection's white one; ⌘ swaps them while
+                // held, with what a press does (direct_select.rs).
+                Tool::PathSelection | Tool::DirectSelection => crate::tool_cursor::path_tool(&painter, p, crate::direct_select::direct_cursor(app, held)),
+                // ⌘ makes the Pen Direct Selection: its white arrow.
+                Tool::Pen if crate::direct_select::direct_cursor(app, held) => crate::tool_cursor::path_tool(&painter, p, true),
                 Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, view.zoom),
                 Tool::RedEye => {
                     let pupil = app.ui.tool_options.red_eye_pupil_size.clamp(1.0, 100.0);
@@ -2773,8 +2790,14 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                 None
             } else if precise && !brush && !matches!(tool, Tool::Hand | Tool::RotateView | Tool::Zoom) {
                 Some(1025)
+            } else if tool == Tool::Pen && crate::direct_select::direct_cursor(app, held) {
+                // ⌘: the Pen is Direct Selection (`tool_cursor::path_tool` drew its arrow).
+                None
             } else if tool == Tool::Pen {
-                Some(crate::vector_ui::pen_cursor_asset(app, xf.to_doc(p)))
+                Some(crate::vector_ui::pen_cursor_asset(app, xf.to_doc(p), held))
+            } else if matches!(tool, Tool::PathSelection | Tool::DirectSelection) {
+                // `tool_cursor::path_tool` already took the cursor pack's arrow for the mode.
+                None
             } else if matches!(tool, Tool::Ruler | Tool::Count) {
                 Some(crate::analysis_ui::cursor_asset(app, tool, xf.to_doc(p), held))
             } else if tool == Tool::Patch {
@@ -3731,7 +3754,6 @@ pub(crate) fn finish_gesture(app: &mut PrismApp, d: Drag) {
     match d.tool {
         Tool::ObjectSelection => crate::retouch_ui::finish_object_selection(app, d.start, [end[0], end[1]], d.modifiers),
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.live),
-        Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
         Tool::Type | Tool::VerticalType => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
         Tool::Brush | Tool::Pencil | Tool::Eraser => {
             let live = app.live_stroke.take();

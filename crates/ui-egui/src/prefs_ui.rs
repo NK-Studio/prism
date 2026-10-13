@@ -1877,10 +1877,12 @@ mod tests {
         // Type favorites are live and can be cleared in Preferences.
         assert!(has_visible_fields(&values, "type"));
         assert!(!prefs::is_hidden("type.favoriteFonts"));
-        // Every setting of these sections is still unimplemented.
-        for section in ["integrations", "scratchDisks"] {
-            assert!(!has_visible_fields(&values, section), "{section}");
-        }
+        // Every setting of this section is still unimplemented.
+        assert!(!has_visible_fields(&values, "scratchDisks"));
+        // Integrations shows only the update check so far.
+        assert!(has_visible_fields(&values, "integrations"));
+        assert!(!prefs::is_hidden("integrations.checkForUpdates"));
+        assert!(prefs::is_hidden("integrations.controlPort"));
         // Rotate View with Trackpad is live; the other Enhanced Controls rows stay hidden.
         assert!(has_visible_fields(&values, "enhancedControls"));
         assert!(!prefs::is_hidden("enhancedControls.rotateViewWithTrackpad"));

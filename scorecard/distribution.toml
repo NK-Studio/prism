@@ -25,9 +25,9 @@ note = "release.yml (freebsd job) + packaging/freebsd/package.sh; relocated desk
 [[item]]
 id = "DIST-220-1"
 target = "Help > Check for Updates plus an opt-out periodic release-feed check on all desktops"
-status = "missing"
+status = "partial"
 issue = 220
-note = "No update check in crates"
+note = "crates/updater + update_ui.rs: signed feed, daily opt-out check, in-app install (macOS bundle swap, Windows MSI); FreeBSD gets a download link; feed URL and key not configured yet, Windows install unverified on hardware"
 
 [[item]]
 id = "DIST-220-2"

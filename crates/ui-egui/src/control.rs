@@ -975,6 +975,7 @@ pub fn inspect(app: &PrismApp, ctx: &egui::Context) -> Value {
         "magnetic": app.ui.magnetic,
         "textEdit": app.ui.text_edit,
         "typeTransform": app.ui.type_transform,
+        "update": app.ui.update,
         "shapeCorners": crate::shape_corners_ui::inspect(app),
         "arrowHandles": crate::arrow_handles_ui::inspect(app),
         "layerMenu": app.ui.layer_menu,
