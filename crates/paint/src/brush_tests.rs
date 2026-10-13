@@ -296,8 +296,13 @@ fn tilt_direction_and_rotation_drive_angle() {
     };
     let mut flat = StrokePoint::new(0.0, 0.0, 1.0);
     flat.tilt_x = 90.0;
+    // A tip shrunk to nothing paints nothing (as Photoshop's size Fade to 0 does) …
+    assert!(dabs_of(&b, &[flat]).is_empty());
+    // … and a minimum diameter keeps it painting.
+    let mut b = b;
+    b.shape_dynamics.size.minimum = 0.25;
     let d = dabs_of(&b, &[flat]);
-    assert!(d[0].radius <= 0.5 + 1e-6);
+    assert!((d[0].radius - 2.5).abs() < 1e-6, "{}", d[0].radius);
 }
 
 #[test]

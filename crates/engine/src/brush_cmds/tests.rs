@@ -636,9 +636,12 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
         let d: Vec<i64> = r["damage"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
         assert!(d[0].abs() < 1000 && d[1].abs() < 1000 && d[2] > 0 && d[3] > 0, "{r}");
     }
-    // Control: 200 % scatter paints where it did before the cap (the damage includes the dabs'
-    // anti-aliased edge).
+    // Control: 200 % scatter is not capped: the one dab lands within two radii of the point (its
+    // damage is one dab rectangle, edge included).
     let mut s = new();
     s.execute("tools.setBrush", json!({ "brush": scatter(2.0) })).unwrap();
-    assert_eq!(s.execute("paint.stroke", stroke).unwrap(), json!({"damage": [15, 12, 27, 27]}));
+    let r = s.execute("paint.stroke", stroke).unwrap();
+    let d: Vec<f64> = r["damage"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    let (cx, cy, radius) = (d[0] + d[2] / 2.0, d[1] + d[3] / 2.0, f64::from(s.tools.brush.size) / 2.0);
+    assert!((cx - 10.0).hypot(cy - 10.0) <= 2.0 * radius + 1.5 && d[2] == d[3], "{r}");
 }

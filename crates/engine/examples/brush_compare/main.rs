@@ -97,10 +97,101 @@ struct Case {
     /// Document bit depth: 8 (default) or 16, whose renders show values 8-bit PNGs would round.
     #[serde(default = "depth8")]
     depth: u32,
+    #[serde(default)]
+    dynamics: Dynamics,
+    /// Separate dabs (spacing wide enough not to overlap): also compare the distributions of their
+    /// size, angle, roundness, offset from the path and peak, which jitter makes random.
+    #[serde(default)]
+    stats: bool,
 }
 
 fn depth8() -> u32 {
     8
+}
+
+/// What drives a dynamic: nothing, or Photoshop's Fade, the one control a script can drive
+/// deterministically (Stroke Path has no pen). Pen pressure goes through the same control mapping.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum Ctl {
+    #[default]
+    Off,
+    Fade,
+}
+
+impl Ctl {
+    /// Photoshop's `bVTy` code.
+    fn photoshop(self) -> u32 {
+        match self {
+            Ctl::Off => 0,
+            Ctl::Fade => 1,
+        }
+    }
+    fn prism(self) -> &'static str {
+        match self {
+            Ctl::Off => "off",
+            Ctl::Fade => "fade",
+        }
+    }
+}
+
+fn steps25() -> u32 {
+    25
+}
+fn one() -> u32 {
+    1
+}
+
+/// One dynamic, in Photoshop's panel units (whole percentages).
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Dyn {
+    #[serde(default)]
+    jitter: u32,
+    #[serde(default)]
+    control: Ctl,
+    #[serde(default = "steps25")]
+    fade_steps: u32,
+    #[serde(default)]
+    minimum: u32,
+}
+
+/// Scattering: `amount` is the Scatter percentage (up to 1000).
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ScatterCase {
+    amount: u32,
+    #[serde(default)]
+    both_axes: bool,
+    #[serde(default)]
+    control: Ctl,
+    #[serde(default = "steps25")]
+    fade_steps: u32,
+    #[serde(default = "one")]
+    count: u32,
+    #[serde(default)]
+    count_jitter: u32,
+}
+
+/// Shape Dynamics, Scattering and Transfer.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Dynamics {
+    size: Option<Dyn>,
+    angle: Option<Dyn>,
+    roundness: Option<Dyn>,
+    scatter: Option<ScatterCase>,
+    opacity: Option<Dyn>,
+    flow: Option<Dyn>,
+}
+
+impl Dynamics {
+    fn shape(&self) -> bool {
+        self.size.is_some() || self.angle.is_some() || self.roundness.is_some()
+    }
+    fn transfer(&self) -> bool {
+        self.opacity.is_some() || self.flow.is_some()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +239,19 @@ impl Case {
             if !(lo..=hi).contains(&v) {
                 return fail(format!("{name} {v} is outside {lo}..={hi}"));
             }
+        }
+        let dy = &self.dynamics;
+        for (name, d) in [("size", dy.size), ("angle", dy.angle), ("roundness", dy.roundness), ("opacity", dy.opacity), ("flow", dy.flow)] {
+            if let Some(d) = d
+                && (d.jitter > 100 || d.minimum > 100 || !(1..=9999).contains(&d.fade_steps))
+            {
+                return fail(format!("{name} dynamic: jitter and minimum are 0..=100 %, fadeSteps 1..=9999"));
+            }
+        }
+        if let Some(sc) = dy.scatter
+            && (sc.amount > 1000 || !(1..=16).contains(&sc.count) || sc.count_jitter > 100 || !(1..=9999).contains(&sc.fade_steps))
+        {
+            return fail("scatter: amount 0..=1000 %, count 1..=16, countJitter 0..=100 %, fadeSteps 1..=9999".into());
         }
         if self.points.len() < 2 {
             return fail("needs at least two points (Photoshop strokes a path)".into());
@@ -209,6 +313,26 @@ fn render_prism(case: &Case, suite: &Suite, out: &Path) -> R<()> {
         "pressureOpacity": false,
         "smoothing": {"amount": 0.0},
     });
+    let mut brush = brush;
+    let pct = |v: u32| f64::from(v) / 100.0;
+    let dynamic = |d: Option<Dyn>| match d {
+        Some(d) => json!({"jitter": pct(d.jitter), "control": d.control.prism(), "fadeSteps": d.fade_steps, "minimum": pct(d.minimum)}),
+        None => json!({"jitter": 0.0, "control": "off"}),
+    };
+    let dy = &case.dynamics;
+    if dy.shape() {
+        brush["shapeDynamics"] = json!({"enabled": true, "size": dynamic(dy.size), "angle": dynamic(dy.angle), "roundness": dynamic(dy.roundness)});
+    }
+    if let Some(sc) = dy.scatter {
+        brush["scattering"] = json!({
+            "enabled": true,
+            "scatter": {"jitter": pct(sc.amount), "control": sc.control.prism(), "fadeSteps": sc.fade_steps},
+            "bothAxes": sc.both_axes, "count": sc.count, "countJitter": {"jitter": pct(sc.count_jitter)},
+        });
+    }
+    if dy.transfer() {
+        brush["transfer"] = json!({"enabled": true, "opacity": dynamic(dy.opacity), "flow": dynamic(dy.flow)});
+    }
     let cmd = match case.tool {
         Tool::Brush => "paint.stroke",
         Tool::Pencil => "paint.pencil",
@@ -235,11 +359,31 @@ fn jsx_cases(suite: &Suite, cases: &[&Case]) -> Value {
                     "pencil": c.tool == Tool::Pencil,
                     "size": c.size, "hardness": c.hardness, "spacing": c.spacing, "angle": c.angle,
                     "roundness": c.roundness, "opacity": c.opacity, "flow": c.flow, "depth": c.depth,
-                    "points": c.points,
+                    "points": c.points, "dyn": jsx_dynamics(&c.dynamics),
                 })
             })
             .collect(),
     )
+}
+
+/// The case's dynamics as Photoshop's variation values (`bVTy` control code, Fade steps, jitter and
+/// minimum in percent), `null` for a section that stays off.
+fn jsx_dynamics(d: &Dynamics) -> Value {
+    let v = |d: Option<Dyn>| {
+        d.map_or(
+            json!({"control": 0, "fadeSteps": 25, "jitter": 0, "minimum": 0}),
+            |d| json!({"control": d.control.photoshop(), "fadeSteps": d.fade_steps, "jitter": d.jitter, "minimum": d.minimum}),
+        )
+    };
+    json!({
+        "shape": d.shape().then(|| json!({"size": v(d.size), "angle": v(d.angle), "roundness": v(d.roundness)})),
+        "scatter": d.scatter.map(|s| json!({
+            "amount": {"control": s.control.photoshop(), "fadeSteps": s.fade_steps, "jitter": s.amount, "minimum": 0},
+            "bothAxes": s.both_axes, "count": s.count,
+            "countJitter": {"control": 0, "fadeSteps": 25, "jitter": s.count_jitter, "minimum": 0},
+        })),
+        "transfer": d.transfer().then(|| json!({"opacity": v(d.opacity), "flow": v(d.flow)})),
+    })
 }
 
 /// ExtendScript (ES3) that renders every case into `<out>/ps/<id>.png` and records the tool
@@ -322,7 +466,62 @@ function setToolOptions(tool, k) {
     for (i = 0; i < OFF.length; i++) o.putBoolean(s(OFF[i]), false);
     var dual = new ActionDescriptor(); dual.putBoolean(s("useDualBrush"), false);
     o.putObject(s("dualBrush"), s("dualBrush"), dual);
+    // The requested dynamics. Some keys are four-character codes, not string IDs.
+    var dy = k.dyn;
+    if (dy.shape) {
+        o.putBoolean(s("useTipDynamics"), true);
+        o.putObject(c("szVr"), c("brVr"), variation(dy.shape.size, true));
+        o.putUnitDouble(s("minimumDiameter"), c("#Prc"), dy.shape.size.minimum);
+        o.putObject(s("angleDynamics"), c("brVr"), variation(dy.shape.angle));
+        o.putObject(s("roundnessDynamics"), c("brVr"), variation(dy.shape.roundness, true));
+        o.putUnitDouble(s("minimumRoundness"), c("#Prc"), dy.shape.roundness.minimum);
+        o.putBoolean(s("flipX"), false); o.putBoolean(s("flipY"), false); o.putBoolean(s("brushProjection"), false);
+    }
+    if (dy.scatter) {
+        o.putBoolean(s("useScatter"), true);
+        o.putObject(s("scatterDynamics"), c("brVr"), variation(dy.scatter.amount));
+        o.putBoolean(s("bothAxes"), dy.scatter.bothAxes);
+        o.putInteger(s("count"), dy.scatter.count);
+        o.putObject(s("countDynamics"), c("brVr"), variation(dy.scatter.countJitter));
+    }
+    if (dy.transfer) {
+        o.putBoolean(s("usePaintDynamics"), true);
+        o.putObject(c("opVr"), c("brVr"), variation(dy.transfer.opacity));
+        o.putObject(c("prVr"), c("brVr"), variation(dy.transfer.flow));
+    }
     putOptions(tool, o);
+}
+// Size and roundness keep their minimum in the panel's own key (minimumDiameter, minimumRoundness);
+// the variation's `minimum` would apply a second time, so it stays 0 for them.
+function variation(v, panelMinimum) {
+    var d = new ActionDescriptor();
+    d.putInteger(c("bVTy"), v.control); d.putInteger(c("fStp"), v.fadeSteps);
+    d.putUnitDouble(s("jitter"), c("#Prc"), v.jitter); d.putUnitDouble(s("minimum"), c("#Prc"), panelMinimum ? 0 : v.minimum);
+    return d;
+}
+// Restoring the whole options descriptor doesn't switch sections back off, and a section that is off
+// hides its settings: snapshot each tool with its sections on (to keep those settings), then put
+// the switches back one by one.
+var SECTIONS = ["useTipDynamics", "useScatter", "useTexture", "useColorDynamics", "usePaintDynamics", "useBrushPose"];
+function putSwitches(tool, from) {
+    var f = new ActionDescriptor(), i;
+    for (i = 0; i < OFF.length; i++) { try { f.putBoolean(s(OFF[i]), from.getBoolean(s(OFF[i]))); } catch (e) {} }
+    putOptions(tool, f);
+}
+function snapshot(tool) {
+    selectTool(tool);
+    var orig = optionsDescriptor(), on = new ActionDescriptor(), i;
+    for (i = 0; i < SECTIONS.length; i++) on.putBoolean(s(SECTIONS[i]), true);
+    putOptions(tool, on);
+    var full = optionsDescriptor();
+    putSwitches(tool, orig);
+    return { orig: orig, full: full };
+}
+function restore(tool, snap) {
+    selectTool(tool);
+    try { putOptions(tool, snap.full); } catch (e) {}
+    try { putBrush(snap.orig.getObjectValue(s("brush"))); } catch (e) {}
+    try { putSwitches(tool, snap.orig); } catch (e) {}
 }
 // `diameter`, not `masterDiameter`: with the master diameter Photoshop 2026 ignores the hardness.
 function setBrush(k) {
@@ -353,7 +552,7 @@ function strokeLine(doc, k) {
 var units = app.preferences.rulerUnits, fg = app.foregroundColor, done = 0, failed = [];
 // The user's tool and both tools' options, restored at the end.
 var userTool = currentTool(), saved = {}, TOOLS = ["paintbrushTool", "pencilTool"], t;
-for (t = 0; t < TOOLS.length; t++) { selectTool(TOOLS[t]); saved[TOOLS[t]] = optionsDescriptor(); }
+for (t = 0; t < TOOLS.length; t++) saved[TOOLS[t]] = snapshot(TOOLS[t]);
 app.preferences.rulerUnits = Units.PIXELS;
 new Folder(OUT).create();
 var black = new SolidColor(); black.rgb.red = 0; black.rgb.green = 0; black.rgb.blue = 0;
@@ -384,7 +583,7 @@ try {
     app.preferences.rulerUnits = units;
     app.foregroundColor = fg;
     for (t = 0; t < TOOLS.length; t++) {
-        try { selectTool(TOOLS[t]); putOptions(TOOLS[t], saved[TOOLS[t]]); putBrush(saved[TOOLS[t]].getObjectValue(s("brush"))); } catch (e) {}
+        try { restore(TOOLS[t], saved[TOOLS[t]]); } catch (e) {}
     }
     try { selectTool(userTool); } catch (e) {}
 }
@@ -513,6 +712,8 @@ struct Row {
     prism: Option<Shape>,
     /// Why the Photoshop render may not match the case (empty = comparable).
     problems: Vec<String>,
+    /// Dab distributions, for `stats` cases.
+    stats: String,
 }
 
 /// Tool-option switches (as Photoshop 2026 reports them) that must be off for a comparable render:
@@ -546,10 +747,22 @@ fn readback_problems(case: &Case, path: &Path) -> Vec<String> {
         problems.push("no tool options read back".into());
         return problems;
     };
-    let on: Vec<&str> = SECTION_KEYS.iter().copied().filter(|k| opts.get(*k).and_then(Value::as_bool) == Some(true)).collect();
+    let dy = &case.dynamics;
+    let wanted = |k: &str| match k {
+        "useTipDynamics" => dy.shape(),
+        "useScatter" => dy.scatter.is_some(),
+        "usePaintDynamics" => dy.transfer(),
+        _ => false,
+    };
+    let on: Vec<&str> = SECTION_KEYS.iter().copied().filter(|k| !wanted(k) && opts.get(*k).and_then(Value::as_bool) == Some(true)).collect();
     if !on.is_empty() {
         problems.push(format!("left on: {}", on.join(", ")));
     }
+    let off: Vec<&str> = SECTION_KEYS.iter().copied().filter(|k| wanted(k) && opts.get(*k).and_then(Value::as_bool) != Some(true)).collect();
+    if !off.is_empty() {
+        problems.push(format!("not on: {}", off.join(", ")));
+    }
+    problems.extend(variation_problems(dy, opts));
     if opts.get("dualBrush").and_then(|d| d.get("useDualBrush")).and_then(Value::as_bool) == Some(true) {
         problems.push("left on: dualBrush".into());
     }
@@ -574,6 +787,191 @@ fn readback_problems(case: &Case, path: &Path) -> Vec<String> {
         }
     }
     problems
+}
+
+/// Photoshop's read-back variations (`bVTy`, `fStp`, `jitter`, minimum) against the case's dynamics.
+fn variation_problems(dy: &Dynamics, opts: &serde_json::Map<String, Value>) -> Vec<String> {
+    let num = |v: Option<&Value>| v.and_then(|v| v.get("value").and_then(Value::as_f64).or_else(|| v.as_f64()));
+    let mut problems = Vec::new();
+    let mut check = |name: &str, got: Option<f64>, want: f64| match got {
+        Some(g) if (g - want).abs() < 0.01 => {}
+        Some(g) => problems.push(format!("{name} {g} (case {want})")),
+        None => problems.push(format!("{name} not reported")),
+    };
+    let mut dynamic = |key: &str, d: Option<Dyn>, min_key: Option<&str>| {
+        let Some(d) = d else { return };
+        let v = opts.get(key);
+        check(&format!("{key}.bVTy"), num(v.and_then(|v| v.get("bVTy"))), f64::from(d.control.photoshop()));
+        if d.control == Ctl::Fade {
+            check(&format!("{key}.fStp"), num(v.and_then(|v| v.get("fStp"))), f64::from(d.fade_steps));
+        }
+        check(&format!("{key}.jitter"), num(v.and_then(|v| v.get("jitter"))), f64::from(d.jitter));
+        // Size and roundness keep their minimum in the panel's key; their variation's own minimum
+        // must stay 0 or Photoshop applies it twice.
+        let own_minimum = if min_key.is_some() { 0.0 } else { f64::from(d.minimum) };
+        check(&format!("{key}.minimum"), num(v.and_then(|v| v.get("minimum"))), own_minimum);
+        if let Some(k) = min_key {
+            check(k, num(opts.get(k)), f64::from(d.minimum));
+        }
+    };
+    if dy.shape() {
+        dynamic("szVr", dy.size, Some("minimumDiameter"));
+        dynamic("angleDynamics", dy.angle, None);
+        dynamic("roundnessDynamics", dy.roundness, Some("minimumRoundness"));
+    }
+    if dy.transfer() {
+        dynamic("opVr", dy.opacity, None);
+        dynamic("prVr", dy.flow, None);
+    }
+    if let Some(sc) = dy.scatter {
+        let v = opts.get("scatterDynamics");
+        check("scatterDynamics.jitter", num(v.and_then(|v| v.get("jitter"))), f64::from(sc.amount));
+        check("scatterDynamics.bVTy", num(v.and_then(|v| v.get("bVTy"))), f64::from(sc.control.photoshop()));
+        check("count", num(opts.get("count")), f64::from(sc.count));
+        check("countDynamics.jitter", num(opts.get("countDynamics").and_then(|v| v.get("jitter"))), f64::from(sc.count_jitter));
+        if opts.get("bothAxes").and_then(Value::as_bool) != Some(sc.both_axes) {
+            problems.push(format!("bothAxes not {}", sc.both_axes));
+        }
+    }
+    problems
+}
+
+// ---------------------------------------------------------------------------
+// Dab statistics
+// ---------------------------------------------------------------------------
+
+/// One separate dab found in a render.
+#[derive(Clone, Copy, Debug)]
+struct DabStat {
+    /// Distance along the path to the dab's projection, px.
+    along: f64,
+    /// Equivalent diameter: the disc of the dab's area at its peak, px.
+    diameter: f64,
+    peak: f64,
+    /// Long-axis angle, degrees counter-clockwise, in (−90, 90].
+    angle: f64,
+    /// Short over long axis (from the second moments).
+    roundness: f64,
+    /// Signed distance from the path, px (left of the direction of travel positive).
+    offset: f64,
+}
+
+/// The separate dabs of a render: 8-connected regions above 2 % coverage.
+fn find_dabs(c: &Coverage, path: &[[f64; 2]]) -> Vec<DabStat> {
+    let (w, h) = (c.width, c.height);
+    let mut seen = vec![false; c.v.len()];
+    let mut out = Vec::new();
+    let mut stack = Vec::new();
+    for start in 0..c.v.len() {
+        if seen[start] || c.v[start] <= 0.02 {
+            continue;
+        }
+        seen[start] = true;
+        stack.push(start);
+        let (mut m, mut mx, mut my, mut mxx, mut myy, mut mxy, mut peak) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        while let Some(i) = stack.pop() {
+            let v = f64::from(c.v[i]);
+            let (x, y) = ((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
+            m += v;
+            mx += v * x;
+            my += v * y;
+            mxx += v * x * x;
+            myy += v * y * y;
+            mxy += v * x * y;
+            peak = peak.max(v);
+            let (ix, iy) = ((i % w) as i64, (i / w) as i64);
+            for (dx, dy) in [(-1i64, -1i64), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                let (nx, ny) = (ix + dx, iy + dy);
+                if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                    continue;
+                }
+                let j = ny as usize * w + nx as usize;
+                if !seen[j] && c.v[j] > 0.02 {
+                    seen[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+        if m < 0.5 {
+            continue;
+        }
+        let (cx, cy) = (mx / m, my / m);
+        let (sxx, syy, sxy) = (mxx / m - cx * cx, myy / m - cy * cy, mxy / m - cx * cy);
+        let tr = sxx + syy;
+        let disc = ((sxx - syy).powi(2) / 4.0 + sxy * sxy).sqrt();
+        let (l1, l2) = (tr / 2.0 + disc, (tr / 2.0 - disc).max(0.0));
+        // Image y points down: negate for counter-clockwise.
+        let mut angle = -(0.5 * (2.0 * sxy).atan2(sxx - syy)).to_degrees();
+        if angle <= -90.0 {
+            angle += 180.0;
+        }
+        let (along, offset) = path_position(path, cx, cy);
+        out.push(DabStat {
+            along,
+            diameter: 2.0 * (m / (peak.max(1e-6) * std::f64::consts::PI)).sqrt(),
+            peak,
+            angle,
+            roundness: if l1 > 0.0 { (l2 / l1).sqrt() } else { 1.0 },
+            offset,
+        });
+    }
+    out.sort_by(|a, b| a.along.total_cmp(&b.along));
+    out
+}
+
+/// Distance along a polyline to the point nearest (x, y), and the signed distance to it.
+fn path_position(path: &[[f64; 2]], x: f64, y: f64) -> (f64, f64) {
+    let (mut best, mut along, mut offset, mut run) = (f64::MAX, 0.0, 0.0, 0.0);
+    for seg in path.windows(2) {
+        let ([ax, ay], [bx, by]) = (seg[0], seg[1]);
+        let (dx, dy) = (bx - ax, by - ay);
+        let len = dx.hypot(dy);
+        if len <= 0.0 {
+            continue;
+        }
+        let t = (((x - ax) * dx + (y - ay) * dy) / (len * len)).clamp(0.0, 1.0);
+        let (px, py) = (ax + dx * t, ay + dy * t);
+        let d = (x - px).hypot(y - py);
+        if d < best {
+            best = d;
+            along = run + t * len;
+            // Left of travel in a y-down image is negative cross product.
+            offset = -(dx * (y - ay) - dy * (x - ax)) / len;
+        }
+        run += len;
+    }
+    (along, offset)
+}
+
+/// n, mean, standard deviation, 5th, 50th and 95th percentiles.
+fn summary(mut v: Vec<f64>) -> [f64; 6] {
+    if v.is_empty() {
+        return [0.0, f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN];
+    }
+    v.sort_by(f64::total_cmp);
+    let n = v.len() as f64;
+    let mean = v.iter().sum::<f64>() / n;
+    let sd = (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n).sqrt();
+    let q = |p: f64| v[((n - 1.0) * p).round() as usize];
+    [n, mean, sd, q(0.05), q(0.5), q(0.95)]
+}
+
+/// Report lines comparing the two renders' dab distributions.
+fn stats_lines(id: &str, ps: &[DabStat], prism: &[DabStat]) -> String {
+    let mut t = format!(
+        "\n### `{id}`\n\n| metric | PS n | PS mean | PS sd | PS p5 | PS p50 | PS p95 | Prism n | Prism mean | Prism sd | Prism p5 | Prism p50 | Prism p95 |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n"
+    );
+    let metrics: [(&str, fn(&DabStat) -> f64); 5] =
+        [("diameter", |d| d.diameter), ("peak", |d| d.peak), ("angle", |d| d.angle), ("roundness", |d| d.roundness), ("offset", |d| d.offset)];
+    for (name, f) in metrics {
+        let (a, b) = (summary(ps.iter().map(f).collect()), summary(prism.iter().map(f).collect()));
+        let _ = writeln!(
+            t,
+            "| {name} | {:.0} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.0} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} |",
+            a[0], a[1], a[2], a[3], a[4], a[5], b[0], b[1], b[2], b[3], b[4], b[5]
+        );
+    }
+    t
 }
 
 /// Signed difference image: red where Prism lays more ink, blue where Photoshop does (×4), over
@@ -606,6 +1004,7 @@ fn diff_case(case: &Case, out: &Path) -> R<Row> {
         ps: None,
         prism: None,
         problems: readback_problems(case, &out.join("ps").join(format!("{}.json", case.id))),
+        stats: String::new(),
     };
     let ps = load_coverage(&out.join("ps").join(format!("{}.png", case.id)))?;
     let pr = load_coverage(&out.join("prism").join(format!("{}.png", case.id)))?;
@@ -661,6 +1060,17 @@ fn diff_case(case: &Case, out: &Path) -> R<Row> {
     }
     row.mae = if n > 0 { sum / n as f64 } else { 0.0 };
     row.status = if row.problems.is_empty() { "ok".into() } else { "**PS settings differ**".into() };
+    if case.stats {
+        let (da, db) = (find_dabs(a, &case.points), find_dabs(b, &case.points));
+        row.stats = stats_lines(&case.id, &da, &db);
+        let mut csv = String::from("render,along,diameter,peak,angle,roundness,offset\n");
+        for (who, ds) in [("photoshop", &da), ("prism", &db)] {
+            for d in ds.iter() {
+                let _ = writeln!(csv, "{who},{:.3},{:.4},{:.4},{:.3},{:.4},{:.4}", d.along, d.diameter, d.peak, d.angle, d.roundness, d.offset);
+            }
+        }
+        std::fs::write(out.join("profiles").join(format!("{}.dabs.csv", case.id)), csv).map_err(|e| e.to_string())?;
+    }
     std::fs::write(out.join("diff").join(format!("{}.png", case.id)), diff_png(a, b)?).map_err(|e| e.to_string())?;
     let (pa, pb) = (profile(a, probe), profile(b, probe));
     let mut csv = String::from("pos,photoshop,prism\n");
@@ -725,6 +1135,13 @@ fn report(rows: &[Row]) -> String {
                 g(&r.edge_ps, |e| e.width),
                 g(&r.edge_prism, |e| e.width)
             );
+        }
+    }
+    let with_stats: Vec<&Row> = rows.iter().filter(|r| !r.stats.is_empty()).collect();
+    if !with_stats.is_empty() {
+        t.push_str("\n## Dab statistics\n\nSeparate dabs found in each render (8-connected, > 2 %): equivalent diameter, peak coverage, long-axis angle (° CCW), roundness and signed offset from the path (px). Per-dab values: `profiles/<id>.dabs.csv`.\n");
+        for r in with_stats {
+            t.push_str(&r.stats);
         }
     }
     let flagged: Vec<&Row> = rows.iter().filter(|r| !r.problems.is_empty()).collect();
