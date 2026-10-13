@@ -27,7 +27,8 @@ Open `target/brush-compare/report.md`. Each case gets:
   edge: the mean coverage of every pixel by distance from the centre in 0.1 px bins
   (`profiles/<id>.radial.csv`). It is summarised as the 50 % radius and the 90 % → 10 % edge
   width. A one-row probe sees only one sub-pixel phase; the radial edge sees them all. This is
-  how the computed tips' anti-aliasing was matched (`prism_paint::EDGE_SPAN`, `EDGE_INSET`).
+  how the computed tips were matched (`prism_paint::Falloff`): Photoshop draws them as texels one
+  pixel apart, placed on the dab with bilinear interpolation.
 - Photoshop's tool options read back after the brush was set. Any switched-on flag (`on: …`)
   means a dynamics section or option was active. That render is not comparable until it is
   turned off.

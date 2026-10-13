@@ -98,9 +98,8 @@ impl Footprint {
 /// Bounding rectangle of a round dab of this hardness, as [`footprint`] rasterizes it (its
 /// anti-aliased edge or soft tail included).
 pub fn dab_rect(d: &Dab, hardness: f32) -> Rect {
-    let r = d.radius.max(1e-3);
-    let falloff = crate::Falloff::new(hardness, r);
-    let reach = if falloff.is_hard() { r + crate::EDGE_REACH } else { r * falloff.reach() };
+    let r = d.radius.max(0.5);
+    let reach = r * crate::Falloff::new(hardness, r).reach();
     crate::render::rect_around(d, reach)
 }
 

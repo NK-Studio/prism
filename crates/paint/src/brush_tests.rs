@@ -106,7 +106,7 @@ fn hard_edge_is_sharp() {
     // it, with only the anti-aliasing band in between.
     let b = BrushSettings { hardness: 1.0, ..brush() };
     let r = raster(&b, &Dab::round(Point::new(50.0, 50.0), 20.0, 1.0));
-    let prof: Vec<f32> = (0..22).map(|i| at(&r, 50 + i, 50)).collect();
+    let prof: Vec<f32> = (0..23).map(|i| at(&r, 50 + i, 50)).collect();
     let band = prof.iter().filter(|&&a| (0.01..0.99).contains(&a)).count();
     assert!(band <= 3, "hardness 1 rim is {band} px wide: {prof:?}");
     assert!(prof[17] > 0.99, "translucent inside the rim: {prof:?}");
@@ -968,8 +968,8 @@ fn huge_scatter_is_capped_and_renders_at_every_depth() {
         let b = with(j);
         assert_eq!(all_dabs(&b, &pts), capped, "scatter {j} paints like the maximum");
         let ctx = BrushContext::new(&b);
-        // Radius 10 plus the anti-aliased edge, plus a pixel of slack on each side.
-        let side = 2 * ((10.0 + crate::EDGE_REACH).ceil() as u32 + 1) + 1;
+        // Radius 10 plus the hard edge's tail, plus a pixel of slack on each side.
+        let side = 2 * ((10.0 + crate::Falloff::new(1.0, 10.0).reach_past_edge()).ceil() as u32 + 1) + 1;
         for d in &capped.0 {
             let r = ctx.dab_rect(d, false);
             assert!(!r.is_empty() && r.width() <= side && r.height() <= side, "{r:?}");
@@ -1019,11 +1019,12 @@ fn dab_rect_of_a_far_or_non_finite_centre_does_not_overflow() {
     }
 }
 
-/// The rasterizer's shortcuts for computed tips (skip pixels beyond the edge, skip the gradient
-/// inside it) give exactly the per-pixel edge model: the relative radius, the first-order signed
-/// distance to the ellipse and `tip_coverage`. Tips narrower than the edge (1 px) included.
+/// The rasterizer's computed tips are exactly the texel model: texels at whole-pixel offsets from
+/// the dab centre (the relative radius on the ellipse, the first-order signed distance to its edge,
+/// `Falloff::at`) placed bilinearly; its shortcuts (empty beyond the tail, full inside) change
+/// nothing. Tips narrower than their tail (1 px) included.
 #[test]
-fn computed_tip_shortcuts_match_the_edge_model() {
+fn computed_tips_are_bilinearly_placed_texels() {
     for (size, hardness, roundness, angle) in
         [(1.0f32, 1.0f32, 1.0f32, 0.0f32), (3.0, 1.0, 1.0, 0.0), (9.0, 0.3, 1.0, 0.0), (60.0, 1.0, 0.2, 30.0), (40.0, 0.0, 0.5, -70.0)]
     {
@@ -1039,15 +1040,24 @@ fn computed_tip_shortcuts_match_the_edge_model() {
             let (r, ro) = (d.radius, d.roundness.max(0.5 / d.radius).min(1.0));
             let rm = (r * ro).max(0.5);
             let (major, (sn, cs)) = (rm / ro, d.angle.sin_cos());
-            for (i, v) in got.iter().enumerate() {
-                let (x, y) = (rect.x0 + (i as u32 % rect.width()) as i32, rect.y0 + (i as u32 / rect.width()) as i32);
-                let (dx, dy) = (x as f32 + 0.5 - centre.x as f32, -(y as f32 + 0.5 - centre.y as f32));
+            let falloff = crate::Falloff::new(hardness, rm);
+            // Texel at offset (tx, ty) from the centre (y down).
+            let texel = |tx: f32, ty: f32| {
+                let (dx, dy) = (tx, -ty);
                 let (u, w) = (dx * cs + dy * sn, -dx * sn + dy * cs);
                 let (qu, qv) = (u / major, w / rm);
                 let q = (qu * qu + qv * qv).sqrt();
                 let g = if q > 1e-6 { ((qu / major).powi(2) + (qv / rm).powi(2)).sqrt() / q } else { 0.0 };
-                let sd = if g > 0.0 { (q - 1.0) / g } else { -rm };
-                let want = crate::tip_coverage(q, sd, &crate::Falloff::new(hardness, rm));
+                falloff.at(q, if g > 0.0 { (q - 1.0) / g } else { -rm })
+            };
+            for (i, v) in got.iter().enumerate() {
+                let (x, y) = (rect.x0 + (i as u32 % rect.width()) as i32, rect.y0 + (i as u32 / rect.width()) as i32);
+                let (dx, dy) = (x as f32 + 0.5 - centre.x as f32, y as f32 + 0.5 - centre.y as f32);
+                let (tx, ty) = (dx.floor(), dy.floor());
+                let (fx, fy) = (dx - tx, dy - ty);
+                let top = texel(tx, ty) * (1.0 - fx) + texel(tx + 1.0, ty) * fx;
+                let bottom = texel(tx, ty + 1.0) * (1.0 - fx) + texel(tx + 1.0, ty + 1.0) * fx;
+                let want = top * (1.0 - fy) + bottom * fy;
                 assert!((v - want).abs() < 1e-5, "size {size} round {roundness} at {centre:?} pixel ({x}, {y}): {v} vs {want}");
             }
         }

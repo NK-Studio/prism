@@ -126,7 +126,7 @@ fn clone_stamp_sample_all_layers_onto_empty_layer_and_opacity() {
     let p = rgba(&s, 48, 16);
     assert!(p[0] > 0.99 && p[1] < 0.01 && p[3] > 0.99, "{p:?}");
     // currentAndBelow on the bottom layer ignores layers above.
-    s.execute("paint.cloneStamp", json!({"points": [[40, 5]], "source": [8, 5], "size": 4, "hardness": 100, "opacity": 50, "sampleLayer": "currentAndBelow"}))
+    s.execute("paint.cloneStamp", json!({"points": [[40.5, 5.5]], "source": [8.5, 5.5], "size": 4, "hardness": 100, "opacity": 50, "sampleLayer": "currentAndBelow"}))
         .unwrap();
     let p = rgba(&s, 40, 5);
     assert!((p[3] - 0.5).abs() < 0.02, "opacity 50 → half alpha {p:?}");

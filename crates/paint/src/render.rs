@@ -19,7 +19,7 @@ use crate::dynamics::DabGenerator;
 use crate::retouch::{Footprint, alpha_index, over_native};
 use crate::rng::hash2;
 use crate::tile::{Mips, PatternImage};
-use crate::{Dab, EDGE_INNER, EDGE_REACH, Falloff, StrokePoint, tip_coverage};
+use crate::{Dab, Falloff, StrokePoint};
 
 /// Edge of a stroke-buffer tile.
 pub const COV_TILE: i32 = 64;
@@ -115,13 +115,14 @@ fn tip_axes(d: &Dab) -> (f32, f32) {
     (ro, (d.radius * ro).max(0.5))
 }
 
-/// How far from its centre, in pixels, a computed tip paints: its major radius plus the
-/// anti-aliased edge (hard), or out to the end of its falloff tail (soft).
+/// How far from its centre, in pixels, a computed tip's texels reach: its major radius plus the
+/// hard edge's tail, or out to the end of a soft tip's falloff (bilinear placement adds a pixel,
+/// which [`rect_around`]'s slack covers).
 pub(crate) fn round_reach(d: &Dab, hardness: f32) -> f32 {
     let (ro, rm) = tip_axes(d);
     let major = rm / ro;
     let falloff = Falloff::new(hardness, rm);
-    if falloff.is_hard() { major + EDGE_REACH } else { major * falloff.reach() }
+    if falloff.is_hard() { major + falloff.reach_past_edge() } else { major * falloff.reach() }
 }
 
 /// The pixel rectangle `reach` (plus 1 px of anti-aliasing slack) around a dab's centre. The casts
@@ -198,14 +199,73 @@ impl BrushContext {
         let (ro, rm) = tip_axes(d);
         let (inv_major, inv_minor) = (ro / rm, 1.0 / rm);
         let falloff = Falloff::new(hardness, rm);
-        // In q² (relative radius squared): beyond `outside_q2` nothing paints; within `inside_q2`
-        // coverage is full (-1: nowhere, for a tip narrower than its edge or tail).
-        let positive_sq = |v: f32| if v > 0.0 { v * v } else { -1.0 };
-        let (outside_q2, inside_q2) = if falloff.is_hard() {
-            ((1.0 + EDGE_REACH / rm).powi(2), positive_sq(1.0 - EDGE_INNER / rm))
-        } else {
-            (falloff.reach().powi(2), positive_sq(falloff.full_to()))
+        // In q² (relative radius squared): beyond `outside_q2` the texels are empty; within
+        // `inside_q2` they are full (-1: nowhere, for a tip narrower than its tail).
+        let (outside_q2, inside_q2) = (falloff.reach().powi(2), if falloff.full_to() > 0.0 { falloff.full_to().powi(2) } else { -1.0 });
+        // Pixel or texel offset from the dab centre (y down) into tip space: y up, projected,
+        // rotated by −angle, flipped.
+        let to_tip = |dx: f32, dy: f32| {
+            let (mut ux, mut uy) = (dx, -dy);
+            if let Some((ax, ay, k)) = proj {
+                let t = (ux * ax + uy * ay) * k;
+                ux += t * ax;
+                uy += t * ay;
+            }
+            ((ux * cs + uy * sn) * fx, (-ux * sn + uy * cs) * fy)
         };
+        // A computed tip's texel at tip-space (u, v): the relative radius on the ellipse (semi-axes
+        // `major` along u, `rm` along v), and for a hard tip the signed distance to its edge in
+        // pixels, to first order (q − 1) / |∇q| (exact on a circle), so the edge is the same width
+        // all round a flattened tip. |∇q| ≤ 1 / rm, so |sd| ≥ |q − 1|·rm: the q² bounds skip the
+        // work exactly where it can't change the texel.
+        let texel = |u: f32, v: f32| {
+            let (qu, qv) = (u * inv_major, v * inv_minor);
+            let q2 = qu * qu + qv * qv;
+            if q2 >= outside_q2 {
+                return 0.0;
+            }
+            if q2 <= inside_q2 {
+                return 1.0;
+            }
+            let q = q2.sqrt();
+            if !falloff.is_hard() {
+                return falloff.at(q, 0.0);
+            }
+            let (gu, gv) = (qu * inv_major, qv * inv_minor);
+            let g = if q > 1e-6 { (gu * gu + gv * gv).sqrt() / q } else { 0.0 };
+            falloff.at(q, if g > 0.0 { (q - 1.0) / g } else { -rm })
+        };
+        // Photoshop places a computed tip as a bitmap of texels one pixel apart, centred on the
+        // dab, with bilinear interpolation: the texels at whole-pixel offsets from the centre
+        // around the rectangle (one more column and row), and the weights of the far texels.
+        let (ox, oy) = (rect.x0 as f32 + 0.5 - cx, rect.y0 as f32 + 0.5 - cy);
+        let (gx0, gy0) = (ox.floor(), oy.floor());
+        let (wx, wy) = (ox - gx0, oy - gy0);
+        let computed = mips.is_none() && !aliased;
+        if computed {
+            let gw = w + 1;
+            let mut texels = Vec::with_capacity(gw * (h + 1));
+            for j in 0..=h {
+                let ty = gy0 + j as f32;
+                for i in 0..gw {
+                    let (u, v) = to_tip(gx0 + i as f32, ty);
+                    texels.push(texel(u, v));
+                }
+            }
+            let (w00, w10, w01, w11) = ((1.0 - wx) * (1.0 - wy), wx * (1.0 - wy), (1.0 - wx) * wy, wx * wy);
+            for (row, (r0, r1)) in out.chunks_exact_mut(w.max(1)).zip(texels.chunks_exact(gw).zip(texels.chunks_exact(gw).skip(1))) {
+                for (o, (a, b)) in row.iter_mut().zip(r0.windows(2).zip(r1.windows(2))) {
+                    *o = a[0] * w00 + a[1] * w10 + b[0] * w01 + b[1] * w11;
+                }
+            }
+            // Without per-pixel effects the placed texels times flow are the dab.
+            if !(noise || tex_tip || wet) {
+                if d.alpha != 1.0 {
+                    out.iter_mut().for_each(|o| *o *= d.alpha);
+                }
+                return;
+            }
+        }
         // Sampled-tip mapping.
         let (level, inv_scale, tw, th) = match mips {
             Some(m) => {
@@ -221,17 +281,9 @@ impl BrushContext {
             for xx in 0..w {
                 let x = rect.x0 + xx as i32;
                 let dx = x as f32 + 0.5 - cx;
-                // To y-up, project, rotate by -angle, flip.
-                let (mut ux, mut uy) = (dx, -dy);
-                if let Some((ax, ay, k)) = proj {
-                    let t = (ux * ax + uy * ay) * k;
-                    ux += t * ax;
-                    uy += t * ay;
-                }
-                let u = (ux * cs + uy * sn) * fx;
-                let v = (-ux * sn + uy * cs) * fy;
                 let (mut val, rn) = match mips {
                     None if aliased => {
+                        let (u, v) = to_tip(dx, dy);
                         let d2 = (u * ro).powi(2) + v * v;
                         if d2 > rm * rm {
                             continue;
@@ -239,36 +291,21 @@ impl BrushContext {
                         (1.0, d2.sqrt() / rm)
                     }
                     None => {
-                        // Relative radius on the ellipse (semi-axes `major` along u, `rm` along v).
-                        // A soft tip's falloff scales with the tip. A hard tip's edge is measured in
-                        // pixels, by the first-order signed distance (q − 1) / |∇q| (exact on a
-                        // circle), so its anti-aliasing is the same width all round a flattened
-                        // tip instead of stretching by 1 / roundness along the long axis.
-                        let (qu, qv) = (u * inv_major, v * inv_minor);
-                        let q2 = qu * qu + qv * qv;
-                        // |∇q| ≤ 1 / rm, so |sd| ≥ |q − 1|·rm: these bounds skip work exactly where
-                        // it can't change the result.
-                        if q2 >= outside_q2 {
+                        // The placed texels (above); only Wet Edges reads the relative radius.
+                        let val = out.get(yy * w + xx).copied().unwrap_or(0.0);
+                        if val <= 0.0 {
                             continue;
                         }
-                        if q2 <= inside_q2 && !wet {
-                            // Full coverage; only Wet Edges reads the relative radius here.
-                            (1.0, 0.0)
+                        let rn = if wet {
+                            let (u, v) = to_tip(dx, dy);
+                            (u * inv_major).hypot(v * inv_minor)
                         } else {
-                            let q = q2.sqrt();
-                            if q2 <= inside_q2 {
-                                (1.0, q)
-                            } else if !falloff.is_hard() {
-                                (falloff.at(q), q)
-                            } else {
-                                let (gu, gv) = (qu * inv_major, qv * inv_minor);
-                                let g = if q > 1e-6 { (gu * gu + gv * gv).sqrt() / q } else { 0.0 };
-                                let sd = if g > 0.0 { (q - 1.0) / g } else { -rm };
-                                (tip_coverage(q, sd, &falloff), q)
-                            }
-                        }
+                            0.0
+                        };
+                        (val, rn)
                     }
                     Some(m) => {
+                        let (u, v) = to_tip(dx, dy);
                         let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
                         if px < -1.0 || py < -1.0 || px > tw + 1.0 || py > th + 1.0 {
                             continue;
