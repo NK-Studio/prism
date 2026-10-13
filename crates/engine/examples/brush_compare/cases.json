@@ -1,0 +1,32 @@
+{
+  "canvas": { "width": 400, "height": 120 },
+  "cases": [
+    { "id": "dab-h0", "note": "soft tip falloff profile, hardness 0", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 0, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
+    { "id": "dab-h25", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 25, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
+    { "id": "dab-h50", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 50, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
+    { "id": "dab-h75", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 75, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
+    { "id": "dab-h100", "note": "hard edge anti-aliasing", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 100, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
+
+    { "id": "dab-round20-a0", "note": "elliptical tip: edge width along the long axis", "canvas": { "width": 300, "height": 300 }, "size": 200, "roundness": 20, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
+    { "id": "dab-round20-a30", "canvas": { "width": 300, "height": 300 }, "size": 200, "roundness": 20, "angle": 30, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
+
+    { "id": "line-s25", "note": "baseline hard line", "size": 40, "points": [[40, 60], [360, 60]], "probe": { "column": 200 } },
+    { "id": "line-flow10", "note": "flow build-up within one stroke", "size": 40, "flow": 10, "points": [[40, 60], [360, 60]], "probe": { "column": 200 } },
+    { "id": "line-flow50", "size": 40, "flow": 50, "points": [[40, 60], [360, 60]], "probe": { "column": 200 } },
+    { "id": "line-op50", "note": "stroke opacity ceiling", "size": 40, "opacity": 50, "points": [[40, 60], [360, 60]], "probe": { "column": 200 } },
+    { "id": "line-soft-flow10", "size": 40, "hardness": 0, "flow": 10, "points": [[40, 60], [360, 60]], "probe": { "column": 200 } },
+    { "id": "line-s100", "note": "dab placement: first dab, step, last point", "size": 30, "spacing": 100, "points": [[40, 60], [360, 60]], "probe": { "row": 60 } },
+    { "id": "line-s150", "size": 30, "spacing": 150, "points": [[40, 60], [361, 60]], "probe": { "row": 60 } },
+
+    { "id": "thin-size1-y50", "note": "1 px line on a pixel boundary", "canvas": { "width": 200, "height": 100 }, "size": 1, "points": [[20, 50], [180, 50]], "probe": { "column": 100 } },
+    { "id": "thin-size1-y50c", "note": "1 px line on a pixel centre", "canvas": { "width": 200, "height": 100 }, "size": 1, "points": [[20, 50.5], [180, 50.5]], "probe": { "column": 100 } },
+    { "id": "thin-size2", "canvas": { "width": 200, "height": 100 }, "size": 2, "points": [[20, 50], [180, 50]], "probe": { "column": 100 } },
+    { "id": "thin-size3", "canvas": { "width": 200, "height": 100 }, "size": 3, "points": [[20, 50.5], [180, 50.5]], "probe": { "column": 100 } },
+    { "id": "thin-diag-size1", "note": "beading on a shallow diagonal", "canvas": { "width": 200, "height": 100 }, "size": 1, "points": [[20, 20], [180, 80]], "probe": { "column": 100 } },
+    { "id": "thin-diag-size3", "canvas": { "width": 200, "height": 100 }, "size": 3, "points": [[20, 20], [180, 80]], "probe": { "column": 100 } },
+
+    { "id": "pencil-diag-size1", "tool": "pencil", "canvas": { "width": 200, "height": 100 }, "size": 1, "points": [[20, 20], [180, 80]], "probe": { "column": 100 } },
+    { "id": "pencil-size4", "note": "even pencil sizes snap to pixel corners", "tool": "pencil", "canvas": { "width": 200, "height": 100 }, "size": 4, "points": [[20, 50.3], [180, 50.3]], "probe": { "column": 100 } },
+    { "id": "pencil-size5", "tool": "pencil", "canvas": { "width": 200, "height": 100 }, "size": 5, "points": [[20, 50.3], [180, 50.3]], "probe": { "column": 100 } }
+  ]
+}
