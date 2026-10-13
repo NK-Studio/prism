@@ -42,7 +42,8 @@ the cases change.
 The cases are in `crates/engine/examples/brush_compare/cases.json`. They use Photoshop's panel
 units: whole pixels, degrees and whole percentages. Fields: `size`, `hardness`, `spacing`,
 `angle`, `roundness`, `opacity`, `flow`, `tool` (`brush` | `pencil`), `points` (path anchors in
-pixels, at least two), `canvas` and `probe` (`{"row": y}` or `{"column": x}`) and `radial`. Values Photoshop
+pixels, at least two), `canvas` and `probe` (`{"row": y}` or `{"column": x}`), `radial` and `depth` (8 or 16: a 16-bit document
+shows values an 8-bit PNG would round; decode its PNGs at 16 bits, which PIL's `RGB` mode does not). Values Photoshop
 can't represent are rejected.
 
 Photoshop renders each case with **Stroke Path** (no simulated pressure) on a new 8-bit sRGB

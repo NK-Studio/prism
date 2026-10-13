@@ -1063,3 +1063,16 @@ fn computed_tips_are_bilinearly_placed_texels() {
         }
     }
 }
+
+/// Flow and Opacity apply as Photoshop's 8-bit levels (halves up), whatever the document depth.
+#[test]
+fn flow_and_opacity_apply_as_photoshop_levels() {
+    use crate::brush::photoshop_level;
+    for (pct, level) in [(1.0f32, 3.0f32), (2.0, 5.0), (3.0, 8.0), (10.0, 26.0), (30.0, 77.0), (50.0, 128.0), (100.0, 255.0), (0.0, 0.0)] {
+        assert_eq!(photoshop_level(pct / 100.0), level / 255.0, "{pct} %");
+    }
+    assert_eq!(photoshop_level(f32::NAN), 0.0);
+    assert_eq!(photoshop_level(2.0), 1.0);
+    let b = BrushSettings { flow: 0.01, opacity: 0.5, ..brush() }.bounded_for_render();
+    assert_eq!((b.flow, b.opacity), (3.0 / 255.0, 128.0 / 255.0));
+}

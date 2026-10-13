@@ -94,6 +94,13 @@ struct Case {
     /// distance from the centre), which a one-row probe samples at a single sub-pixel phase.
     #[serde(default)]
     radial: bool,
+    /// Document bit depth: 8 (default) or 16, whose renders show values 8-bit PNGs would round.
+    #[serde(default = "depth8")]
+    depth: u32,
+}
+
+fn depth8() -> u32 {
+    8
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +131,9 @@ impl Case {
         let c = self.canvas(suite);
         if !(1..=4000).contains(&c.width) || !(1..=4000).contains(&c.height) {
             return fail("canvas must be 1..=4000 px on each side".into());
+        }
+        if !matches!(self.depth, 8 | 16) {
+            return fail(format!("depth {} is not 8 or 16", self.depth));
         }
         let ranges: [(&str, i64, i64, i64); 7] = [
             ("size", self.size.into(), 1, 5000),
@@ -184,7 +194,7 @@ fn render_prism(case: &Case, suite: &Suite, out: &Path) -> R<()> {
     let c = case.canvas(suite);
     let mut s = Session::new();
     let run = |s: &mut Session, id: &str, p: Value| s.execute(id, p).map_err(|e| format!("case `{}`: {id}: {e}", case.id));
-    run(&mut s, "file.new", json!({"width": c.width, "height": c.height, "mode": "rgb", "depth": 8, "background": "white"}))?;
+    run(&mut s, "file.new", json!({"width": c.width, "height": c.height, "mode": "rgb", "depth": case.depth, "background": "white"}))?;
     // Constant input: no pressure or tilt (Photoshop's Stroke Path without Simulate Pressure).
     let points: Vec<Value> = case.points.iter().map(|p| json!([p[0], p[1], 1.0])).collect();
     let brush = json!({
@@ -224,7 +234,7 @@ fn jsx_cases(suite: &Suite, cases: &[&Case]) -> Value {
                     "id": c.id, "width": cv.width, "height": cv.height,
                     "pencil": c.tool == Tool::Pencil,
                     "size": c.size, "hardness": c.hardness, "spacing": c.spacing, "angle": c.angle,
-                    "roundness": c.roundness, "opacity": c.opacity, "flow": c.flow,
+                    "roundness": c.roundness, "opacity": c.opacity, "flow": c.flow, "depth": c.depth,
                     "points": c.points,
                 })
             })
@@ -352,7 +362,7 @@ try {
         var k = CASES[n], doc = null, rec = { id: k.id };
         try {
             // 72 ppi so path points and pixels coincide.
-            doc = app.documents.add(UnitValue(k.width, "px"), UnitValue(k.height, "px"), 72, "brush-compare " + k.id, NewDocumentMode.RGB, DocumentFill.WHITE, 1, BitsPerChannelType.EIGHT, "sRGB IEC61966-2.1");
+            doc = app.documents.add(UnitValue(k.width, "px"), UnitValue(k.height, "px"), 72, "brush-compare " + k.id, NewDocumentMode.RGB, DocumentFill.WHITE, 1, k.depth == 16 ? BitsPerChannelType.SIXTEEN : BitsPerChannelType.EIGHT, "sRGB IEC61966-2.1");
             app.foregroundColor = black;
             var tool = k.pencil ? "pencilTool" : "paintbrushTool";
             selectTool(tool);
