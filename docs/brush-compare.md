@@ -23,6 +23,11 @@ Open `target/brush-compare/report.md`. Each case gets:
   half-pixel coordinate offsets.
 - `diff/<id>.png`: red where Prism lays more ink, blue where Photoshop does (×4).
 - `profiles/<id>.csv`: the two profiles, for plotting.
+- Cases with `"radial": true` (a single dab centred on the first point) also get a radial
+  edge: the mean coverage of every pixel by distance from the centre in 0.1 px bins
+  (`profiles/<id>.radial.csv`). It is summarised as the 50 % radius and the 90 % → 10 % edge
+  width. A one-row probe sees only one sub-pixel phase; the radial edge sees them all. This is
+  how the computed tips' anti-aliasing was matched (`prism_paint::EDGE_SPAN`, `EDGE_INSET`).
 - Photoshop's tool options read back after the brush was set. Any switched-on flag (`on: …`)
   means a dynamics section or option was active. That render is not comparable until it is
   turned off.
@@ -36,7 +41,7 @@ the cases change.
 The cases are in `crates/engine/examples/brush_compare/cases.json`. They use Photoshop's panel
 units: whole pixels, degrees and whole percentages. Fields: `size`, `hardness`, `spacing`,
 `angle`, `roundness`, `opacity`, `flow`, `tool` (`brush` | `pencil`), `points` (path anchors in
-pixels, at least two), `canvas` and `probe` (`{"row": y}` or `{"column": x}`). Values Photoshop
+pixels, at least two), `canvas` and `probe` (`{"row": y}` or `{"column": x}`) and `radial`. Values Photoshop
 can't represent are rejected.
 
 Photoshop renders each case with **Stroke Path** (no simulated pressure) on a new 8-bit sRGB

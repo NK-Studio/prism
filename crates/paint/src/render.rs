@@ -19,7 +19,7 @@ use crate::dynamics::DabGenerator;
 use crate::retouch::{Footprint, alpha_index, over_native};
 use crate::rng::hash2;
 use crate::tile::{Mips, PatternImage};
-use crate::{Dab, StrokePoint, dab_coverage};
+use crate::{Dab, EDGE_INNER, EDGE_REACH, StrokePoint, tip_coverage, tip_falloff};
 
 /// Edge of a stroke-buffer tile.
 pub const COV_TILE: i32 = 64;
@@ -153,7 +153,7 @@ impl BrushContext {
     /// Bounding rectangle of a dab (rotated sampled tips need the corner reach).
     pub fn dab_rect(&self, d: &Dab, dual: bool) -> Rect {
         let sampled = if dual { self.dual_tip.is_some() } else { self.tip.is_some() };
-        let reach = if sampled { d.radius * std::f32::consts::SQRT_2 } else { d.radius };
+        let reach = if sampled { d.radius * std::f32::consts::SQRT_2 } else { d.radius + EDGE_REACH };
         rect_around(d, reach)
     }
 
@@ -180,7 +180,14 @@ impl BrushContext {
         let r = d.radius;
         let ro = d.roundness.max(0.5 / r).min(1.0);
         let rm = (r * ro).max(0.5);
-        let reach2 = (rm + 0.5) * (rm + 0.5);
+        let (inv_major, inv_minor) = (ro / rm, 1.0 / rm);
+        // In q² (relative radius squared): beyond `outside_q2` nothing paints; within `inside_q2`
+        // the anti-aliased edge is fully on (none of a tip narrower than the edge is: -1).
+        let outside_q2 = (1.0 + EDGE_REACH / rm).powi(2);
+        let inside = 1.0 - EDGE_INNER / rm;
+        let inside_q2 = if inside > 0.0 { inside * inside } else { -1.0 };
+        // A hard tip is fully on inside the edge; only Wet Edges reads the relative radius there.
+        let hard_inside = hardness >= 1.0 && !wet;
         // Sampled-tip mapping.
         let (level, inv_scale, tw, th) = match mips {
             Some(m) => {
@@ -206,14 +213,39 @@ impl BrushContext {
                 let u = (ux * cs + uy * sn) * fx;
                 let v = (-ux * sn + uy * cs) * fy;
                 let (mut val, rn) = match mips {
-                    None => {
+                    None if aliased => {
                         let d2 = (u * ro).powi(2) + v * v;
-                        if d2 >= reach2 {
+                        if d2 > rm * rm {
                             continue;
                         }
-                        let dd = d2.sqrt();
-                        let val = if aliased { if dd <= rm { 1.0 } else { 0.0 } } else { dab_coverage(dd, rm, hardness) };
-                        (val, dd / rm)
+                        (1.0, d2.sqrt() / rm)
+                    }
+                    None => {
+                        // Relative radius on the ellipse (semi-axes `major` along u, `rm` along v),
+                        // and the signed distance to its edge in pixels, to first order
+                        // (q − 1) / |∇q| (exact on a circle). Measuring the edge in pixels keeps
+                        // its anti-aliasing the same width all round a flattened tip, instead of
+                        // stretching it by 1 / roundness along the long axis.
+                        let (qu, qv) = (u * inv_major, v * inv_minor);
+                        let q2 = qu * qu + qv * qv;
+                        // |∇q| ≤ 1 / rm, so |sd| ≥ |q − 1|·rm: these bounds skip the gradient
+                        // exactly where it can't change the result.
+                        if q2 >= outside_q2 {
+                            continue;
+                        }
+                        if q2 <= inside_q2 && hard_inside {
+                            (1.0, 0.0)
+                        } else {
+                            let q = q2.sqrt();
+                            if q2 <= inside_q2 {
+                                (tip_falloff(q, hardness), q)
+                            } else {
+                                let (gu, gv) = (qu * inv_major, qv * inv_minor);
+                                let g = if q > 1e-6 { (gu * gu + gv * gv).sqrt() / q } else { 0.0 };
+                                let sd = if g > 0.0 { (q - 1.0) / g } else { -rm };
+                                (tip_coverage(q, sd, hardness), q)
+                            }
+                        }
                     }
                     Some(m) => {
                         let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);

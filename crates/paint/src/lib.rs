@@ -136,23 +136,56 @@ pub fn dabs(stroke: &Stroke) -> Vec<Dab> {
     out
 }
 
+/// Span of the computed tip's anti-aliased edge, in pixels: coverage falls from 1 to 0 along a
+/// smoothstep this wide. Its 90 % → 10 % width (≈ 0.61 × span) is the ~1.55 px Photoshop's hard
+/// round tips show at every diameter from 10 to 500 px (measured with `cargo xtask brush-compare`,
+/// docs/brush-compare.md).
+pub const EDGE_SPAN: f32 = 2.55;
+/// How far inside the nominal radius the edge reaches 50 % coverage (Photoshop: 0.14–0.18 px for
+/// 10–50 px dabs and 40 px lines, 0.30–0.37 px for 100–200 px dabs).
+pub const EDGE_INSET: f32 = 0.2;
+/// How far beyond the nominal radius a computed tip still paints.
+pub const EDGE_REACH: f32 = EDGE_SPAN / 2.0 - EDGE_INSET;
+/// How far inside the nominal radius the anti-aliased edge starts (closer in, it is fully on).
+pub const EDGE_INNER: f32 = EDGE_SPAN / 2.0 + EDGE_INSET;
+
+/// Anti-aliased edge factor at signed distance `sd` (pixels, positive outside) from a computed
+/// tip's nominal boundary.
+#[inline]
+pub fn edge_coverage(sd: f32) -> f32 {
+    let x = ((sd + EDGE_INSET) / EDGE_SPAN + 0.5).clamp(0.0, 1.0);
+    1.0 - x * x * (3.0 - 2.0 * x)
+}
+
+/// Coverage of a computed tip at relative radius `q` (0 = centre, 1 = nominal edge) and signed
+/// distance `sd` in pixels from the nominal edge: the hardness falloff, which scales with the
+/// tip, times the anti-aliased edge, which is a fixed width in pixels at every tip size.
+#[inline]
+pub fn tip_coverage(q: f32, sd: f32, hardness: f32) -> f32 {
+    if sd >= EDGE_REACH {
+        return 0.0;
+    }
+    edge_coverage(sd) * tip_falloff(q, hardness)
+}
+
+/// The hardness falloff alone, at relative radius `q` (1 = nominal edge).
+#[inline]
+pub fn tip_falloff(q: f32, hardness: f32) -> f32 {
+    let h = hardness.clamp(0.0, 1.0);
+    if q <= h || 1.0 - h < 1e-3 {
+        1.0
+    } else {
+        let t = ((q - h) / (1.0 - h)).clamp(0.0, 1.0);
+        // smoothstep falloff
+        1.0 - t * t * (3.0 - 2.0 * t)
+    }
+}
+
 /// Coverage of a round dab at distance `d` from its centre (anti-aliased edge, hardness falloff).
 #[inline]
 pub fn dab_coverage(d: f32, radius: f32, hardness: f32) -> f32 {
-    if d >= radius + 0.5 {
-        return 0.0;
-    }
-    let edge = ((radius + 0.5 - d).clamp(0.0, 1.0)).min(1.0);
-    let h = hardness.clamp(0.0, 1.0);
-    let inner = radius * h;
-    let falloff = if d <= inner || radius - inner < 1e-3 {
-        1.0
-    } else {
-        let t = ((d - inner) / (radius - inner)).clamp(0.0, 1.0);
-        // smoothstep falloff
-        1.0 - t * t * (3.0 - 2.0 * t)
-    };
-    edge * falloff
+    let r = radius.max(1e-3);
+    tip_coverage(d / r, d - r, hardness)
 }
 
 /// Rasterize a stroke onto `target`, optionally limited by a selection (grayscale coverage surface).
@@ -208,7 +241,27 @@ mod tests {
         assert_eq!(dab_coverage(20.0, 10.0, 1.0), 0.0);
         let soft_mid = dab_coverage(5.0, 10.0, 0.0);
         assert!(soft_mid > 0.2 && soft_mid < 0.8);
-        assert!(dab_coverage(9.9, 10.0, 1.0) > 0.5);
+        assert!(dab_coverage(9.5, 10.0, 1.0) > 0.5);
+    }
+
+    #[test]
+    fn hard_edge_is_a_fixed_width_ramp_at_every_size() {
+        // Photoshop's hard round tips: 50 % just inside the radius, 90 % → 10 % over ~1.55 px.
+        for r in [5.0f32, 50.0, 250.0] {
+            let at = |level: f32| {
+                let (mut lo, mut hi) = (r - 3.0, r + 3.0);
+                for _ in 0..40 {
+                    let mid = (lo + hi) / 2.0;
+                    if dab_coverage(mid, r, 1.0) > level { lo = mid } else { hi = mid }
+                }
+                lo
+            };
+            assert!((at(0.5) - (r - EDGE_INSET)).abs() < 1e-3, "r50 at {r}");
+            let width = at(0.1) - at(0.9);
+            assert!((width - 1.55).abs() < 0.02, "edge width {width} at {r}");
+            assert_eq!(dab_coverage(r + EDGE_REACH, r, 1.0), 0.0);
+            assert_eq!(dab_coverage(r - 2.0, r, 1.0), 1.0);
+        }
     }
 
     #[test]

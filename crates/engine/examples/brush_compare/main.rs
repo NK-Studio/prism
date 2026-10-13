@@ -90,6 +90,10 @@ struct Case {
     /// Path anchors in document pixels (0,0 = top-left corner of the first pixel).
     points: Vec<[f64; 2]>,
     probe: Option<Probe>,
+    /// A single dab centred on the first point: also report its radial edge (every pixel by
+    /// distance from the centre), which a one-row probe samples at a single sub-pixel phase.
+    #[serde(default)]
+    radial: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -434,9 +438,61 @@ fn shape(p: &[f32]) -> Shape {
     Shape { peak, fwhm: right - left, centre }
 }
 
+/// Radial bin width, px.
+const RADIAL_BIN: f64 = 0.1;
+
+/// Mean coverage by distance from `centre` in [`RADIAL_BIN`] bins out to `max_r` (NaN = no pixel).
+fn radial(c: &Coverage, centre: [f64; 2], max_r: f64) -> Vec<f32> {
+    let n = (max_r / RADIAL_BIN).ceil() as usize + 1;
+    let (mut sum, mut count) = (vec![0.0f64; n], vec![0u32; n]);
+    for (y, row) in c.v.chunks(c.width).enumerate() {
+        for (x, v) in row.iter().enumerate() {
+            let d = (x as f64 + 0.5 - centre[0]).hypot(y as f64 + 0.5 - centre[1]);
+            if let (Some(s), Some(k)) = (sum.get_mut((d / RADIAL_BIN) as usize), count.get_mut((d / RADIAL_BIN) as usize)) {
+                *s += f64::from(*v);
+                *k += 1;
+            }
+        }
+    }
+    sum.iter().zip(&count).map(|(s, k)| if *k > 0 { (*s / f64::from(*k)) as f32 } else { f32::NAN }).collect()
+}
+
+/// Distance at which the radial mean first falls below `level`, walking out from the centre.
+fn crossing(r: &[f32], level: f32) -> Option<f32> {
+    let mut prev: Option<(f32, f32)> = None;
+    for (i, v) in r.iter().enumerate() {
+        if v.is_nan() {
+            continue;
+        }
+        let d = (i as f32 + 0.5) * RADIAL_BIN as f32;
+        if *v < level {
+            return Some(match prev {
+                Some((pd, pv)) if pv > *v => pd + (d - pd) * (pv - level) / (pv - *v),
+                _ => d,
+            });
+        }
+        prev = Some((d, *v));
+    }
+    None
+}
+
+/// A dab's edge: the 50 % radius and the 90 % → 10 % width.
+struct Edge {
+    r50: f32,
+    width: f32,
+}
+
+fn edge(r: &[f32]) -> Option<Edge> {
+    Some(Edge { r50: crossing(r, 0.5)?, width: crossing(r, 0.1)? - crossing(r, 0.9)? })
+}
+
 struct Row {
     id: String,
     note: String,
+    /// Half the diameter, for radial cases.
+    radius: Option<f32>,
+    edge_ps: Option<Edge>,
+    edge_prism: Option<Edge>,
     status: String,
     ink_ps: f64,
     ink_prism: f64,
@@ -528,6 +584,9 @@ fn diff_case(case: &Case, out: &Path) -> R<Row> {
     let mut row = Row {
         id: case.id.clone(),
         note: case.note.clone(),
+        radius: case.radial.then(|| case.size as f32 / 2.0),
+        edge_ps: None,
+        edge_prism: None,
         status: String::new(),
         ink_ps: 0.0,
         ink_prism: 0.0,
@@ -541,6 +600,19 @@ fn diff_case(case: &Case, out: &Path) -> R<Row> {
     let ps = load_coverage(&out.join("ps").join(format!("{}.png", case.id)))?;
     let pr = load_coverage(&out.join("prism").join(format!("{}.png", case.id)))?;
     let probe = case.probe();
+    let centre = case.points.first().copied().unwrap_or_default();
+    let max_r = f64::from(case.size) / 2.0 + 4.0;
+    let (rad_ps, rad_prism) =
+        (ps.as_ref().filter(|_| case.radial).map(|c| radial(c, centre, max_r)), pr.as_ref().filter(|_| case.radial).map(|c| radial(c, centre, max_r)));
+    row.edge_ps = rad_ps.as_deref().and_then(edge);
+    row.edge_prism = rad_prism.as_deref().and_then(edge);
+    if let (Some(a), Some(b)) = (&rad_ps, &rad_prism) {
+        let mut csv = String::from("distance,photoshop,prism\n");
+        for (i, (x, y)) in a.iter().zip(b).enumerate() {
+            let _ = writeln!(csv, "{:.2},{x:.5},{y:.5}", (i as f64 + 0.5) * RADIAL_BIN);
+        }
+        std::fs::write(out.join("profiles").join(format!("{}.radial.csv", case.id)), csv).map_err(|e| e.to_string())?;
+    }
     if let Some(c) = &ps {
         row.ink_ps = c.v.iter().map(|v| f64::from(*v)).sum();
         row.ps = Some(shape(&profile(c, probe)));
@@ -621,6 +693,28 @@ fn report(rows: &[Row]) -> String {
             f(&r.prism, |s| s.fwhm),
             dc
         );
+    }
+    let radial: Vec<&Row> = rows.iter().filter(|r| r.radius.is_some()).collect();
+    if !radial.is_empty() {
+        t.push_str(
+            "\n## Single-dab edges (radial)\n\n\
+             Mean coverage of every pixel by distance from the dab centre (0.1 px bins): the radius where it falls to 50 %, \
+             and the 90 % → 10 % edge width.\n\n\
+             | case | radius | r50 PS | r50 Prism | width PS | width Prism |\n|---|---:|---:|---:|---:|---:|\n",
+        );
+        let g = |e: &Option<Edge>, f: fn(&Edge) -> f32| e.as_ref().map_or("–".to_string(), |e| format!("{:.2}", f(e)));
+        for r in radial {
+            let _ = writeln!(
+                t,
+                "| `{}` | {:.1} | {} | {} | {} | {} |",
+                r.id,
+                r.radius.unwrap_or_default(),
+                g(&r.edge_ps, |e| e.r50),
+                g(&r.edge_prism, |e| e.r50),
+                g(&r.edge_ps, |e| e.width),
+                g(&r.edge_prism, |e| e.width)
+            );
+        }
     }
     let flagged: Vec<&Row> = rows.iter().filter(|r| !r.problems.is_empty()).collect();
     if !flagged.is_empty() {

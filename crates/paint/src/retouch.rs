@@ -95,9 +95,9 @@ impl Footprint {
     }
 }
 
-/// Bounding rectangle of a dab (1 px of anti-aliasing slack included).
+/// Bounding rectangle of a dab (its anti-aliased edge included).
 pub fn dab_rect(d: &Dab) -> Rect {
-    crate::render::rect_around(d, d.radius)
+    crate::render::rect_around(d, d.radius + crate::EDGE_REACH)
 }
 
 /// Rasterize one dab's coverage.

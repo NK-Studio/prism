@@ -961,9 +961,11 @@ fn huge_scatter_is_capped_and_renders_at_every_depth() {
         let b = with(j);
         assert_eq!(all_dabs(&b, &pts), capped, "scatter {j} paints like the maximum");
         let ctx = BrushContext::new(&b);
+        // Radius 10 plus the anti-aliased edge, plus a pixel of slack on each side.
+        let side = 2 * ((10.0 + crate::EDGE_REACH).ceil() as u32 + 1) + 1;
         for d in &capped.0 {
             let r = ctx.dab_rect(d, false);
-            assert!(!r.is_empty() && r.width() <= 24 && r.height() <= 24, "{r:?}");
+            assert!(!r.is_empty() && r.width() <= side && r.height() <= side, "{r:?}");
         }
         for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
             let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
@@ -1006,4 +1008,39 @@ fn dab_rect_of_a_far_or_non_finite_centre_does_not_overflow() {
     let huge = Dab::round(Point::new(5.0, 5.0), f32::INFINITY, 1.0);
     let r = crate::retouch::dab_rect(&huge);
     assert!(r.x0 <= r.x1 && r.y0 <= r.y1, "{r:?}");
+}
+
+/// The rasterizer's shortcuts for computed tips (skip pixels beyond the edge, skip the gradient
+/// inside it) give exactly the per-pixel edge model: the relative radius, the first-order signed
+/// distance to the ellipse and `tip_coverage`. Tips narrower than the edge (1 px) included.
+#[test]
+fn computed_tip_shortcuts_match_the_edge_model() {
+    for (size, hardness, roundness, angle) in
+        [(1.0f32, 1.0f32, 1.0f32, 0.0f32), (3.0, 1.0, 1.0, 0.0), (9.0, 0.3, 1.0, 0.0), (60.0, 1.0, 0.2, 30.0), (40.0, 0.0, 0.5, -70.0)]
+    {
+        let b = BrushSettings { size, hardness, roundness, ..brush() };
+        let ctx = BrushContext::new(&b);
+        for centre in [Point::new(20.0, 20.0), Point::new(20.5, 20.5), Point::new(20.3, 20.7)] {
+            let mut d = Dab::round(centre, size / 2.0, 1.0);
+            d.roundness = roundness;
+            d.angle = angle.to_radians();
+            let rect = ctx.dab_rect(&d, false);
+            let mut got = Vec::new();
+            ctx.rasterize(&d, false, rect, &mut got);
+            let (r, ro) = (d.radius, d.roundness.max(0.5 / d.radius).min(1.0));
+            let rm = (r * ro).max(0.5);
+            let (major, (sn, cs)) = (rm / ro, d.angle.sin_cos());
+            for (i, v) in got.iter().enumerate() {
+                let (x, y) = (rect.x0 + (i as u32 % rect.width()) as i32, rect.y0 + (i as u32 / rect.width()) as i32);
+                let (dx, dy) = (x as f32 + 0.5 - centre.x as f32, -(y as f32 + 0.5 - centre.y as f32));
+                let (u, w) = (dx * cs + dy * sn, -dx * sn + dy * cs);
+                let (qu, qv) = (u / major, w / rm);
+                let q = (qu * qu + qv * qv).sqrt();
+                let g = if q > 1e-6 { ((qu / major).powi(2) + (qv / rm).powi(2)).sqrt() / q } else { 0.0 };
+                let sd = if g > 0.0 { (q - 1.0) / g } else { -rm };
+                let want = crate::tip_coverage(q, sd, hardness);
+                assert!((v - want).abs() < 1e-5, "size {size} round {roundness} at {centre:?} pixel ({x}, {y}): {v} vs {want}");
+            }
+        }
+    }
 }

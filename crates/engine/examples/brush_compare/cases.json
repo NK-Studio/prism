@@ -1,11 +1,19 @@
 {
   "canvas": { "width": 400, "height": 120 },
   "cases": [
-    { "id": "dab-h0", "note": "soft tip falloff profile, hardness 0", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 0, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
-    { "id": "dab-h25", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 25, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
-    { "id": "dab-h50", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 50, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
-    { "id": "dab-h75", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 75, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
-    { "id": "dab-h100", "note": "hard edge anti-aliasing", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 100, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
+    { "id": "dab-h0", "note": "soft tip falloff profile, hardness 0", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 0, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 }, "radial": true },
+    { "id": "dab-h25", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 25, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 }, "radial": true },
+    { "id": "dab-h50", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 50, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 }, "radial": true },
+    { "id": "dab-h75", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 75, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 }, "radial": true },
+    { "id": "dab-h100", "note": "hard edge anti-aliasing", "canvas": { "width": 300, "height": 300 }, "size": 200, "hardness": 100, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 }, "radial": true },
+
+    { "id": "dab-hard-3", "note": "hard edge vs size", "canvas": { "width": 40, "height": 40 }, "size": 3, "spacing": 1000, "points": [[20.3, 20.7], [20.8, 20.7]], "probe": { "row": 20 }, "radial": true },
+    { "id": "dab-hard-5", "note": "hard edge vs size", "canvas": { "width": 40, "height": 40 }, "size": 5, "spacing": 1000, "points": [[20.3, 20.7], [20.8, 20.7]], "probe": { "row": 20 }, "radial": true },
+    { "id": "dab-hard-10", "note": "hard edge vs size", "canvas": { "width": 40, "height": 40 }, "size": 10, "spacing": 1000, "points": [[20.3, 20.7], [20.8, 20.7]], "probe": { "row": 20 }, "radial": true },
+    { "id": "dab-hard-20", "note": "hard edge vs size", "canvas": { "width": 60, "height": 60 }, "size": 20, "spacing": 1000, "points": [[30.3, 30.7], [30.8, 30.7]], "probe": { "row": 30 }, "radial": true },
+    { "id": "dab-hard-50", "note": "hard edge vs size", "canvas": { "width": 90, "height": 90 }, "size": 50, "spacing": 1000, "points": [[45.3, 45.7], [45.8, 45.7]], "probe": { "row": 45 }, "radial": true },
+    { "id": "dab-hard-100", "note": "hard edge vs size", "canvas": { "width": 140, "height": 140 }, "size": 100, "spacing": 1000, "points": [[70.3, 70.7], [70.8, 70.7]], "probe": { "row": 70 }, "radial": true },
+    { "id": "dab-hard-500", "note": "hard edge vs size", "canvas": { "width": 540, "height": 540 }, "size": 500, "spacing": 1000, "points": [[270.3, 270.7], [270.8, 270.7]], "probe": { "row": 270 }, "radial": true },
 
     { "id": "dab-round20-a0", "note": "elliptical tip: edge width along the long axis", "canvas": { "width": 300, "height": 300 }, "size": 200, "roundness": 20, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },
     { "id": "dab-round20-a30", "canvas": { "width": 300, "height": 300 }, "size": 200, "roundness": 20, "angle": 30, "points": [[150, 150], [150.5, 150]], "probe": { "row": 150 } },

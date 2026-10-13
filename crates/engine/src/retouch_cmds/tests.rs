@@ -109,7 +109,7 @@ fn clone_stamp_samples_pre_stroke_state_and_non_aligned_returns_source() {
     }
     assert!(s.execute("paint.cloneStamp", json!({"points": [[1, 1]]})).is_err(), "source is required");
     // An explicit offset works too.
-    s.execute("paint.cloneStamp", json!({"points": [[70, 10]], "offset": [-60, 0], "size": 4, "hardness": 100})).unwrap();
+    s.execute("paint.cloneStamp", json!({"points": [[70, 10]], "offset": [-60, 0], "size": 5, "hardness": 100})).unwrap();
     assert!((rgba(&s, 70, 10)[0] - 14.0 / 80.0).abs() < 1e-3, "samples the current state (x=10 was cloned from x=14)");
 }
 
