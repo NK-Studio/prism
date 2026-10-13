@@ -4303,7 +4303,7 @@ dependencies = [
 
 [[package]]
 name = "prism"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "arboard",
  "block2 0.6.2",
@@ -4341,7 +4341,7 @@ dependencies = [
 
 [[package]]
 name = "prism-affinity"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -4351,7 +4351,7 @@ dependencies = [
 
 [[package]]
 name = "prism-algo"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "prism-color",
  "prism-geom",
@@ -4364,7 +4364,7 @@ dependencies = [
 
 [[package]]
 name = "prism-automation"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "base64 0.22.1",
  "cap-std",
@@ -4386,7 +4386,7 @@ dependencies = [
 
 [[package]]
 name = "prism-cli"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "prism-automation",
  "prism-codecs",
@@ -4400,7 +4400,7 @@ dependencies = [
 
 [[package]]
 name = "prism-cms"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "moxcms",
  "rayon",
@@ -4408,7 +4408,7 @@ dependencies = [
 
 [[package]]
 name = "prism-codecs"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "exr",
  "flate2",
@@ -4428,7 +4428,7 @@ dependencies = [
 
 [[package]]
 name = "prism-color"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "prism-cms",
  "serde",
@@ -4436,7 +4436,7 @@ dependencies = [
 
 [[package]]
 name = "prism-compose"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "criterion",
  "prism-color",
@@ -4451,7 +4451,7 @@ dependencies = [
 
 [[package]]
 name = "prism-doc"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "prism-color",
  "prism-geom",
@@ -4462,7 +4462,7 @@ dependencies = [
 
 [[package]]
 name = "prism-engine"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "blake3",
  "flate2",
@@ -4493,7 +4493,7 @@ dependencies = [
 
 [[package]]
 name = "prism-format"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "blake3",
  "flate2",
@@ -4512,14 +4512,14 @@ dependencies = [
 
 [[package]]
 name = "prism-geom"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "prism-gpu"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "half",
  "log",
@@ -4536,14 +4536,14 @@ dependencies = [
 
 [[package]]
 name = "prism-heif"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "heic-rs",
 ]
 
 [[package]]
 name = "prism-io"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "blake3",
  "crc32fast",
@@ -4571,14 +4571,14 @@ dependencies = [
 
 [[package]]
 name = "prism-ops"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "prism-doc",
 ]
 
 [[package]]
 name = "prism-paint"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "prism-color",
  "prism-geom",
@@ -4589,7 +4589,7 @@ dependencies = [
 
 [[package]]
 name = "prism-plugins"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "prism-color",
  "prism-geom",
@@ -4604,7 +4604,7 @@ dependencies = [
 
 [[package]]
 name = "prism-psd"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "flate2",
  "prism-psd",
@@ -4615,7 +4615,7 @@ dependencies = [
 
 [[package]]
 name = "prism-raster"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "prism-color",
  "prism-geom",
@@ -4625,7 +4625,7 @@ dependencies = [
 
 [[package]]
 name = "prism-raw"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "png 0.18.1",
  "prism-raw",
@@ -4634,7 +4634,7 @@ dependencies = [
 
 [[package]]
 name = "prism-tablet"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "block2 0.6.2",
  "objc2 0.6.4",
@@ -4645,7 +4645,7 @@ dependencies = [
 
 [[package]]
 name = "prism-testkit"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "memory-stats",
  "prism-color",
@@ -4656,7 +4656,7 @@ dependencies = [
 
 [[package]]
 name = "prism-text"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "encoding_rs",
  "flate2",
@@ -4671,7 +4671,7 @@ dependencies = [
 
 [[package]]
 name = "prism-ui-egui"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "base64 0.22.1",
  "eframe",
@@ -4708,7 +4708,7 @@ dependencies = [
 
 [[package]]
 name = "prism-updater"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "minisign",
  "minisign-verify",
@@ -4722,7 +4722,7 @@ dependencies = [
 
 [[package]]
 name = "prism-vector"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "prism-color",
  "prism-doc",
@@ -7487,7 +7487,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "minisign",
  "serde",
