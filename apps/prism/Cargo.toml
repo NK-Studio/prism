@@ -73,6 +73,7 @@ dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
 # Drop position on Windows (`cursor.rs`): safe Win32 wrappers (GetCursorPos), no dependencies of
 # its own. Pinned exactly: review the diff before bumping.
 [target.'cfg(target_os = "windows")'.dependencies]
+winit = { version = "=0.30.13", default-features = false }
 # Safe Windows screen-capture bindings.
 xcap = "=0.9.8"
 winsafe = { version = "=0.0.29", default-features = false, features = ["user"] }

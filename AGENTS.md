@@ -23,7 +23,7 @@ Prism (프리즘) is a native, Photoshop-comparable image editor maintained by N
 crates/
   geom cms color raster      L0 foundation (geometry, ICC colour management, pixel formats + blend math, COW tiles)
   psd codecs                 L0 standalone format crates (no workspace deps; publishable)
-  tablet                     L0 standalone pen tablet input (macOS AppKit); the one isolated unsafe crate
+  tablet                     L0 standalone pen tablet input (macOS AppKit / Windows Ink); isolated unsafe boundary
   doc                        L1 document model (layers, masks, adjustments, effects, smart objects: pure data)
   ops paint algo text vector L2 history, brush engine, imaging algorithms, type engine, paths/shapes
   compose gpu format         L3 CPU compositor (the oracle), wgpu compositor, .prism native format
@@ -46,7 +46,7 @@ xtask/                       cargo xtask layers | ci | stats | corpus | test-cor
 People trust Prism with their work, and a crash loses it. A malformed file, a bad command or MCP param, a corrupt settings file, an odd keystroke or a full disk must produce an error the user or agent can act on, never a panic. Don't ship a feature by adding a panic path; fix a crash before building on top of it. The shared standard is `../craftrules/standards/never-crash.md`.
 
 - **Non-test code never panics.** No `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!` or `unimplemented!`. Return the crate's error type and propagate with `?`; use `ok_or(..)?`, `let .. else { return Err(..) }`, `if let`, or `unwrap_or*` where a fallback is truly correct (never one that silently corrupts a document). Unfinished features return an "unsupported" error. The only exception is a provably infallible literal: `#[allow(clippy::expect_used)]` plus `.expect("why it can't fail")`.
-- **No `unsafe`.** The workspace sets `unsafe_code = "forbid"`. The one exception is the isolated helper crate `prism-tablet` (`crates/tablet`): winit drops pen tablet data, and reading it on macOS needs an AppKit event monitor (Objective-C interop). Only its `src/macos.rs` allows `unsafe` (`unsafe_code = "deny"` crate-wide, every block has a `SAFETY:` comment, tested against real `NSEvent`s); all mapping code is safe. Don't add `unsafe` anywhere else.
+- **No `unsafe`.** The workspace sets `unsafe_code = "forbid"`. The one exception is the isolated helper crate `prism-tablet` (`crates/tablet`): winit drops pen tablet data. Its `src/macos.rs` (AppKit) and `src/windows.rs` (Windows Ink history and window gesture policy) allow narrowly scoped native interop (`unsafe_code = "deny"` crate-wide, every block has a `SAFETY:` comment, native lifecycle tests required); all mapping and queue code is safe. The Windows boundary was explicitly authorized on 2026-10-14. Don't add `unsafe` anywhere else.
 - **Input-derived numbers are hostile.** Use `get()` rather than `[i]`/`[a..b]` for indices from files, params, selections or arithmetic on them; slice strings only at char boundaries; use `checked_*`/`saturating_*` for lengths, offsets and counts; guard division by zero and NaN/inf casts; cap allocations sized by input.
 - **Bound recursion** with depth limits or seen-sets (documents can be deep or cyclic).
 - **Don't cascade.** Handle lock poisoning (`lock().unwrap_or_else(PoisonError::into_inner)`) and treat thread joins as `Result`s.
@@ -64,6 +64,10 @@ People trust Prism with their work, and a crash loses it. A malformed file, a ba
 8. **Performance is a feature.** Benchmark heavy operations on a 24–36 MP image in release. Work per tile in parallel (rayon), skip empty tiles, never scan a full surface per frame (cache per revision), and record before/after timings in the dev log.
 
 9. **Never panic on input** (see *Never crash* above). A command's `run` closure and anything it calls must return `Err`, never panic, for *any* params or document state: validate params, check bounds before indexing or dividing, and reject absurd sizes before allocating. The `panic_hunt` integration test fuzzes every command with adversarial params and must stay green.
+
+### Authorized brush investigation (2026-10-14)
+
+The maintainer explicitly authorized local, read-only REA/Ghidra analysis of the installed Photoshop 2026 executable and directly connected brush/input modules for Windows pen fidelity. This is a scoped exception to behavior-only investigation, not permission to copy proprietary code, pseudocode, shaders, profiles or assets. Preserve binary identity, evidence, inference and unknowns separately; implement Prism independently. Analysis databases, binary snapshots and decompilation stay in gitignored local output. Do not describe this investigation as strictly behavior-only clean-room research. See `docs/pen-input-analysis.md`.
 
 ## 4. Picking work
 

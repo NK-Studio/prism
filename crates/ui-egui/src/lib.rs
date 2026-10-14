@@ -138,6 +138,7 @@ pub mod state;
 pub mod stroke_constraint;
 pub mod stroke_trail;
 pub mod stylus;
+pub mod pen_input;
 pub mod swatches_ui;
 mod tab_strip;
 pub mod theme;
@@ -1677,6 +1678,9 @@ impl PrismApp {
 
 #[cfg(test)]
 mod input_tests;
+
+#[cfg(test)]
+mod pen_input_tests;
 
 #[cfg(test)]
 mod pencil_tests;

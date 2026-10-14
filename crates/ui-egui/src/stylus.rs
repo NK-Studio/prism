@@ -3,10 +3,10 @@
 //!
 //! Sources, by platform (eframe 0.36.2, egui-winit 0.36.2, winit 0.30.13):
 //!
-//! - **Windows**: winit turns `WM_POINTER` pen and touch input into `WindowEvent::Touch` with a
-//!   normalised force (`POINTER_PEN_INFO::pressure / 1024`); egui-winit forwards it as
-//!   `egui::Event::Touch { force }` alongside the emulated pointer. [`Stylus::update`] reads it.
-//!   winit drops the pen's tilt and rotation, so those stay 0.
+//! - **Windows**: the tablet hook reads paired pointer history before winit consumes it.
+//!   `pen_input` routes every contact's position, pressure, pose and time in order. The
+//!   egui touch fallback also preserves per-event force; winit's emulated mouse never
+//!   paints the same contact again. [`Stylus::update`] remains the cursor/other-tools state.
 //! - **macOS**: winit 0.30 drops `NSEvent` tablet data, so the desktop app installs an AppKit
 //!   local event monitor (the `prism-tablet` crate) that writes pressure, tilt, rotation and
 //!   the eraser end into the [`StylusFeed`] before winit handles each event.
@@ -60,12 +60,10 @@ pub struct StylusFeed(Arc<Mutex<Option<PenSample>>>);
 
 impl StylusFeed {
     pub fn set(&self, s: Option<PenSample>) {
-        if let Ok(mut g) = self.0.lock() {
-            *g = s.map(PenSample::sanitized);
-        }
+        *self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = s.map(PenSample::sanitized);
     }
     pub fn get(&self) -> Option<PenSample> {
-        self.0.lock().ok().and_then(|g| *g)
+        *self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -86,11 +84,33 @@ pub struct Stylus {
     lifted: bool,
     /// Tilt X, tilt Y, rotation of each point of the current drag (parallel to its points).
     pub(crate) stroke: Vec<[f32; 3]>,
+    pub(crate) times: Vec<f64>,
+    pub(crate) time: f64,
+    pub(crate) contact: Option<(egui::ViewportId, u64)>,
+    pub(crate) contact_document: Option<prism_doc::DocId>,
+    pub(crate) touch_packets: crate::pen_input::TouchPackets,
+    pub(crate) trace_enabled: bool,
+    pub(crate) trace: std::collections::VecDeque<serde_json::Value>,
 }
 
 impl Default for Stylus {
     fn default() -> Self {
-        Self { feed: StylusFeed::default(), use_pressure: true, end: None, tool_before_eraser: None, touch: None, lifted: false, stroke: Vec::new() }
+        Self {
+            feed: StylusFeed::default(),
+            use_pressure: true,
+            end: None,
+            tool_before_eraser: None,
+            touch: None,
+            lifted: false,
+            stroke: Vec::new(),
+            times: Vec::new(),
+            time: 0.0,
+            contact: None,
+            contact_document: None,
+            touch_packets: Default::default(),
+            trace_enabled: false,
+            trace: Default::default(),
+        }
     }
 }
 
@@ -164,6 +184,7 @@ impl Stylus {
     /// Start recording a drag's tilt/rotation.
     pub(crate) fn begin_stroke(&mut self) {
         self.stroke.clear();
+        self.times.clear();
         self.record_point();
     }
 
@@ -171,20 +192,25 @@ impl Stylus {
     pub(crate) fn record_point(&mut self) {
         let s = self.sample().unwrap_or_default();
         self.stroke.push([s.tilt_x, s.tilt_y, s.rotation]);
+        self.times.push(self.time);
     }
 
     /// Stroke points for `paint.stroke`: `[x, y, pressure]`, extended with
     /// `tiltX, tiltY, rotation` when the drag carried any tilt or rotation.
     pub fn stroke_points(&self, points: &[[f64; 3]]) -> Vec<Vec<f64>> {
         let has_pose = self.stroke.iter().any(|t| t.iter().any(|v| *v != 0.0));
+        let has_time = self.times.iter().any(|t| *t != 0.0);
         points
             .iter()
             .enumerate()
             .map(|(i, p)| {
                 let mut v = vec![p[0], p[1], p[2]];
-                if has_pose {
+                if has_pose || has_time {
                     let t = self.stroke.get(i).or(self.stroke.last()).copied().unwrap_or_default();
                     v.extend(t.map(f64::from));
+                    if has_time {
+                        v.push(self.times.get(i).copied().unwrap_or(0.0));
+                    }
                 }
                 v
             })
