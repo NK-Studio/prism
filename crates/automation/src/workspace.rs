@@ -663,6 +663,8 @@ mod tests {
         assert!(documents_filesystem_path_params("brush.presets.importSut", r#"{"path":".sut file"?,"data":base64?}"#));
         assert!(!documents_filesystem_path_params("path.makeShape", "{} → {name,path}"));
         assert!(!documents_filesystem_path_params("path.addAnchor", "{} → {name,path}"));
+        assert!(!documents_filesystem_path_params("path.deleteComponents", "{} → {name,path}"));
+        assert!(!documents_filesystem_path_params("path.duplicateComponents", "{} → {name,path}"));
     }
 
     fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
@@ -695,6 +697,8 @@ mod tests {
                 | "path.distributeComponents"
                 | "path.arrangeComponents"
                 | "path.mergeComponents"
+                | "path.deleteComponents"
+                | "path.duplicateComponents"
                 | "path.clippingPath.set"
                 | "path.rename"
                 | "select.toWorkPath"
