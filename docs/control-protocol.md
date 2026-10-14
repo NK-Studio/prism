@@ -1,5 +1,27 @@
 # Control protocol
 
+## Pen input diagnostics
+
+`ui.penTrace {"enabled":true,"clear":true}` enables a bounded, in-memory pen trace
+(4096 samples maximum). It is off by default. `ui.penTrace {}` reads it and
+`ui.penTrace {"enabled":false}` stops recording. Each event records its source
+(`windowsInk` or `eguiTouch`), device/contact identity, document coordinates,
+pressure validity, pressure, pose, phase and millisecond time. Inspect
+`pressureValid` before interpreting a constant pressure as a device reading.
+`pressureSupported:false` explicitly identifies an unsupported-pressure device
+using constant mouse pressure; `null` means capability is still unknown.
+Diagnostics record the selected canvas; they are not a system-wide input logger.
+
+`ui.pointer` accepts optional per-event `time` in milliseconds and `kind:"cancel"`.
+Cancel drops the uncommitted painting preview without adding history. Existing
+requests without time keep their previous format. Batches are bounded to 4096
+events and validated before dispatch; pressure must be finite and within 0..1.
+Recorded tip-contact events can be replayed through `ui.pointer` on the same
+document with matching tool/brush settings. Filter barrel-button gestures out
+of a painting replay; they belong to the separate secondary-button UI path.
+
+## Connection and authentication
+
 The desktop app listens on `127.0.0.1:<port>` (loopback only). Start it with a token file so the credential is not exposed in the process command line:
 
 ```sh
@@ -45,7 +67,7 @@ from saved UI state. Numeric corner controls remain available in Properties.
 
 - `engine.execute {command, params}`: run any engine or UI command by id. Engine commands run directly with their default params and never open a dialog. Use `ui.menu.invoke` for menu-click behaviour, which opens a command's dialog when no params are given. `params` must be a JSON object (omit it or pass `null` for none); an array, string, number or boolean is an error naming the command, in every transport (control channel, `serve`, MCP and the CLI)
 - `engine.commands`: list commands with enablement
-- `ui.inspect`: full UI state (tool, panels, views, dialogs, windows, window size). The menu tree is not included; use `ui.menu.list`. `brushPicker` is `null` while closed and `{pos: [x, y], list: {collapsed, filter, view, renaming}}` while the Brush Preset picker is open (coordinates in screen points). `view` holds the View/Window/Type preferences: `screen_mode`, `extras`, `show` and `snap_to` flags, `flip_horizontal`, `arrange` (Window › Arrange layout), pixel aspect, font preview size, language options. `perf.timings.gpuInfo` holds the graphics adapter, backend, driver, the backend chosen at launch and why, the canvas renderer (`gpu`/`cpu`) and, after a device loss, `lost` (`help.systemInfo` returns the same as `info`)
+- `ui.inspect`: full UI state (tool, panels, views, dialogs, windows, window size). `update` is the software update state: `status.state` (`idle`, `checking`, `upToDate`, `available`, `downloading`, `ready`, `failed`, with `offer`, `received`/`total` or `message`), `manual` and `installOnExit`. `help.checkForUpdates` starts a check and opens its dialog; `ui.dialog.confirm` on that dialog downloads (`available`) or quits to install (`ready`). The menu tree is not included; use `ui.menu.list`. `brushPicker` is `null` while closed and `{pos: [x, y], list: {collapsed, filter, view, renaming}}` while the Brush Preset picker is open (coordinates in screen points). `view` holds the View/Window/Type preferences: `screen_mode`, `extras`, `show` and `snap_to` flags, `flip_horizontal`, `arrange` (Window › Arrange layout), pixel aspect, font preview size, language options. `perf.timings.gpuInfo` holds the graphics adapter, backend, driver, the backend chosen at launch and why, the canvas renderer (`gpu`/`cpu`) and, after a device loss, `lost` (`help.systemInfo` returns the same as `info`)
 - `ui.set {tool?, panels?, dockTabs?, dock?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSize?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerView?, gradientBlendMode?, gradientClassic?, typeFontFilter?, arrow?}`: change UI state; any other field is an error, checked before anything changes (`theme` is `pro`, `proMedium`, `studio`, or `studioLight`; `selectionMode` is the selection tools' options-bar mode, 0 New, 1 Add, 2 Subtract, 3 Intersect; `brushSection` indexes the Brush Settings sections, `brushTab` 0 = Brush Settings, 1 = Brushes; `brushesView` and `brushPickerView` are `list` or `grid` for the Brushes panel and the Brush Preset picker; `brushPicker` is `[x, y]` in screen points to open the Brush Preset picker there (as a right-click with a painting tool does) or `null` to close it, and picking a preset in it is `tools.setBrush {"preset": name}`; `dock` is `{order: ["layers", …], heights: {"properties": 180}, collapsed: ["color"]}`, the right-dock groups top to bottom, their heights in points and the groups collapsed to their tab strip; `dockWidth` sets the right dock width in points, clamped to 250..520; `colorPanel` is `{background, mode}`, whether the Color panel edits the background colour and its presentation (`hueCube` by default, `brightnessCube`, `colorWheel`, or `hsbSliders`); omitted members keep their defaults)
   - `typeTransform` is `null` outside a temporary Ctrl/Cmd Type-tool drag. During a drag it reports its source document/revision, original affine, oriented `frame` (layer, local bounds, document-space corners and pivot), and captured `gesture`. Drive it with `ui.pointer` and `command: true` at `down`; `move`/`up` may release the modifier. The document/history remain unchanged during preview, and `up` applies one `type.edit` within `textEdit`'s session. Pressing Escape during the drag cancels only the preview. This pointer state is never restored from saved UI state.
 - `ui.menu.invoke {id, params?, wait?}` / `ui.menu.list`: activate a menu item by id; list the menu tree. A menu item that starts a background job (a filter without a dialog, such as Blur More) replies with the job's result once it has been applied; with `"wait": false` the reply is `{job, pending: true}` at once

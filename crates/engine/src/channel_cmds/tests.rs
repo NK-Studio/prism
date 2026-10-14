@@ -253,8 +253,8 @@ fn quick_mask_enter_paint_exit() {
     assert_eq!((q.opacity, q.indicates), (0.5, ColorIndicates::MaskedAreas));
     // Painting black masks; white unmasks. The layer is untouched.
     let before = px(&s, 5, 5);
-    s.execute("paint.stroke", json!({"points": [[5, 5]], "size": 4, "hardness": 1.0, "color": "#000000"})).unwrap();
-    s.execute("paint.stroke", json!({"points": [[30, 10]], "size": 4, "hardness": 1.0, "color": "#ffffff"})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[5.5, 5.5]], "size": 4, "hardness": 1.0, "color": "#000000"})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[30.5, 10.5]], "size": 4, "hardness": 1.0, "color": "#ffffff"})).unwrap();
     assert_eq!(px(&s, 5, 5), before);
     s.execute("select.editInQuickMaskMode", json!({})).unwrap();
     assert!(doc(&s).quick_mask.is_none());

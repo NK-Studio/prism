@@ -31,6 +31,8 @@ mod control_server;
 mod crash_guard;
 mod cursor;
 mod gpu_startup;
+#[cfg(target_os = "macos")]
+mod location_panel;
 mod logging;
 #[cfg(target_os = "macos")]
 mod mac_menu;
@@ -42,10 +44,11 @@ mod services;
 mod settings_migration;
 #[cfg(target_os = "windows")]
 mod window_opacity;
-// Windows gets pen pressure from winit (WM_POINTER); the web runner has its own listener.
-#[cfg(any(target_os = "macos", test))]
+// Native tablet adapters preserve data omitted by winit's mouse/touch translation.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod tablet;
 mod ui_state;
+mod updates;
 
 use prism_engine::Session;
 use prism_ui_egui::PrismApp;
@@ -260,6 +263,8 @@ fn main() -> eframe::Result {
     let presets = services::presets_dir().map(prism_engine::preset_store::open_dir_async);
     let custom_titlebar = custom_titlebar(services::prefs_file().as_deref());
     let mut options = native_options(custom_titlebar);
+    #[cfg(target_os = "windows")]
+    let pen_queue = tablet::configure_windows(&mut options);
     // eframe restores the saved window layout before our code runs; drop values that would crash it.
     ui_state::sanitize(options.persistence_path.as_deref());
     // Crash-safe GPU startup (#4): pick the backend (a marker left by a start that died in the
@@ -305,6 +310,7 @@ fn main() -> eframe::Result {
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
             services.preset_store = presets;
+            services.updater = Some(Box::new(updates::DesktopUpdater::new(cc.egui_ctx.clone())));
             // Personal cursor artwork is optional runtime input, never bundled or compiled in.
             let cursor_dir = prism_automation::security::environment("PRISM_CURSOR_PACK_DIR")
                 .map(std::path::PathBuf::from)
@@ -416,9 +422,11 @@ fn main() -> eframe::Result {
             let _ = in_window_menus;
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
+            app.services.screen_cursor = cursor::screen_service();
             #[cfg(target_os = "windows")]
             {
                 app.services.window_opacity = Some(window_opacity::service());
+                tablet::connect_windows(&cc.egui_ctx, pen_queue.clone());
             }
             app.services.screen_pick = screen_color::service(cc);
             // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor

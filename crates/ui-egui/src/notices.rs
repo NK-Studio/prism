@@ -39,10 +39,78 @@ impl Notice {
     }
 }
 
-/// Show a notice (newest last); returns its id.
+/// How long a toast stays up, in seconds, fades included.
+pub const TOAST_SECONDS: f64 = 1.6;
+const TOAST_FADE_IN: f64 = 0.12;
+const TOAST_FADE_OUT: f64 = 0.4;
+
+/// A short confirmation shown at the bottom of the window and gone after [`TOAST_SECONDS`]: for
+/// things that went as expected (a save), where a notice that waits to be dismissed is too much.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Toast {
+    pub text: String,
+    /// When it was first drawn (egui time); the clock starts then, not when it was posted.
+    #[serde(skip)]
+    pub shown_at: Option<f64>,
+}
+
+/// Show `text` as a toast, replacing the one up.
+pub fn toast(app: &mut PrismApp, text: String) {
+    app.ui.toast = Some(Toast { text, shown_at: None });
+}
+
+/// Confirm a save that had nothing to warn about ("Saved a.png").
+pub fn saved(app: &mut PrismApp, name: &str) {
+    toast(app, crate::i18n::fmt(tl!("Saved {name}"), &[("name", name)]));
+}
+
+/// Draw the toast in `ctx`'s window, bottom centre above the status bar, fading in and out.
+pub fn show_toast(app: &mut PrismApp, ctx: &egui::Context) {
+    let Some(toast) = app.ui.toast.as_mut() else { return };
+    let now = ctx.input(|i| i.time);
+    let age = now - *toast.shown_at.get_or_insert(now);
+    if !(0.0..TOAST_SECONDS).contains(&age) {
+        app.ui.toast = None;
+        return;
+    }
+    let alpha = (age / TOAST_FADE_IN).min((TOAST_SECONDS - age) / TOAST_FADE_OUT).clamp(0.0, 1.0) as f32;
+    let text = toast.text.clone();
+    let t = crate::theme::Tokens::get(ctx);
+    egui::Area::new(egui::Id::new("prism-toast"))
+        .order(egui::Order::Tooltip)
+        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -40.0))
+        .interactable(false)
+        .show(ctx, |ui| {
+            ui.set_opacity(alpha);
+            egui::Frame::NONE
+                .fill(t.card)
+                .stroke(egui::Stroke::new(1.0, t.card_border))
+                .corner_radius(t.radius_lg)
+                .inner_margin(egui::Margin::symmetric(14, 8))
+                .shadow(egui::Shadow { offset: [0, 2], blur: 10, spread: 0, color: t.shadow })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("✓").strong().color(t.accent));
+                        ui.label(egui::RichText::new(text).color(t.text));
+                    });
+                });
+        });
+    ctx.request_repaint();
+}
+
+/// Show a notice (newest last); returns its id. A notice that says the same as one already shown
+/// (saving the same file twice) moves that one to the front instead of stacking a copy.
 pub fn post(app: &mut PrismApp, title: impl Into<String>, lines: Vec<String>, error: bool, dismiss_pref: Option<&str>) -> u64 {
+    let title = title.into();
+    let dismiss_pref = dismiss_pref.map(str::to_owned);
+    if let Some(at) = app.ui.notices.iter().position(|n| n.title == title && n.lines == lines && n.error == error && n.dismiss_pref == dismiss_pref && n.args.is_empty()) {
+        let notice = app.ui.notices.remove(at);
+        let id = notice.id;
+        app.ui.notices.push(notice);
+        return id;
+    }
     let id = app.ui.alloc_id();
-    app.ui.notices.push(Notice { id, title: title.into(), lines, error, dismiss_pref: dismiss_pref.map(str::to_owned), args: Vec::new() });
+    app.ui.notices.push(Notice { id, title, lines, error, dismiss_pref, args: Vec::new() });
     cap_notices(app);
     id
 }
@@ -184,6 +252,40 @@ mod tests {
         let text = app.ui.notices[1].lines.join(" ");
         assert!(text.contains("Blend If on `Overlay`"), "{text}");
         assert!(!text.contains("Memory usage"), "the budget hint is only for the budget fallback: {text}");
+    }
+
+    #[test]
+    fn a_toast_shows_then_goes() {
+        let mut app = PrismApp::new(Session::new(), Services::default());
+        saved(&mut app, "a.png");
+        assert_eq!(app.ui.toast.as_ref().map(|t| t.text.as_str()), Some("Saved a.png"));
+        let ctx = egui::Context::default();
+        let frame = |app: &mut PrismApp, time: f64| {
+            let raw = egui::RawInput { time: Some(time), ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| show_toast(app, ui.ctx()));
+            out.textures_delta.clear();
+            out
+        };
+        let out = frame(&mut app, 10.0);
+        assert!(!out.shapes.is_empty(), "drawn");
+        assert_eq!(app.ui.toast.as_ref().and_then(|t| t.shown_at), Some(10.0), "the clock starts when it is first drawn");
+        frame(&mut app, 10.0 + TOAST_SECONDS / 2.0);
+        assert!(app.ui.toast.is_some());
+        frame(&mut app, 10.0 + TOAST_SECONDS + 0.01);
+        assert!(app.ui.toast.is_none(), "gone");
+    }
+
+    #[test]
+    fn the_same_notice_twice_shows_once() {
+        let mut app = PrismApp::new(Session::new(), Services::default());
+        let warn = || vec!["16-bit written as 8-bit".to_string()];
+        let first = post(&mut app, "Saved a.png with 1 warning", warn(), false, None);
+        post(&mut app, "Opened b.psd", Vec::new(), false, None);
+        let again = post(&mut app, "Saved a.png with 1 warning", warn(), false, None);
+        assert_eq!(first, again);
+        assert_eq!(app.ui.notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), ["Opened b.psd", "Saved a.png with 1 warning"], "moved to the front");
+        post(&mut app, "Saved a.png with 1 warning", warn(), true, None);
+        assert_eq!(app.ui.notices.len(), 3, "an error is a different notice");
     }
 
     #[test]

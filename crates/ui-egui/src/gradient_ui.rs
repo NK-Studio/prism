@@ -4,7 +4,9 @@
 //! stops along the line (drag to move, drag off the line to delete, double-click for the Color
 //! Picker), midpoint diamonds between them, a click on the line adds a stop, and dragging the line
 //! moves the whole gradient. A drag elsewhere redraws the selected gradient. Radial and Angle
-//! gradients show their circle, Diamond its square, Reflected its mirrored half.
+//! gradients show their circle, Diamond its square, Reflected its mirrored half. Over the widget
+//! the pointer becomes the move cursor (a plus over the line), and the control last clicked
+//! stays selected, ringed in the accent colour.
 //!
 //! Every gesture previews live through the regular canvas path (a shallow copy of the document
 //! with the edited fill, so the GPU canvas just re-runs its gradient pass) and commits one command
@@ -62,6 +64,9 @@ enum Drag {
 pub struct LiveGradient {
     drag: Option<Drag>,
     last_click: Option<(Grab, f64)>,
+    /// The handle, stop or midpoint last clicked on a gradient fill layer: drawn with a ring
+    /// round it, as Photoshop shows the selected control.
+    selected: Option<(LayerId, Grab)>,
     /// Pending edit from the Properties panel's stops editor (previewed like a canvas drag).
     panel: Option<(LayerId, &'static str, Value)>,
     /// Cached preview document by key.
@@ -199,6 +204,43 @@ impl Widget {
     }
 }
 
+/// The selected control of the active gradient fill layer, if it still exists.
+fn selected(app: &PrismApp) -> Option<Grab> {
+    let (id, grab) = app.gradient.selected?;
+    let (l, frame, _) = active_gradient(app).filter(|a| a.0.id == id)?;
+    let w = Widget::new(fill_of(&l)?, frame)?;
+    match grab {
+        Grab::Stop(i) if i >= w.stops.len() => None,
+        Grab::Mid(i) if w.mid_location(i).is_none() => None,
+        g => Some(g),
+    }
+}
+
+/// The colour stop of the active gradient fill layer nearest to location `t`.
+fn stop_near(app: &PrismApp, t: f32) -> Option<usize> {
+    let (l, frame, _) = active_gradient(app)?;
+    let w = Widget::new(fill_of(&l)?, frame)?;
+    (0..w.stops.len()).min_by(|a, b| (w.stops[*a].0 - t).abs().total_cmp(&(w.stops[*b].0 - t).abs()))
+}
+
+/// The pointer over the live gradient's widget (`point` in document pixels): the move cursor
+/// on a handle, stop or midpoint and while dragging one, a plus over the line (a click adds a
+/// stop there). `None` elsewhere.
+pub(crate) fn cursor(app: &PrismApp, point: [f64; 2]) -> Option<egui::CursorIcon> {
+    if !live_mode(app) {
+        return None;
+    }
+    match &app.gradient.drag {
+        Some(Drag::Edit { .. }) => return Some(egui::CursorIcon::Move),
+        Some(Drag::Draw { .. }) => return None,
+        None => {}
+    }
+    let zoom = app.current_zoom().max(0.01);
+    let (l, frame, _) = active_gradient(app)?;
+    let hit = Widget::new(fill_of(&l)?, frame)?.hit([point[0] as f32, point[1] as f32], GRAB / zoom)?;
+    Some(if matches!(hit, Grab::Line(_)) { egui::CursorIcon::Copy } else { egui::CursorIcon::Move })
+}
+
 /// Pointer input for the Gradient tool in live mode. Returns true when consumed.
 pub fn pointer(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     if !live_mode(app) {
@@ -212,8 +254,18 @@ pub fn pointer(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) -> bool
             let active = active_gradient(app);
             let grab = active.as_ref().and_then(|(l, frame, _)| Widget::new(fill_of(l)?, *frame)?.hit(p, GRAB / zoom));
             app.gradient.drag = Some(match (grab, active) {
-                (Some(grab), Some((l, ..))) => Drag::Edit { layer: l.id, grab, down: p, moved: false, commit: None },
-                (_, active) => Drag::Draw { from: p, to: p, redraw: active.map(|a| a.0.id) },
+                (Some(grab), Some((l, ..))) => {
+                    // A handle, stop or midpoint becomes the selected control (the line adds a
+                    // stop on release, which is selected then).
+                    if !matches!(grab, Grab::Line(_)) {
+                        app.gradient.selected = Some((l.id, grab));
+                    }
+                    Drag::Edit { layer: l.id, grab, down: p, moved: false, commit: None }
+                }
+                (_, active) => {
+                    app.gradient.selected = None;
+                    Drag::Draw { from: p, to: p, redraw: active.map(|a| a.0.id) }
+                }
             });
         }
         ToolEvent::Move { x, y, .. } => drag_to(app, [x as f32, y as f32], mods),
@@ -293,8 +345,18 @@ fn finish(app: &mut PrismApp) {
                 }
             };
         }
-        Drag::Edit { commit: Some((cmd, p)), moved: true, .. } => {
-            let _ = app.run(cmd, p);
+        Drag::Edit { layer, commit: Some((cmd, p)), moved: true, .. } => {
+            let ok = app.run(cmd, p.clone()).is_ok();
+            // A stop dragged past another changes its index: keep the one dragged selected; one
+            // torn off is gone.
+            match p["action"].as_str() {
+                Some("move") if ok => {
+                    let t = p["location"].as_f64().map(|t| t as f32);
+                    app.gradient.selected = t.and_then(|t| stop_near(app, t)).map(|i| (layer, Grab::Stop(i)));
+                }
+                Some("delete") => app.gradient.selected = None,
+                _ => {}
+            }
         }
         Drag::Edit { layer, grab, moved: false, .. } => click(app, layer, grab),
         Drag::Edit { .. } => {}
@@ -309,7 +371,10 @@ fn click(app: &mut PrismApp, layer: LayerId, grab: Grab) {
     app.gradient.last_click = Some((grab, now));
     match grab {
         Grab::Line(t) => {
-            let _ = app.run(cmds::STOP, json!({"layer": layer.0, "action": "add", "location": t}));
+            // The new stop is the selected one, as in Photoshop.
+            if app.run(cmds::STOP, json!({"layer": layer.0, "action": "add", "location": t})).is_ok() {
+                app.gradient.selected = stop_near(app, t).map(|i| (layer, Grab::Stop(i)));
+            }
         }
         Grab::Stop(i) if double => edit_stop_color(app, layer, i),
         Grab::Start | Grab::End if double => {
@@ -444,7 +509,17 @@ pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform) {
     }
     let Some((fill, frame, grabbed)) = shown_fill(app) else { return };
     let Some(w) = Widget::new(&fill, frame) else { return };
+    // What a drag holds, else the control last clicked.
+    let grabbed = match &app.gradient.drag {
+        None => selected(app),
+        Some(_) => grabbed,
+    };
     let accent = Tokens::get(painter.ctx()).accent;
+    // The selected control's ring: an accent outline round it, over a soft shadow.
+    let ring = |p: Pos2, r: f32| {
+        painter.circle_stroke(p, r, Stroke::new(3.5, Color32::from_black_alpha(90)));
+        painter.circle_stroke(p, r, Stroke::new(1.5, accent));
+    };
     let sp = |p: [f32; 2]| xf.to_screen(p[0], p[1]);
     let (s, e) = (sp(w.start), sp(w.end));
     let r = s.distance(e);
@@ -474,13 +549,19 @@ pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform) {
         if let Some(t) = w.mid_location(i) {
             let sel = grabbed == Some(Grab::Mid(i));
             diamond(painter, sp(w.at(t)), 4.5, if sel { accent } else { Color32::WHITE }, Color32::from_black_alpha(160));
+            if sel {
+                ring(sp(w.at(t)), 8.0);
+            }
         }
     }
     // End handles, then the colour stops (a stop at an end sits inside its handle).
     for (p, g) in [(s, Grab::Start), (e, Grab::End)] {
-        let ring = if grabbed == Some(g) { accent } else { Color32::WHITE };
+        let sel = grabbed == Some(g);
         painter.circle_stroke(p, 8.0, Stroke::new(3.5, Color32::from_black_alpha(90)));
-        painter.circle_stroke(p, 8.0, Stroke::new(2.0, ring));
+        painter.circle_stroke(p, 8.0, Stroke::new(2.0, if sel { accent } else { Color32::WHITE }));
+        if sel {
+            ring(p, 12.0);
+        }
     }
     for (i, (t, c)) in w.stops.iter().enumerate() {
         let p = sp(w.at(*t));
@@ -488,6 +569,9 @@ pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform) {
         painter.circle_filled(p, 5.0, c32(*c));
         painter.circle_stroke(p, 5.5, Stroke::new(1.5, if sel { accent } else { Color32::WHITE }));
         painter.circle_stroke(p, 6.8, Stroke::new(1.0, Color32::from_black_alpha(110)));
+        if sel {
+            ring(p, 9.5);
+        }
     }
 }
 
@@ -562,6 +646,9 @@ pub fn paint_thumbnail(ui: &egui::Ui, layer: LayerId, f: &Fill, rect: Rect) -> b
     true
 }
 
+/// Height of the gradient popup around its list: the current-gradient bar, the footer and margins.
+const POPUP_CHROME: f32 = 90.0;
+
 /// Options-bar swatch of the current gradient. Both live and classic modes use the same
 /// engine-owned preset, so its popup reuses the Gradients browser instead of keeping an
 /// independent copy of the chosen gradient in the UI (#1651).
@@ -573,14 +660,48 @@ pub fn preset_swatch(app: &mut PrismApp, ui: &mut egui::Ui) {
     ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     let resp = resp.on_hover_text(tl!("The current gradient (pick one in Window › Gradients)"));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Gradients")));
-    egui::Popup::menu(&resp).show(|ui| {
+    // The list's height comes from the room under the swatch, which stays put while the popup
+    // is open (the popup's own available height follows its size and would feed back into it).
+    let room = ui.ctx().content_rect().bottom() - resp.rect.bottom() - POPUP_CHROME;
+    let max_h = room.clamp(90.0, 320.0);
+    // Open state of its own rather than egui's one-popup-at-a-time memory, which a preset's
+    // context menu (Rename…, Delete, Move to) would take over, closing the picker and the menu
+    // with it.
+    // It stays open only while drawn every pass: picking another tool hides the swatch, which
+    // closes the picker rather than leaving it to reappear with the Gradient tool.
+    let open_id = resp.id.with("gradient-picker");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let shown_at = ui.data(|d| d.get_temp::<u64>(open_id));
+    let was_open = shown_at.is_some_and(|p| p.saturating_add(1) >= pass);
+    let mut open = was_open ^ resp.clicked();
+    // Clicks inside (a group's header, the size slider, a preset, the footer buttons) keep it
+    // open, as in Photoshop; so do clicks in a context menu opened from it.
+    let close = if egui::Popup::is_any_open(ui.ctx()) { egui::PopupCloseBehavior::IgnoreClicks } else { egui::PopupCloseBehavior::CloseOnClickOutside };
+    let chosen = egui::Popup::menu(&resp).open_bool(&mut open).close_behavior(close).show(|ui| {
         ui.set_min_width(260.0);
         ui.set_max_width(330.0);
-        crate::preset_panels::gradients_panel(app, ui);
+        crate::preset_panels::gradients_browser(app, ui, crate::preset_panels::GradientsHost::Picker { max_h })
+    });
+    // A double-clicked preset is chosen: the picker closes.
+    if chosen.is_some_and(|r| r.inner) {
+        open = false;
+    }
+    if shown_at.is_some() && !open {
+        // A name being typed in the picker goes with it, rather than showing up when it reopens.
+        if app.ui.presets_ui.renaming.as_ref().is_some_and(|r| r.0 == "gradients") {
+            app.ui.presets_ui.renaming = None;
+        }
+    }
+    ui.data_mut(|d| {
+        if open {
+            d.insert_temp(open_id, pass);
+        } else {
+            d.remove::<u64>(open_id);
+        }
     });
 }
 
-/// Live mode: style, reverse, dither and blend mode changes in the options bar also edit the selected
+/// Live mode: style, reverse, dither, blend mode and opacity changes in the options bar also edit the selected
 /// gradient fill layer (one history step each), as in Photoshop.
 pub fn options_changed(app: &mut PrismApp, before: &crate::state::ToolOptions) {
     let o = app.ui.tool_options.clone();
@@ -590,6 +711,11 @@ pub fn options_changed(app: &mut PrismApp, before: &crate::state::ToolOptions) {
     let Some((l, ..)) = active_gradient(app) else { return };
     if o.gradient_blend_mode != before.gradient_blend_mode {
         let _ = app.run("layer.setProps", json!({"layer": l.id.0, "blend": o.gradient_blend_mode.label()}));
+    }
+    // Opacity too, as a new live gradient takes it (a scrub of the field is one history step).
+    if o.fill_opacity != before.fill_opacity {
+        let p = json!({"layer": l.id.0, "opacity": (o.fill_opacity / 100.0).clamp(0.0, 1.0), "coalesce": format!("gradient-tool-opacity-{}", l.id.0)});
+        let _ = app.run("layer.setProps", p);
     }
     if o.gradient_style == before.gradient_style && o.gradient_reverse == before.gradient_reverse && o.gradient_dither == before.gradient_dither {
         return;
@@ -1089,4 +1215,152 @@ mod tests {
         crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 140.0, y: 60.0 }, mods());
         assert!(display_doc(&mut app, 0).is_none());
     }
+
+    /// Over the live gradient's widget the pointer changes, as in Photoshop: the move cursor on
+    /// the end handles, stops and midpoints (and while dragging one), a plus over the line,
+    /// where a click adds a stop; elsewhere and in Classic mode the tool's own cursor stays.
+    #[test]
+    fn the_widget_changes_the_cursor() {
+        use egui::CursorIcon;
+        let mut app = app_with_gradient("linear");
+        drag(&mut app, [20.0, 60.0], [180.0, 60.0]);
+        assert_eq!(cursor(&app, [180.0, 61.0]), Some(CursorIcon::Move), "end handle");
+        assert_eq!(cursor(&app, [21.0, 60.0]), Some(CursorIcon::Move), "start handle");
+        assert_eq!(cursor(&app, [100.0, 60.0]), Some(CursorIcon::Move), "the midpoint diamond");
+        assert_eq!(cursor(&app, [60.0, 62.0]), Some(CursorIcon::Copy), "the line adds a stop");
+        assert_eq!(cursor(&app, [100.0, 100.0]), None, "away from the widget");
+        // Mid-drag of a handle, wherever the pointer gets to.
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 180.0, y: 60.0, pressure: 1.0 }, mods());
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 150.0, y: 100.0, pressure: 1.0 }, mods());
+        assert_eq!(cursor(&app, [150.0, 100.0]), Some(CursorIcon::Move));
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 150.0, y: 100.0 }, mods());
+        app.ui.tool_options.gradient_classic = true;
+        assert_eq!(cursor(&app, [150.0, 100.0]), None, "Classic mode has no widget");
+    }
+
+    /// A clicked handle, stop or midpoint stays selected, ringed, as in Photoshop: a click on the
+    /// line selects the stop it adds, a stop dragged past another stays selected, and a drag off
+    /// the widget or another layer drops the selection.
+    #[test]
+    fn a_clicked_control_stays_selected() {
+        let mut app = app_with_gradient("linear");
+        drag(&mut app, [20.0, 60.0], [180.0, 60.0]);
+        let click_at = |app: &mut PrismApp, p: [f64; 2]| {
+            app.last_frame_time += 1.0;
+            crate::canvas::tool_event(app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, mods());
+            crate::canvas::tool_event(app, ToolEvent::Up { x: p[0], y: p[1] }, mods());
+        };
+        assert_eq!(selected(&app), None, "nothing until a click");
+        click_at(&mut app, [180.0, 60.0]);
+        assert_eq!(selected(&app), Some(Grab::End));
+        click_at(&mut app, [100.0, 60.0]);
+        assert_eq!(selected(&app), Some(Grab::Mid(0)));
+        // A click on the line adds a stop a quarter of the way: the stop selected is that one.
+        click_at(&mut app, [60.0, 60.0]);
+        assert_eq!(get(&mut app)["stops"].as_array().unwrap().len(), 3);
+        assert_eq!(selected(&app), Some(Grab::Stop(1)));
+        // Another at three quarters; the first one dragged past it becomes the third stop, and
+        // stays the one selected.
+        click_at(&mut app, [140.0, 60.0]);
+        assert_eq!(selected(&app), Some(Grab::Stop(2)));
+        drag(&mut app, [60.0, 60.0], [160.0, 60.0]);
+        let stops = get(&mut app)["stops"].clone();
+        assert_eq!(selected(&app), Some(Grab::Stop(2)), "{stops}");
+        assert!((stops[2][0].as_f64().unwrap() - 0.875).abs() < 0.01, "{stops}");
+        // Torn off the line, it is gone and so is the selection.
+        drag(&mut app, [160.0, 60.0], [160.0, 110.0]);
+        assert_eq!(get(&mut app)["stops"].as_array().unwrap().len(), 3);
+        assert_eq!(selected(&app), None);
+        // A drag away from the widget redraws the gradient and deselects.
+        click_at(&mut app, [20.0, 60.0]);
+        assert_eq!(selected(&app), Some(Grab::Start));
+        drag(&mut app, [100.0, 10.0], [100.0, 110.0]);
+        assert_eq!(selected(&app), None);
+        // Selecting another layer: nothing of this one shows selected.
+        click_at(&mut app, [100.0, 10.0]);
+        assert_eq!(selected(&app), Some(Grab::Start));
+        app.run("layer.new.layer", json!({})).unwrap();
+        assert_eq!(selected(&app), None);
+    }
+
+    /// The gradient popup shows fully at once: egui fades popups in, which over the checkerboard
+    /// looked like the gradients filling in every time it opened, so the theme turns animations
+    /// off. Its first visible frame paints what it paints once settled (colours include the
+    /// fade's opacity).
+    #[test]
+    fn the_gradient_popup_opens_without_fading_in() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        // Frames 1/60 s apart, as on screen: the harness's default 1/4 s outlasts egui's 0.2 s fade.
+        let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut PrismApp| {
+                ui.horizontal(|ui| preset_swatch(app, ui));
+            },
+            app_with_gradient("linear"),
+        );
+        // The harness turns animations off itself: start from egui's default, so it is the
+        // theme that turns them off.
+        h.ctx.all_styles_mut(|s| s.animation_time = egui::Style::default().animation_time);
+        crate::PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(3);
+        // The colours painted (fills, strokes, gradient vertices), which carry the fade's opacity.
+        let popup = |h: &Harness<'_, PrismApp>| -> Vec<egui::Color32> {
+            h.output()
+                .shapes
+                .iter()
+                .flat_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) => vec![r.fill, r.stroke.color],
+                    egui::Shape::Mesh(m) => m.vertices.iter().map(|v| v.color).collect(),
+                    _ => Vec::new(),
+                })
+                .collect()
+        };
+        h.get_by_label("Gradients").click();
+        // The first pass sizes the popup unseen; the next one is the first it is shown in.
+        h.step();
+        h.step();
+        let first = popup(&h);
+        h.run_steps(30);
+        assert!(!first.is_empty());
+        let settled = popup(&h);
+        let diff = first.iter().zip(&settled).position(|(a, b)| a != b);
+        assert!(
+            diff.is_none() && first.len() == settled.len(),
+            "the first visible frame paints other colours ({} vs {}) from {diff:?}: {:?} vs {:?}",
+            first.len(),
+            settled.len(),
+            diff.map(|i| first[i]),
+            diff.map(|i| settled[i])
+        );
+    }
+
+    /// The options bar's gradient popup keeps its size while the pointer moves over it: its list
+    /// took its height from the popup's own last size, less a margin, so every repaint shrank it
+    /// until the list was at its minimum.
+    #[test]
+    fn the_gradient_popup_keeps_its_height_while_the_pointer_moves() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+            |ui, app: &mut PrismApp| {
+                ui.horizontal(|ui| preset_swatch(app, ui));
+            },
+            app_with_gradient("linear"),
+        );
+        crate::PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(3);
+        h.get_by_label("Gradients").click();
+        h.run_steps(3);
+        // The footer's size slider sits at the popup's bottom.
+        let footer = |h: &Harness<'_, PrismApp>| h.get_by_role(egui::accesskit::Role::Slider).rect();
+        let first = footer(&h);
+        for p in [(100.0, 100.0), (200.0, 300.0), (50.0, 200.0), (300.0, 150.0), (120.0, 400.0), (600.0, 600.0)] {
+            h.hover_at(egui::pos2(p.0, p.1));
+            h.run_steps(3);
+            assert_eq!(footer(&h), first, "after the pointer moved to {p:?}");
+        }
+        assert!(first.top() > 300.0, "the list uses the room under the swatch: {first:?}");
+    }
 }
+
+#[cfg(test)]
+#[path = "gradient_ui/popup_tests.rs"]
+mod popup_tests;

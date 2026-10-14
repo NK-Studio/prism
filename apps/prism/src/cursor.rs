@@ -11,16 +11,28 @@
 //! [`service`] builds the pointer-position service for the app's window, `None` where it can't
 //! be read.
 
-pub use platform::service;
+pub use platform::{screen_service, service};
 
 #[cfg(target_os = "macos")]
 mod platform {
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSEvent, NSWindow};
-    use prism_ui_egui::CursorPosFn;
+    use objc2_app_kit::{NSApplication, NSEvent, NSScreen, NSWindow};
+    use prism_ui_egui::{CursorPosFn, ScreenCursorFn};
 
     pub fn service(_cc: &eframe::CreationContext<'_>) -> Option<CursorPosFn> {
         Some(Box::new(|ctx: &egui::Context| in_window_points().map(|(x, y)| egui::pos2(x as f32, y as f32) / ctx.zoom_factor())))
+    }
+
+    /// The pointer on the desktop in winit's physical pixels: AppKit points from the top of the
+    /// primary screen (winit flips window frames the same way) times the window's backing scale.
+    pub fn screen_service() -> Option<ScreenCursorFn> {
+        Some(Box::new(|ctx: &egui::Context| {
+            let mtm = MainThreadMarker::new()?;
+            let at = NSEvent::mouseLocation();
+            let primary = NSScreen::screens(mtm).firstObject()?.frame();
+            let scale = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
+            Some(egui::pos2(at.x as f32, (primary.size.height - at.y) as f32) * scale)
+        }))
     }
 
     /// The pointer in points from the top-left of the content view of our frontmost window under
@@ -43,7 +55,7 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 mod platform {
-    use prism_ui_egui::CursorPosFn;
+    use prism_ui_egui::{CursorPosFn, ScreenCursorFn};
 
     pub fn service(_cc: &eframe::CreationContext<'_>) -> Option<CursorPosFn> {
         Some(Box::new(|ctx: &egui::Context| {
@@ -51,6 +63,11 @@ mod platform {
             let inner = ctx.input(|i| i.viewport().inner_rect)?;
             Some(super::client_points(egui::pos2(pt.x as f32, pt.y as f32), inner.min, ctx.pixels_per_point()))
         }))
+    }
+
+    /// `GetCursorPos`: physical pixels, as winit's window positions are (per-monitor DPI aware).
+    pub fn screen_service() -> Option<ScreenCursorFn> {
+        Some(Box::new(|_: &egui::Context| winsafe::GetCursorPos().ok().map(|pt| egui::pos2(pt.x as f32, pt.y as f32))))
     }
 }
 
@@ -66,9 +83,13 @@ fn client_points(screen_px: egui::Pos2, inner_min: egui::Pos2, ppp: f32) -> egui
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod platform {
-    use prism_ui_egui::CursorPosFn;
+    use prism_ui_egui::{CursorPosFn, ScreenCursorFn};
 
     pub fn service(_cc: &eframe::CreationContext<'_>) -> Option<CursorPosFn> {
+        None
+    }
+
+    pub fn screen_service() -> Option<ScreenCursorFn> {
         None
     }
 }

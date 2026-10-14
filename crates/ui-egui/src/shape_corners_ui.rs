@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use egui::{Event, Modifiers, PointerButton, Stroke, vec2};
-use prism_doc::{Document, LayerContent, LayerId, LiveShape};
+use prism_doc::{CornerStyle, Document, LayerContent, LayerId, LiveShape};
 use prism_geom::Rect;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -34,6 +34,9 @@ pub struct CornerDrag {
     pub radii: [f64; 4],
     pub start: [f64; 2],
     pub linked: bool,
+    /// The rectangle's corner style: dragging resizes round arcs or chamfer cuts alike.
+    #[serde(default)]
+    pub corners: CornerStyle,
 }
 
 struct Preview {
@@ -54,12 +57,16 @@ pub(crate) struct Runtime {
     native_press: bool,
 }
 
+/// Tools that show the widgets: the Rectangle tool, the path selection tools and the Move tool
+/// (as the arrow handles do).
 fn allowed(tool: Tool) -> bool {
-    matches!(tool, Tool::Rectangle | Tool::PathSelection | Tool::DirectSelection)
+    matches!(tool, Tool::Rectangle | Tool::Move | Tool::PathSelection | Tool::DirectSelection)
 }
 
 fn rectangle(app: &PrismApp) -> Option<(LayerId, [f64; 4], [f64; 4])> {
     if !allowed(app.ui.tool)
+        // Hidden while the Move tool drags the layer, back on release (as the arrow handles).
+        || app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move)
         || app.ui.transform.is_some()
         || app.ui.mask_target
         || app.ui.vector_mask_target
@@ -77,11 +84,23 @@ fn rectangle(app: &PrismApp) -> Option<(LayerId, [f64; 4], [f64; 4])> {
         return None;
     }
     let LayerContent::Shape(shape) = &layer.content else { return None };
-    let Some(LiveShape::Rect { rect, radii }) = &shape.live else { return None };
+    let Some(LiveShape::Rect { rect, radii, .. }) = &shape.live else { return None };
     if !rect.iter().chain(radii).all(|v| v.is_finite()) || rect[2] <= 0.0 || rect[3] <= 0.0 || rect.iter().chain(radii).any(|v| v.abs() > 1e7) {
         return None;
     }
     Some((id, *rect, *radii))
+}
+
+/// The corner style of rectangle `layer` in the active document (round when it has none).
+fn corner_style(app: &PrismApp, layer: LayerId) -> CornerStyle {
+    let shape = app.session.active().and_then(|st| st.doc.layer(layer)).and_then(|l| match &l.content {
+        LayerContent::Shape(sh) => sh.live.clone(),
+        _ => None,
+    });
+    match shape {
+        Some(LiveShape::Rect { corners, .. }) => corners,
+        _ => CornerStyle::Round,
+    }
 }
 
 /// Widgets stay distinct at the maximum radius and remain reachable on sharp rectangles.
@@ -197,6 +216,7 @@ pub(crate) fn pointer(app: &mut PrismApp, event: ToolEvent, mods: Modifiers) -> 
                 radii: base,
                 start: p,
                 linked: !mods.alt,
+                corners: corner_style(app, id),
             });
         }
         ToolEvent::Move { .. } => {
@@ -295,7 +315,7 @@ pub(crate) fn display_doc(app: &mut PrismApp, index: usize) -> Option<(Arc<Docum
     let st = app.session.documents().get(index)?;
     let mut shown = (*st.doc).clone();
     let LayerContent::Shape(mut shape) = shown.layer(LayerId(drag.layer))?.content.clone() else { return None };
-    shape.live = Some(LiveShape::Rect { rect: drag.rect, radii: drag.radii });
+    shape.live = Some(LiveShape::Rect { rect: drag.rect, radii: drag.radii, corners: drag.corners });
     shape.path = prism_vector::shapes::live_path(shape.live.as_ref()?);
     shape.psd_raw = None;
     prism_engine::vector_cmds::refresh_shape(&shown, &mut shape);
@@ -326,7 +346,7 @@ pub(crate) fn cursor(app: &PrismApp, point: [f64; 2]) -> Option<egui::CursorIcon
 /// pending radii as the compositor (also on the first frame of native pointer movement).
 pub(crate) fn outline(app: &PrismApp, layer: LayerId) -> Option<prism_doc::Path> {
     let drag = app.ui.shape_corners.as_ref().filter(|d| d.layer == layer.0)?;
-    Some(prism_vector::shapes::live_path(&LiveShape::Rect { rect: drag.rect, radii: drag.radii }))
+    Some(prism_vector::shapes::live_path(&LiveShape::Rect { rect: drag.rect, radii: drag.radii, corners: drag.corners }))
 }
 
 pub(crate) fn draw(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform) {

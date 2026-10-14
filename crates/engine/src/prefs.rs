@@ -56,6 +56,11 @@ choice!(PointSize { PostScript = "postScript", Traditional = "traditional" } def
 choice!(Interpolation { BicubicAutomatic = "bicubicAutomatic", Nearest = "nearestNeighbor", Bilinear = "bilinear", Bicubic = "bicubic", BicubicSmoother = "bicubicSmoother", BicubicSharper = "bicubicSharper", PreserveDetails = "preserveDetails" } default BicubicAutomatic);
 choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
 choice!(Theme { Pro = "pro", #[serde(alias = "classic")] ProMedium = "proMedium", Studio = "studio", StudioLight = "studioLight" } default ProMedium);
+choice!(
+    /// Interface density, independent of the colour theme: Photoshop's compact panels, or roomier
+    /// ones with rounder corners.
+    Layout { Compact = "compact", Comfortable = "comfortable" } default Compact
+);
 choice!(CanvasColor { Default = "default", Black = "black", DarkGray = "darkGray", MediumGray = "mediumGray", LightGray = "lightGray", Custom = "custom" } default Default);
 choice!(CanvasBorder { DropShadow = "dropShadow", Line = "line", None = "none" } default DropShadow);
 choice!(UiScale { Auto = "auto", P75 = "75", P100 = "100", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
@@ -200,13 +205,15 @@ impl Default for General {
 #[serde(default, rename_all = "camelCase")]
 pub struct Interface {
     pub theme: Theme,
+    /// Panel density (`compact` / `comfortable`); any theme works with either.
+    pub layout: Layout,
     /// Pasteboard colour in standard screen mode (`canvasCustomColor` when "custom").
     pub canvas_color: CanvasColor,
     pub canvas_custom_color: String,
     /// Document border in standard screen mode.
     pub canvas_border: CanvasBorder,
     pub ui_scale: UiScale,
-    /// UI language: `auto` (follow the system) or a language code such as `en`, `ja`. The list of
+    /// UI language: `auto` (follow the system) or a language code (`en` or `ko`). The list of
     /// languages belongs to the shell (`ui-egui` i18n); an unknown code falls back to `auto`.
     /// Command ids and the control protocol stay English.
     pub language: String,
@@ -229,6 +236,7 @@ impl Default for Interface {
     fn default() -> Self {
         Self {
             theme: Theme::ProMedium,
+            layout: Layout::Compact,
             canvas_color: CanvasColor::Default,
             canvas_custom_color: "#282828".into(),
             canvas_border: CanvasBorder::DropShadow,
@@ -721,12 +729,24 @@ pub struct Integrations {
     pub allow_agent_control: bool,
     /// Default control port (0 = only when `--control` is given).
     pub control_port: u32,
+    /// Look for a new Prism version once a day (Help › Check for Updates… works either way).
+    pub check_for_updates: bool,
 }
 
 impl Default for Integrations {
     fn default() -> Self {
-        Self { allow_agent_control: true, control_port: 0 }
+        Self { allow_agent_control: true, control_port: 0, check_for_updates: true }
     }
+}
+
+/// In-app update bookkeeping (not a Preferences-dialog section).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UpdateState {
+    /// The version the user chose to skip ("Skip This Version"); empty for none.
+    pub skipped_version: String,
+    /// UTC date (`YYYY-MM-DD`) of the last automatic check; empty before the first.
+    pub last_check: String,
 }
 
 /// Edit › Menus: hidden items and item colours, by command id.
@@ -789,6 +809,18 @@ pub struct Preferences {
     pub dialogs: BTreeMap<String, Value>,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
+    /// The first-run setup (language, then theme) was finished or skipped. Fresh preferences
+    /// start `false`; a preferences file written before this field existed reads as `true`, so
+    /// people who already use Prism never see it. Not a Preferences-dialog setting.
+    #[serde(default = "setup_was_done")]
+    pub setup_complete: bool,
+    /// In-app updates: skipped version and the last automatic check.
+    pub updates: UpdateState,
+}
+
+/// Older preferences files predate the first-run setup: their owners have already set Prism up.
+fn setup_was_done() -> bool {
+    true
 }
 
 /// Preferences dialog sections in Photoshop's order: (id, title).
@@ -889,6 +921,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "general.colorPicker" => ColorPicker::NAMES,
         "general.imageInterpolation" => Interpolation::NAMES,
         "interface.theme" => Theme::NAMES,
+        "interface.layout" => Layout::NAMES,
         "interface.canvasColor" => CanvasColor::NAMES,
         "interface.canvasBorder" => CanvasBorder::NAMES,
         "interface.uiScale" => UiScale::NAMES,
@@ -1037,7 +1070,7 @@ fn check_value(path: &str, v: &Value) -> std::result::Result<(), String> {
     if path == "interface.language" {
         let ok = v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 16 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
         if !ok {
-            return Err("`interface.language` must be `auto` or a language code such as `en` or `ja`".into());
+            return Err("`interface.language` must be `auto` or a language code such as `en` or `ko`".into());
         }
     }
     if let Some((lo, hi)) = range(path) {

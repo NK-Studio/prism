@@ -28,8 +28,12 @@ pub enum FileDialogRequest {
     Open { multiple: bool },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
     Save { suggested: String },
-    /// A folder to write into (the Save window's "Other Folder…").
+    /// A folder to write into (the Save window's "Other Folder…", saving each layer as a file).
     Folder,
+    /// Where to save, picked in the system save panel with every file shown (no file types), so
+    /// an existing file of any type can be chosen to overwrite: the Save window's "Other
+    /// Location…". `suggested` is the path the window names now.
+    Location { suggested: String },
 }
 
 /// The user's choice (a cancelled dialog answers `None`).
@@ -69,6 +73,9 @@ type Then = Box<dyn FnOnce(&mut PrismApp, Option<FileDialogAnswer>) -> Result<Va
 /// The file dialog in progress.
 pub(crate) struct Pending {
     window: Option<u64>,
+    /// The window the panel belongs to when not the document's: a dialog in its own window (the
+    /// Save window's Other Location…), so the panel opens on it rather than behind it.
+    viewport: Option<egui::ViewportId>,
     /// Not shown yet: it is shown at the end of the frame, which has the window to parent it to.
     request: Option<FileDialogRequest>,
     answer: Option<Receiver<Option<FileDialogAnswer>>>,
@@ -101,11 +108,11 @@ impl PrismApp {
         }
         let kind = match request {
             FileDialogRequest::Open { .. } => "open",
-            FileDialogRequest::Save { .. } => "save",
+            FileDialogRequest::Save { .. } | FileDialogRequest::Location { .. } => "save",
             FileDialogRequest::Folder => "folder",
         };
         let then: Then = Box::new(move |app, answer| answer.map_or_else(|| Err(CANCELLED.into()), |a| then(app, a)));
-        self.file_dialog = Some(Pending { request: Some(request), answer: None, then, window: self.ui.active_window });
+        self.file_dialog = Some(Pending { request: Some(request), answer: None, then, window: self.ui.active_window, viewport: None });
         Ok(json!({ "fileDialog": kind }))
     }
 
@@ -115,6 +122,24 @@ impl PrismApp {
             FileDialogAnswer::SaveTo(path) => then(app, path),
             _ => Err(UNEXPECTED.into()),
         })
+    }
+
+    /// Ask where to save with every file shown (see [`FileDialogRequest::Location`]): `then` gets
+    /// the chosen path.
+    pub(crate) fn pick_location(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        self.ask_file(FileDialogRequest::Location { suggested: suggested.to_string() }, move |app, answer| match answer {
+            FileDialogAnswer::SaveTo(path) => then(app, path),
+            _ => Err(UNEXPECTED.into()),
+        })
+    }
+
+    /// Open the panel just asked for on `viewport`'s window (a dialog with a window of its own).
+    pub(crate) fn file_dialog_on(&mut self, viewport: egui::ViewportId) {
+        if let Some(p) = self.file_dialog.as_mut()
+            && viewport != egui::ViewportId::ROOT
+        {
+            p.viewport = Some(viewport);
+        }
     }
 
     /// Ask for a folder: `then` gets its path.
@@ -182,13 +207,14 @@ impl PrismApp {
     /// continues the action that asked once the answer is in. Its errors go to the status bar.
     pub fn poll_file_dialog(&mut self, ctx: &egui::Context, parent: Option<&eframe::Frame>) {
         let Some(p) = self.file_dialog.as_mut() else { return };
-        let native_parent = p.window.and_then(|id| eframe::native_viewport_window(ctx, crate::doc_windows::viewport(Some(id))));
+        let child = p.viewport.or(p.window.map(|id| crate::doc_windows::viewport(Some(id))));
+        let native_parent = child.and_then(|v| eframe::native_viewport_window(ctx, v));
         // An actual child may not have been created yet when a command asks for a dialog.
-        if p.window.is_some() && native_parent.is_none() && parent.and_then(eframe::Frame::winit_window).is_some() {
+        if child.is_some() && native_parent.is_none() && parent.and_then(eframe::Frame::winit_window).is_some() {
             ctx.request_repaint();
             return;
         }
-        let parent_window = if p.window.is_some() { native_parent.as_deref() } else { parent.and_then(eframe::Frame::winit_window).map(AsRef::as_ref) };
+        let parent_window = if child.is_some() { native_parent.as_deref() } else { parent.and_then(eframe::Frame::winit_window).map(AsRef::as_ref) };
         if let Some(request) = p.request.take() {
             let (tx, rx) = mpsc::channel();
             p.answer = Some(rx);

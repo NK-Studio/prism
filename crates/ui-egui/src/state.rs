@@ -533,6 +533,8 @@ pub struct ToolOptions {
     pub shape_fill: bool,
     pub stroke_width: f32,
     pub corner_radius: f32,
+    /// Rectangle corners: round arcs or straight (chamfer) cuts of `corner_radius`.
+    pub corner_style: prism_doc::CornerStyle,
     pub polygon_sides: u32,
     pub line_weight: f32,
     pub line_round_tips: bool,
@@ -662,6 +664,7 @@ impl Default for ToolOptions {
             shape_fill: true,
             stroke_width: 0.0,
             corner_radius: 0.0,
+            corner_style: prism_doc::CornerStyle::Round,
             polygon_sides: 5,
             line_weight: 3.0,
             line_round_tips: false,
@@ -928,6 +931,11 @@ pub struct UiState {
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
+    /// The work path hidden from the canvas (↩ with the Pen, as in Photoshop): its document and
+    /// a fingerprint of its geometry. It shows again once it changes or is picked in the Paths
+    /// panel (`vector_ui::work_path_hidden`).
+    #[serde(default)]
+    pub hidden_work_path: Option<(u64, u64)>,
     /// Layers panel kind filter ("pixel", "adjustment", "type", "shape", "smart"); empty = all.
     #[serde(default)]
     pub layer_filter: Vec<String>,
@@ -1016,6 +1024,9 @@ pub struct UiState {
     /// Non-blocking notices (import/export warnings, files that couldn't open), newest last.
     #[serde(default)]
     pub notices: Vec<crate::notices::Notice>,
+    /// A short confirmation at the bottom of the window ("Saved a.png"), gone after a moment.
+    #[serde(default)]
+    pub toast: Option<crate::notices::Toast>,
     /// Pending GPU fallback warning, visible to automation.
     #[serde(default)]
     pub gpu_fallback_notice: Option<String>,
@@ -1029,6 +1040,9 @@ pub struct UiState {
     pub camera_raw_scope: CameraRawScopeState,
     #[serde(default)]
     pub camera_raw_preview: CameraRawPreviewState,
+    /// Software update check, download and install (`update_ui`). Live state, never restored.
+    #[serde(default, skip_deserializing)]
+    pub update: crate::update_ui::UpdateUi,
 }
 
 impl Default for UiState {
@@ -1068,6 +1082,7 @@ impl Default for UiState {
             shape_corners: None,
             arrow_handles: None,
             selected_path: None,
+            hidden_work_path: None,
             panels: Panels::default(),
             views: Vec::new(),
             dialogs: Vec::new(),
@@ -1094,11 +1109,13 @@ impl Default for UiState {
             status: String::new(),
             status_error: false,
             notices: Vec::new(),
+            toast: None,
             gpu_fallback_notice: None,
             slow_refresh_noticed: Vec::new(),
             chrome: Default::default(),
             camera_raw_scope: Default::default(),
             camera_raw_preview: Default::default(),
+            update: Default::default(),
         }
     }
 }

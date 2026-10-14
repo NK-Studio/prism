@@ -109,7 +109,7 @@ fn clone_stamp_samples_pre_stroke_state_and_non_aligned_returns_source() {
     }
     assert!(s.execute("paint.cloneStamp", json!({"points": [[1, 1]]})).is_err(), "source is required");
     // An explicit offset works too.
-    s.execute("paint.cloneStamp", json!({"points": [[70, 10]], "offset": [-60, 0], "size": 4, "hardness": 100})).unwrap();
+    s.execute("paint.cloneStamp", json!({"points": [[70, 10]], "offset": [-60, 0], "size": 5, "hardness": 100})).unwrap();
     assert!((rgba(&s, 70, 10)[0] - 14.0 / 80.0).abs() < 1e-3, "samples the current state (x=10 was cloned from x=14)");
 }
 
@@ -126,7 +126,7 @@ fn clone_stamp_sample_all_layers_onto_empty_layer_and_opacity() {
     let p = rgba(&s, 48, 16);
     assert!(p[0] > 0.99 && p[1] < 0.01 && p[3] > 0.99, "{p:?}");
     // currentAndBelow on the bottom layer ignores layers above.
-    s.execute("paint.cloneStamp", json!({"points": [[40, 5]], "source": [8, 5], "size": 4, "hardness": 100, "opacity": 50, "sampleLayer": "currentAndBelow"}))
+    s.execute("paint.cloneStamp", json!({"points": [[40.5, 5.5]], "source": [8.5, 5.5], "size": 4, "hardness": 100, "opacity": 50, "sampleLayer": "currentAndBelow"}))
         .unwrap();
     let p = rgba(&s, 40, 5);
     assert!((p[3] - 0.5).abs() < 0.02, "opacity 50 → half alpha {p:?}");
@@ -1217,8 +1217,9 @@ fn live_dodge_matches_the_commit_across_cells() {
         for x in 0..200 {
             let (got, want) = (a.rgba(x, y), b.rgba(x, y));
             changed |= (want[0] - texture(x, y)[0]).abs() > 0.02;
-            // The commit also lays the stroke's last dab, which the live stroke shows on release.
-            if (x - 150).pow(2) + (y - 70).pow(2) > 25 * 25 {
+            // The commit also lays the stroke's last dab, which the live stroke shows on release:
+            // a 40 px tip at hardness 30 paints out to ~1.5 radii (its soft tail), plus slack.
+            if (x - 150).pow(2) + (y - 70).pow(2) > 36 * 36 {
                 worst = (0..4).map(|c| (got[c] - want[c]).abs()).fold(worst, f32::max);
             }
         }

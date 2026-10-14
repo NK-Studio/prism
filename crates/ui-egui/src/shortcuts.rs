@@ -173,6 +173,9 @@ fn clipboard_press(e: &egui::Event, mods: Modifiers, is_windows: bool) -> Option
 /// drops ⌘V entirely when the clipboard holds no text (an image). Outside text fields, give the
 /// pixel commands their key presses back: Copy/Cut/Paste become ⌘C/⌘X/⌘V presses (with ⇧/⌥ as
 /// held, so ⇧⌘C is Copy Merged), and a ⌘V release without a paste event becomes a ⌘V press.
+/// A ⌘V that already went down (a paste event, or the native menu's key equivalent) owns its
+/// releases until ⌘ comes up: the menu sends a release and AppKit the real one, and neither may
+/// paste again (each made a second pasted layer).
 ///
 /// Ctrl+Insert copies and Shift+Insert pastes: egui-winit maps them on Windows (a Shift+Insert
 /// release without a paste event pastes the image, like ⌘V), and we map them here on Linux.
@@ -205,6 +208,16 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
         if let egui::Event::ModifiersChanged(m) | egui::Event::Key { modifiers: m, .. } = &e {
             mods = *m;
         }
+        if let egui::Event::ModifiersChanged(m) = &e
+            && !m.command
+        {
+            ctx.data_mut(|d| d.remove_temp::<bool>(seen));
+        }
+        if let egui::Event::Key { key: Key::V, pressed: true, modifiers, .. } = &e
+            && modifiers.command
+        {
+            ctx.data_mut(|d| d.insert_temp(seen, true));
+        }
         if let Some((key, held)) = clipboard_press(&e, mods, cfg!(target_os = "windows")) {
             if key == Key::V {
                 ctx.data_mut(|d| d.insert_temp(seen, true));
@@ -218,7 +231,7 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
                 Key::Insert if cfg!(target_os = "windows") && modifiers.shift && !modifiers.ctrl => Some(Modifiers::COMMAND),
                 _ => None,
             }
-            && !ctx.data_mut(|d| d.remove_temp::<bool>(seen)).unwrap_or(false)
+            && !ctx.data(|d| d.get_temp::<bool>(seen)).unwrap_or(false)
         {
             out.push(press(Key::V, held));
         }
@@ -283,6 +296,11 @@ pub fn handle(app: &mut PrismApp, ctx: &egui::Context) {
             return;
         }
     }
+    // Path Selection with components selected: ⌫ deletes them (not Edit › Clear's pixels), the
+    // arrows nudge them.
+    if focus == Focus::None && crate::path_select::keys(app, ctx) {
+        return;
+    }
     // Move tool / Free Transform: arrows nudge (⇧ ×10, ⌥ duplicates first).
     if focus == Focus::None && crate::move_mods::arrow_keys(app, ctx) {
         return;
@@ -298,7 +316,17 @@ pub fn handle(app: &mut PrismApp, ctx: &egui::Context) {
         }
         return;
     }
-    // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769).
+    // Pen: ↩ ends the path being drawn as an open path and, in Path mode, deselects it so it
+    // leaves the canvas (it stays the work path), as in Photoshop; with nothing being drawn it
+    // hides the work path. Esc ends a path and keeps it shown (#1769).
+    if app.ui.tool == Tool::Pen
+        && focus == Focus::None
+        && (app.ui.pen.is_some() || crate::vector_ui::shown_work_path(app).is_some())
+        && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter))
+    {
+        crate::vector_ui::pen_enter(app);
+        return;
+    }
     if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::NONE, Key::Escape)) {
         crate::vector_ui::pen_commit(app, false);
         return;
@@ -487,6 +515,8 @@ mod tests {
         let mut r = raw(vec![egui::Event::Paste("x".into()), up.clone()], Modifiers::COMMAND);
         clipboard_keys(&ctx, false, &mut r);
         assert_eq!(keys(&r), vec![(Key::V, true, false), (Key::V, false, false)]);
+        // ⌘ comes up: the next ⌘V is a new keystroke.
+        clipboard_keys(&ctx, false, &mut raw(vec![], Modifiers::NONE));
         // An image on the clipboard: egui-winit sends only the release. It still pastes.
         let mut r = raw(vec![up.clone()], Modifiers::COMMAND);
         clipboard_keys(&ctx, false, &mut r);
@@ -495,6 +525,28 @@ mod tests {
         let mut r = raw(vec![egui::Event::Paste("x".into())], Modifiers::COMMAND);
         clipboard_keys(&ctx, true, &mut r);
         assert!(matches!(r.events.as_slice(), [_, egui::Event::Paste(_)]));
+    }
+
+    /// The macOS menu's ⌘V key equivalent arrives as a press and a release, then AppKit sends the
+    /// real release: one paste, not one per release (pasting made two layers).
+    #[test]
+    fn native_menu_paste_presses_once() {
+        let ctx = egui::Context::default();
+        let key = |pressed| egui::Event::Key { key: Key::V, physical_key: None, pressed, repeat: false, modifiers: Modifiers::COMMAND };
+        let presses = |r: &egui::RawInput| r.events.iter().filter(|e| matches!(e, egui::Event::Key { key: Key::V, pressed: true, .. })).count();
+        let mut r = egui::RawInput { events: vec![key(true), key(false)], ..Default::default() };
+        clipboard_keys(&ctx, false, &mut r);
+        assert_eq!(presses(&r), 1, "{:?}", r.events);
+        // AppKit's own key-up, on a later frame.
+        let mut r = egui::RawInput { events: vec![key(false)], ..Default::default() };
+        clipboard_keys(&ctx, false, &mut r);
+        assert_eq!(presses(&r), 0, "{:?}", r.events);
+        // ⌘ up, then an image-only ⌘V without the menu (release only) still pastes.
+        let mut r = egui::RawInput { events: vec![egui::Event::ModifiersChanged(Modifiers::NONE)], ..Default::default() };
+        clipboard_keys(&ctx, false, &mut r);
+        let mut r = egui::RawInput { events: vec![egui::Event::ModifiersChanged(Modifiers::COMMAND), key(false)], ..Default::default() };
+        clipboard_keys(&ctx, false, &mut r);
+        assert_eq!(presses(&r), 1, "{:?}", r.events);
     }
 
     /// #530: egui-winit sends Cut for Shift+Delete on Windows; on the canvas it opens Fill.

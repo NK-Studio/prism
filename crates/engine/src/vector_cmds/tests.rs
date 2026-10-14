@@ -429,7 +429,7 @@ fn translate_vectors_moves_shapes_and_masks() {
     .unwrap();
     let sh = shape(&s, id);
     assert_eq!(sh.cache.unwrap().content_bounds(), Rect::new(15, 10, 35, 30));
-    assert_eq!(sh.live, Some(LiveShape::Rect { rect: [15.0, 10.0, 20.0, 20.0], radii: [0.0; 4] }));
+    assert_eq!(sh.live, Some(LiveShape::Rect { rect: [15.0, 10.0, 20.0, 20.0], radii: [0.0; 4], corners: CornerStyle::Round }));
 }
 
 #[test]
@@ -641,5 +641,84 @@ fn line_tips_are_editable_undoable_and_validate_atomically() {
         let before = doc(&s).clone();
         assert!(s.execute("shape.edit", json!({"roundTips":false})).is_err());
         assert_eq!(doc(&s), &before);
+    }
+}
+
+/// Chamfered rectangles: straight cuts of the radii's size, switchable with `corners`, kept
+/// through moves and edits, undoable, and refused for unknown styles.
+#[test]
+fn chamfered_rectangles() {
+    for depth in [8, 16, 32] {
+        let mut s = session(200, 150, depth);
+        // 50×40 with 10 px cuts: 2000 − 4 × (10 × 10 / 2).
+        let r = s.execute("shape.create", json!({"kind": "roundedRect", "rect": [10, 10, 50, 40], "radii": 10, "corners": "chamfer"})).unwrap();
+        let id = r["layer"].as_u64().unwrap();
+        assert_eq!(r["live"]["corners"], "chamfer", "{r}");
+        assert!(doc(&s).layer(LayerId(id)).unwrap().name.starts_with("Rectangle"), "named for the tool");
+        let a = alpha_sum(&shape(&s, id));
+        assert!((a - 1800.0).abs() / 1800.0 < 0.01, "depth {depth}: {a}");
+        assert!(shape(&s, id).path.subpaths[0].knots.iter().all(|k| k.in_ctrl == k.anchor && k.out_ctrl == k.anchor), "straight cuts");
+        // Moving or resizing keeps the style; radii edits resize the cuts.
+        let r = s.execute("shape.edit", json!({"layer": id, "move": [5, 0]})).unwrap();
+        assert_eq!(r["live"]["corners"], "chamfer");
+        let r = s.execute("shape.edit", json!({"layer": id, "radii": [20, 0, 0, 0]})).unwrap();
+        assert_eq!((r["live"]["corners"].as_str(), r["live"]["radii"].clone()), (Some("chamfer"), json!([20.0, 0.0, 0.0, 0.0])));
+        assert!((alpha_sum(&shape(&s, id)) - 1800.0).abs() < 20.0, "one 20 px cut: 2000 − 200");
+        // Back to round, and undo restores the chamfer.
+        let r = s.execute("shape.edit", json!({"layer": id, "corners": "round"})).unwrap();
+        assert!(r["live"].get("corners").is_none(), "round is the default, not written: {r}");
+        assert!(shape(&s, id).path.subpaths[0].knots.iter().any(|k| k.out_ctrl != k.anchor), "an arc again");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(matches!(shape(&s, id).live, Some(LiveShape::Rect { corners: CornerStyle::Chamfer, .. })));
+        // Unknown styles are refused, and change nothing.
+        for bad in [json!("bevel"), json!(3), json!(true)] {
+            assert!(s.execute("shape.edit", json!({"layer": id, "corners": bad})).is_err());
+            assert!(s.execute("shape.create", json!({"kind": "roundedRect", "rect": [0, 0, 9, 9], "corners": bad})).is_err());
+        }
+        assert!(matches!(shape(&s, id).live, Some(LiveShape::Rect { corners: CornerStyle::Chamfer, .. })));
+    }
+}
+
+/// Free Transform (⌘T) changing W or H keeps a live rectangle's corners: chamfers stay 45° cuts
+/// and arcs stay circular, sized by the geometric mean of the scales so they stay in proportion
+/// to the box, and the path matches the live parameters (it stretched with the box before, out
+/// of step with them).
+#[test]
+fn stretching_a_live_rectangle_keeps_its_corners() {
+    let radii = |s: &Session, id: u64| match shape(s, id).live {
+        Some(LiveShape::Rect { radii, .. }) => radii,
+        other => panic!("not a live rectangle: {other:?}"),
+    };
+    let near = |a: [f64; 4], b: f64| a.iter().all(|v| (v - b).abs() < 1e-9);
+    for corners in ["chamfer", "round"] {
+        let mut s = session(400, 200, 8);
+        let id = s
+            .execute("shape.create", json!({"kind": "roundedRect", "rect": [10, 10, 100, 40], "radii": 8, "corners": corners}))
+            .unwrap()["layer"]
+            .as_u64()
+            .unwrap();
+        // Four times as wide, same height, about the shape's left edge: corners × √4.
+        s.execute("edit.transform", json!({"matrix": [4, 0, 0, 1, -30, 0]})).unwrap();
+        let sh = shape(&s, id);
+        let Some(live @ LiveShape::Rect { rect, .. }) = &sh.live else { panic!("{corners}: still live: {:?}", sh.live) };
+        assert_eq!(*rect, [10.0, 10.0, 400.0, 40.0], "{corners}");
+        assert!(near(radii(&s, id), 16.0), "{corners}: {:?}", radii(&s, id));
+        assert_eq!(sh.path, vector::shapes::live_path(live), "{corners}: the path is the live shape's");
+        if corners == "chamfer" {
+            let a: Vec<_> = sh.path.subpaths[0].knots.iter().map(|k| (k.anchor.x, k.anchor.y)).collect();
+            assert_eq!(a.get(..3), Some(&[(26.0, 10.0), (394.0, 10.0), (410.0, 26.0)][..]), "a 16 × 16 cut at 45°");
+        }
+        // Undoing a stretch in steps (W 25 %, then H 50 % and back) restores the corners: the
+        // size follows the total scale, not the path taken (the smaller scale lost them for good).
+        s.execute("edit.transform", json!({"matrix": [0.25, 0, 0, 1, 7.5, 0]})).unwrap();
+        assert!(near(radii(&s, id), 8.0), "{corners}: {:?}", radii(&s, id));
+        s.execute("edit.transform", json!({"matrix": [1, 0, 0, 0.5, 0, 5]})).unwrap();
+        s.execute("edit.transform", json!({"matrix": [1, 0, 0, 2, 0, -10]})).unwrap();
+        assert!(near(radii(&s, id), 8.0), "{corners}: {:?}", radii(&s, id));
+        // Uniform scaling scales the corners with it; a flip keeps them.
+        s.execute("edit.transform", json!({"matrix": [0.5, 0, 0, 0.5, 5, 5]})).unwrap();
+        assert!(near(radii(&s, id), 4.0), "{corners}: {:?}", radii(&s, id));
+        s.execute("edit.transform", json!({"matrix": [-1, 0, 0, 1, 70, 0]})).unwrap();
+        assert!(near(radii(&s, id), 4.0), "{corners}: {:?}", radii(&s, id));
     }
 }

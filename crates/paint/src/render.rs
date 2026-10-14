@@ -19,7 +19,7 @@ use crate::dynamics::DabGenerator;
 use crate::retouch::{Footprint, alpha_index, over_native};
 use crate::rng::hash2;
 use crate::tile::{Mips, PatternImage};
-use crate::{Dab, StrokePoint, dab_coverage};
+use crate::{Dab, Falloff, StrokePoint};
 
 /// Edge of a stroke-buffer tile.
 pub const COV_TILE: i32 = 64;
@@ -111,6 +111,22 @@ fn prepare_pattern(b: &BrushSettings) -> Option<Arc<PatternImage>> {
     Some(Arc::new(img))
 }
 
+/// A computed tip's roundness and minor radius, as the rasterizer uses them.
+fn tip_axes(d: &Dab) -> (f32, f32) {
+    let ro = d.roundness.max(0.5 / d.radius).min(1.0);
+    (ro, (d.radius * ro).max(0.5))
+}
+
+/// How far from its centre, in pixels, a computed tip's texels reach: its major radius plus the
+/// hard edge's tail, or out to the end of a soft tip's falloff (bilinear placement adds a pixel,
+/// which [`rect_around`]'s slack covers).
+pub(crate) fn round_reach(d: &Dab, hardness: f32) -> f32 {
+    let (ro, rm) = tip_axes(d);
+    let major = rm / ro;
+    let falloff = Falloff::new(hardness, rm);
+    if falloff.is_hard() { major + falloff.reach_past_edge() } else { major * falloff.reach() }
+}
+
 /// The pixel rectangle `reach` (plus 1 px of anti-aliasing slack) around a dab's centre. The casts
 /// saturate and the arithmetic saturates, so a far or non-finite centre or reach from a direct
 /// caller gives a (possibly empty) rectangle instead of an `i32` overflow (#977).
@@ -158,10 +174,16 @@ impl BrushContext {
         a + (b - a) * ty
     }
 
-    /// Bounding rectangle of a dab (rotated sampled tips need the corner reach).
+    /// Bounding rectangle of a dab (rotated sampled tips need the corner reach; computed tips their
+    /// anti-aliased edge or soft tail).
     pub fn dab_rect(&self, d: &Dab, dual: bool) -> Rect {
-        let sampled = if dual { self.dual_tip.is_some() || !self.dual_sequence.is_empty() } else { self.tip.is_some() || !self.sequence.is_empty() };
-        let reach = if sampled { d.radius * std::f32::consts::SQRT_2 } else { d.radius };
+        let b = &self.brush;
+        let (sampled, hardness) = if dual {
+            (self.dual_tip.is_some() || !self.dual_sequence.is_empty(), b.dual_brush.hardness)
+        } else {
+            (self.tip.is_some() || !self.sequence.is_empty(), b.hardness)
+        };
+        let reach = if sampled { d.radius * std::f32::consts::SQRT_2 } else { round_reach(d, hardness) };
         rect_around(d, reach)
     }
 
@@ -188,9 +210,76 @@ impl BrushContext {
             (pc, ps, 1.0 / d.proj_scale.max(0.05) - 1.0)
         });
         let r = d.radius;
-        let ro = d.roundness.max(0.5 / r).min(1.0);
-        let rm = (r * ro).max(0.5);
-        let reach2 = (rm + 0.5) * (rm + 0.5);
+        let (ro, rm) = tip_axes(d);
+        let (inv_major, inv_minor) = (ro / rm, 1.0 / rm);
+        let falloff = Falloff::new(hardness, rm);
+        // In q² (relative radius squared): beyond `outside_q2` the texels are empty; within
+        // `inside_q2` they are full (-1: nowhere, for a tip narrower than its tail).
+        let (outside_q2, inside_q2) = (falloff.reach().powi(2), if falloff.full_to() > 0.0 { falloff.full_to().powi(2) } else { -1.0 });
+        // Pixel or texel offset from the dab centre (y down) into tip space: y up, projected,
+        // rotated by −angle, flipped.
+        let to_tip = |dx: f32, dy: f32| {
+            let (mut ux, mut uy) = (dx, -dy);
+            if let Some((ax, ay, k)) = proj {
+                let t = (ux * ax + uy * ay) * k;
+                ux += t * ax;
+                uy += t * ay;
+            }
+            ((ux * cs + uy * sn) * fx, (-ux * sn + uy * cs) * fy)
+        };
+        // A computed tip's texel at tip-space (u, v): the relative radius on the ellipse (semi-axes
+        // `major` along u, `rm` along v), and for a hard tip the signed distance to its edge in
+        // pixels, to first order (q − 1) / |∇q| (exact on a circle), so the edge is the same width
+        // all round a flattened tip. |∇q| ≤ 1 / rm, so |sd| ≥ |q − 1|·rm: the q² bounds skip the
+        // work exactly where it can't change the texel.
+        let texel = |u: f32, v: f32| {
+            let (qu, qv) = (u * inv_major, v * inv_minor);
+            let q2 = qu * qu + qv * qv;
+            if q2 >= outside_q2 {
+                return 0.0;
+            }
+            if q2 <= inside_q2 {
+                return 1.0;
+            }
+            let q = q2.sqrt();
+            if !falloff.is_hard() {
+                return falloff.at(q, 0.0);
+            }
+            let (gu, gv) = (qu * inv_major, qv * inv_minor);
+            let g = if q > 1e-6 { (gu * gu + gv * gv).sqrt() / q } else { 0.0 };
+            falloff.at(q, if g > 0.0 { (q - 1.0) / g } else { -rm })
+        };
+        // Photoshop places a computed tip as a bitmap of texels one pixel apart, centred on the
+        // dab, with bilinear interpolation: the texels at whole-pixel offsets from the centre
+        // around the rectangle (one more column and row), and the weights of the far texels.
+        let (ox, oy) = (rect.x0 as f32 + 0.5 - cx, rect.y0 as f32 + 0.5 - cy);
+        let (gx0, gy0) = (ox.floor(), oy.floor());
+        let (wx, wy) = (ox - gx0, oy - gy0);
+        let computed = mips.is_none() && !aliased;
+        if computed {
+            let gw = w + 1;
+            let mut texels = Vec::with_capacity(gw * (h + 1));
+            for j in 0..=h {
+                let ty = gy0 + j as f32;
+                for i in 0..gw {
+                    let (u, v) = to_tip(gx0 + i as f32, ty);
+                    texels.push(texel(u, v));
+                }
+            }
+            let (w00, w10, w01, w11) = ((1.0 - wx) * (1.0 - wy), wx * (1.0 - wy), (1.0 - wx) * wy, wx * wy);
+            for (row, (r0, r1)) in out.chunks_exact_mut(w.max(1)).zip(texels.chunks_exact(gw).zip(texels.chunks_exact(gw).skip(1))) {
+                for (o, (a, b)) in row.iter_mut().zip(r0.windows(2).zip(r1.windows(2))) {
+                    *o = a[0] * w00 + a[1] * w10 + b[0] * w01 + b[1] * w11;
+                }
+            }
+            // Without per-pixel effects the placed texels times flow are the dab.
+            if !(noise || tex_tip || wet) {
+                if d.alpha != 1.0 {
+                    out.iter_mut().for_each(|o| *o *= d.alpha);
+                }
+                return;
+            }
+        }
         // Sampled-tip mapping.
         let (level, inv_scale, tw, th) = match mips {
             Some(m) => {
@@ -206,26 +295,31 @@ impl BrushContext {
             for xx in 0..w {
                 let x = rect.x0 + xx as i32;
                 let dx = x as f32 + 0.5 - cx;
-                // To y-up, project, rotate by -angle, flip.
-                let (mut ux, mut uy) = (dx, -dy);
-                if let Some((ax, ay, k)) = proj {
-                    let t = (ux * ax + uy * ay) * k;
-                    ux += t * ax;
-                    uy += t * ay;
-                }
-                let u = (ux * cs + uy * sn) * fx;
-                let v = (-ux * sn + uy * cs) * fy;
                 let (mut val, rn) = match mips {
-                    None => {
+                    None if aliased => {
+                        let (u, v) = to_tip(dx, dy);
                         let d2 = (u * ro).powi(2) + v * v;
-                        if d2 >= reach2 {
+                        if d2 > rm * rm {
                             continue;
                         }
-                        let dd = d2.sqrt();
-                        let val = if aliased { if dd <= rm { 1.0 } else { 0.0 } } else { dab_coverage(dd, rm, hardness) };
-                        (val, dd / rm)
+                        (1.0, d2.sqrt() / rm)
+                    }
+                    None => {
+                        // The placed texels (above); only Wet Edges reads the relative radius.
+                        let val = out.get(yy * w + xx).copied().unwrap_or(0.0);
+                        if val <= 0.0 {
+                            continue;
+                        }
+                        let rn = if wet {
+                            let (u, v) = to_tip(dx, dy);
+                            (u * inv_major).hypot(v * inv_minor)
+                        } else {
+                            0.0
+                        };
+                        (val, rn)
                     }
                     Some(m) => {
+                        let (u, v) = to_tip(dx, dy);
                         let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
                         if px < -1.0 || py < -1.0 || px > tw + 1.0 || py > th + 1.0 {
                             continue;

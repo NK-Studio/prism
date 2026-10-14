@@ -346,7 +346,8 @@ pub struct Smoothing {
     pub pulled_string: bool,
     /// Keep catching up with the pointer while it pauses (uses point timestamps).
     pub catch_up: bool,
-    /// Finish the stroke at the last pointer position.
+    /// Finish the stroke at the last pointer position. Off by default: finish at
+    /// the filtered brush tip instead of extending through the pen's release tail.
     pub catch_up_on_end: bool,
     /// Divide the string length by the view zoom (the command's `zoom` param).
     pub adjust_for_zoom: bool,
@@ -354,7 +355,7 @@ pub struct Smoothing {
 
 impl Default for Smoothing {
     fn default() -> Self {
-        Self { amount: 0.0, pulled_string: false, catch_up: true, catch_up_on_end: true, adjust_for_zoom: true }
+        Self { amount: 0.0, pulled_string: false, catch_up: true, catch_up_on_end: false, adjust_for_zoom: true }
     }
 }
 
@@ -481,6 +482,8 @@ impl BrushSettings {
         // NaN scatters nothing (as before: it never passed the `> 0` check); infinity is the maximum.
         let safe_scatter = |amount: f32| if amount.is_nan() { 0.0 } else { amount.clamp(0.0, MAX_SCATTER) };
         let mut brush = self.clone();
+        brush.flow = photoshop_level(brush.flow);
+        brush.opacity = photoshop_level(brush.opacity);
         brush.size = safe_size(brush.size);
         brush.dual_brush.size = safe_size(brush.dual_brush.size);
         brush.scattering.scatter.jitter = safe_scatter(brush.scattering.scatter.jitter);
@@ -543,6 +546,14 @@ impl BrushSettings {
         }
         self
     }
+}
+
+/// A brush's Flow or Opacity as Photoshop applies it: to the nearest 1/255 (halves up), whatever
+/// the document depth. Measured with `cargo xtask brush-compare` (`flow16-*`, `opac16-*` and
+/// `flow*-x10-*` cases): in a 16-bit document one dab at 1 % flow lays 3/255 (0.01178, not 0.01),
+/// at 50 % 128/255, and ten stacked 1 % dabs build up as 3/255 dabs do.
+pub fn photoshop_level(v: f32) -> f32 {
+    if v.is_nan() { 0.0 } else { (v.clamp(0.0, 1.0) * 255.0 + 0.5).floor() / 255.0 }
 }
 
 /// A named brush preset (session tool state; serde round-trips).

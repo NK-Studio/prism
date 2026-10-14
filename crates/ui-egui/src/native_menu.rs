@@ -633,18 +633,23 @@ impl NativeMenu {
     }
 
     /// Before egui sees this frame's input: key equivalents become the key presses they were,
-    /// and clicks wait for [`NativeMenu::run`].
-    pub fn raw_input(&mut self, raw: &mut egui::RawInput) {
+    /// and clicks wait for [`NativeMenu::run`]. True when a key equivalent was added: it lands in
+    /// the main window's input even while a floating document window has the focus, so the
+    /// shortcuts must run then too (⌘W didn't close a floating document).
+    pub fn raw_input(&mut self, raw: &mut egui::RawInput) -> bool {
+        let mut keys = false;
         for e in self.backend.drain() {
             match e {
                 Event::Key(chord) => {
                     raw.events.extend(chord.key_event(true));
                     raw.events.extend(chord.key_event(false));
+                    keys = true;
                 }
                 Event::Click(id) => self.clicks.push(id),
             }
             self.dirty = true;
         }
+        keys
     }
 }
 
@@ -829,21 +834,23 @@ mod tests {
     /// the preference checked; choosing one sets `interface.language`.
     #[test]
     fn the_app_menu_switches_the_ui_language() {
-        let l = prism_layout(&crate::menus::menu_items(&app(false)), Lang::EN, "ja");
+        let l = prism_layout(&crate::menus::menu_items(&app(false)), Lang::EN, "ko");
         let app_menu = l.bar.menu(MenuRole::App).unwrap();
         let Some(Node::Submenu { children, .. }) = app_menu.children.iter().find(|n| matches!(n, Node::Submenu { label, .. } if label == "Language")) else {
             panic!("a Language submenu");
         };
         assert_eq!(children.iter().filter(|n| matches!(n, Node::Item(_))).count(), Lang::all().count() + 1);
-        assert_eq!(l.bar.find("app.language.ja").map(|it| (it.label.as_str(), it.checked)), Some(("日本語", Some(true))));
+        assert_eq!(l.bar.find("app.language.ko").map(|it| (it.label.as_str(), it.checked)), Some(("한국어", Some(true))));
+        assert!(l.bar.find("app.language.ja").is_none(), "only English and Korean");
         assert_eq!(l.bar.find("app.language.auto").and_then(|it| it.checked), Some(false));
         // Native names stay native in another UI language.
-        let de = prism_layout(&crate::menus::menu_items(&app(false)), Lang::from_pref("de"), "de");
-        assert_eq!(de.bar.find("app.language.ja").map(|it| it.label.as_str()), Some("日本語"));
+        let ko = prism_layout(&crate::menus::menu_items(&app(false)), Lang::from_pref("ko"), "ko");
+        assert_eq!(ko.bar.find("app.language.en").map(|it| it.label.as_str()), Some("English"));
         let mut a = app(false);
         let ctx = egui::Context::default();
-        crate::menus::invoke(&mut a, &ctx, "app.language.fr", json!({})).unwrap();
-        assert_eq!(a.session.prefs().interface.language, "fr");
+        crate::menus::invoke(&mut a, &ctx, "app.language.ko", json!({})).unwrap();
+        assert_eq!(a.session.prefs().interface.language, "ko");
+        assert!(crate::menus::invoke(&mut a, &ctx, "app.language.fr", json!({})).is_err(), "a removed language is an error");
         crate::menus::invoke(&mut a, &ctx, "app.language.auto", json!({})).unwrap();
         assert_eq!(a.session.prefs().interface.language, "auto");
         assert!(crate::menus::invoke(&mut a, &ctx, "app.language.xx-nope", json!({})).is_err(), "an unknown code is an error");
@@ -947,6 +954,35 @@ mod tests {
         // Nothing changed: no rebuild of the rows on the next frame.
         frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
         assert_eq!(synced.borrow().len(), 1);
+    }
+
+    /// ⌘W while a floating document window has the focus: AppKit's menu takes the key and it
+    /// lands in the unfocused main window's input, where it still closes the active document.
+    #[test]
+    fn key_equivalents_run_while_a_floating_window_has_the_focus() {
+        use eframe::App as _;
+        let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut app = app(true);
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.sync_views();
+        let ctx = egui::Context::default();
+        let close = Chord::parse("Cmd+W").unwrap();
+        let unfocused = || {
+            let mut raw = egui::RawInput { focused: false, ..Default::default() };
+            raw.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { focused: Some(false), ..Default::default() });
+            raw
+        };
+        // Without a key equivalent the unfocused main window runs no shortcuts.
+        frame(&ctx, unfocused(), |ui| app.root_shortcuts(ui.ctx()));
+        assert_eq!(app.session.documents().len(), 2);
+        app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced, events: vec![Event::Key(close)] })));
+        let mut raw = unfocused();
+        app.raw_input_hook(&ctx, &mut raw);
+        frame(&ctx, raw, |ui| {
+            assert!(!ui.ctx().input(|i| i.focused));
+            app.root_shortcuts(ui.ctx());
+        });
+        assert_eq!(app.session.documents().len(), 1, "⌘W closed the active document");
     }
 
     #[test]

@@ -267,10 +267,13 @@ impl Default for ShapeStroke {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum LiveShape {
-    /// Rectangle `[x, y, w, h]` with corner radii `[tl, tr, br, bl]` (all zero = sharp).
+    /// Rectangle `[x, y, w, h]` with corner sizes `[tl, tr, br, bl]` (all zero = sharp): radii
+    /// of round corners, or how far a chamfer cuts back along each side.
     Rect {
         rect: [f64; 4],
         radii: [f64; 4],
+        #[serde(default, skip_serializing_if = "CornerStyle::is_round")]
+        corners: CornerStyle,
     },
     Ellipse {
         rect: [f64; 4],
@@ -298,6 +301,39 @@ pub enum LiveShape {
         #[serde(default, rename = "roundTips")]
         round_tips: bool,
     },
+}
+
+/// How a live rectangle's corners are shaped (every corner alike; sizes are per corner).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CornerStyle {
+    /// Quarter-ellipse arcs (Photoshop's rounded rectangle).
+    #[default]
+    Round,
+    /// Straight cuts across the corner.
+    Chamfer,
+}
+
+impl CornerStyle {
+    pub fn is_round(&self) -> bool {
+        *self == CornerStyle::Round
+    }
+
+    /// The name used in command parameters: `round` or `chamfer`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CornerStyle::Round => "round",
+            CornerStyle::Chamfer => "chamfer",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<CornerStyle> {
+        match s {
+            "round" => Some(CornerStyle::Round),
+            "chamfer" => Some(CornerStyle::Chamfer),
+            _ => None,
+        }
+    }
 }
 
 fn default_arrow_angle() -> f64 {
@@ -345,10 +381,15 @@ mod tests {
     fn serde_roundtrip() {
         let p = Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (3.0, 4.0)]).with_op(PathOp::Exclude)]);
         let s = ShapeStroke { dashes: vec![2.0, 1.0], ..Default::default() };
-        let j = serde_json::to_string(&(&p, &s, &LiveShape::Rect { rect: [0.0; 4], radii: [1.0; 4] })).unwrap();
+        let j = serde_json::to_string(&(&p, &s, &LiveShape::Rect { rect: [0.0; 4], radii: [1.0; 4], corners: CornerStyle::Chamfer })).unwrap();
         let back: (Path, ShapeStroke, LiveShape) = serde_json::from_str(&j).unwrap();
         assert_eq!(back.0, p);
         assert_eq!(back.1, s);
+        assert!(matches!(back.2, LiveShape::Rect { corners: CornerStyle::Chamfer, .. }));
+        // Files written before corner styles load as round; round corners aren't written.
+        let old: LiveShape = serde_json::from_str(r#"{"kind":"rect","rect":[0,0,4,4],"radii":[1,1,1,1]}"#).unwrap();
+        assert!(matches!(old, LiveShape::Rect { corners: CornerStyle::Round, .. }));
+        assert!(!serde_json::to_string(&old).unwrap().contains("corners"));
         let v: Path = serde_json::from_str(r#"{"subpaths":[{"closed":true,"knots":[]}]}"#).unwrap();
         assert_eq!(v.subpaths[0].op, PathOp::Combine);
     }

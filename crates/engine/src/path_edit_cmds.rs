@@ -217,6 +217,39 @@ fn set_operation(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+fn delete_components(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.deleteComponents";
+    let subs = subpath_list(CMD, p)?.ok_or_else(|| bad(CMD, "missing `subpaths`"))?;
+    let name = p.get("name").and_then(Value::as_str).unwrap_or("work");
+    // The work path emptied goes away, as in Photoshop (one history step either way).
+    if crate::vector_cmds::is_work(Some(name)) {
+        let doc = &s.active().ok_or(crate::EngineError::NoDocument)?.doc;
+        let wp = doc.work_path.as_ref().ok_or_else(|| bad(CMD, "no work path"))?;
+        let picked = edit::components_of(wp, &subs).map_err(|e| bad(CMD, e))?;
+        if picked.iter().map(|r| r.len()).sum::<usize>() == wp.subpaths.len() {
+            s.edit("Delete Path", |doc, _| {
+                doc.work_path = None;
+                Ok(())
+            })?;
+            return Ok(json!({"name": "work", "path": Value::Null}));
+        }
+    }
+    edit_path(s, CMD, p, "Delete Path", |path| edit::delete_components(path, &subs))
+}
+
+fn duplicate_components(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.duplicateComponents";
+    let subs = subpath_list(CMD, p)?.ok_or_else(|| bad(CMD, "missing `subpaths`"))?;
+    let d = if p.get("move").is_some() { offset(CMD, p)? } else { [0.0, 0.0] };
+    let mut copies = Vec::new();
+    let mut r = edit_path(s, CMD, p, "Duplicate Path", |path| {
+        copies = edit::duplicate_components(path, &subs, d)?;
+        Ok(())
+    })?;
+    r["subpaths"] = json!(copies);
+    Ok(r)
+}
+
 fn merge_components(s: &mut Session, p: &Value) -> Result<Value> {
     let tol = p.get("tolerance").and_then(Value::as_f64).filter(|t| t.is_finite()).unwrap_or(0.1).clamp(0.05, 10.0);
     edit_path(s, "path.mergeComponents", p, "Merge Shape Components", |path| {
@@ -292,6 +325,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Arrange Components",
             r#""to":"front|forward|backward|back","subpaths":[i,…] (the components holding them) → also "subpaths": their new indices (Pen options bar › Path Arrangement)"#.into(),
             arrange_components,
+        ),
+        spec(
+            "path.deleteComponents",
+            "Delete Path",
+            r#""subpaths":[i,…] (the components holding them; Path Selection's Delete; the work path emptied is removed) → "path": null when removed"#.into(),
+            delete_components,
+        ),
+        spec(
+            "path.duplicateComponents",
+            "Duplicate Path",
+            r#""subpaths":[i,…] (the components holding them),"move":[dx,dy]=[0,0] (copies on top, moved; Path Selection's ⌥-drag) → also "subpaths": the copies' indices"#.into(),
+            duplicate_components,
         ),
         spec(
             "path.mergeComponents",
@@ -502,5 +547,111 @@ mod tests {
             assert!(s.execute(id, p.clone()).is_err(), "{id} {p}");
         }
         assert_eq!(s.active().unwrap().history.entries().len(), steps);
+    }
+
+    /// Two squares, the second with a hole joined to it (one component of two subpaths).
+    fn two_components() -> serde_json::Value {
+        json!({"subpaths": [
+            {"closed": true, "knots": [[10, 10], [30, 10], [30, 30], [10, 30]]},
+            {"closed": true, "knots": [[50, 10], [90, 10], [90, 50], [50, 50]]},
+            {"closed": true, "op": "join", "knots": [[60, 20], [80, 20], [80, 40], [60, 40]]},
+        ]})
+    }
+
+    /// Path Selection's Delete removes whole components (a hole goes with its shape), in one
+    /// step; the work path emptied goes away; bad lists change nothing.
+    #[test]
+    fn delete_components_removes_whole_components() {
+        let mut s = session();
+        s.execute("path.set", json!({"path": two_components()})).unwrap();
+        let before = work(&s);
+        // Naming the hole picks its whole component.
+        s.execute("path.deleteComponents", json!({"subpaths": [2]})).unwrap();
+        assert_eq!(work(&s).subpaths.len(), 1);
+        assert_eq!(work(&s).subpaths[0].knots[0].anchor.x, 10.0);
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("Delete Path"));
+        assert!(s.undo());
+        assert_eq!(work(&s), before);
+        let r = s.execute("path.deleteComponents", json!({"subpaths": [0, 1]})).unwrap();
+        assert!(r["path"].is_null() && s.active().unwrap().doc.work_path.is_none(), "the emptied work path is removed");
+        assert!(s.undo());
+        assert_eq!(work(&s), before);
+        let steps = s.active().unwrap().history.entries().len();
+        for bad in [json!({}), json!({"subpaths": []}), json!({"subpaths": [9]}), json!({"subpaths": ["x"]}), json!({"subpaths": [0], "name": "nope"})] {
+            assert!(s.execute("path.deleteComponents", bad.clone()).is_err(), "{bad}");
+        }
+        assert_eq!(s.active().unwrap().history.entries().len(), steps);
+        assert_eq!(work(&s), before);
+    }
+
+    /// ⌥-drag with Path Selection: copies of whole components on top, moved, in one step; the
+    /// result names the copies. A shape layer's path takes it too.
+    #[test]
+    fn duplicate_components_copies_and_moves_in_one_step() {
+        let mut s = session();
+        s.execute("path.set", json!({"path": two_components()})).unwrap();
+        let steps = s.active().unwrap().history.entries().len();
+        let r = s.execute("path.duplicateComponents", json!({"subpaths": [1], "move": [5, 7]})).unwrap();
+        assert_eq!(r["subpaths"], json!([3, 4]));
+        let w = work(&s);
+        assert_eq!(w.subpaths.len(), 5);
+        assert_eq!((w.subpaths[3].knots[0].anchor.x, w.subpaths[3].knots[0].anchor.y), (55.0, 17.0));
+        assert_eq!((w.subpaths[4].knots[0].anchor.x, w.subpaths[4].knots[0].anchor.y), (65.0, 27.0));
+        assert_eq!(w.subpaths[4].op, prism_doc::PathOp::Join, "the hole stays joined to its copy");
+        assert_ne!(w.subpaths[3].op, prism_doc::PathOp::Join, "the copy is a component of its own");
+        assert_eq!(w.components().len(), 3);
+        assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+        // In place without `move`; a bad move changes nothing.
+        let r = s.execute("path.duplicateComponents", json!({"subpaths": [0]})).unwrap();
+        assert_eq!(r["subpaths"], json!([5]));
+        assert!(s.execute("path.duplicateComponents", json!({"subpaths": [0], "move": [f64::MAX, 0]})).is_err());
+        // A shape layer.
+        let id = s.execute("shape.create", json!({"kind": "rect", "rect": [10, 10, 20, 20]})).unwrap()["layer"].as_u64().unwrap();
+        let r = s.execute("path.duplicateComponents", json!({"name": "layer", "layer": id, "subpaths": [0], "move": [30, 0]})).unwrap();
+        assert_eq!(r["subpaths"], json!([1]));
+        let doc = &s.active().unwrap().doc;
+        let prism_doc::LayerContent::Shape(sh) = &doc.layer(LayerId(id)).unwrap().content else { panic!("shape") };
+        assert_eq!(sh.path.subpaths.len(), 2);
+    }
+
+    /// Make: Shape turns the selected layer itself into the shape layer when it is an empty,
+    /// unlocked pixel layer (its name, position and settings stay); a painted, locked or
+    /// Background layer gets a new shape layer above it, as before.
+    #[test]
+    fn make_shape_converts_an_empty_pixel_layer_in_place() {
+        let mut s = session();
+        let empty = s.execute("layer.new.layer", json!({"name": "Sketch"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("path.set", json!({"path": square()})).unwrap();
+        let layers = s.active().unwrap().doc.layers.len();
+        let r = s.execute("path.makeShape", json!({})).unwrap();
+        assert_eq!(r["layer"].as_u64(), Some(empty), "the same layer");
+        let st = s.active().unwrap();
+        assert_eq!(st.doc.layers.len(), layers, "no new layer");
+        let l = st.doc.layer(LayerId(empty)).unwrap();
+        assert!(matches!(l.content, prism_doc::LayerContent::Shape(_)) && l.name == "Sketch");
+        assert!(st.doc.work_path.is_none());
+        assert!(s.undo());
+        assert!(matches!(s.active().unwrap().doc.layer(LayerId(empty)).unwrap().content, prism_doc::LayerContent::Raster(_)));
+        // Painted, or locked: a new shape layer above.
+        for setup in ["paint", "lock"] {
+            let mut s = session();
+            let id = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+            match setup {
+                "paint" => {
+                    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 5, "height": 5})).unwrap();
+                    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+                    s.execute("select.deselect", json!({})).unwrap();
+                }
+                _ => {
+                    s.execute("layer.setProps", json!({"layer": id, "locks": {"pixels": true}})).unwrap();
+                }
+            }
+            s.execute("path.set", json!({"path": square()})).unwrap();
+            let layers = s.active().unwrap().doc.layers.len();
+            let r = s.execute("path.makeShape", json!({})).unwrap();
+            assert_ne!(r["layer"].as_u64(), Some(id), "{setup}");
+            assert_eq!(s.active().unwrap().doc.layers.len(), layers + 1, "{setup}");
+            assert!(matches!(s.active().unwrap().doc.layer(LayerId(id)).unwrap().content, prism_doc::LayerContent::Raster(_)), "{setup}");
+        }
     }
 }

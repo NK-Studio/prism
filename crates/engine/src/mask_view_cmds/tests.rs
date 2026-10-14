@@ -69,7 +69,7 @@ fn painting_in_mask_view_paints_the_mask() {
     l.surface().unwrap().read_region_into(Rect::new(0, 0, 40, 20), &mut b);
     assert_eq!(a, b, "the layer's pixels are untouched");
     // An explicit target still wins.
-    s.execute("paint.stroke", json!({"points": [[5, 5]], "size": 4, "color": "#00ff00", "target": "pixels"})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[5.5, 5.5]], "size": 4, "color": "#00ff00", "target": "pixels"})).unwrap();
     let l = s.active().unwrap().doc.layer(id).unwrap();
     assert!(l.surface().unwrap().sample_channel(5, 5, 1) > 0.9);
 }

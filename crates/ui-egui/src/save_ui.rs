@@ -69,6 +69,12 @@ fn writable(key: &str) -> bool {
     original(key) || prism_codecs::from_extension(key).is_some_and(|f| f.caps().write)
 }
 
+/// Whether the list offers `key`: writable, and an image format when saving each layer as a file
+/// (a layer on its own is an image; originals are for the whole document).
+fn offered(key: &str, per_layer: bool) -> bool {
+    writable(key) && !(per_layer && original(key))
+}
+
 /// The format key for a typed extension (`jpeg` → `jpg`, `tiff` → `tif`).
 fn key_for_extension(ext: &str) -> Option<&'static str> {
     let ext = ext.to_ascii_lowercase();
@@ -128,6 +134,11 @@ fn file_stem(path: &str) -> String {
     }
 }
 
+/// Whether two paths name the same file (the same path, or the same file on disk).
+fn same_file(a: &str, b: &str) -> bool {
+    a == b || std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b)
+}
+
 fn join(dir: &str, name: &str) -> String {
     if dir.is_empty() || dir == "." {
         name.to_string()
@@ -172,6 +183,7 @@ pub fn open(app: &mut PrismApp, copy: bool) -> Result<Value, String> {
     f.insert("__save".into(), json!(if copy { "copy" } else { "save" }));
     f.insert("__label".into(), json!(if copy { "Save a Copy…" } else { "Save As…" }));
     f.insert("name".into(), json!(name));
+    f.insert("__name".into(), json!(name));
     f.insert("dir".into(), json!(dir));
     f.insert("format".into(), json!(format));
     f.insert("perLayer".into(), json!(false));
@@ -244,7 +256,84 @@ fn settings(f: &Map<String, Value>) -> crate::ExportSettings {
 /// The file (or, per layer, the folder) the fields name.
 fn target(f: &Map<String, Value>) -> String {
     let name = s(f, "name", "").trim().to_string();
-    if b(f, "perLayer", false) { join(s(f, "dir", "."), &name) } else { join(s(f, "dir", "."), &format!("{name}.{}", s(f, "format", "psd"))) }
+    if b(f, "perLayer", false) { join(s(f, "dir", "."), &name) } else { join(s(f, "dir", "."), &format!("{name}.{}", extension(f))) }
+}
+
+/// The extension the file gets: the format's own, or the spelling of a picked or typed file name
+/// when it names the same format. Picking `photo.jpeg` must overwrite it, not write `photo.jpg`
+/// beside it.
+fn extension(f: &Map<String, Value>) -> String {
+    let format = s(f, "format", "psd");
+    match f.get("ext").and_then(Value::as_str) {
+        Some(ext) if key_for_extension(ext) == Some(format) => ext.to_string(),
+        _ => format.to_string(),
+    }
+}
+
+/// The absolute path a Name holds, if it is one: `/…`, `~/…` (the home folder) or `C:\…`.
+fn path_in_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    if let Some(rest) = name.strip_prefix("~/") {
+        return home().map(|h| h.join(rest).to_string_lossy().into_owned());
+    }
+    let bytes = name.as_bytes();
+    let drive = bytes.first().is_some_and(u8::is_ascii_alphabetic) && bytes.get(1) == Some(&b':') && matches!(bytes.get(2), Some(b'/' | b'\\'));
+    (name.starts_with('/') || name.starts_with("\\\\") || drive).then(|| name.to_string())
+}
+
+/// A full path in Name (pasted, or typed and then left): use it as the location, name and type,
+/// as if it had been picked in Other Location…. True when the name was a path.
+pub fn take_typed_path(f: &mut Map<String, Value>) -> bool {
+    if b(f, "perLayer", false) {
+        return false;
+    }
+    let Some(path) = path_in_name(s(f, "name", "")) else { return false };
+    apply_picked(f, &path);
+    true
+}
+
+/// Take a path chosen in the system save panel ("Other Location…"): its folder, and its name and
+/// type, so choosing an existing file means "overwrite this one". A type Prism can't write keeps
+/// the format and says so.
+fn apply_picked(f: &mut Map<String, Value>, path: &str) {
+    if path.ends_with(['/', '\\']) || std::path::Path::new(path).is_dir() {
+        // A folder: save into it under the last plain name (a pasted path may have replaced it).
+        let name = f.get("__name").and_then(Value::as_str).unwrap_or_else(|| s(f, "name", "Untitled")).to_string();
+        let dir = path.trim_end_matches(['/', '\\']);
+        f.insert("dir".into(), json!(if dir.is_empty() { "/" } else { dir }));
+        f.insert("name".into(), json!(name));
+        f.remove("__error");
+        return;
+    }
+    let (dir, file) = match path.rfind(['/', '\\']) {
+        Some(i) => (path.get(..i).filter(|d| !d.is_empty()).unwrap_or("/"), path.get(i + 1..).unwrap_or("")),
+        None => (".", path),
+    };
+    f.insert("dir".into(), json!(dir));
+    f.remove("__error");
+    let (stem, ext) = match file.rfind('.') {
+        Some(i) if i > 0 => (file.get(..i).unwrap_or(file), file.get(i + 1..)),
+        _ => (file, None),
+    };
+    if !stem.is_empty() {
+        f.insert("name".into(), json!(stem));
+        f.insert("__name".into(), json!(stem));
+    }
+    match ext {
+        Some(ext) => match key_for_extension(ext).filter(|k| offered(k, false)) {
+            Some(key) => {
+                f.insert("format".into(), json!(key));
+                f.insert("ext".into(), json!(ext));
+            }
+            None => {
+                f.remove("ext");
+                f.insert("__error".into(), json!(crate::i18n::fmt(tl!("Prism can't write .{ext} files"), &[("ext", ext)])));
+            }
+        },
+        None => {
+            f.remove("ext");
+        }
+    }
 }
 
 /// Why the fields can't be saved yet, if they can't.
@@ -256,6 +345,8 @@ fn problem(f: &Map<String, Value>) -> Option<&'static str> {
         Some(tl!("A name can't contain slashes"))
     } else if !writable(s(f, "format", "")) {
         Some(tl!("Prism can't write this format"))
+    } else if b(f, "perLayer", false) && original(s(f, "format", "")) {
+        Some(tl!("Each layer is saved as an image: pick an image format"))
     } else {
         None
     }
@@ -286,8 +377,13 @@ fn warning(app: &PrismApp, f: &Map<String, Value>) -> Option<String> {
     if depth != prism_color::SampleType::U8 && matches!(format, "jpg" | "webp" | "gif" | "bmp" | "ico" | "qoi" | "avif") {
         lines.push(tl!("This format saves 8 bits per channel.").to_string());
     }
-    if std::path::Path::new(&target(f)).exists() {
+    let path = target(f);
+    if std::path::Path::new(&path).exists() {
         lines.push(tl!("A file with this name already exists and will be replaced.").to_string());
+    }
+    let active = app.session.active_index();
+    if app.session.documents().iter().enumerate().any(|(i, d)| Some(i) != active && d.path.as_deref().is_some_and(|p| same_file(p, &path))) {
+        lines.push(tl!("This file is open in Prism; that tab won't update.").to_string());
     }
     (!lines.is_empty()).then(|| lines.join(" "))
 }
@@ -333,21 +429,64 @@ fn size_text(bytes: u64) -> String {
     if mb >= 1.0 { format!("{mb:.1} MB") } else { format!("{:.0} KB", (bytes as f64 / 1024.0).max(1.0)) }
 }
 
-/// The row label, right-aligned in the label column.
+/// The row label, left-aligned in the label column: rows start on the same edge as the title
+/// and the options below them.
 fn label(ui: &mut egui::Ui, t: &Tokens, text: &str) {
-    ui.allocate_ui_with_layout(egui::vec2(LABEL_WIDTH, 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.add(egui::Label::new(egui::RichText::new(text).color(t.text_dim)).selectable(false).truncate());
-    });
+    // A fixed-width cell, so every row's control starts on the same line.
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(label_width(ui), 24.0), egui::Sense::hover());
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    ui.painter().text(rect.left_center(), egui::Align2::LEFT_CENTER, text, font, t.text_dim);
+}
+
+/// Every row label the window can show: the label column is as wide as the longest of them in
+/// the UI language, so it is snug but doesn't move when Advanced opens.
+const ROW_LABELS: [&str; 13] =
+    ["Name", "Folder", "Location", "Format", "File size", "Quality", "Layers", "Include", "Groups", "Size", "File names", "Compression", "Color detail"];
+
+fn label_key() -> egui::Id {
+    egui::Id::new("save-label-width")
+}
+
+/// Measures the label column for this frame (see [`ROW_LABELS`]).
+fn measure_labels(ui: &egui::Ui) {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let widest =
+        ROW_LABELS.iter().map(|l| ui.painter().layout_no_wrap(tl!(l).to_string(), font.clone(), egui::Color32::WHITE).size().x).fold(0.0_f32, f32::max);
+    let width = (widest.ceil() + 2.0).clamp(32.0, 140.0);
+    ui.data_mut(|d| d.insert_temp(label_key(), width));
 }
 
 /// Width of the label column (the controls line up after it).
-const LABEL_WIDTH: f32 = 72.0;
+fn label_width(ui: &egui::Ui) -> f32 {
+    ui.data(|d| d.get_temp::<f32>(label_key())).unwrap_or(72.0)
+}
+
+/// Where the controls start: past the label column and its gap.
+fn column(ui: &egui::Ui) -> f32 {
+    label_width(ui) + ui.spacing().item_spacing.x
+}
 /// The window's content width.
-pub const WIDTH: f32 = 480.0;
+pub const WIDTH: f32 = 420.0;
+
+fn footer_key() -> egui::Id {
+    egui::Id::new("save-footer")
+}
+
+/// The button row's left side: the estimated file size, beside Cancel and Save.
+pub fn footer(ui: &mut egui::Ui) {
+    let Some(text) = ui.data(|d| d.get_temp::<Option<String>>(footer_key())).flatten() else { return };
+    let t = Tokens::get(ui.ctx());
+    // Centred on the buttons' row only. Centred in the space left (`with_layout`) it would sit in
+    // the middle of last frame's taller window after Advanced folds, and keep the window that tall.
+    let row = egui::vec2(ui.available_width(), ui.min_rect().height().max(1.0));
+    ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.label(egui::RichText::new(text).size(11.5).color(t.text_faint));
+    });
+}
 
 fn note(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.horizontal(|ui| {
-        ui.add_space(LABEL_WIDTH + ui.spacing().item_spacing.x);
+        ui.add_space(column(ui));
         ui.add(egui::Label::new(egui::RichText::new(text).size(11.5).color(t.text_faint)).wrap());
     });
 }
@@ -397,6 +536,7 @@ fn fold(ui: &mut egui::Ui, t: &Tokens, open: &mut bool, text: &str) {
 /// folded away until searched for or asked for. Enter takes the first match.
 fn format_picker(app: &PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let current = s(f, "format", "psd").to_string();
+    let per_layer = b(f, "perLayer", false);
     let shown = fmt_of(&current).map_or(current.to_uppercase(), |m| m.label.to_string());
     let search_id = ui.id().with("save-format-search");
     let mut picked: Option<&'static str> = None;
@@ -424,7 +564,7 @@ fn format_picker(app: &PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             let mut refocus = pending && !focused;
             let ql = q.trim().to_lowercase();
             let matches = |m: &Fmt| {
-                writable(m.key)
+                offered(m.key, per_layer)
                     && (ql.is_empty()
                         || m.key.contains(&ql)
                         || m.label.to_lowercase().contains(&ql)
@@ -445,7 +585,8 @@ fn format_picker(app: &PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             };
             egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                 if ql.is_empty() {
-                    let recent: Vec<&'static Fmt> = app.ui.save.recent_formats.iter().filter_map(|k| fmt_of(k)).filter(|m| writable(m.key)).take(2).collect();
+                    let recent: Vec<&'static Fmt> =
+                        app.ui.save.recent_formats.iter().filter_map(|k| fmt_of(k)).filter(|m| offered(m.key, per_layer)).take(2).collect();
                     if !recent.is_empty() {
                         heading(ui, tl!("Recent"));
                         for m in recent {
@@ -504,8 +645,11 @@ fn format_picker(app: &PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
 fn location_picker(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let dir = s(f, "dir", ".").to_string();
     // Desktop and Downloads by their names in the UI language; any other folder by its own name.
-    let specials: Vec<(String, &str)> =
-        home().map(|h| vec![(h.join("Desktop").to_string_lossy().into_owned(), tl!("Desktop")), (h.join("Downloads").to_string_lossy().into_owned(), tl!("Downloads"))]).unwrap_or_default();
+    let specials: Vec<(String, &str)> = home()
+        .map(|h| {
+            vec![(h.join("Desktop").to_string_lossy().into_owned(), tl!("Desktop")), (h.join("Downloads").to_string_lossy().into_owned(), tl!("Downloads"))]
+        })
+        .unwrap_or_default();
     let name_of = |d: &str| {
         specials.iter().find(|(p, _)| p == d).map_or_else(|| d.rsplit(['/', '\\']).find(|p| !p.is_empty()).unwrap_or(d).to_string(), |(_, t)| t.to_string())
     };
@@ -528,56 +672,97 @@ fn location_picker(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
     let shown = options.iter().find(|(d, _)| *d == dir).map_or_else(|| name_of(&dir), |(_, t)| t.clone());
     let mut chosen = None;
     let mut other = false;
-    let r = egui::ComboBox::from_id_salt("save-location").selected_text(shown).width(ui.available_width()).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
-        for (d, text) in &options {
-            if ui.selectable_label(*d == dir, text).on_hover_text(d).clicked() {
-                chosen = Some(d.clone());
+    let r =
+        egui::ComboBox::from_id_salt("save-location").selected_text(shown).width(ui.available_width()).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
+            for (d, text) in &options {
+                if ui.selectable_label(*d == dir, text).on_hover_text(d).clicked() {
+                    chosen = Some(d.clone());
+                }
             }
-        }
-        ui.separator();
-        if ui.selectable_label(false, tl!("Other Folder…")).clicked() {
-            other = true;
-        }
-    });
+            ui.separator();
+            // Saving each layer names a folder; otherwise the system save panel, where clicking an
+            // existing file means overwriting it.
+            let more = if b(f, "perLayer", false) { tl!("Other Folder…") } else { tl!("Other Location…") };
+            if ui.selectable_label(false, more).clicked() {
+                other = true;
+            }
+        });
     r.response.on_hover_text(&dir);
     if let Some(d) = chosen {
         f.insert("dir".into(), json!(d));
     }
     if other {
-        let picked = app.pick_folder(|app, dir| {
+        other_location(app, f);
+        // The Save window has a window of its own: the panel opens on it, not behind it.
+        app.file_dialog_on(ui.ctx().viewport_id());
+    }
+}
+
+/// Location › Other Location… (Other Folder… when saving each layer): ask the system, and fill the
+/// Save window from the answer on a later frame.
+fn other_location(app: &mut PrismApp, f: &mut Map<String, Value>) {
+    let picked = if b(f, "perLayer", false) {
+        app.pick_folder(|app, dir| {
             if let Some(d) = app.ui.dialogs.iter_mut().find(|d| owns(&d.fields)) {
                 d.fields.insert("dir".into(), json!(dir));
             }
             Ok(Value::Null)
-        });
-        if let Err(e) = picked
-            && e != crate::file_dialog::CANCELLED
-        {
-            f.insert("__error".into(), json!(e));
-        }
+        })
+    } else {
+        app.pick_location(&target(f), |app, path| {
+            if let Some(d) = app.ui.dialogs.iter_mut().find(|d| owns(&d.fields)) {
+                apply_picked(&mut d.fields, &path);
+            }
+            Ok(Value::Null)
+        })
+    };
+    if let Err(e) = picked
+        && e != crate::file_dialog::CANCELLED
+    {
+        f.insert("__error".into(), json!(e));
     }
 }
 
 pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(WIDTH);
+    measure_labels(ui);
     ui.spacing_mut().item_spacing.y = 8.0;
     let per_layer = b(f, "perLayer", false);
     // Name (or, per layer, the folder to create) with the extension the format writes.
     ui.horizontal(|ui| {
         label(ui, &t, if per_layer { tl!("Folder") } else { tl!("Name") });
         let mut name = s(f, "name", "").to_string();
-        let ext = if per_layer { "/".to_string() } else { format!(".{}", s(f, "format", "psd")) };
-        let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width((ui.available_width() - 56.0).max(80.0)));
-        ui.add_sized([48.0, 24.0], egui::Label::new(egui::RichText::new(ext).color(t.text_dim)).selectable(false));
-        if r.changed() {
+        let ext = if per_layer { "/".to_string() } else { format!(".{}", extension(f)) };
+        // The extension sits inside the field's right end, so this row ends where the dropdowns do.
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let ext_width = ui.painter().layout_no_wrap(ext.clone(), font.clone(), t.text_dim).size().x;
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut name)
+                .desired_width(ui.available_width())
+                .margin(egui::Margin { left: 10, right: (ext_width + 14.0).round() as i8, top: 4, bottom: 4 }),
+        );
+        let at = egui::pos2(r.rect.right() - 10.0, r.rect.center().y);
+        ui.painter().text(at, egui::Align2::RIGHT_CENTER, &ext, font, t.text_faint);
+        // A full path pasted in (or typed, once the field is left) is taken like a file picked in
+        // Other Location…: the system panel's ⌘⇧G only goes to folders, it doesn't pick a file.
+        let pasted = r.changed() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
+        if (pasted || r.lost_focus()) && !per_layer && path_in_name(&name).is_some() {
+            f.insert("name".into(), json!(name));
+            take_typed_path(f);
+        } else if r.changed() {
             // Typing an extension picks its format: "logo.jpg" saves as JPEG.
             if let Some((stem, ext)) = name.rsplit_once('.')
-                && let Some(key) = key_for_extension(ext)
+                && let Some(key) = key_for_extension(ext).filter(|k| offered(k, per_layer))
                 && !stem.is_empty()
             {
                 f.insert("format".into(), json!(key));
+                f.insert("ext".into(), json!(ext));
                 name = stem.to_string();
+            }
+            // The last plain name, kept for a folder pasted in later.
+            if path_in_name(&name).is_none() {
+                f.insert("__name".into(), json!(name));
             }
             f.insert("name".into(), json!(name));
             f.remove("__error");
@@ -594,16 +779,30 @@ pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if let Some(w) = warning(app, f) {
         note(ui, &t, &w);
     }
+    ui.add_space(2.0);
+    crate::widgets::hairline(ui);
     ui.horizontal(|ui| {
-        ui.add_space(LABEL_WIDTH + ui.spacing().item_spacing.x);
         let mut on = per_layer;
         if crate::widgets::checkbox(ui, &mut on, "Save each layer as a file").changed() {
             f.insert("perLayer".into(), json!(on));
+            // Layers are saved as images: an original format gives way to the last image format.
+            if on && original(s(f, "format", "psd")) {
+                let image = app.ui.save.recent_formats.iter().find(|k| offered(k, true)).cloned().unwrap_or_else(|| "png".into());
+                f.insert("format".into(), json!(image));
+            }
         }
     });
     // Open as it was last time; the field lets automation open it too.
     let mut advanced = b(f, "advanced", app.ui.save.advanced);
     let was = advanced;
+    // The size of the file this saves goes in the button row (`footer`); per layer, the warning
+    // line counts the files instead.
+    let size = if b(f, "perLayer", false) {
+        None
+    } else {
+        estimate(app, ui, f).map(|bytes| crate::i18n::fmt(tl!("Estimated size {size}"), &[("size", &size_text(bytes))]))
+    };
+    ui.data_mut(|d| d.insert_temp(footer_key(), size));
     fold(ui, &t, &mut advanced, tl!("Advanced"));
     if advanced != was {
         app.ui.save.advanced = advanced;
@@ -613,16 +812,10 @@ pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         advanced_body(app, ui, &t, f);
     }
     if let Some(e) = f.get("__error").and_then(Value::as_str) {
-        ui.colored_label(t.danger, e);
-    }
-    // Size (or file count) for the footer, left of the buttons.
-    let footer = if b(f, "perLayer", false) {
-        None
-    } else {
-        estimate(app, ui, f).map(|bytes| crate::i18n::fmt(tl!("Estimated size {size}"), &[("size", &size_text(bytes))]))
-    };
-    if let Some(text) = footer {
-        ui.label(egui::RichText::new(text).size(11.5).color(t.text_faint));
+        ui.horizontal(|ui| {
+            ui.add_space(column(ui));
+            ui.add(egui::Label::new(egui::RichText::new(e).color(t.danger)).wrap());
+        });
     }
 }
 
@@ -630,7 +823,7 @@ fn advanced_body(app: &PrismApp, ui: &mut egui::Ui, t: &Tokens, f: &mut Map<Stri
     let format = s(f, "format", "psd").to_string();
     let direct_id = ui.id().with("save-direct");
     let mut direct = ui.data(|d| d.get_temp::<bool>(direct_id)).unwrap_or(false);
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 12, ..Default::default() }).show(ui, |ui| {
+    egui::Frame::NONE.show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 6.0;
         match format.as_str() {
             "png" => {
@@ -690,7 +883,10 @@ fn advanced_body(app: &PrismApp, ui: &mut egui::Ui, t: &Tokens, f: &mut Map<Stri
             per_layer_options(app, ui, t, f);
         }
         if matches!(format.as_str(), "png" | "jpg" | "webp") {
-            fold(ui, t, &mut direct, tl!("Direct settings"));
+            ui.horizontal(|ui| {
+                ui.add_space(column(ui));
+                fold(ui, t, &mut direct, tl!("Direct settings"));
+            });
             if direct {
                 direct_settings(ui, t, f, &format);
             }
@@ -705,7 +901,7 @@ fn per_layer_options(app: &PrismApp, ui: &mut egui::Ui, t: &Tokens, f: &mut Map<
             label(ui, t, title);
             let mut v = s(f, key, options.first().map_or("", |o| o.0)).to_string();
             let opts: Vec<(String, &str)> = options.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-            if crate::widgets::dropdown(ui, id, &mut v, &opts, 220.0) {
+            if crate::widgets::dropdown(ui, id, &mut v, &opts, ui.available_width()) {
                 f.insert(key.into(), json!(v));
             }
         });
@@ -715,14 +911,14 @@ fn per_layer_options(app: &PrismApp, ui: &mut egui::Ui, t: &Tokens, f: &mut Map<
     ui.horizontal(|ui| {
         label(ui, t, tl!("Size"));
         let mut trim = b(f, "trim", false);
-        if crate::widgets::dropdown(ui, "save-trim", &mut trim, &[(false, "Keep canvas size"), (true, "Trim to content")], 220.0) {
+        if crate::widgets::dropdown(ui, "save-trim", &mut trim, &[(false, "Keep canvas size"), (true, "Trim to content")], ui.available_width()) {
             f.insert("trim".into(), json!(trim));
         }
     });
     ui.horizontal(|ui| {
         label(ui, t, tl!("File names"));
         let mut pattern = s(f, "pattern", "{layer}").to_string();
-        if ui.add(egui::TextEdit::singleline(&mut pattern).desired_width(220.0)).on_hover_text(tl!("{layer}, {index} and {document} are replaced")).changed() {
+        if ui.add(egui::TextEdit::singleline(&mut pattern).desired_width(ui.available_width()).margin(egui::Margin { left: 10, right: 10, top: 4, bottom: 4 })).on_hover_text(tl!("{layer}, {index} and {document} are replaced")).changed() {
             f.insert("pattern".into(), json!(pattern));
         }
     });
@@ -847,6 +1043,7 @@ pub fn confirm(app: &mut PrismApp, f: &Map<String, Value>) -> Result<Value, Stri
             let count = r["files"].as_array().map_or(0, Vec::len);
             app.ui.status = crate::i18n::fmt(tl!("Saved {count} files in {folder}"), &[("count", &count.to_string()), ("folder", &target(f))]);
             app.ui.status_error = false;
+            crate::notices::toast(app, app.ui.status.clone());
             r
         })
     } else {

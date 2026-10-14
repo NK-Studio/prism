@@ -217,3 +217,190 @@ fn the_format_list_searches_and_enter_takes_the_first_match() {
     let (_, f) = save_dialog(h.state());
     assert_eq!(s(&f, "format", ""), "jpg", "picked, and the window is still open: Enter didn't also save");
 }
+
+#[test]
+fn saving_each_layer_offers_only_image_formats() {
+    assert!(offered("psd", false) && !offered("psd", true) && !offered("prism", true) && offered("png", true) && offered("tif", true));
+    let (app, _) = app();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    crate::PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(2);
+    crate::save_ui::open(h.state_mut(), false).unwrap();
+    h.run_steps(3);
+    // Ticking the box while PSD is chosen moves to an image format.
+    use egui_kittest::kittest::Queryable;
+    h.get_by_label("Save each layer as a file").click();
+    h.run_steps(3);
+    let (id, f) = save_dialog(h.state());
+    assert_eq!((b(&f, "perLayer", false), s(&f, "format", "")), (true, "png"));
+    h.get_all_by_role(egui::accesskit::Role::ComboBox).nth(1).unwrap().click();
+    h.run_steps(3);
+    assert!(h.query_by_label("PSD   Keeps layers").is_none(), "originals aren't offered per layer");
+    assert!(h.query_by_label("PNG   Lossless, keeps transparency").is_some());
+    // An original set some other way (automation) is refused, with the reason shown.
+    set(h.state_mut(), id, json!({"format": "psd"}));
+    assert!(crate::dialogs::confirm(h.state_mut(), id).is_err());
+    assert!(save_dialog(h.state()).1.get("__error").is_some());
+}
+
+/// Other Location…: a file picked in the system save panel means "overwrite this one".
+#[test]
+fn a_picked_file_sets_the_folder_name_and_format() {
+    let picked = |path: &str| {
+        let mut f = Map::new();
+        f.insert("name".into(), json!("Untitled-1"));
+        f.insert("dir".into(), json!("/start"));
+        f.insert("format".into(), json!("png"));
+        apply_picked(&mut f, path);
+        f
+    };
+    let f = picked("/work/art/logo.png");
+    assert_eq!((s(&f, "dir", ""), s(&f, "name", ""), s(&f, "format", "")), ("/work/art", "logo", "png"));
+    assert_eq!(target(&f), "/work/art/logo.png");
+    // The format follows the file, and the file keeps its own spelling: picking photo.jpeg
+    // overwrites it rather than writing photo.jpg beside it.
+    let f = picked("/work/photo.jpeg");
+    assert_eq!(s(&f, "format", ""), "jpg");
+    assert_eq!(target(&f), "/work/photo.jpeg");
+    assert_eq!(target(&picked("/work/a.b.PNG")), "/work/a.b.PNG");
+    assert_eq!(target(&picked("/work/scan.tiff")), "/work/scan.tiff");
+    // Another format chosen afterwards writes its own extension again.
+    let mut f = picked("/work/photo.jpeg");
+    f.insert("format".into(), json!("webp"));
+    assert_eq!(target(&f), "/work/photo.webp");
+    // No extension: the name and folder, with the format kept.
+    let f = picked("/work/poster");
+    assert_eq!((s(&f, "name", ""), s(&f, "format", "")), ("poster", "png"));
+    assert_eq!(target(&f), "/work/poster.png");
+    // A type Prism can't write: folder and name taken, the format kept, and the reason shown.
+    let f = picked("/work/notes.txt");
+    assert_eq!((s(&f, "dir", ""), s(&f, "name", ""), s(&f, "format", "")), ("/work", "notes", "png"));
+    assert!(s(&f, "__error", "").contains(".txt"), "{f:?}");
+    // A folder (chosen in the panel) keeps the name.
+    let dir = std::env::temp_dir().to_string_lossy().trim_end_matches('/').to_string();
+    let f = picked(&dir);
+    assert_eq!((s(&f, "dir", ""), s(&f, "name", ""), s(&f, "format", "")), (dir.as_str(), "Untitled-1", "png"));
+    // A file at the root and odd input never panic.
+    assert_eq!(target(&picked("/x.png")), "/x.png");
+    for odd in ["", "/", ".png", "..", "/a/.", "C:\\pics\\shot.jpg"] {
+        picked(odd);
+    }
+    assert_eq!(target(&picked("C:\\pics\\shot.jpg")), "C:\\pics/shot.jpg");
+}
+
+/// The whole round trip: Other Location… asks the system save panel (with no file types, so any
+/// file can be clicked) and the Save window then saves over the picked file.
+#[test]
+fn other_location_saves_over_the_picked_file() {
+    let (mut app, written) = app();
+    let (show, asked) = crate::file_dialog::fake(vec![Some(crate::FileDialogAnswer::SaveTo("/work/old/photo.jpeg".into()))]);
+    app.services.file_dialog = Some(show);
+    let ctx = egui::Context::default();
+    crate::menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    let (id, mut f) = save_dialog(&app);
+    set(&mut app, id, json!({"name": "Untitled-1", "dir": "/start", "format": "png"}));
+    f.insert("name".into(), json!("Untitled-1"));
+    f.insert("dir".into(), json!("/start"));
+    f.insert("format".into(), json!("png"));
+    other_location(&mut app, &mut f);
+    let mut out = ctx.run_ui(Default::default(), |ui| app.poll_file_dialog(ui.ctx(), None));
+    out.textures_delta.clear();
+    assert!(matches!(asked.borrow().as_slice(), [crate::FileDialogRequest::Location { suggested }] if suggested == "/start/Untitled-1.png"), "{:?}", asked.borrow());
+    let (_, f) = save_dialog(&app);
+    assert_eq!((s(&f, "dir", ""), s(&f, "name", ""), s(&f, "format", "")), ("/work/old", "photo", "jpg"));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(saves(&written).last().unwrap().0, "/work/old/photo.jpeg");
+}
+
+/// Saving over a file another tab has open warns that the tab won't follow.
+#[test]
+fn saving_over_a_file_open_in_another_tab_warns() {
+    let (mut app, _) = app();
+    let open = std::env::temp_dir().join("prism-open-elsewhere.png").to_string_lossy().into_owned();
+    // This tab has the file open; a new document becomes the one being saved.
+    app.session.active_mut().unwrap().path = Some(open.clone());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let mut f = Map::new();
+    f.insert("format".into(), json!("png"));
+    apply_picked(&mut f, &open);
+    let w = warning(&app, &f).unwrap_or_default();
+    assert!(w.contains("open in Prism"), "{w}");
+    f.insert("name".into(), json!("somewhere-else"));
+    assert!(!warning(&app, &f).unwrap_or_default().contains("open in Prism"));
+}
+
+/// A full path pasted into Name is its folder, name and type: the system panel's ⌘⇧G only goes
+/// to folders, so this is how a known file path is chosen.
+#[test]
+fn a_full_path_in_the_name_is_taken_as_the_location() {
+    let typed = |name: &str| {
+        let mut f = Map::new();
+        f.insert("name".into(), json!(name));
+        f.insert("__name".into(), json!("Untitled-1"));
+        f.insert("dir".into(), json!("/start"));
+        f.insert("format".into(), json!("psd"));
+        let took = take_typed_path(&mut f);
+        (took, f)
+    };
+    let (took, f) = typed("/Users/me/Desktop/close.png");
+    assert!(took);
+    assert_eq!((s(&f, "dir", ""), s(&f, "name", ""), s(&f, "format", "")), ("/Users/me/Desktop", "close", "png"));
+    assert_eq!(target(&f), "/Users/me/Desktop/close.png");
+    assert!(validate(&f).is_ok());
+    // A folder keeps the name the window had.
+    let dir = std::env::temp_dir().to_string_lossy().trim_end_matches('/').to_string();
+    let (_, f) = typed(&format!("{dir}/"));
+    assert_eq!((s(&f, "dir", ""), s(&f, "name", "")), (dir.as_str(), "Untitled-1"));
+    let (_, f) = typed(&dir);
+    assert_eq!((s(&f, "dir", ""), s(&f, "name", "")), (dir.as_str(), "Untitled-1"));
+    // ~ is the home folder; a Windows drive path works too.
+    if let Some(h) = home() {
+        let (_, f) = typed("~/art/x.jpg");
+        assert_eq!(target(&f), format!("{}/art/x.jpg", h.to_string_lossy()));
+    }
+    assert!(typed("C:\\pics\\shot.jpg").0);
+    // A plain name, or one with a relative slash, is left alone (the slash is still refused).
+    assert!(!typed("logo").0);
+    let (took, f) = typed("a/b");
+    assert!(!took);
+    assert!(validate(&f).is_err());
+    // Saving each layer names a folder: left alone.
+    let mut f = Map::new();
+    f.insert("name".into(), json!("/x/y.png"));
+    f.insert("perLayer".into(), json!(true));
+    assert!(!take_typed_path(&mut f));
+}
+
+/// Enter or Save with a full path still in Name saves to that path.
+#[test]
+fn saving_with_a_path_in_the_name_writes_there() {
+    let (mut app, written) = app();
+    let ctx = egui::Context::default();
+    crate::menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    let (id, _) = save_dialog(&app);
+    set(&mut app, id, json!({"name": "/work/out/close.png", "dir": "/start", "format": "psd"}));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(saves(&written).last().unwrap().0, "/work/out/close.png");
+}
+
+/// Folding Advanced must let the window shrink: the estimated size sits on the buttons' row, not
+/// in the middle of the space left over from the taller window (which kept it that tall).
+#[test]
+fn the_footer_stays_on_the_buttons_row() {
+    let row = std::cell::Cell::new(egui::Rect::NOTHING);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(480.0, 900.0)).build_ui(|ui| {
+        ui.data_mut(|d| d.insert_temp(footer_key(), Some("Estimated size 816 KB".to_string())));
+        let r = ui
+            .with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                ui.add_sized([84.0, 30.0], egui::Button::new("Save"));
+                footer(ui);
+            })
+            .response
+            .rect;
+        row.set(r);
+    });
+    h.run();
+    drop(h);
+    let row = row.get();
+    assert!(row.height() <= 31.0, "the row grew to {row:?}");
+}

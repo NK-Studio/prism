@@ -52,7 +52,8 @@ impl Sources {
     pub fn system() -> Self {
         Self {
             locale: || match crate::i18n::current().code() {
-                code @ ("ja" | "ko" | "zh-hans" | "zh-hant") => Some(code.to_string()),
+                // Korean UI: Hangul first. English: the system locale orders the CJK scripts.
+                "ko" => Some("ko".to_string()),
                 _ => cjk::ui_locale().map(str::to_string),
             },
             files: cjk::font_files,
@@ -329,21 +330,17 @@ mod tests {
     fn changing_language_resets_the_loader_once_and_reorders_scripts() {
         crate::i18n::with_language(crate::i18n::Lang::EN, || {
             let ctx = egui::Context::default();
-            crate::i18n::sync_context(&ctx, "ja");
+            crate::i18n::sync_context(&ctx, "ko");
             ctx.with_plugin::<CjkFontPlugin, _>(|plugin| {
-                assert_eq!(plugin.0.order()[0], CjkScript::Japanese);
+                assert_eq!(plugin.0.order()[0], CjkScript::Korean);
                 plugin.0.tried = plugin.0.order().to_vec();
                 plugin.0.last_resort_tried = true;
             })
             .expect("font plugin");
-            crate::i18n::sync_context(&ctx, "ja");
-            assert!(ctx.with_plugin::<CjkFontPlugin, _>(|plugin| plugin.0.exhausted()).expect("font plugin"), "idle frames must not reload fonts");
             crate::i18n::sync_context(&ctx, "ko");
-            ctx.with_plugin::<CjkFontPlugin, _>(|plugin| {
-                assert!(!plugin.0.exhausted());
-                assert_eq!(plugin.0.order()[0], CjkScript::Korean);
-            })
-            .expect("font plugin");
+            assert!(ctx.with_plugin::<CjkFontPlugin, _>(|plugin| plugin.0.exhausted()).expect("font plugin"), "idle frames must not reload fonts");
+            crate::i18n::sync_context(&ctx, "en");
+            assert!(!ctx.with_plugin::<CjkFontPlugin, _>(|plugin| plugin.0.exhausted()).expect("font plugin"), "a language change reloads once");
         });
     }
 

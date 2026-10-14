@@ -5,25 +5,14 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 
 ## Supported languages
 
+Prism speaks **English and Korean** only.
+
 | Language | Preference code | Integer plural forms |
 |---|---|---|
 | English | `en` | one / other |
-| 简体中文 | `zh-hans` | one form |
-| 日本語 | `ja` | one form |
 | 한국어 | `ko` | one form |
-| Русский | `ru` | one / few / many |
-| Français | `fr` | singular for 0 and 1 / plural for 2+ |
-| 繁體中文 | `zh-hant` | one form |
-| Español | `es` | one / other |
-| Čeština | `cs` | one / few / other |
-| Deutsch | `de` | one / other |
-| Bahasa Indonesia | `id` | one form |
-| Português (Brasil) | `pt-br` | singular for 0 and 1 / plural for 2+ |
-| Italiano | `it` | one / other |
-| Polski | `pl` | one / few (2–4, not 12–14) / many |
-| Ελληνικά | `el` | one / other |
 
-Every non-English catalog covers the current menu labels, `tl!` literals, blend mode names,
+The Korean catalog covers the current menu labels, `tl!` literals, blend mode names,
 and generated preference labels. Tests enforce that coverage. This does not include every
 engine error or status message: those remain English, as do automation command IDs and
 user-provided document, layer and preset names.
@@ -38,9 +27,9 @@ documents, undo history and tools remain available throughout a language change.
 
 The existing preference store saves the selection for future launches. `auto` follows the
 native system locale; an unsupported code follows the same fallback. Regional tags such as
-`fr-CA`, `ko-KR` and `zh-CN` resolve to the corresponding registered catalog. Traditional and
-Simplified Chinese remain distinct. Every Portuguese locale (`pt`, `pt-BR`, `pt-PT`) uses the
-Brazilian Portuguese catalog.
+`ko-KR` and `en-GB` resolve to Korean or English. Any other system language (Japanese, French, …)
+is skipped, and with none of the two in the list the UI uses English. A preference saved by an
+older version for a removed language (`ja`, `fr`, …) is treated the same way.
 
 ### First launch and system language
 
@@ -83,24 +72,23 @@ file-resource hot reload are not implemented.
 
 ## Fonts
 
-The native lazy CJK font loader prioritises the selected Japanese, Korean or Chinese script.
+The native lazy CJK font loader puts Hangul first when the UI is Korean. In English it keeps the
+system's CJK fallback order, so Japanese and Chinese document names and text still render.
 Switching languages rebuilds the font definitions and resets the existing loader, so fonts
 removed from the definitions can be registered again. Idle frames keep their font cache.
-Other languages retain the system's CJK fallback preference for document names and text.
 
 Font files are not added to this repository. Native rendering uses installed system fonts
 and the optional craft-fonts build input; see [Fonts](development.md#fonts-craft-fonts).
 Switching catalogs does not supply missing fonts.
 
-## Add or maintain a catalog
+## Maintain the Korean catalog
 
-1. Add `<code>.tsv` under `crates/ui-egui/src/i18n`, following the header in `ja.tsv`.
-2. Register its code, native name and plural rule in `i18n::LANGUAGES`.
-3. Translate the meaning of the English source keys. Preserve `{name}` placeholders, escaped
+1. Edit `crates/ui-egui/src/i18n/ko.tsv`, following its header.
+2. Translate the meaning of the English source keys. Preserve `{name}` placeholders, escaped
    characters and the trailing `…` on dialog commands. Use `@id` to disambiguate a command
    label and `@plural` for count-sensitive text. Keep product names such as Prism.
-4. Set `complete_menus` when the catalog covers all enforced keys. Add source and license
-   attribution for translation assets, then run the catalog and shell tests.
+3. Every `tl!` literal and menu string needs a Korean entry: the catalog and shell tests fail
+   otherwise. Then run:
 
 ```sh
 cargo test -p prism-ui-egui --locked

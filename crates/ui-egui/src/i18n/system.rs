@@ -74,16 +74,14 @@ mod tests {
     #[test]
     fn system_preferences_are_negotiated_in_order() {
         for (tags, expected) in [
-            (vec!["ja-JP", "en-US"], "ja"),
-            (vec!["fr-CA", "en-US"], "fr"),
+            (vec!["ko-KR", "en-US"], "ko"),
+            // Languages Prism doesn't speak are skipped: the next one that it does wins.
+            (vec!["ja-JP", "ko-KR"], "ko"),
             (vec!["sv-SE", "ko-KR", "fr-FR"], "ko"),
-            (vec!["zh-Hant-HK", "zh-CN"], "zh-hant"),
-            (vec!["zh-Hans-CN", "zh-TW"], "zh-hans"),
-            (vec!["en-US", "ru-RU"], "en"),
+            (vec!["fr-CA", "en-US"], "en"),
+            (vec!["zh-Hant-HK", "zh-CN"], "en"),
+            (vec!["en-US", "ko-KR"], "en"),
             (vec!["sv-SE", "ar-SA"], "en"),
-            (vec!["de-AT", "en-US"], "de"),
-            (vec!["pt-PT"], "pt-br"),
-            (vec!["it-IT", "en-US"], "it"),
             (vec![], "en"),
         ] {
             with_system_tags(&tags, || assert_eq!(system_lang().code(), expected));
@@ -93,7 +91,7 @@ mod tests {
     #[test]
     fn test_system_preferences_restore_and_remain_thread_local() {
         with_system_tags(&["ko-KR"], || {
-            with_system_tags(&["fr-FR"], || assert_eq!(system_lang().code(), "fr"));
+            with_system_tags(&["en-GB"], || assert_eq!(system_lang().code(), "en"));
             assert_eq!(system_lang().code(), "ko");
             std::thread::spawn(|| assert_eq!(system_lang(), Lang::EN)).join().expect("locale test thread");
             assert!(std::panic::catch_unwind(|| with_system_tags(&["ja-JP"], || panic!("test unwind"))).is_err());

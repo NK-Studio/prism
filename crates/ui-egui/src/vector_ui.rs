@@ -5,7 +5,6 @@
 use egui::{Color32, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use prism_doc::vector::Path;
 use prism_doc::{Document, LayerContent};
-use prism_geom::Affine;
 use prism_vector::edit::Hit;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -27,6 +26,56 @@ pub struct PenPath {
     /// Re-dragging the final anchor changes its outgoing control only; the incoming curve stays put.
     #[serde(skip)]
     pub adjusting_last: bool,
+    /// Undo and Redo while drawing (⌘Z / ⇧⌘Z): the path before each press that changed it (an
+    /// anchor added with its handles, or the last anchor's handle broken), as in Photoshop.
+    #[serde(skip)]
+    pub undo: Vec<PenState>,
+    #[serde(skip)]
+    pub redo: Vec<PenState>,
+}
+
+/// A Pen path's knots and unlinked (cusp) knots: one step of its Undo.
+pub type PenState = (Vec<[[f64; 2]; 3]>, Vec<usize>);
+
+impl PenPath {
+    /// Records the path before a press changes it (a new step clears Redo).
+    fn checkpoint(&mut self) {
+        self.undo.push((self.knots.clone(), self.unlinked.clone()));
+        self.redo.clear();
+    }
+
+    /// Steps back (`redo` false) or forward through the presses. Whether there was a step.
+    fn step(&mut self, redo: bool) -> bool {
+        let (from, to) = if redo { (&mut self.redo, &mut self.undo) } else { (&mut self.undo, &mut self.redo) };
+        let Some((knots, unlinked)) = from.pop() else { return false };
+        to.push((std::mem::replace(&mut self.knots, knots), std::mem::replace(&mut self.unlinked, unlinked)));
+        self.dragging = false;
+        self.adjusting_last = false;
+        true
+    }
+}
+
+/// While the Pen draws a path, Undo and Redo step through its presses (for every caller: menus,
+/// shortcuts, the control channel, MCP); with none left they fall through to the document's
+/// history, as in Photoshop. `None` for other commands or when there is no Pen step to take.
+pub(crate) fn pen_intercept(app: &mut PrismApp, id: &str) -> Option<Result<Value, String>> {
+    let redo = match id {
+        "edit.undo" => false,
+        "edit.redo" => true,
+        _ => return None,
+    };
+    let pen = app.ui.pen.as_mut()?;
+    pen.step(redo).then(|| Ok(json!({"pen": {"knots": pen.knots.len()}})))
+}
+
+/// Undo / Redo are enabled while the Pen has a step to take (else as the document says).
+pub(crate) fn pen_is_enabled(app: &PrismApp, id: &str) -> Option<bool> {
+    let pen = app.ui.pen.as_ref()?;
+    match id {
+        "edit.undo" if !pen.undo.is_empty() => Some(true),
+        "edit.redo" if !pen.redo.is_empty() => Some(true),
+        _ => None,
+    }
 }
 
 pub fn is_shape_tool(t: Tool) -> bool {
@@ -47,6 +96,10 @@ fn stroke_param(app: &PrismApp) -> Value {
     let o = &app.ui.tool_options;
     if o.stroke_width > 0.0 { json!({"width": o.stroke_width, "color": hex(app.session.tools.background)}) } else { Value::Null }
 }
+
+/// The rectangle corner styles the options bar and Properties offer.
+const CORNER_STYLES: [(prism_doc::CornerStyle, &str); 2] =
+    [(prism_doc::CornerStyle::Round, "Rounded corners"), (prism_doc::CornerStyle::Chamfer, "Chamfered corners")];
 
 /// Geometry of a Shape-tool drag as `shape.create` params, without fill and stroke (None when too
 /// small): ⇧ constrains proportions, ⌥ draws from the centre. Custom shapes give their box as a `rect`.
@@ -80,8 +133,12 @@ fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], m
             return None;
         }
         match tool {
-            Tool::Rectangle if o.corner_radius > 0.0 => json!({"kind": "roundedRect", "rect": rect, "radii": vec![o.corner_radius; 4]}),
-            Tool::Rectangle | Tool::CustomShape => json!({"kind": "rect", "rect": rect}),
+            Tool::Rectangle if o.corner_radius > 0.0 => {
+                json!({"kind": "roundedRect", "rect": rect, "radii": vec![o.corner_radius; 4], "corners": o.corner_style.as_str()})
+            }
+            // Sharp for now, but the corner widgets dragged later cut in the chosen style.
+            Tool::Rectangle => json!({"kind": "rect", "rect": rect, "corners": o.corner_style.as_str()}),
+            Tool::CustomShape => json!({"kind": "rect", "rect": rect}),
             Tool::EllipseShape => json!({"kind": "ellipse", "rect": rect}),
             Tool::Triangle => json!({"kind": "polygon", "rect": rect, "sides": 3}),
             _ => json!({"kind": "polygon", "rect": rect, "sides": o.polygon_sides.max(3)}),
@@ -147,8 +204,19 @@ fn pen_to_json(pen: &PenPath, closed: bool) -> Value {
 /// Pen press: close on the first anchor, reshape the last anchor's outgoing handle,
 /// or add a new anchor (dragging a new anchor pulls symmetrical handles).
 /// Cursor intent mirrors the same first/last-anchor hit tests used by `pen_down`.
-pub(crate) fn pen_cursor_asset(app: &PrismApp, p: [f64; 2]) -> u32 {
-    let Some(pen) = app.ui.pen.as_ref().filter(|pen| !pen.knots.is_empty()) else { return 1063 };
+/// With no path being drawn, the Pen's cursor says what a press does, as in Photoshop: ⌥ is
+/// Convert Point (also through its drag), and with Auto Add/Delete a segment adds an anchor and
+/// an anchor deletes it.
+pub(crate) fn pen_cursor_asset(app: &PrismApp, p: [f64; 2], mods: egui::Modifiers) -> u32 {
+    let converting = matches!(&app.ui.direct_selection.drag, Some(crate::direct_select::Drag::Edit { edit: crate::direct_select::Edit::Convert(_), .. }));
+    let Some(pen) = app.ui.pen.as_ref().filter(|pen| !pen.knots.is_empty()) else {
+        return match auto_edit_at(app, p) {
+            _ if mods.alt || converting => 1035,
+            Some((_, Hit::Segment(..))) => 1031,
+            Some((_, Hit::Anchor(_))) => 1032,
+            _ => 1063,
+        };
+    };
     let tol = pen_hit_tol(app);
     if pen_closes_at(pen, p, tol) {
         1034
@@ -227,6 +295,7 @@ pub fn pen_down(app: &mut PrismApp, x: f64, y: f64) {
         pen_commit(app, true);
         return;
     }
+    pen.checkpoint();
     // Clicking the last anchor breaks its outgoing handle without throwing away the incoming
     // curve. Dragging from that anchor then sets the outgoing handle independently (#1482).
     // This must precede adding a point, or a re-click creates a zero-length segment.
@@ -268,13 +337,169 @@ pub fn pen_up(app: &mut PrismApp) {
     }
 }
 
+/// A fingerprint of `path`'s geometry, to tell whether a hidden work path has changed since.
+fn path_fingerprint(path: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (path.inverted, format!("{:?}", path.fill_rule)).hash(&mut h);
+    for sp in &path.subpaths {
+        (sp.closed, format!("{:?}", sp.op), sp.knots.len()).hash(&mut h);
+        for k in &sp.knots {
+            for p in [k.anchor, k.in_ctrl, k.out_ctrl] {
+                (p.x.to_bits(), p.y.to_bits()).hash(&mut h);
+            }
+        }
+    }
+    h.finish()
+}
+
+/// Whether `doc`'s work path is the one hidden with ↩ (unchanged since). A hidden work path stays
+/// in the Paths panel but isn't drawn, and the path tools don't edit it, as in Photoshop.
+pub(crate) fn work_path_hidden(app: &PrismApp, doc: &Document) -> bool {
+    match (app.ui.hidden_work_path, &doc.work_path) {
+        (Some((id, print)), Some(wp)) => id == doc.id.0 && print == path_fingerprint(wp),
+        _ => false,
+    }
+}
+
+/// The active document's work path, unless hidden.
+pub(crate) fn shown_work_path(app: &PrismApp) -> Option<Path> {
+    let st = app.session.active()?;
+    (!work_path_hidden(app, &st.doc)).then(|| st.doc.work_path.clone()).flatten()
+}
+
+/// Hides the active document's work path from the canvas and deselects it in the Paths panel
+/// (the Pen's ↩, as in Photoshop). Whether there was one to hide.
+pub(crate) fn hide_work_path(app: &mut PrismApp) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let Some(wp) = st.doc.work_path.as_ref().filter(|_| !work_path_hidden(app, &st.doc)) else { return false };
+    app.ui.hidden_work_path = Some((st.doc.id.0, path_fingerprint(wp)));
+    if app.ui.selected_path.as_deref() == Some("work") {
+        app.ui.selected_path = None;
+    }
+    true
+}
+
+/// ↩ with the Pen: ends a path being drawn and, in Path mode, deselects it, so it leaves the
+/// canvas (it stays the work path in the Paths panel), as in Photoshop; with no path being
+/// drawn it hides the work path. Whether it did anything.
+pub(crate) fn pen_enter(app: &mut PrismApp) -> bool {
+    let drawing = app.ui.pen.is_some();
+    // Shape mode and a targeted vector mask finish into a layer: nothing to hide.
+    let path_mode = app.ui.tool_options.vector_mode != "shape" && targeted_vector_mask(app).is_none();
+    if drawing {
+        pen_commit(app, false);
+    }
+    let hid = path_mode && hide_work_path(app);
+    drawing || hid
+}
+
+/// Canvas key tag of the Pen's shape preview (other previews use other bits).
+const PEN_PREVIEW: u64 = 1 << 46;
+/// Id of the layer previewing a new shape layer drawn with the Pen.
+pub(crate) const PEN_PREVIEW_LAYER: prism_doc::LayerId = prism_doc::LayerId(u64::MAX - 79);
+
+/// The Pen path being drawn as a closed subpath with path operation `op`.
+fn pen_subpath(pen: &PenPath, op: prism_doc::PathOp) -> prism_doc::Subpath {
+    let p = |q: [f64; 2]| prism_geom::Point::new(q[0], q[1]);
+    let knots = pen
+        .knots
+        .iter()
+        .enumerate()
+        .map(|(i, k)| prism_doc::Knot { anchor: p(k[0]), in_ctrl: p(k[1]), out_ctrl: p(k[2]), smooth: !pen.unlinked.contains(&i) && (k[1] != k[0] || k[2] != k[0]) })
+        .collect();
+    prism_doc::Subpath { closed: true, knots, op }
+}
+
+/// The document as the shape the Pen is drawing will leave it, filled (the path taken as
+/// closed), as in Photoshop: added to the selected shape layer with the Path Operation (Shape
+/// mode, or Path mode on a selected shape layer, [`pen_shape_target`]), or a new layer in the
+/// options bar's fill and stroke (Shape mode). Cached while the path and options stay; `None`
+/// for a work path or before there are two anchors.
+pub(crate) fn pen_display_doc(app: &mut PrismApp, idx: usize) -> Option<(std::sync::Arc<Document>, u64)> {
+    use std::hash::{Hash, Hasher};
+    let o = app.ui.tool_options.clone();
+    let drawing = app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
+    // Where the path goes when finished: the selected shape layer (either mode), or a new layer.
+    let target = pen_shape_target(app);
+    let new_layer = target.is_none() && o.vector_mode == "shape" && targeted_vector_mask(app).is_none();
+    if app.ui.tool != Tool::Pen || !drawing || app.session.active_index() != Some(idx) || (target.is_none() && !new_layer) {
+        app.pen_preview = None;
+        return None;
+    }
+    let pen = app.ui.pen.clone()?;
+    let add_to = target.as_ref().map(|(id, _)| prism_doc::LayerId(*id));
+    let op_name = target.map_or_else(|| o.pen_shape_op.clone(), |(_, op)| op);
+    let op = match op_name.as_str() {
+        "subtract" => prism_doc::PathOp::Subtract,
+        "intersect" => prism_doc::PathOp::Intersect,
+        "exclude" => prism_doc::PathOp::Exclude,
+        _ => prism_doc::PathOp::Combine,
+    };
+    let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+    let st = app.session.active()?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (st.doc.id.0, st.revision, add_to.map(|l| l.0), &op_name, o.shape_fill, o.stroke_width.to_bits(), fg.map(f32::to_bits), bg.map(f32::to_bits)).hash(&mut h);
+    for k in &pen.knots {
+        k.iter().for_each(|q| (q[0].to_bits(), q[1].to_bits()).hash(&mut h));
+    }
+    pen.unlinked.hash(&mut h);
+    let print = h.finish();
+    let key = PEN_PREVIEW | (print & (PEN_PREVIEW - 1));
+    if let Some((p, doc)) = &app.pen_preview
+        && *p == print
+    {
+        return Some((doc.clone(), key));
+    }
+    let source = st.doc.clone();
+    let mut shown = (*source).clone();
+    match add_to {
+        Some(id) => {
+            let LayerContent::Shape(sh) = &mut shown.layer_mut(id)?.content else { return None };
+            sh.path.subpaths.push(pen_subpath(&pen, op));
+            sh.live = None;
+            sh.psd_raw = None;
+            prism_engine::vector_cmds::refresh_shape(&source, sh);
+        }
+        None => {
+            let solid = |c: [f32; 4]| prism_doc::Fill::Solid(prism_doc::Color::rgba(c[0], c[1], c[2], c[3]));
+            let fill = o.shape_fill.then(|| solid(fg));
+            let stroke = (o.stroke_width > 0.0).then(|| prism_doc::ShapeStroke { width: o.stroke_width, paint: solid(bg), ..Default::default() });
+            let mut sh = prism_doc::ShapeLayer { path: Path::new(vec![pen_subpath(&pen, prism_doc::PathOp::Combine)]), fill, stroke, ..Default::default() };
+            prism_engine::vector_cmds::refresh_shape(&source, &mut sh);
+            let mut layer = prism_doc::Layer::new("Shape", LayerContent::Shape(sh));
+            layer.id = PEN_PREVIEW_LAYER;
+            shown.insert_above(st.active_layer, layer);
+        }
+    }
+    let doc = std::sync::Arc::new(prism_engine::mode_cmds::display_document(&shown).unwrap_or(shown));
+    app.pen_preview = Some((print, doc.clone()));
+    Some((doc, key))
+}
+
 /// Does a finished Pen subpath join the work path rather than replace it? While the work path is
 /// selected in the Paths panel.
 fn appends_to_work_path(app: &PrismApp) -> bool {
     app.ui.selected_path.as_deref() == Some("work") && app.session.active().is_some_and(|st| st.doc.work_path.is_some())
 }
 
-/// Finish the pen path: a work path (Path mode) or a new shape layer (Shape mode).
+/// The shape layer a path the Pen finishes goes into, with the Path Operation: in Shape mode
+/// with an operation other than New Layer; in Path mode while a shape layer is selected and the
+/// work path isn't being added to (its shape path is the active path then, as in Photoshop).
+fn pen_shape_target(app: &PrismApp) -> Option<(u64, String)> {
+    let o = &app.ui.tool_options;
+    let (id, _) = active_shape_path(app)?;
+    if o.vector_mode == "shape" {
+        (o.pen_shape_op != "new").then(|| (id, o.pen_shape_op.clone()))
+    } else if targeted_vector_mask(app).is_none() && !appends_to_work_path(app) {
+        Some((id, o.pen_path_op.clone()))
+    } else {
+        None
+    }
+}
+
+/// Finish the pen path: a work path (Path mode), a new shape layer (Shape mode), or a part of
+/// the selected shape layer ([`pen_shape_target`]).
 pub fn pen_commit(app: &mut PrismApp, closed: bool) {
     let Some(pen) = app.ui.pen.take() else { return };
     if pen.knots.len() < 2 {
@@ -283,19 +508,26 @@ pub fn pen_commit(app: &mut PrismApp, closed: bool) {
     let mut path = pen_to_json(&pen, closed);
     let o = &app.ui.tool_options;
     let op = o.pen_path_op.clone();
-    let r = if o.vector_mode == "shape" {
+    let into_shape = pen_shape_target(app);
+    let mut drawn_into = crate::direct_select::PathRef::Work;
+    let r = if let Some((id, shape_op)) = into_shape {
+        // The selected shape layer takes the new component with the Path Operation.
+        drawn_into = crate::direct_select::PathRef::Layer(id);
+        let r = app.run("shape.create", json!({"kind": "path", "path": path, "addTo": id, "op": shape_op}));
+        if r.is_ok() {
+            app.ui.selected_path = Some("layer".into());
+        }
+        r
+    } else if o.vector_mode == "shape" {
         let fill = if closed && o.shape_fill { json!(hex(app.session.tools.foreground)) } else { Value::Null };
         let stroke = if closed { stroke_param(app) } else { json!({"width": o.stroke_width.max(1.0), "color": hex(app.session.tools.foreground)}) };
-        let mut q = json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke});
-        // Path Operations other than New Layer add to the selected shape layer.
-        if o.pen_shape_op != "new"
-            && let Some((id, _)) = active_shape_path(app)
-        {
-            q["addTo"] = json!(id);
-            q["op"] = json!(o.pen_shape_op);
+        let r = app.run("shape.create", json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke}));
+        if let Some(id) = r.as_ref().ok().and_then(|v| v.get("layer")).and_then(Value::as_u64) {
+            drawn_into = crate::direct_select::PathRef::Layer(id);
         }
-        app.run("shape.create", q)
+        r
     } else if let Some((id, existing)) = targeted_vector_mask(app) {
+        drawn_into = crate::direct_select::PathRef::Layer(id);
         // A targeted vector mask takes the new subpath (#196), as in Photoshop.
         let mut p = prism_engine::vector_cmds::path_json(&existing);
         if let (Some(subs), Some(new)) = (p.get_mut("subpaths").and_then(Value::as_array_mut), path.get_mut("subpaths").and_then(Value::as_array_mut)) {
@@ -313,12 +545,29 @@ pub fn pen_commit(app: &mut PrismApp, closed: bool) {
             q["op"] = json!(op);
         }
         // The drawn work path is selected in the Paths panel, as in Photoshop.
-        app.run("path.set", q).inspect(|_| app.ui.selected_path = Some("work".into()))
+        app.run("path.set", q).inspect(|_| {
+            app.ui.selected_path = Some("work".into());
+            app.ui.hidden_work_path = None;
+        })
     };
-    if let Err(e) = r {
-        app.ui.status = e;
-        app.ui.status_error = true;
+    match r {
+        // The component just drawn is selected, every anchor, as Path Selection picks it (as
+        // in Photoshop): ready for the path tools, the options bar's component menus, ⌥ and ⌘.
+        Ok(_) => select_drawn_component(app, drawn_into),
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
     }
+}
+
+/// Selects every anchor of the newest component of `want`, the path the Pen just finished into.
+fn select_drawn_component(app: &mut PrismApp, want: crate::direct_select::PathRef) {
+    use crate::direct_select::DirectSelection;
+    let Some((r, path)) = crate::direct_select::candidates(app).into_iter().find(|(r, _)| *r == want) else { return };
+    let Some(newest) = path.components().last().cloned() else { return };
+    let anchors = newest.flat_map(|s| prism_vector::edit::subpath_anchors(&path, s)).collect();
+    app.ui.direct_selection = DirectSelection { target: Some(r), anchors, ..Default::default() };
 }
 
 /// The path that path commands act on without a name: the one selected in the Paths panel, else
@@ -387,14 +636,6 @@ pub fn path_to_selection(app: &mut PrismApp, params: Value) -> Result<Value, Str
 // ---------------------------------------------------------------------------------------------
 // Path Selection
 
-/// What Path Selection edits.
-enum PathTarget {
-    Shape(u64),
-    /// The active layer's vector mask, when its Layers thumbnail is targeted (#196).
-    VectorMask(u64),
-    Work,
-}
-
 /// The targeted vector mask of the active layer, if the Layers panel targets it.
 pub(crate) fn targeted_vector_mask(app: &PrismApp) -> Option<(u64, Path)> {
     let st = app.session.active()?;
@@ -413,36 +654,6 @@ pub(crate) fn active_shape_path(app: &PrismApp) -> Option<(u64, Path)> {
     }
 }
 
-/// The path Path Selection edits: the targeted vector mask, the active shape layer's path, else
-/// the work path.
-fn target_path(app: &PrismApp) -> Option<(PathTarget, Path)> {
-    if let Some((id, p)) = targeted_vector_mask(app) {
-        return Some((PathTarget::VectorMask(id), p));
-    }
-    if let Some((id, p)) = active_shape_path(app) {
-        return Some((PathTarget::Shape(id), p));
-    }
-    app.session.active()?.doc.work_path.clone().map(|p| (PathTarget::Work, p))
-}
-
-pub fn path_selection_finish(app: &mut PrismApp, start: [f64; 2], end: [f64; 2]) {
-    let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
-    if dx.abs() + dy.abs() < 0.5 {
-        return;
-    }
-    let Some((target, path)) = target_path(app) else { return };
-    let _ = match target {
-        PathTarget::Shape(id) => app.run("shape.edit", json!({"layer": id, "move": [dx.round(), dy.round()]})),
-        PathTarget::VectorMask(id) => {
-            let moved = path.transform(&Affine::translate(dx.round(), dy.round()));
-            app.run("layer.vectorMask.edit", json!({"layer": id, "path": prism_engine::vector_cmds::path_json(&moved)}))
-        }
-        PathTarget::Work => {
-            let moved = path.transform(&Affine::translate(dx.round(), dy.round()));
-            app.run("path.set", json!({"name": "work", "path": prism_engine::vector_cmds::path_json(&moved)}))
-        }
-    };
-}
 
 // ---------------------------------------------------------------------------------------------
 // Drawing
@@ -525,7 +736,7 @@ pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform, doc
         crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);
     } else if paths {
         if vector_tool {
-            if let Some(wp) = &doc.work_path {
+            if let Some(wp) = doc.work_path.as_ref().filter(|_| !work_path_hidden(app, doc)) {
                 draw_path(wp, tool == Tool::PathSelection);
             }
             let st = app.session.active();
@@ -618,7 +829,20 @@ pub fn options_bar(app: &mut PrismApp, ui: &mut egui::Ui, tool: Tool) -> bool {
         return true;
     }
     if tool == Tool::PathSelection {
-        lbl(ui, if app.ui.vector_mask_target { "Drag to move the targeted vector mask" } else { tl!("Drag to move the active shape's path or the Work Path") });
+        // Photoshop's Path Selection bar: what the selected components do, then a hint.
+        let shape_mode = matches!(app.ui.direct_selection.target, Some(crate::direct_select::PathRef::Layer(_))) && !app.ui.vector_mask_target;
+        pen_operations_menu(app, ui, shape_mode);
+        pen_alignment_menu(app, ui);
+        pen_arrangement_menu(app, ui);
+        crate::widgets::vline(ui, 22.0);
+        let (shift, alt, cmd) = (crate::shortcuts::pretty("Shift"), crate::shortcuts::pretty("Alt"), crate::shortcuts::pretty("Cmd"));
+        lbl(
+            ui,
+            &crate::i18n::fmt(
+                tl!("Click: select a path component · {shift}-click: add · Drag: move · {alt}-drag: copy · {cmd}: Direct Selection"),
+                &[("shift", &shift), ("alt", &alt), ("cmd", &cmd)],
+            ),
+        );
         return true;
     }
     if tool == Tool::DirectSelection {
@@ -642,6 +866,7 @@ pub fn options_bar(app: &mut PrismApp, ui: &mut egui::Ui, tool: Tool) -> bool {
             crate::widgets::vline(ui, 22.0);
             lbl(ui, tl!("Radius:"));
             crate::widgets::value_field(ui, &mut o.corner_radius, 0.0..=10000.0, "px", 62.0);
+            crate::widgets::dropdown(ui, "shape-corner-style", &mut o.corner_style, &CORNER_STYLES, 104.0);
         }
         Tool::Polygon => {
             crate::widgets::vline(ui, 22.0);
@@ -701,8 +926,10 @@ fn pen_bar_target(app: &PrismApp) -> Option<(crate::direct_select::PathRef, Path
     use crate::direct_select::PathRef;
     let candidates = crate::direct_select::candidates(app);
     let want_work = app.ui.tool_options.vector_mode != "shape" && !app.ui.vector_mask_target;
-    let (r, path) = candidates.iter().find(|(r, _)| !want_work || *r == PathRef::Work).or(candidates.first()).cloned()?;
     let ds = &app.ui.direct_selection;
+    // The path with selected components (Path or Direct Selection) first.
+    let picked_path = candidates.iter().find(|(r, _)| ds.target == Some(*r) && !ds.anchors.is_empty());
+    let (r, path) = picked_path.or_else(|| candidates.iter().find(|(r, _)| !want_work || *r == PathRef::Work)).or(candidates.first()).cloned()?;
     let picked = (ds.target == Some(r) && !ds.anchors.is_empty()).then(|| {
         let mut v: Vec<usize> = ds.anchors.iter().map(|a| a[0]).collect();
         v.sort_unstable();
@@ -965,6 +1192,107 @@ fn corner_radii_patch(radii: [f64; 4], corner: usize, radius: f32) -> Value {
     json!({"radii": next})
 }
 
+/// A complete rectangle with just the field's corner rounded or cut (clockwise from top-left).
+fn corner_glyph(ui: &mut egui::Ui, key: &str, corner: usize, style: prism_doc::CornerStyle, radius: &mut f32) -> Option<u64> {
+    let names = match style {
+        prism_doc::CornerStyle::Round => ["corner-round-top-left", "corner-round-top-right", "corner-round-bottom-right", "corner-round-bottom-left"],
+        prism_doc::CornerStyle::Chamfer => ["corner-chamfer-top-left", "corner-chamfer-top-right", "corner-chamfer-bottom-right", "corner-chamfer-bottom-left"],
+    };
+    let name = names.get(corner)?;
+    let label = match corner {
+        0 => tl!("Top-left corner radius"),
+        1 => tl!("Top-right corner radius"),
+        2 => tl!("Bottom-right corner radius"),
+        _ => tl!("Bottom-left corner radius"),
+    };
+    let (rect, _) = ui.allocate_exact_size(vec2(22.0, 22.0), egui::Sense::hover());
+    let response =
+        ui.interact(rect, egui::Id::new((key, "corner-scrub", corner)), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal).on_hover_text(label);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    crate::icons::paint(ui, rect, name, 20.0, Tokens::get(ui.ctx()).text_dim);
+    let drag_id = response.id.with("origin");
+    if response.drag_started()
+        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+    {
+        let gesture = ui.ctx().cumulative_pass_nr();
+        ui.data_mut(|d| d.insert_temp(drag_id, (*radius, origin.x, gesture)));
+    }
+    let mut changed = None;
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        if let Some((base, start, gesture)) = ui.data(|d| d.get_temp::<(f32, f32, u64)>(drag_id))
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let value = (base + pointer.x - start).round().clamp(0.0, 100000.0);
+            if value.is_finite() && value != *radius {
+                *radius = value;
+                changed = Some(gesture);
+            }
+        }
+    }
+    if response.drag_stopped() {
+        ui.data_mut(|d| d.remove::<(f32, f32, u64)>(drag_id));
+    }
+    changed
+}
+
+/// Vertical gap between the rows of Properties › Shape (fields are 24 pt tall).
+const ROW_GAP: f32 = 6.0;
+
+/// Properties › Shape corner sizes, laid out like the rectangle: a link button, then a 2 × 2
+/// grid of fields, each beside a glyph of its corner. Linked (the default while all four match),
+/// a change sizes every corner. Returns the `shape.edit` patch.
+fn corner_grid(ui: &mut egui::Ui, key: &str, radii: [f64; 4], style: prism_doc::CornerStyle) -> Option<Value> {
+    let link_id = egui::Id::new(key).with("link");
+    let same = radii.iter().all(|r| (r - radii[0]).abs() < 1e-9);
+    let mut linked = ui.data(|d| d.get_temp::<bool>(link_id)).unwrap_or(same);
+    let mut out = None;
+    ui.horizontal(|ui| {
+        let tip = if linked { tl!("Unlink corner radius values") } else { tl!("Link corner radius values") };
+        // The link button sits level with the middle of the two rows of fields below.
+        let (column, _) = ui.allocate_exact_size(vec2(22.0, 2.0 * 24.0 + ROW_GAP), Sense::hover());
+        let slot = Rect::from_center_size(column.center(), vec2(22.0, 22.0));
+        let link = ui.scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| crate::icons::button(ui, if linked { "link" } else { "unlink" }, 22.0, linked, tip)).inner;
+        // Named for screen readers and the control channel.
+        link.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, linked, tl!(tip)));
+        if link.clicked() {
+            linked = !linked;
+            ui.data_mut(|d| d.insert_temp(link_id, linked));
+            // Linking evens the corners out to the top-left one, as the fields then show.
+            if linked && !same {
+                out = Some(json!({"radii": radii[0]}));
+            }
+        }
+        ui.add_space(4.0);
+        ui.vertical(|ui| {
+            // Breathing room between the two rows of fields.
+            ui.spacing_mut().item_spacing.y = ROW_GAP;
+            for row in [[0, 1], [3, 2]] {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    for (i, corner) in row.into_iter().enumerate() {
+                        let mut v = radii[corner] as f32;
+                        let mut scrub = if i == 0 { corner_glyph(ui, key, corner, style, &mut v) } else { None };
+                        let typed = crate::widgets::value_field(ui, &mut v, 0.0..=100000.0, "px", 80.0).changed();
+                        if i == 1 {
+                            scrub = corner_glyph(ui, key, corner, style, &mut v);
+                        }
+                        if typed || scrub.is_some() {
+                            let mut patch = if linked { json!({"radii": f64::from(v.max(0.0))}) } else { corner_radii_patch(radii, corner, v) };
+                            patch["coalesce"] = json!(match scrub {
+                                Some(gesture) => format!("{key}-corner-scrub-{corner}-{gesture}"),
+                                None => format!("{key}-{}", if linked { 4 } else { corner }),
+                            });
+                            out = Some(patch);
+                        }
+                    }
+                });
+            }
+        });
+    });
+    out
+}
+
 /// Properties panel for a shape layer: Appearance (fill, stroke) and live shape geometry.
 pub fn shape_properties(app: &mut PrismApp, ui: &mut egui::Ui, id: prism_doc::LayerId) {
     let Some(sh) = app.session.active().and_then(|s| s.doc.layer(id)).and_then(|l| match &l.content {
@@ -1027,8 +1355,13 @@ pub fn shape_properties(app: &mut PrismApp, ui: &mut egui::Ui, id: prism_doc::La
             | prism_doc::vector::LiveShape::Polygon { rect, .. } => {
                 ui.horizontal(|ui| {
                     let (mut w, mut h) = (rect[2] as f32, rect[3] as f32);
-                    let cw = num(ui, "W", &mut w, 1.0..=300000.0, "px");
-                    let ch = num(ui, "H", &mut h, 1.0..=300000.0, "px");
+                    // Wide enough for sizes like 1250.5 px: narrower fields clip the leading digits.
+                    let field = |ui: &mut egui::Ui, label: &str, v: &mut f32| {
+                        ui.label(egui::RichText::new(label).color(t.text_dim).size(12.0));
+                        crate::widgets::value_field(ui, v, 1.0..=300000.0, "px", 80.0).changed()
+                    };
+                    let cw = field(ui, "W", &mut w);
+                    let ch = field(ui, "H", &mut h);
                     if cw || ch {
                         edit = Some(json!({"rect": [rect[0], rect[1], w.round(), h.round()], "coalesce": key("wh")}));
                     }
@@ -1037,25 +1370,19 @@ pub fn shape_properties(app: &mut PrismApp, ui: &mut egui::Ui, id: prism_doc::La
             prism_doc::vector::LiveShape::Line { .. } | prism_doc::LiveShape::Arrow { .. } => {}
         }
         ui.vertical(|ui| match live {
-            prism_doc::vector::LiveShape::Rect { radii, .. } => {
-                // Keep the uniform workflow available after independent corner edits too.
+            prism_doc::vector::LiveShape::Rect { radii, corners, .. } => {
+                // The same gap as between the corner fields, under W/H too.
+                ui.spacing_mut().item_spacing.y = ROW_GAP;
+                ui.add_space(2.0);
                 ui.horizontal(|ui| {
-                    let mut all = radii[0] as f32;
-                    if num(ui, tl!("Corner radius"), &mut all, 0.0..=100000.0, "px") {
-                        edit = Some(json!({"radii": all, "coalesce": key("radius-all")}));
+                    ui.label(egui::RichText::new(tl!("Corners")).color(t.text_dim).size(12.0));
+                    let mut style = *corners;
+                    if crate::widgets::dropdown(ui, &key("corner-style"), &mut style, &CORNER_STYLES, 120.0) {
+                        edit = Some(json!({"corners": style.as_str()}));
                     }
                 });
-                // Separate rows also fit the narrow Properties dock. The labels use the
-                // localized corner names, rather than untranslated abbreviations.
-                for (index, label) in [(0, tl!("Top Left")), (1, tl!("Top Right")), (3, tl!("Bottom Left")), (2, tl!("Bottom Right"))] {
-                    ui.horizontal(|ui| {
-                        let mut radius = radii[index] as f32;
-                        if num(ui, label, &mut radius, 0.0..=100000.0, "px") {
-                            let mut patch = corner_radii_patch(*radii, index, radius);
-                            patch["coalesce"] = json!(key(&format!("radius-{index}")));
-                            edit = Some(patch);
-                        }
-                    });
+                if let Some(patch) = corner_grid(ui, &key("radius"), *radii, *corners) {
+                    edit = Some(patch);
                 }
             }
             prism_doc::vector::LiveShape::Polygon { sides, star_ratio, .. } => {
@@ -1258,6 +1585,10 @@ pub fn paths_panel(app: &mut PrismApp, ui: &mut egui::Ui) {
                 ui.painter().galley(pos2(r.left() + 46.0, r.center().y - g.size().y / 2.0), g, t.text);
                 if resp.clicked() {
                     app.ui.selected_path = Some(key.clone());
+                    // Picking the work path shows it again.
+                    if *kind == PathRow::Work {
+                        app.ui.hidden_work_path = None;
+                    }
                 }
                 // Double-clicking the Work Path saves it (Photoshop's "Save Path").
                 if resp.double_clicked() && *kind == PathRow::Work {
@@ -1614,6 +1945,92 @@ mod tests {
         }
     }
 
+    /// Types `text` + Enter into field `n` of the corner grid (top-left, top-right, bottom-left,
+    /// bottom-right), after clicking the link button `toggles` times; returns the patch.
+    fn type_into_corner(radii: [f64; 4], toggles: usize, n: usize, text: &str) -> Option<Value> {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+        // The grid shows the document's radii, so each patch is applied as `shape.edit` would.
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 80.0)).build_ui_state(
+            |ui, (radii, out): &mut ([f64; 4], Option<Value>)| {
+                if let Some(p) = corner_grid(ui, "corner-test", *radii, prism_doc::CornerStyle::Round) {
+                    match &p["radii"] {
+                        Value::Array(a) => *radii = std::array::from_fn(|i| a[i].as_f64().unwrap()),
+                        v => *radii = [v.as_f64().unwrap(); 4],
+                    }
+                    *out = Some(p);
+                }
+            },
+            (radii, None),
+        );
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+        for _ in 0..toggles {
+            h.get_all_by_role(egui::accesskit::Role::CheckBox).next().unwrap().click();
+            h.run_steps(2);
+        }
+        h.state_mut().1 = None;
+        h.get_all_by_role(egui::accesskit::Role::SpinButton).nth(n).unwrap().click();
+        h.run();
+        for c in text.chars() {
+            h.event(egui::Event::Text(c.to_string()));
+            h.run();
+        }
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        h.state().1.clone()
+    }
+
+    /// Properties › Shape corners: a 2 × 2 grid laid out like the rectangle, linked while the
+    /// corners match (one field sizes all four) and per corner once unlinked or uneven.
+    #[test]
+    fn the_corner_grid_links_like_photoshop() {
+        // Even corners start linked: any field sets all four.
+        let p = type_into_corner([20.0; 4], 0, 3, "30").unwrap();
+        assert_eq!(p["radii"], json!(30.0), "{p}");
+        // Unlinked, the field is its own corner (the grid's fourth field is bottom-right).
+        let p = type_into_corner([20.0; 4], 1, 3, "30").unwrap();
+        assert_eq!(p["radii"], json!([20.0, 20.0, 30.0, 20.0]), "{p}");
+        // Uneven corners start unlinked; linking evens them to the top-left one.
+        let p = type_into_corner([5.0, 6.0, 7.0, 8.0], 0, 2, "9").unwrap();
+        assert_eq!(p["radii"], json!([5.0, 6.0, 7.0, 9.0]), "bottom-left: {p}");
+        let p = type_into_corner([5.0, 6.0, 7.0, 8.0], 1, 1, "12").unwrap();
+        assert_eq!(p["radii"], json!(12.0), "linked after evening out: {p}");
+    }
+
+    /// The Rectangle tool with Chamfered corners draws straight cuts, and the preview matches.
+    #[test]
+    fn the_rectangle_tool_draws_chamfered_corners() {
+        let mut app = app();
+        app.ui.tool_options.corner_radius = 8.0;
+        app.ui.tool_options.corner_style = prism_doc::CornerStyle::Chamfer;
+        let none = egui::Modifiers::NONE;
+        let shown = shape_geometry(&app.ui.tool_options, Tool::Rectangle, [10.0, 10.0], [60.0, 40.0], none)
+            .and_then(|p| prism_engine::vector_cmds::shape_path(&p).ok())
+            .unwrap();
+        finish_shape(&mut app, Tool::Rectangle, [10.0, 10.0], [60.0, 40.0], none);
+        let st = app.session.active().unwrap();
+        let LayerContent::Shape(sh) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("no shape layer") };
+        assert!(matches!(sh.live, Some(prism_doc::LiveShape::Rect { corners: prism_doc::CornerStyle::Chamfer, radii: [8.0, 8.0, 8.0, 8.0], .. })), "{:?}", sh.live);
+        assert_eq!(sh.path, shown);
+        assert_eq!(sh.path.subpaths[0].knots.len(), 8, "four straight cuts");
+        // With no radius it is a sharp rectangle, but it keeps the style: rounding it later
+        // (the corner widgets, Properties) cuts chamfers, not arcs.
+        app.ui.tool_options.corner_radius = 0.0;
+        let sharp = shape_geometry(&app.ui.tool_options, Tool::Rectangle, [0.0, 0.0], [9.0, 9.0], none).unwrap();
+        assert_eq!((sharp["kind"].as_str(), sharp["corners"].as_str()), (Some("rect"), Some("chamfer")));
+        finish_shape(&mut app, Tool::Rectangle, [100.0, 100.0], [160.0, 140.0], none);
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        app.run("shape.edit", json!({"layer": layer.0, "radii": [10, 10, 10, 10]})).unwrap();
+        let st = app.session.active().unwrap();
+        let LayerContent::Shape(sh) = &st.doc.layer(layer).unwrap().content else { panic!("no shape layer") };
+        assert!(matches!(sh.live, Some(prism_doc::LiveShape::Rect { corners: prism_doc::CornerStyle::Chamfer, .. })), "{:?}", sh.live);
+        assert!(sh.path.subpaths[0].knots.iter().all(|k| k.out_ctrl == k.anchor), "straight cuts after rounding");
+        // The option is remembered with the other tool options (older settings load as round).
+        let o: crate::state::ToolOptions = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(o.corner_style, prism_doc::CornerStyle::Round);
+    }
+
     #[test]
     fn shape_preview_is_the_committed_path() {
         let mut app = app();
@@ -1633,6 +2050,110 @@ mod tests {
         assert!(prism_engine::vector_cmds::shape_path(&json!({"kind": "rect"})).is_err());
     }
 
+    /// ⌘Z / ⇧⌘Z while drawing with the Pen step through its presses, not the document; with no
+    /// Pen step left they reach the document again.
+    #[test]
+    fn pen_undo_and_redo_step_through_the_path_being_drawn() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        app.run("layer.new.layer", json!({})).unwrap();
+        let layers = app.session.active().unwrap().doc.layers.len();
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+            pen_down(&mut app, x, y);
+            pen_up(&mut app);
+        }
+        assert!(crate::menus::is_enabled(&app, "edit.undo"));
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots.len(), 2, "the last anchor is gone");
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "the document is untouched");
+        assert!(crate::menus::is_enabled(&app, "edit.redo"));
+        app.run("edit.redo", json!({})).unwrap();
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots.len(), 3);
+        for _ in 0..3 {
+            app.run("edit.undo", json!({})).unwrap();
+        }
+        assert!(app.ui.pen.as_ref().unwrap().knots.is_empty());
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers);
+        // No Pen step left: Undo is the document's again (the new layer).
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1);
+        // A new press clears the Pen's Redo.
+        app.run("edit.redo", json!({})).unwrap();
+        pen_down(&mut app, 50.0, 50.0);
+        pen_up(&mut app);
+        assert!(app.ui.pen.as_ref().unwrap().redo.is_empty());
+    }
+
+    /// Shape mode: the shape the Pen is drawing shows filled before it is closed, as in
+    /// Photoshop, added to the selected shape layer with the Path Operation or as a new layer;
+    /// the document itself is untouched until the path is finished.
+    #[test]
+    fn the_pen_previews_the_shape_it_draws() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.pen_auto_add_delete = false;
+        let draw = |app: &mut PrismApp, x: f64| {
+            for (dx, y) in [(0.0, 20.0), (40.0, 20.0), (40.0, 60.0)] {
+                pen_down(app, x + dx, y);
+                pen_up(app);
+            }
+        };
+        let filled = |doc: &Document, id: prism_doc::LayerId| match &doc.layer(id).map(|l| &l.content) {
+            Some(LayerContent::Shape(sh)) => sh.cache.as_ref().map(|c| c.content_bounds()),
+            _ => None,
+        };
+        // A new shape layer: a preview layer above, in the foreground colour.
+        let layers = app.session.active().unwrap().doc.layers.len();
+        pen_down(&mut app, 10.0, 20.0);
+        pen_up(&mut app);
+        assert!(pen_display_doc(&mut app, 0).is_none(), "one anchor: nothing to fill yet");
+        for (x, y) in [(50.0, 20.0), (50.0, 60.0)] {
+            pen_down(&mut app, x, y);
+            pen_up(&mut app);
+        }
+        let (doc, key) = pen_display_doc(&mut app, 0).expect("a preview");
+        let b = filled(&doc, PEN_PREVIEW_LAYER).expect("the new shape, filled");
+        assert!(b.x0 >= 9 && b.x1 <= 51 && b.y0 >= 19 && b.y1 <= 61 && b.width() > 30, "{b:?}");
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "nothing committed");
+        assert_eq!(pen_display_doc(&mut app, 0).unwrap().1, key, "cached while unchanged");
+        pen_down(&mut app, 10.0, 60.0);
+        pen_up(&mut app);
+        assert_ne!(pen_display_doc(&mut app, 0).unwrap().1, key, "a new anchor redraws");
+        pen_down(&mut app, 10.0, 20.0); // close: a shape layer
+        assert!(pen_display_doc(&mut app, 0).is_none(), "nothing being drawn");
+        let shape = app.session.active().unwrap().active_layer.unwrap();
+        // Drawing elsewhere on the selected shape layer (Combine Shapes): it grows in place.
+        app.ui.tool_options.pen_shape_op = "combine".into();
+        draw(&mut app, 100.0);
+        let (doc, _) = pen_display_doc(&mut app, 0).unwrap();
+        assert!(doc.layer(PEN_PREVIEW_LAYER).is_none(), "no extra layer");
+        let LayerContent::Shape(sh) = &doc.layer(shape).unwrap().content else { panic!("shape") };
+        assert_eq!(sh.path.subpaths.len(), 2);
+        let b = filled(&doc, shape).unwrap();
+        assert!(b.x0 <= 10 && b.x1 >= 139, "both parts filled: {b:?}");
+        let LayerContent::Shape(sh) = &app.session.active().unwrap().doc.layer(shape).unwrap().content else { panic!("shape") };
+        assert_eq!(sh.path.subpaths.len(), 1, "the document waits for the close");
+        // Path mode on the selected shape layer: its shape path is the active path, so it grows
+        // there too (as in Photoshop), with the Path Operation.
+        app.ui.tool_options.vector_mode = "path".into();
+        let (doc, _) = pen_display_doc(&mut app, 0).expect("Path mode on a shape layer previews");
+        let LayerContent::Shape(sh) = &doc.layer(shape).unwrap().content else { panic!("shape") };
+        assert_eq!(sh.path.subpaths.len(), 2);
+        pen_down(&mut app, 100.0, 20.5); // close: into the shape layer, not a work path
+        let st = app.session.active().unwrap();
+        let LayerContent::Shape(sh) = &st.doc.layer(shape).unwrap().content else { panic!("shape") };
+        assert_eq!(sh.path.subpaths.len(), 2);
+        assert!(st.doc.work_path.is_none());
+        let ds = &app.ui.direct_selection;
+        assert_eq!((ds.target, ds.anchors.clone()), (Some(crate::direct_select::PathRef::Layer(shape.0)), vec![[1, 0], [1, 1], [1, 2]]), "the new part is selected");
+        // A work path being added to (selected in the Paths panel) shows its outline only.
+        app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [{"anchor": [5, 5]}, {"anchor": [9, 9]}]}]}})).unwrap();
+        app.ui.selected_path = Some("work".into());
+        draw(&mut app, 150.0);
+        assert!(pen_display_doc(&mut app, 0).is_none());
+    }
+
     #[test]
     fn pen_builds_and_closes_a_work_path() {
         let mut app = app();
@@ -1649,8 +2170,12 @@ mod tests {
         let wp = app.session.active().unwrap().doc.work_path.clone().unwrap();
         assert!(wp.subpaths[0].closed && wp.subpaths[0].knots.len() == 3);
         assert!(wp.subpaths[0].knots[2].smooth);
-        // Path Selection moves it.
-        path_selection_finish(&mut app, [50.0, 50.0], [60.0, 55.0]);
+        // Path Selection moves it: a press inside the closed path picks it, the drag moves it.
+        app.ui.tool = Tool::PathSelection;
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Down { x: 100.0, y: 40.0, pressure: 1.0 }, m);
+        crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Move { x: 110.0, y: 45.0, pressure: 1.0 }, m);
+        crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Up { x: 110.0, y: 45.0 }, m);
         let wp = app.session.active().unwrap().doc.work_path.clone().unwrap();
         assert_eq!((wp.subpaths[0].knots[0].anchor.x, wp.subpaths[0].knots[0].anchor.y), (30.0, 25.0));
     }
@@ -1677,17 +2202,17 @@ mod tests {
         };
         app.hover_doc = Some([60.0, 60.0]);
         assert_eq!(rings(&app), 0);
-        assert_eq!(pen_cursor_asset(&app, [60.0, 60.0]), 1030);
+        assert_eq!(pen_cursor_asset(&app, [60.0, 60.0], egui::Modifiers::NONE), 1030);
         // On the first anchor: a ring around it (plus the closing segment preview).
         app.hover_doc = Some([21.0, 21.0]);
         assert_eq!(rings(&app), 1);
-        assert_eq!(pen_cursor_asset(&app, [21.0, 21.0]), 1034);
+        assert_eq!(pen_cursor_asset(&app, [21.0, 21.0], egui::Modifiers::NONE), 1034);
         // A two-anchor minimum still applies: one anchor never closes.
         let mut one = self::app();
         one.ui.tool = Tool::Pen;
         pen_down(&mut one, 20.0, 20.0);
         pen_up(&mut one);
-        assert_eq!(pen_cursor_asset(&one, [20.5, 20.5]), 1066);
+        assert_eq!(pen_cursor_asset(&one, [20.5, 20.5], egui::Modifiers::NONE), 1066);
     }
 
     fn pen_triangle(app: &mut PrismApp, x: f64) {
@@ -1794,15 +2319,21 @@ mod tests {
         for cmd in ["path.toSelection", "layer.vectorMask.fromPath", "path.makeShape"] {
             assert!(crate::canvas_tool_menu::pen_bar_enabled(&app, cmd), "{cmd}");
         }
-        // The bar acts on the newest component without a Direct Selection pick.
+        // The component just drawn is selected (every anchor, as Path Selection picks it), and
+        // the bar acts on it.
         let (r, _, picked) = pen_bar_target(&app).unwrap();
-        assert_eq!((r, picked), (crate::direct_select::PathRef::Work, None));
+        assert_eq!((r, picked), (crate::direct_select::PathRef::Work, Some(vec![1])));
+        assert_eq!(app.ui.direct_selection.anchors, [[1, 0], [1, 1], [1, 2]]);
         run_on_bar_path(&mut app, "path.alignComponents", r, json!({"edge": "top"})).unwrap();
         assert!(work(&app).subpaths.iter().all(|s| s.knots[0].anchor.y == 20.0));
         let ctx = egui::Context::default();
         crate::canvas_tool_menu::pen_bar_run(&mut app, &ctx, "path.makeShape");
         assert!(app.session.active().unwrap().doc.work_path.is_none(), "Shape consumes the work path");
         assert!(active_shape_path(&app).is_some());
+        // The selected anchors stay selected on the shape layer's path (they used to drop).
+        let shape = active_shape_path(&app).unwrap().0;
+        let ds = &app.ui.direct_selection;
+        assert_eq!((ds.target, ds.anchors.clone()), (Some(crate::direct_select::PathRef::Layer(shape)), vec![[1, 0], [1, 1], [1, 2]]));
         // The bar renders in both modes.
         PrismApp::setup_context(&ctx, Default::default());
         for mode in ["path", "shape"] {
@@ -1933,7 +2464,8 @@ mod tests {
             assert_eq!(pen.knots[1][2], pen.knots[1][0]);
             let saved = serde_json::to_value(pen).unwrap();
             let restored: PenPath = serde_json::from_value(saved).unwrap();
-            assert_eq!(restored, *pen);
+            // The path round-trips; its Undo steps are not saved.
+            assert_eq!((&restored.knots, &restored.unlinked), (&pen.knots, &pen.unlinked));
             assert_eq!(pen_to_json(&restored, false)["subpaths"][0]["knots"][1]["smooth"], false);
             pen_down(&mut app, 100.0 + 7.0 / f64::from(zoom), 100.0);
             assert_eq!(app.ui.pen.as_ref().unwrap().knots.len(), 3);
@@ -2166,3 +2698,7 @@ mod line_tip_tests {
         .clear();
     }
 }
+
+#[cfg(test)]
+#[path = "vector_ui/corner_scrub_tests.rs"]
+mod corner_scrub_tests;

@@ -136,23 +136,135 @@ pub fn dabs(stroke: &Stroke) -> Vec<Dab> {
     out
 }
 
-/// Coverage of a round dab at distance `d` from its centre (anti-aliased edge, hardness falloff).
+// Computed round tips, as Photoshop draws them (measured with `cargo xtask brush-compare`: the
+// `tiny-*`, `dab-hard-*`, `soft-*` and `dab-h*` cases; docs/brush-compare.md): a bitmap of texels
+// one pixel apart, centred on the dab and placed with bilinear interpolation (the rasterizer does
+// that part). Each texel follows a radial profile: full out to some radius, then a Gaussian tail
+// exp(−((d − full) / tail)²). Placement adds the rest of the edge's softness, ~1.55 px from 90 %
+// to 10 % at every hard size.
+
+/// A hard tip's tail starts this many pixels inside its nominal radius (from 5 px up; smaller
+/// tips start it further in, see [`Falloff::new`]).
+pub const HARD_TAIL_START: f32 = 1.0;
+/// A hard tip's tail width in pixels (from 3 px up).
+pub const HARD_TAIL_WIDTH: f32 = 1.0;
+
+/// Photoshop's hardness falloff for soft computed tips, as `(hardness, a, s)` relative to the
+/// radius: full out to `a`, then the tail exp(−((q − a) / s)²), which paints past the nominal
+/// radius (hardness 0 still lays 10 % there). The shape scales with the tip from 20 to 200 px and
+/// the tail fits every measured hardness to ~0.01. Hardnesses in between interpolate linearly; 1 is
+/// the hard tip.
+const FALLOFF: [(f32, f32, f32); 9] = [
+    (0.0, 0.0, 0.654),
+    (0.1, 0.152, 0.570),
+    (0.25, 0.361, 0.452),
+    (0.4, 0.537, 0.343),
+    (0.5, 0.651, 0.276),
+    (0.6, 0.738, 0.214),
+    (0.75, 0.847, 0.136),
+    (0.9, 0.942, 0.060),
+    (1.0, 1.0, 0.0),
+];
+/// Where a tail is cut off, in tail widths: exp(−2.5²) ≈ 0.0019, half an 8-bit level. Hardness 0
+/// then stops at 1.64 radii, where Photoshop's does.
+const TAIL_CUTOFF: f32 = 2.5;
+/// √ln 2: a tail reaches 50 % this many tail widths out.
+const TAIL_HALF: f32 = 0.832_555;
+
+/// The narrowest tail, in pixels, of a tip `diameter` pixels across: 1 px from 3 px up, narrowing
+/// to a lone texel at 1 px. So Photoshop's 1–3 px tips look the same at every hardness and lay 1,
+/// 2 and π units of ink (not the disc areas 0.8, 3.1 and 7.1).
+fn min_tail(diameter: f32) -> f32 {
+    if diameter <= 2.0 { 0.4 + 0.4 * (diameter.max(1.0) - 1.0) } else { (0.8 + 0.2 * (diameter - 2.0)).min(HARD_TAIL_WIDTH) }
+}
+
+/// A computed tip's texel profile for one dab size: hard (full to `edge` pixels inside the nominal
+/// edge, then a `tail`-pixel tail, measured in pixels from the edge) or soft (full to relative
+/// radius `a`, then a tail of relative width `s`, which scales with the tip).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Falloff {
+    hard: bool,
+    radius: f32,
+    a: f32,
+    s: f32,
+    edge: f32,
+    tail: f32,
+}
+
+impl Falloff {
+    /// The profile of a tip with this hardness and radius in pixels (for an ellipse, the minor
+    /// radius, which sets how small the tip is).
+    pub fn new(hardness: f32, radius: f32) -> Self {
+        let r = if radius.is_finite() { radius.max(0.5) } else { 0.5 };
+        let d = 2.0 * r;
+        let h = if hardness.is_finite() { hardness.clamp(0.0, 1.0) } else { 1.0 };
+        let hard = |r: f32| {
+            // Small tips start their tail further in (4 px: 1.25 px; 3 px: at the centre).
+            let edge = (HARD_TAIL_START + ((5.0 - d) / 4.0).max(0.0)).min(r);
+            Self { hard: true, radius: r, a: 1.0, s: 0.0, edge, tail: min_tail(d) }
+        };
+        let hard_tip = hard(r);
+        if h >= 1.0 {
+            return hard_tip;
+        }
+        let i = FALLOFF.iter().rposition(|e| e.0 <= h).unwrap_or(0);
+        let (Some(&(h0, a0, s0)), Some(&(h1, a1, s1))) = (FALLOFF.get(i), FALLOFF.get(i + 1)) else {
+            return hard_tip;
+        };
+        let t = (h - h0) / (h1 - h0);
+        let (mut a, mut s) = (a0 + (a1 - a0) * t, s0 + (s1 - s0) * t);
+        // Widen a tail sharper than the minimum about its 50 % point, and never fill further out
+        // than the hard tip of this size does (so 1–3 px tips are the same at every hardness).
+        let s_min = min_tail(d) / r;
+        if s < s_min {
+            a = (a + TAIL_HALF * s - TAIL_HALF * s_min).max(0.0);
+            s = s_min;
+        }
+        a = a.min(hard_tip.full_to());
+        Self { hard: false, radius: r, a, s, edge: 0.0, tail: 0.0 }
+    }
+
+    pub fn is_hard(&self) -> bool {
+        self.hard
+    }
+
+    /// Relative radius out to which the texels are full.
+    pub fn full_to(&self) -> f32 {
+        if self.hard { 1.0 - self.edge / self.radius } else { self.a }
+    }
+
+    /// Relative radius beyond which the texels are empty.
+    pub fn reach(&self) -> f32 {
+        if self.hard { 1.0 + self.reach_past_edge() / self.radius } else { self.a + TAIL_CUTOFF * self.s }
+    }
+
+    /// For a hard tip, how many pixels past its nominal edge the texels reach.
+    pub fn reach_past_edge(&self) -> f32 {
+        if self.hard { TAIL_CUTOFF * self.tail - self.edge } else { (self.reach() - 1.0) * self.radius }
+    }
+
+    /// Texel value at relative radius `q` (0 = centre, 1 = nominal edge) and signed distance `sd`
+    /// in pixels from the nominal edge (positive outside).
+    #[inline]
+    pub fn at(&self, q: f32, sd: f32) -> f32 {
+        let t = if self.hard { (sd + self.edge) / self.tail } else { (q - self.a) / self.s };
+        if t <= 0.0 {
+            1.0
+        } else if t >= TAIL_CUTOFF {
+            0.0
+        } else {
+            (-t * t).exp()
+        }
+    }
+}
+
+/// Texel value of a round tip at distance `d` from its centre (hardness falloff and edge, without
+/// the bilinear placement the rasterizer adds).
 #[inline]
 pub fn dab_coverage(d: f32, radius: f32, hardness: f32) -> f32 {
-    if d >= radius + 0.5 {
-        return 0.0;
-    }
-    let edge = ((radius + 0.5 - d).clamp(0.0, 1.0)).min(1.0);
-    let h = hardness.clamp(0.0, 1.0);
-    let inner = radius * h;
-    let falloff = if d <= inner || radius - inner < 1e-3 {
-        1.0
-    } else {
-        let t = ((d - inner) / (radius - inner)).clamp(0.0, 1.0);
-        // smoothstep falloff
-        1.0 - t * t * (3.0 - 2.0 * t)
-    };
-    edge * falloff
+    let f = Falloff::new(hardness, radius);
+    let r = f.radius;
+    f.at(d / r, d - r)
 }
 
 /// Rasterize a stroke onto `target`, optionally limited by a selection (grayscale coverage surface).
@@ -208,7 +320,37 @@ mod tests {
         assert_eq!(dab_coverage(20.0, 10.0, 1.0), 0.0);
         let soft_mid = dab_coverage(5.0, 10.0, 0.0);
         assert!(soft_mid > 0.2 && soft_mid < 0.8);
-        assert!(dab_coverage(9.9, 10.0, 1.0) > 0.5);
+        assert!(dab_coverage(9.5, 10.0, 1.0) > 0.5);
+    }
+
+    #[test]
+    fn hard_texels_have_a_one_pixel_tail_inside_the_radius() {
+        // Photoshop's hard round tips from 5 px up: texels full to r − 1, then exp(−(d − (r − 1))²),
+        // so 50 % at r − 0.17 and nothing past r + 1.5.
+        for r in [2.5f32, 5.0, 50.0, 250.0] {
+            assert_eq!(dab_coverage(r - 1.0, r, 1.0), 1.0);
+            assert!((dab_coverage(r - 1.0 + TAIL_HALF, r, 1.0) - 0.5).abs() < 1e-4, "r50 at {r}");
+            assert_eq!(dab_coverage(r + 1.5, r, 1.0), 0.0);
+        }
+    }
+
+    #[test]
+    fn tiny_tips_lay_photoshops_ink_at_every_hardness() {
+        // Photoshop's 1, 2 and 3 px tips lay 1, 2 and π units of ink whatever the hardness and
+        // wherever they land (texels placed bilinearly keep their sum).
+        for (size, ink) in [(1.0f32, 1.0f32), (2.0, 2.0), (3.0, std::f32::consts::PI)] {
+            for hardness in [1.0, 0.5, 0.0] {
+                let b = BrushSettings { size, hardness, ..Default::default() };
+                let ctx = render::BrushContext::new(&b);
+                for c in [(20.0, 20.0), (20.5, 20.5), (20.25, 20.75)] {
+                    let d = Dab::round(Point::new(c.0, c.1), size / 2.0, 1.0);
+                    let mut v = Vec::new();
+                    ctx.rasterize(&d, false, ctx.dab_rect(&d, false), &mut v);
+                    let sum: f32 = v.iter().sum();
+                    assert!((sum - ink).abs() < 0.05 * ink, "{size} px hardness {hardness} at {c:?}: {sum}");
+                }
+            }
+        }
     }
 
     #[test]

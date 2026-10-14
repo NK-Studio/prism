@@ -865,6 +865,10 @@
 	Copyright and Contact Info	저작권 및 연락처 정보
 	Corner Crop Marks	모서리 자르기 표시
 	Corner radius	모서리 반경
+	Link corner radius values	모서리 반경 값 연결
+	Unlink corner radius values	모서리 반경 값 연결 해제
+	Rounded corners	둥근 모서리
+	Chamfered corners	각진 모서리
 	Correction	보정
 	Count Jitter	개수 지터
 	Create	만들기
@@ -954,6 +958,7 @@
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	이미지 위에서 드래그하여 제약 조건 추가; Shift 키로 수평/수직 유지; 오른쪽 클릭하여 삭제.
 	Drag to move the active shape's path or the Work Path	드래그하여 활성 모양의 패스 또는 작업 패스 이동
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	클릭: 기준점 선택 · 드래그: 기준점, 핸들 또는 세그먼트 이동 · {shift}-클릭: 추가 · {alt}-클릭: 하위 패스 전체
+	Click: select a path component · {shift}-click: add · Drag: move · {alt}-drag: copy · {cmd}: Direct Selection	클릭: 패스 구성 요소 선택 · {shift}-클릭: 추가 · 드래그: 이동 · {alt}-드래그: 복사 · {cmd}: 직접 선택
 	Draw with the Pen tool (P) or make a work path from a selection.	펜 도구(P)로 그리거나 선택 영역에서 작업 패스를 만드세요.
 	Drop an image or PSD anywhere to open it.	이미지나 PSD를 아무 곳에나 놓아 여세요.
 	Duplicate Layers…	레이어 복제…
@@ -2902,7 +2907,7 @@ fontWeight	Italic	기울임
 	Enter a name	이름을 입력하세요
 	Estimated size {size}	예상 크기 {size}
 	Fast	빠르게
-	File names	이름 규칙
+	File names	파일명
 	File size	용량
 	Folder	폴더
 	Full color resolution (4:4:4)	색 해상도 유지 (4:4:4)
@@ -2925,6 +2930,9 @@ fontWeight	Italic	기울임
 	Original (editable)	원본 (편집 가능)
 	Original formats keep everything, so there is nothing to set.	원본 형식은 모든 정보를 보존해서 따로 정할 게 없어요.
 	Other Folder…	다른 폴더…
+	Other Location…	다른 위치…
+	Prism can't write .{ext} files	Prism은 .{ext} 파일로 저장할 수 없어요
+	This file is open in Prism; that tab won't update.	이 파일은 Prism에서 열려 있어요. 그 탭은 바뀌지 않습니다.
 	PNG is lossless: the image looks the same. Only the size and saving time change.	PNG는 무손실이라 화질은 같아요. 저장 속도와 크기만 달라집니다.
 	Photos, small files	사진 · 작은 용량
 	Print, can keep layers	인쇄 · 레이어 선택
@@ -2932,6 +2940,7 @@ fontWeight	Italic	기울임
 	Prism native file	Prism 전용 파일
 	Save each layer as a file	레이어별로 저장 (폴더에 파일로)
 	Saved {count} files in {folder}	{folder}에 파일 {count}개를 저장했습니다
+	Saved {name}	{name} 저장 완료
 	Saves {count} layers as separate files in this folder	레이어 {count}개를 이 폴더에 각각 파일로 저장합니다
 	Search formats: png, jpg, layers…	형식 검색: png, jpg, 원본…
 	Selected layers	선택한 레이어
@@ -2950,3 +2959,42 @@ fontWeight	Italic	기울임
 	{layer}, {index} and {document} are replaced	{layer}, {index}, {document}가 실제 값으로 바뀝니다
 	Highest	최고
 	For web	웹용
+	Each layer is saved as an image: pick an image format	레이어별 저장은 이미지로만 저장돼요. 이미지 형식을 고르세요
+# First-run setup (first_run_ui.rs)
+	Welcome to Prism	프리즘에 오신 것을 환영합니다
+	Next	다음
+	Get Started	시작하기
+	Skip	건너뛰기
+	Back	이전
+	Choose your language	언어를 고르세요
+	Prism starts in the language your system uses.	시스템에서 쓰는 언어가 미리 선택돼 있어요.
+	Choose a theme	테마를 고르세요
+	Pick the brightness you like to work in.	작업하기 편한 밝기를 고르세요.
+	You can change these later in Preferences.	나중에 환경설정에서 언제든 바꿀 수 있어요.
+	First-Run Setup…	초기 설정…
+# Software update (update_ui.rs)
+	Check for Updates…	업데이트 확인…
+	Software Update	소프트웨어 업데이트
+	Updates aren't available in this build	이 빌드에서는 업데이트를 사용할 수 없어요
+	Checking for updates…	업데이트를 확인하는 중…
+	Prism is up to date	프리즘이 최신 버전이에요
+	You have the latest version ({version}).	최신 버전({version})을 쓰고 있어요.
+	Couldn't update Prism	프리즘을 업데이트하지 못했어요
+	Prism {version} is available	프리즘 {version} 버전이 나왔어요
+	You have version {version}.	지금 쓰는 버전은 {version}이에요.
+	Release Notes	릴리스 노트
+	Skip This Version	이 버전 건너뛰기
+	Downloading Prism {version}…	프리즘 {version} 내려받는 중…
+	Prism {version} is ready to install	프리즘 {version} 설치 준비가 끝났어요
+	Prism will quit, update and open again. Choose Later to install it the next time you quit.	프리즘을 종료하고 업데이트한 뒤 다시 열어요. 나중에를 고르면 다음에 종료할 때 설치돼요.
+	Restart to Update	다시 시작해서 업데이트
+	Later	나중에
+	Update	업데이트
+	Download…	다운로드…
+	Check for updates	업데이트 확인
+	Compact (Photoshop-style)	촘촘하게 (포토샵식)
+	Comfortable	여유 있게
+	Top-left corner radius	왼쪽 상단 모퉁이 반경
+	Top-right corner radius	오른쪽 상단 모퉁이 반경
+	Bottom-right corner radius	오른쪽 하단 모퉁이 반경
+	Bottom-left corner radius	왼쪽 하단 모퉁이 반경

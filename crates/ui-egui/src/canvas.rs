@@ -115,6 +115,8 @@ pub struct Drag {
     /// A Brush/Eraser stroke that erases: the Eraser, or a right-button Brush drag with
     /// Preferences › Tools › Right-click with painting tools set to Erase.
     pub erase: bool,
+    /// A Shift-click connection must reach its clicked endpoint even without end catch-up.
+    pub connects_previous: bool,
     /// ⇧ constraint of a painting stroke (stroke_constraint.rs).
     pub constrain: Option<crate::stroke_constraint::Axis>,
     /// Modifiers held now (updated on every pointer event of the gesture).
@@ -139,6 +141,7 @@ impl Drag {
             points,
             modifiers,
             erase,
+            connects_previous: false,
             constrain: None,
             live: modifiers,
             released: egui::Modifiers::NONE,
@@ -322,9 +325,14 @@ fn live_stroke(app: &PrismApp, idx: usize) -> Option<&LiveStroke> {
 
 /// `paint.stroke` params for a Brush/Eraser drag (shared by the live preview and the commit). The
 /// stroke smoothing is the session brush's (the options bar's Smoothing %).
-fn stroke_params(app: &PrismApp, tool: Tool, erase: bool, points: &[Vec<f64>]) -> serde_json::Value {
-    let mut p = json!({ "points": points, "erase": erase, "zoom": app.current_zoom(), "target": paint_target(app) });
-    if tool == Tool::Pencil {
+fn stroke_params(app: &PrismApp, drag: &Drag, points: &[Vec<f64>]) -> serde_json::Value {
+    let mut p = json!({ "points": points, "erase": drag.erase, "zoom": app.current_zoom(), "target": paint_target(app) });
+    if drag.connects_previous {
+        // The connecting line is an explicit endpoint gesture. Apply the override
+        // to both live and committed parameters, without changing the user's brush.
+        p["brush"] = json!({"smoothing": {"catchUpOnEnd": true}});
+    }
+    if drag.tool == Tool::Pencil {
         p["autoErase"] = json!(app.ui.tool_options.pencil_auto_erase);
     }
     p
@@ -449,7 +457,7 @@ fn begin_live_stroke(app: &PrismApp) -> Option<LiveStroke> {
         p["target"] = paint_target(app);
         EngineStroke::Retouch(prism_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?)
     } else {
-        let p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
+        let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
         EngineStroke::Brush(Box::new(prism_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(d.tool), &p).ok()?))
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
@@ -459,7 +467,7 @@ fn begin_live_stroke(app: &PrismApp) -> Option<LiveStroke> {
 
 /// Render the drag points the live stroke hasn't seen yet, with the pen pressure, tilt and
 /// rotation the commit's `paint.stroke` gets for them.
-fn feed_live_stroke(app: &mut PrismApp) {
+pub(crate) fn feed_live_stroke(app: &mut PrismApp) {
     // A batched move replays several samples in one frame and calls this once at the end, so the
     // per-sample calls from `tool_event` are skipped (see `canvas_view`).
     if app.defer_live_stroke {
@@ -473,6 +481,7 @@ fn feed_live_stroke(app: &mut PrismApp) {
             let t = pose.get(i).or(pose.last()).copied().unwrap_or_default();
             let mut sp = prism_engine::paint::StrokePoint::new(p[0], p[1], p[2] as f32);
             (sp.tilt_x, sp.tilt_y, sp.rotation) = (t[0], t[1], t[2]);
+            sp.time = app.stylus.times.get(i).copied().unwrap_or(0.0);
             Some(sp)
         })
         .collect();
@@ -733,6 +742,10 @@ fn display_doc(app: &mut PrismApp, idx: usize) -> (std::sync::Arc<Document>, u64
     if let Some(shown) = crate::shape_corners_ui::display_doc(app, idx) {
         return shown;
     }
+    // The shape the Pen is drawing, filled as it will be.
+    if let Some(shown) = crate::vector_ui::pen_display_doc(app, idx) {
+        return shown;
+    }
     if let Some(shown) = crate::type_transform::display_doc(app, idx) {
         return shown;
     }
@@ -760,10 +773,14 @@ fn display_doc(app: &mut PrismApp, idx: usize) -> (std::sync::Arc<Document>, u64
     if let Some(shown) = crate::blend_preview::display_doc(app, idx) {
         return shown;
     }
-    let st = &app.session.documents()[idx];
     if let Some(l) = live_stroke(app, idx) {
         return (l.stroke.doc().clone(), l.display_key());
     }
+    // Free Transform on a shape layer: redrawn as the commit will leave it.
+    if let Some(shown) = crate::transform_tool::shape_display_doc(app, idx) {
+        return shown;
+    }
+    let st = &app.session.documents()[idx];
     if let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview)
         && app.session.active_index() == Some(idx)
         && st.doc.layer(prism_doc::LayerId(t.layer)).is_some()
@@ -2252,6 +2269,12 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
     app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
     app.stylus.update(&ui.input(|i| i.events.clone()));
     crate::stylus::Stylus::sync_eraser_tool(app);
+    let native_packets = if primary { crate::pen_input::take(&ctx) } else { Vec::new() };
+    let mut pen_packets = if primary && native_packets.is_empty() { app.stylus.touch_packets.collect(&ui.input(|i| i.events.clone())) } else { native_packets };
+    pen_packets.retain(|packet| packet.phase != crate::pen_input::Phase::Down || ctx.layer_id_at(packet.pos).is_none_or(|layer| layer == response.layer_id));
+    if primary && app.stylus.contact.is_some_and(|(v, _)| v == ctx.viewport_id()) && ui.input(|i| !i.focused || i.key_pressed(egui::Key::Escape)) {
+        crate::pen_input::cancel(app);
+    }
     // A Magnetic Lasso border left behind by a tool or document switch is dropped.
     crate::magnetic_lasso_ui::frame(app);
     // Held keys (hold_keys.rs): Space repositions a crop frame, marquee, lasso or shape being
@@ -2272,6 +2295,15 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         None if middle => Tool::Hand,
         None => app.ui.tool,
     };
+    if primary
+        && app.stylus.contact.is_some()
+        && (under_dialog
+            || !matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser)
+            || app.drag.as_ref().is_some_and(|d| d.tool != tool)
+            || app.stylus.contact_document != app.session.active().map(|s| s.doc.id))
+    {
+        crate::pen_input::cancel(app);
+    }
     // Zoom direction: the temporary zoom key decides, else ⌥ (Zoom tool).
     let zoom_out = |alt: bool| match temporary {
         Some(crate::hold_keys::Temporary::ZoomOut) => true,
@@ -2334,7 +2366,10 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         // Tools follow the left button; the right one opens the Brush Preset picker or erases
         // (Preferences › Tools, `paint_mouse`).
         crate::paint_mouse::sync_tool_brush(app);
-        let mut buttons = crate::paint_mouse::canvas_buttons(app, &response, tool);
+        let pen_handled = matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser)
+            && !under_dialog
+            && crate::pen_input::paint_packets(app, ctx.viewport_id(), &pen_packets, rect, &xf, mods);
+        let mut buttons = if pen_handled { crate::paint_mouse::Buttons::default() } else { crate::paint_mouse::canvas_buttons(app, &response, tool) };
         if cancelled_crop_press || corner_input {
             (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
         }
@@ -2427,135 +2462,137 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         }
         // A drag is only recognised once the pointer has moved past egui's click distance: the
         // gesture starts where the button went down, not where it is now (#123).
-        let gesture_active_before = app.drag.is_some();
-        // Live painting tools start on the press, not once the pointer passes egui's click
-        // distance: the first dab shows at once. The drag recognised later continues that stroke,
-        // and a click (or a long press that never moved) just ends it.
-        if strokes_live(tool)
-            && app.drag.is_none()
-            && response.is_pointer_button_down_on()
-            && ui.input(|i| i.pointer.primary_pressed())
-            && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p))
-        {
-            let d = xf.to_doc(p);
-            // The press's own modifiers: a ⇧ that arrives with the click still connects the line.
-            let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
-            tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
-            app.press_stroke = app.drag.is_some();
-        }
-        let press_stroke = app.press_stroke;
-        if press_stroke {
-            buttons.started = false;
-        }
-        if buttons.started
-            && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p)).or(response.interact_pointer_pos())
-        {
-            if tool == Tool::Move && app.ui.transform.is_none() {
-                begin_transform_controls_at(app, &ctx, &xf, p);
-            }
-            let d = xf.to_doc(p);
-            let press_mods = if tool.is_type() { ctx.data(|d| d.get_temp(type_press)).unwrap_or(mods) } else { mods };
-            tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
-        }
-        if buttons.dragged || buttons.stopped {
-            // Feed every pointer move the OS delivered this frame, not just the latest position, so
-            // a fast stroke is sampled densely and renders as a smooth curve instead of a coarse
-            // polyline. egui-winit pushes one `PointerMoved` per `CursorMoved`, and they accumulate
-            // while a frame is slow, so reading them all recovers the moves a per-frame
-            // `interact_pointer_pos()` would drop. Only freehand tools take the whole batch; the
-            // rest follow the pointer's latest position. The moves are bounded to the gesture's own
-            // press..release interval (`pointer_moves`), so the start and stop frames keep their
-            // valid samples without leaking a move from outside the gesture.
-            let events = ui.input(|i| i.events.clone());
-            let button = if response.dragged_by(PointerButton::Secondary)
-                || response.drag_started_by(PointerButton::Secondary)
-                || response.drag_stopped_by(PointerButton::Secondary)
+        if !pen_handled {
+            let gesture_active_before = app.drag.is_some();
+            // Live painting tools start on the press, not once the pointer passes egui's click
+            // distance: the first dab shows at once. The drag recognised later continues that stroke,
+            // and a click (or a long press that never moved) just ends it.
+            if strokes_live(tool)
+                && app.drag.is_none()
+                && response.is_pointer_button_down_on()
+                && ui.input(|i| i.pointer.primary_pressed())
+                && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p))
             {
-                PointerButton::Secondary
-            } else {
-                PointerButton::Primary
-            };
-            let press_this_frame = events.iter().any(|e| matches!(e, egui::Event::PointerButton { button: b, pressed: true, .. } if *b == button));
-            let down_at_start = !press_this_frame && (gesture_active_before || buttons.started);
-            let mut positions = if freehand_tool(tool) {
-                pointer_moves(&events, button, down_at_start)
-            } else if buttons.dragged {
-                response.interact_pointer_pos().into_iter().collect()
-            } else {
-                Vec::new()
-            };
-            // A frame with no raw move still tracks a held gesture (a still pointer, a modifier
-            // change): fall back to the latest position, as the old code always did.
-            if positions.is_empty()
-                && buttons.dragged
+                let d = xf.to_doc(p);
+                // The press's own modifiers: a ⇧ that arrives with the click still connects the line.
+                let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
+                tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
+                app.press_stroke = app.drag.is_some();
+            }
+            let press_stroke = app.press_stroke;
+            if press_stroke {
+                buttons.started = false;
+            }
+            if buttons.started
+                && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p)).or(response.interact_pointer_pos())
+            {
+                if tool == Tool::Move && app.ui.transform.is_none() {
+                    begin_transform_controls_at(app, &ctx, &xf, p);
+                }
+                let d = xf.to_doc(p);
+                let press_mods = if tool.is_type() { ctx.data(|d| d.get_temp(type_press)).unwrap_or(mods) } else { mods };
+                tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
+            }
+            if buttons.dragged || buttons.stopped {
+                // Feed every pointer move the OS delivered this frame, not just the latest position, so
+                // a fast stroke is sampled densely and renders as a smooth curve instead of a coarse
+                // polyline. egui-winit pushes one `PointerMoved` per `CursorMoved`, and they accumulate
+                // while a frame is slow, so reading them all recovers the moves a per-frame
+                // `interact_pointer_pos()` would drop. Only freehand tools take the whole batch; the
+                // rest follow the pointer's latest position. The moves are bounded to the gesture's own
+                // press..release interval (`pointer_moves`), so the start and stop frames keep their
+                // valid samples without leaking a move from outside the gesture.
+                let events = ui.input(|i| i.events.clone());
+                let button = if response.dragged_by(PointerButton::Secondary)
+                    || response.drag_started_by(PointerButton::Secondary)
+                    || response.drag_stopped_by(PointerButton::Secondary)
+                {
+                    PointerButton::Secondary
+                } else {
+                    PointerButton::Primary
+                };
+                let press_this_frame = events.iter().any(|e| matches!(e, egui::Event::PointerButton { button: b, pressed: true, .. } if *b == button));
+                let down_at_start = !press_this_frame && (gesture_active_before || buttons.started);
+                let mut positions = if freehand_tool(tool) {
+                    pointer_moves(&events, button, down_at_start)
+                } else if buttons.dragged {
+                    response.interact_pointer_pos().into_iter().collect()
+                } else {
+                    Vec::new()
+                };
+                // A frame with no raw move still tracks a held gesture (a still pointer, a modifier
+                // change): fall back to the latest position, as the old code always did.
+                if positions.is_empty()
+                    && buttons.dragged
+                    && let Some(p) = response.interact_pointer_pos()
+                {
+                    positions.push(p);
+                }
+                app.defer_live_stroke = true;
+                for p in positions {
+                    let d = xf.to_doc(p);
+                    tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+                }
+                app.defer_live_stroke = false;
+                // One live-stroke update for the whole frame, not one per recovered sample.
+                feed_live_stroke(app);
+                crate::magnetic_lasso_ui::flush(app);
+            }
+            if buttons.stopped {
+                let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
+                if let Some(d) = p {
+                    tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
+                }
+            }
+            // A stroke started on the press ends with the release, whether egui saw a drag, a click,
+            // or neither (a long press that never moved).
+            if press_stroke && !buttons.stopped && ui.input(|i| i.pointer.primary_released()) {
+                buttons.clicked = false;
+                let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
+                if let Some(d) = p
+                    && app.drag.is_some()
+                {
+                    tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
+                }
+            }
+            if press_stroke && (app.drag.is_none() || !ui.input(|i| i.pointer.primary_down())) {
+                app.press_stroke = false;
+            }
+            if buttons.clicked
                 && let Some(p) = response.interact_pointer_pos()
             {
-                positions.push(p);
-            }
-            app.defer_live_stroke = true;
-            for p in positions {
+                let click_button = if app.secondary_erase { PointerButton::Secondary } else { PointerButton::Primary };
+                let click_mods = ui.input(|i| pointer_button_modifiers(&i.events, click_button)).unwrap_or(mods);
                 let d = xf.to_doc(p);
-                tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
-            }
-            app.defer_live_stroke = false;
-            // One live-stroke update for the whole frame, not one per recovered sample.
-            feed_live_stroke(app);
-            crate::magnetic_lasso_ui::flush(app);
-        }
-        if buttons.stopped {
-            let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
-            if let Some(d) = p {
-                tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
-            }
-        }
-        // A stroke started on the press ends with the release, whether egui saw a drag, a click,
-        // or neither (a long press that never moved).
-        if press_stroke && !buttons.stopped && ui.input(|i| i.pointer.primary_released()) {
-            buttons.clicked = false;
-            let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
-            if let Some(d) = p
-                && app.drag.is_some()
-            {
-                tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
-            }
-        }
-        if press_stroke && (app.drag.is_none() || !ui.input(|i| i.pointer.primary_down())) {
-            app.press_stroke = false;
-        }
-        if buttons.clicked
-            && let Some(p) = response.interact_pointer_pos()
-        {
-            let click_button = if app.secondary_erase { PointerButton::Secondary } else { PointerButton::Primary };
-            let click_mods = ui.input(|i| pointer_button_modifiers(&i.events, click_button)).unwrap_or(mods);
-            let d = xf.to_doc(p);
-            match tool {
-                Tool::Zoom => {
-                    let nz = zoom_step(view.zoom, if zoom_out(click_mods.alt) { -1 } else { 1 });
-                    let center = app.session.prefs().tools.zoom_clicked_point_to_center;
-                    zoom_about(&mut view, &xf, p, nz, center);
-                }
-                // A click with the (temporary) Hand does nothing, never the tool underneath.
-                Tool::Hand | Tool::RotateView => {}
-                Tool::Move if response.double_clicked() && app.ui.transform.is_none() && crate::type_tool::edit_from_move(app, d[0], d[1]) => {
-                    app.drag = None;
-                    ctx.memory_mut(|m| {
-                        if let Some(id) = m.focused() {
-                            m.surrender_focus(id);
-                        }
-                    });
-                }
-                // Double-clicking closes the polygonal lasso: the first click placed the last
-                // vertex (or already closed it), so the second never starts a new polygon. egui
-                // reports it as a triple click when a vertex went down shortly before.
-                Tool::PolygonLasso if response.double_clicked() || response.triple_clicked() => commit_polygon(app),
-                // The same for the Magnetic Lasso: along the edges, or straight with ⌥.
-                Tool::MagneticLasso if response.double_clicked() || response.triple_clicked() => crate::magnetic_lasso_ui::close(app, mods.alt),
-                _ => {
-                    if tool == Tool::Move && app.ui.transform.is_none() {
-                        begin_transform_controls_at(app, &ctx, &xf, p);
+                match tool {
+                    Tool::Zoom => {
+                        let nz = zoom_step(view.zoom, if zoom_out(click_mods.alt) { -1 } else { 1 });
+                        let center = app.session.prefs().tools.zoom_clicked_point_to_center;
+                        zoom_about(&mut view, &xf, p, nz, center);
                     }
-                    tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: 1.0 }, click_mods);
-                    tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods);
+                    // A click with the (temporary) Hand does nothing, never the tool underneath.
+                    Tool::Hand | Tool::RotateView => {}
+                    Tool::Move if response.double_clicked() && app.ui.transform.is_none() && crate::type_tool::edit_from_move(app, d[0], d[1]) => {
+                        app.drag = None;
+                        ctx.memory_mut(|m| {
+                            if let Some(id) = m.focused() {
+                                m.surrender_focus(id);
+                            }
+                        });
+                    }
+                    // Double-clicking closes the polygonal lasso: the first click placed the last
+                    // vertex (or already closed it), so the second never starts a new polygon. egui
+                    // reports it as a triple click when a vertex went down shortly before.
+                    Tool::PolygonLasso if response.double_clicked() || response.triple_clicked() => commit_polygon(app),
+                    // The same for the Magnetic Lasso: along the edges, or straight with ⌥.
+                    Tool::MagneticLasso if response.double_clicked() || response.triple_clicked() => crate::magnetic_lasso_ui::close(app, mods.alt),
+                    _ => {
+                        if tool == Tool::Move && app.ui.transform.is_none() {
+                            begin_transform_controls_at(app, &ctx, &xf, p);
+                        }
+                        tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, click_mods);
+                        tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods);
+                    }
                 }
             }
         }
@@ -2625,6 +2662,10 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
             let c = response.hover_pos().map_or(c, |p| crate::cursor_pack::stock(&ctx, p, c));
             ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().filter(|_| tool != Tool::Hand).and_then(|p| crate::shape_corners_ui::cursor(app, xf.to_doc(p))) {
+            let c = response.hover_pos().map_or(c, |p| crate::cursor_pack::stock(&ctx, p, c));
+            ui.ctx().set_cursor_icon(c);
+        } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Gradient).and_then(|p| crate::gradient_ui::cursor(app, xf.to_doc(p))) {
+            // The live gradient's handles, stops and line (Photoshop's move and add-stop cursors).
             let c = response.hover_pos().map_or(c, |p| crate::cursor_pack::stock(&ctx, p, c));
             ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().filter(|_| tool.is_type()).and_then(|p| {
@@ -2746,6 +2787,11 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                     }
                 }
                 Tool::Type | Tool::VerticalType => egui::CursorIcon::Text,
+                // Path Selection's black arrow, Direct Selection's white one; ⌘ swaps them while
+                // held, with what a press does (direct_select.rs).
+                Tool::PathSelection | Tool::DirectSelection => crate::tool_cursor::path_tool(&painter, p, crate::direct_select::direct_cursor(app, held)),
+                // ⌘ makes the Pen Direct Selection: its white arrow.
+                Tool::Pen if crate::direct_select::direct_cursor(app, held) => crate::tool_cursor::path_tool(&painter, p, true),
                 Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, view.zoom),
                 Tool::RedEye => {
                     let pupil = app.ui.tool_options.red_eye_pupil_size.clamp(1.0, 100.0);
@@ -2773,8 +2819,14 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                 None
             } else if precise && !brush && !matches!(tool, Tool::Hand | Tool::RotateView | Tool::Zoom) {
                 Some(1025)
+            } else if tool == Tool::Pen && crate::direct_select::direct_cursor(app, held) {
+                // ⌘: the Pen is Direct Selection (`tool_cursor::path_tool` drew its arrow).
+                None
             } else if tool == Tool::Pen {
-                Some(crate::vector_ui::pen_cursor_asset(app, xf.to_doc(p)))
+                Some(crate::vector_ui::pen_cursor_asset(app, xf.to_doc(p), held))
+            } else if matches!(tool, Tool::PathSelection | Tool::DirectSelection) {
+                // `tool_cursor::path_tool` already took the cursor pack's arrow for the mode.
+                None
             } else if matches!(tool, Tool::Ruler | Tool::Count) {
                 Some(crate::analysis_ui::cursor_asset(app, tool, xf.to_doc(p), held))
             } else if tool == Tool::Patch {
@@ -3311,7 +3363,10 @@ fn tool_move(app: &mut PrismApp, x: f64, y: f64, pressure: f32, mods: egui::Modi
         // ⇧: straight 0/45/90° strokes, 45° gradient angles (stroke_constraint.rs).
         let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
         let [x, y] = crate::stroke_constraint::constrain(d.tool, &mut d.constrain, d.start, last, [x, y], mods.shift, zoom);
-        if d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25) {
+        let sample = app.stylus.sample().unwrap_or_default();
+        let pose_changed = app.stylus.stroke.last().is_some_and(|p| *p != [sample.tilt_x, sample.tilt_y, sample.rotation]);
+        let timed_build_up = app.session.tools.brush.build_up && app.stylus.times.last().is_some_and(|t| app.stylus.time > *t);
+        if d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25 || p[2] != f64::from(pressure)) || pose_changed || timed_build_up {
             d.points.push([x, y, pressure as f64]);
             app.stylus.record_point();
         }
@@ -3559,7 +3614,9 @@ pub fn tool_event(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) {
             }
             // ⌥ flips Dodge/Burn and Blur/Sharpen for this stroke.
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
-            app.drag = Some(Drag::new(tool, from.unwrap_or([x, y]), points, mods, erase));
+            let mut drag = Drag::new(tool, from.unwrap_or([x, y]), points, mods, erase);
+            drag.connects_previous = from.is_some();
+            app.drag = Some(drag);
             app.trail = None;
             app.stylus.begin_stroke();
             if from.is_some() {
@@ -3731,11 +3788,10 @@ pub(crate) fn finish_gesture(app: &mut PrismApp, d: Drag) {
     match d.tool {
         Tool::ObjectSelection => crate::retouch_ui::finish_object_selection(app, d.start, [end[0], end[1]], d.modifiers),
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.live),
-        Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
         Tool::Type | Tool::VerticalType => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
         Tool::Brush | Tool::Pencil | Tool::Eraser => {
             let live = app.live_stroke.take();
-            let mut p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
+            let mut p = stroke_params(app, &d, &app.stylus.stroke_points(&d.points));
             if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
                 p["seed"] = json!(seed);
             }
@@ -3912,7 +3968,8 @@ pub fn extra_windows(app: &mut PrismApp, ctx: &egui::Context) {
                 }
                 view = canvas_view(app, ui, w.document, rect, view.clone(), interactive);
             });
-            crate::doc_windows::move_window(&child, w.id);
+            let screen = if crate::doc_windows::moving(&child, w.id) { app.services.screen_cursor.as_mut().and_then(|f| f(&child)) } else { None };
+            crate::doc_windows::move_window(&child, w.id, screen);
             crate::doc_windows::fade_window(app, &child, w.id);
             if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
                 win.view = view;
@@ -3931,6 +3988,9 @@ pub fn extra_windows(app: &mut PrismApp, ctx: &egui::Context) {
                 let at = app.services.cursor_pos.as_mut().and_then(|f| f(&child));
                 app.open_dropped(&child, dropped, at);
                 app.place_next_dropped(&child);
+            }
+            if app.ui.active_window == Some(w.id) {
+                crate::notices::show_toast(app, &child);
             }
             crate::paint_mouse::show_picker(app, &child);
             crate::dialogs::show(app, &child);
@@ -4461,16 +4521,18 @@ mod tests {
         }
         let (shown, key) = display_doc(&mut app, 0);
         assert_ne!(key, 0);
-        assert!(alpha(&shown, 40, 30) > 0.5 && (0.01..0.5).contains(&alpha(&shown, 40, 38)), "soft stroke while drawing");
+        // A soft (hardness 0) 20 px stroke along y = 30 is partly painted 10 px out.
+        assert!(alpha(&shown, 40, 30) > 0.5 && (0.01..0.5).contains(&alpha(&shown, 40, 40)), "soft stroke while drawing");
         assert_eq!(alpha(&app.session.documents()[0].doc, 40, 30), 0.0, "not committed yet");
         // The canvas redraws only what the stroke touched.
         let dk = canvas_display(&app, &app.session.documents()[0].doc, None).1;
         let d = damage_since(&app, 0, (rev, dk), (rev, key), dk, None).unwrap();
-        assert!(d.contains(40, 30) && !d.contains(40, 2) && d.width() < 120, "{d:?}");
+        // (The soft tail reaches ~17 px past the 10..100 px path, so the stroke spans the width.)
+        assert!(d.contains(40, 30) && !d.contains(40, 2) && d.height() < 60, "{d:?}");
         tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 30.0 }, m);
         let doc = app.session.documents()[0].doc.clone();
         assert!(app.live_stroke.is_none() && display_doc(&mut app, 0).1 == 0);
-        assert_eq!((alpha(&doc, 40, 30), alpha(&doc, 40, 38)), (alpha(&shown, 40, 30), alpha(&shown, 40, 38)), "commit matches the preview");
+        assert_eq!((alpha(&doc, 40, 30), alpha(&doc, 40, 40)), (alpha(&shown, 40, 30), alpha(&shown, 40, 40)), "commit matches the preview");
     }
 
     #[test]
@@ -4509,13 +4571,14 @@ mod tests {
     /// Brush drag along y = 40 with one canvas frame per pointer move; returns the document the
     /// canvas showed at the last move, the committed one, and whether the release refreshed only
     /// the stroke's rectangle.
-    fn drag_frames(smoothing: f32, xs: &[f64]) -> (std::sync::Arc<Document>, std::sync::Arc<Document>, bool, PrismApp) {
+    fn drag_frames(smoothing: f32, catch_up_on_end: bool, xs: &[f64]) -> (std::sync::Arc<Document>, std::sync::Arc<Document>, bool, PrismApp) {
         let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
         let ctx = egui::Context::default();
         app.run("file.new", json!({"width": 200, "height": 80, "background": "transparent"})).unwrap();
         app.run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5}})).unwrap();
         // What the options bar's Smoothing field writes.
         app.session.tools.brush.smoothing.amount = smoothing;
+        app.session.tools.brush.smoothing.catch_up_on_end = catch_up_on_end;
         app.ui.tool = Tool::Brush;
         ensure_texture(&mut app, &ctx, 0, None);
         let m = egui::Modifiers::NONE;
@@ -4543,7 +4606,7 @@ mod tests {
     fn release_shows_nothing_new_without_smoothing() {
         // #73: at 0 % the stroke follows the pointer; the last frame drawn while dragging is
         // exactly the committed stroke, so release changes nothing on screen.
-        let (live, done, partial, app) = drag_frames(0.0, &[40.0, 70.0, 100.0, 130.0, 160.0]);
+        let (live, done, partial, app) = drag_frames(0.0, false, &[40.0, 70.0, 100.0, 130.0, 160.0]);
         assert!(same_pixels(&live, &done), "preview at the last move = committed stroke");
         assert!(partial, "the handover refreshes only the stroke");
         let p = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").map(|(_, p)| p.clone()).unwrap();
@@ -4576,18 +4639,18 @@ mod tests {
         // #73: with smoothing the brush lags behind the pointer and catches up at the end; the
         // preview draws that tail live, so no frame after release is missing the end.
         let xs = [30.0, 50.0, 70.0, 90.0, 110.0, 130.0, 150.0, 170.0];
-        let (live, done, partial, _) = drag_frames(0.5, &xs);
+        let (live, done, partial, _) = drag_frames(0.5, true, &xs);
         assert!(same_pixels(&live, &done), "preview at the last move = committed stroke, tail included");
         assert!(partial);
         let end = |d: &Document| (0..200).rev().find(|&x| (0..80).any(|y| d.layers[0].surface().unwrap().rgba(x, y)[3] > 0.0)).unwrap();
         assert!(end(&live) >= 170, "the end reaches the pointer while drawing ({})", end(&live));
         // The options-bar value reaches the stroke: 50 % smooths the wiggle, 0 % doesn't.
-        let (_, rough, _, _) = drag_frames(0.0, &xs);
+        let (_, rough, _, _) = drag_frames(0.0, false, &xs);
         assert!(!same_pixels(&rough, &done), "smoothing changes the stroke");
         // And the commit is what `paint.stroke` gives with that smoothing.
         let mut s = prism_engine::Session::new();
         s.execute("file.new", json!({"width": 200, "height": 80, "background": "transparent"})).unwrap();
-        s.execute("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5, "smoothing": {"amount": 0.5}}})).unwrap();
+        s.execute("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5, "smoothing": {"amount": 0.5, "catchUpOnEnd": true}}})).unwrap();
         let mut pts = vec![json!([10.0, 40.0, 1.0])];
         pts.extend(xs.iter().map(|&x| json!([x, 40.0 + (x / 7.0).sin() * 8.0, 1.0])));
         // (Round tips without dynamics draw the same for any seed.)
@@ -4601,7 +4664,7 @@ mod tests {
         // leave a stale tail behind if it weren't restored.
         let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 200, "height": 120, "background": "transparent"})).unwrap();
-        app.run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 1.0, "smoothing": {"amount": 0.6}}})).unwrap();
+        app.run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 1.0, "smoothing": {"amount": 0.6, "catchUpOnEnd": true}}})).unwrap();
         app.ui.tool = Tool::Brush;
         let m = egui::Modifiers::NONE;
         tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 20.0, pressure: 1.0 }, m);
@@ -4613,6 +4676,32 @@ mod tests {
         let done = app.session.documents()[0].doc.clone();
         let (a, b) = (live.layers[0].surface().unwrap(), done.layers[0].surface().unwrap());
         assert!((0..120).all(|y| (0..200).all(|x| a.rgba(x, y) == b.rgba(x, y))), "no stale tails in the preview");
+    }
+
+    #[test]
+    fn shift_connection_preview_reaches_click_without_changing_freehand_smoothing() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 200, "height": 80, "background": "transparent"})).unwrap();
+        app.run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 1.0, "smoothing": {"amount": 1.0, "catchUpOnEnd": false}}})).unwrap();
+        app.ui.tool = Tool::Brush;
+        tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 40.0 }, egui::Modifiers::NONE);
+        let before = app.session.active().unwrap().history.past_len();
+        tool_event(&mut app, ToolEvent::Down { x: 170.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::SHIFT);
+        let live = display_doc(&mut app, 0).0;
+        assert!(live.layers[0].surface().unwrap().rgba(170, 40)[3] > 0.9);
+        tool_event(&mut app, ToolEvent::Up { x: 170.0, y: 40.0 }, egui::Modifiers::SHIFT);
+        assert!(same_pixels(&live, &app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().history.past_len(), before + 1);
+        assert!(!app.session.tools.brush.smoothing.catch_up_on_end);
+    }
+
+    #[test]
+    fn freehand_without_end_catch_up_stops_at_filtered_tip() {
+        let (live, done, _, app) = drag_frames(1.0, false, &[30.0, 50.0, 70.0, 90.0, 110.0, 130.0, 150.0, 170.0]);
+        assert!(same_pixels(&live, &done));
+        assert_eq!(done.layers[0].surface().unwrap().rgba(170, 40)[3], 0.0);
+        assert!(!app.session.tools.brush.smoothing.catch_up_on_end);
     }
 
     /// Shapes the drag preview paints for `app` this frame.

@@ -315,3 +315,32 @@ fn control_inspection_and_pointer_can_drive_the_same_independent_corner_edit() {
     assert_eq!(response["ok"], true);
     assert_eq!(inspect(&a)["radii"], json!([20.0, 35.0, 20.0, 20.0]));
 }
+
+/// The Move tool shows the corner widgets too, as it does the arrow handles: hidden while it
+/// drags the layer, back on release, and a press on one still edits the corner.
+#[test]
+fn the_move_tool_shows_the_widgets_but_hides_them_while_moving() {
+    let mut a = app(SampleType::U8);
+    a.ui.tool = Tool::Move;
+    let (id, rect, base) = rectangle(&a).expect("widgets with the Move tool");
+    assert!(!inspect(&a).is_null());
+    // Drag the rectangle by its middle: no widgets meanwhile.
+    event(&mut a, "down", [120.0, 80.0], Modifiers::NONE);
+    event(&mut a, "move", [150.0, 100.0], Modifiers::NONE);
+    assert!(a.drag.as_ref().is_some_and(|d| d.tool == Tool::Move));
+    assert!(rectangle(&a).is_none() && inspect(&a).is_null(), "hidden while moving");
+    assert!(cursor(&a, handles(rect, base, 1.0)[0]).is_none());
+    event(&mut a, "up", [150.0, 100.0], Modifiers::NONE);
+    assert!(a.drag.is_none());
+    let (_, moved, _) = rectangle(&a).expect("back after the move");
+    assert_eq!(moved, [rect[0] + 30.0, rect[1] + 20.0, rect[2], rect[3]]);
+    // A press on a widget edits that corner rather than moving the layer.
+    let corner = handles(moved, base, 1.0)[0];
+    event(&mut a, "down", corner, Modifiers::NONE);
+    assert!(a.ui.shape_corners.is_some() && a.drag.is_none());
+    event(&mut a, "move", [corner[0] + 10.0, corner[1] + 10.0], Modifiers::NONE);
+    event(&mut a, "up", [corner[0] + 10.0, corner[1] + 10.0], Modifiers::NONE);
+    let after = live(&a.session.active().unwrap().doc, id);
+    assert!(after[0] > base[0], "{after:?}");
+    assert_eq!(rectangle(&a).unwrap().1, moved, "the layer stayed put");
+}

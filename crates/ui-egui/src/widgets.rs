@@ -142,6 +142,10 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> Response {
     resp
 }
 
+/// How far a [`value_field`]'s number is raised to sit centred in its box: the monospace font's
+/// line puts the digits about this much below the middle (measured at 6× on the field's render).
+const FIELD_LIFT: f32 = 1.75;
+
 /// Monospace numeric field with a dimmed unit suffix, Photoshop style. Drag to scrub.
 pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
     value_field_in(ui, value, range, suffix, width, 0.0).0
@@ -157,7 +161,8 @@ fn value_field_in(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<
         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     }
     let suffix_w = if suffix.is_empty() { 0.0 } else { 16.0 };
-    let field = Rect::from_min_max(rect.min + vec2(4.0, 2.0), rect.max - vec2(4.0 + suffix_w + trailing, 2.0));
+    // Raised by FIELD_LIFT: the monospace digits otherwise sit low in the box, under the suffix.
+    let field = Rect::from_min_max(rect.min + vec2(4.0, 2.0), rect.max - vec2(4.0 + suffix_w + trailing, 2.0)).translate(vec2(0.0, -FIELD_LIFT));
     // Small ranges (gamma 0.01–9.99, 0–1 centres) need two decimals and a finer drag, like Photoshop.
     let fine = range.end() - range.start() <= 10.0;
     let (lo, hi) = (*range.start(), *range.end());

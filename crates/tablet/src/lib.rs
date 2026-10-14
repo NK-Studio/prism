@@ -5,11 +5,13 @@
 //!   each `NSEvent` (`pressure`, `tilt`, `rotation`, `subtype`, and `pointingDeviceType` from
 //!   proximity events) before winit sees the event, so every pointer event the UI handles already
 //!   has its pen sample. AppKit's block-based monitor API needs Objective-C interop, so
-//!   `macos.rs` is the only module in the workspace that allows `unsafe` (craftrules
-//!   never-crash: an isolated, tested helper crate).
+//!   `macos.rs` isolates its `unsafe` interop in this tested helper crate.
+//! - **Windows** ([`windows_ink`], plus `windows::message_hook` on Windows): capture paired
+//!   coordinate/pressure history before winit dispatches, disable pen press-and-hold per window,
+//!   and cancel interrupted contacts. Only `windows.rs` contains the Windows `unsafe` boundary.
 //!
-//! The platform glue hands raw values to the pure mapping in [`appkit`], which normalises,
-//! clamps and tracks pen state and is tested on every platform.
+//! Platform glue hands raw values to pure mapping in [`appkit`] or [`windows_ink`], which
+//! normalises, clamps and tracks pen state and is tested on every platform.
 //!
 //! A sample is reported through a callback: `Some(sample)` while a pen is in use (hovering or
 //! touching), `None` when the pointer is a mouse again.
@@ -17,6 +19,10 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod appkit;
+pub mod windows_ink;
+
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 #[cfg(target_os = "macos")]
 pub mod macos;

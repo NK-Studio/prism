@@ -11,9 +11,11 @@ mod ico;
 mod layers;
 mod perf;
 mod pinned;
+mod release;
 mod scorecard;
 mod sha256;
 mod stats;
+mod update;
 mod version;
 
 use std::path::{Path, PathBuf};
@@ -45,6 +47,15 @@ commands:
                   regenerate docs/scorecard.md (--check: fail if it is stale)
   version [set X.Y.Z[-pre]]
                   print the workspace version, or set it (Cargo.toml + Cargo.lock)
+  release start X.Y.Z | status [--json] | check | done [--note T] | skip | back
+                  local release conveyor belt (packaging/release/pipeline.json,
+                  progress in log/release/state.json; see xtask/src/release.rs)
+  update keygen --secret PATH | update publish --site DIR --base-url URL [...]
+                  in-app update signing keys, and the signed update feed for the Vercel site
+                  (see xtask/src/update.rs)
+  brush-compare <jsx|render|diff|all> [--out DIR] [--cases FILE] [--only ID,...]
+                  brush engine vs Photoshop: generate the Photoshop script, render the same cases
+                  in Prism and diff them into target/brush-compare/ (docs/brush-compare.md)
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
 ";
@@ -64,7 +75,10 @@ fn main() -> ExitCode {
         Some("perf") => perf::run(&root(), &rest),
         Some("scorecard") => scorecard::run(&root(), &rest),
         Some("version") => version::run(&root(), &rest),
+        Some("brush-compare") => cmd_brush_compare(&rest),
         Some("ico") => ico::run(&rest),
+        Some("update") => update::run(&root(), &rest),
+        Some("release") => release::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -143,6 +157,12 @@ fn cmd_parity() -> Result<(), String> {
     let mut c = cargo();
     c.args(["run", "-q", "-p", "prism-ui-egui", "--example", "parity", "--", "--write", "docs/parity.md"]);
     run(c, "cargo run -p prism-ui-egui --example parity")
+}
+
+fn cmd_brush_compare(rest: &[&str]) -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["run", "-q", "--profile", "fast", "-p", "prism-engine", "--example", "brush_compare", "--"]).args(rest);
+    run(c, "cargo run --profile fast -p prism-engine --example brush_compare")
 }
 
 fn cmd_ci() -> Result<(), String> {

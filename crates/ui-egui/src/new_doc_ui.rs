@@ -709,7 +709,8 @@ mod tests {
 
         #[test]
         fn save_restart_select_create_and_delete_through_the_dialog() {
-            let store = Arc::new(Mutex::new(None));
+            // A user who has already been through the first-run setup (an existing preferences file).
+            let store = Arc::new(Mutex::new(Some("{}".to_string())));
             let mut h = harness_with_store(&store);
             type_into(&mut h, 0, "1600");
             type_into(&mut h, 1, "1600");

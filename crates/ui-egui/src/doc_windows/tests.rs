@@ -533,3 +533,62 @@ fn phased_drag_can_capture_docking_before_release_and_cancel_keeps_the_window() 
     assert_eq!(call(h.state_mut(), &ctx, "ui.drag", json!({"phase":"invalid","from":[1,2],"to":[3,4]}))["ok"], false);
     assert_eq!(h.state().synthetic.len(), before);
 }
+
+/// A floating window dragged by its tab follows the OS pointer, not the pointer events: those
+/// lag the window's own move, and placing them with its new position made the window shake.
+#[test]
+fn a_dragged_window_follows_the_os_pointer() {
+    let a = app(1);
+    let document = a.session.active().unwrap().doc.id;
+    let strip = Rect::from_min_size(Pos2::ZERO, egui::vec2(300.0, 26.0));
+    let drag = |automated| TabDrag {
+        document,
+        window: Some(1),
+        strip,
+        // A stale event: read with the moved window's origin, the pointer seems to jump back.
+        pointer: egui::pos2(40.0, 10.0),
+        released: false,
+        scale: 2.0,
+        start: egui::pos2(100.0, 20.0),
+        window_origin: Some(egui::pos2(400.0, 300.0)),
+        automated,
+    };
+    let moved_to = |automated, screen| {
+        let ctx = Context::default();
+        ctx.data_mut(|d| d.insert_temp(drag_key(), drag(automated)));
+        let mut raw = egui::RawInput { viewport_id: viewport(Some(1)), ..Default::default() };
+        raw.viewports.insert(raw.viewport_id, Default::default());
+        let mut out = ctx.run_ui(raw, |ui| move_window(ui.ctx(), 1, screen));
+        out.textures_delta.clear();
+        out.viewport_output.get(&viewport(Some(1))).and_then(|v| {
+            v.commands.iter().find_map(|c| if let egui::ViewportCommand::OuterPosition(p) = c { Some(*p) } else { None })
+        })
+    };
+    // The OS pointer 60 px right and 30 px down of the grab: the window moves by exactly that.
+    assert_eq!(moved_to(false, Some(egui::pos2(160.0, 50.0))), Some(egui::pos2(230.0, 165.0)));
+    // Without one (or under automation) the recorded pointer still drives it.
+    assert_eq!(moved_to(false, None), Some(egui::pos2(170.0, 145.0)));
+    assert_eq!(moved_to(true, Some(egui::pos2(160.0, 50.0))), Some(egui::pos2(170.0, 145.0)));
+    // Non-finite readings are ignored.
+    assert_eq!(moved_to(false, Some(egui::pos2(f32::NAN, 0.0))), Some(egui::pos2(170.0, 145.0)));
+}
+
+/// A system file panel (the Save window's Other Location…) must not open under Prism's
+/// always-on-top windows: they drop to ordinary stacking while it is up, and it opens on the
+/// window that asked for it.
+#[test]
+fn a_file_panel_is_not_covered_by_floating_windows() {
+    let mut a = app(1);
+    a.services.application_active = Some(Box::new(|| true));
+    let ctx = Context::default();
+    assert_eq!(window_level(&a, &ctx), egui::viewport::WindowLevel::AlwaysOnTop);
+    a.services.file_dialog = Some(crate::file_dialog::fake(vec![None]).0);
+    a.pick_location("/x/a.png", |_, _| Ok(Value::Null)).unwrap();
+    a.file_dialog_on(crate::native_dialogs::viewport(7));
+    assert_eq!(window_level(&a, &ctx), egui::viewport::WindowLevel::Normal);
+    // Answered (cancelled here): back on top.
+    let mut out = ctx.run_ui(Default::default(), |ui| a.poll_file_dialog(ui.ctx(), None));
+    out.textures_delta.clear();
+    assert!(!a.file_dialog_open());
+    assert_eq!(window_level(&a, &ctx), egui::viewport::WindowLevel::AlwaysOnTop);
+}

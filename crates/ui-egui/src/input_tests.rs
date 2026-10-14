@@ -518,3 +518,54 @@ fn esc_ends_a_pen_path_and_keeps_it() {
     assert_eq!(path.subpaths[0].knots.len(), 3);
     assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
 }
+
+/// ↩ while drawing with the Pen ends the path, open, and deselects it, as in Photoshop: it
+/// leaves the canvas (still the work path in the Paths panel), and the path tools leave it
+/// alone, so the next click starts a new path even on top of it. ↩ with nothing being drawn
+/// hides the work path too; a changed work path shows again. Shape mode keeps its layer.
+#[test]
+fn enter_ends_a_pen_path_and_hides_it() {
+    use crate::vector_ui::{PenPath, shown_work_path, work_path_hidden};
+    let pen = || PenPath { knots: vec![[[50.0, 50.0]; 3], [[150.0, 50.0]; 3], [[150.0, 120.0]; 3]], ..Default::default() };
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::Pen;
+    h.state_mut().ui.pen = Some(pen());
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    let app = h.state();
+    assert!(app.ui.pen.is_none(), "the Pen leaves drawing state");
+    let doc = &app.session.active().unwrap().doc;
+    let path = doc.work_path.clone().expect("the path is kept as the work path");
+    assert_eq!((path.subpaths[0].knots.len(), path.subpaths[0].closed), (3, false));
+    assert!(work_path_hidden(app, doc) && shown_work_path(app).is_none(), "off the canvas");
+    assert_eq!(app.ui.selected_path, None, "deselected in the Paths panel");
+    assert!(crate::direct_select::candidates(app).is_empty(), "the path tools don't edit it");
+    // A press on the hidden path's segment starts a new path (Auto Add/Delete leaves it alone).
+    crate::vector_ui::pen_down(h.state_mut(), 100.0, 50.0);
+    crate::vector_ui::pen_up(h.state_mut());
+    assert_eq!(h.state().ui.pen.as_ref().map(|p| p.knots.len()), Some(1));
+    assert_eq!(h.state().session.active().unwrap().doc.work_path, Some(path.clone()), "untouched");
+    // Esc finishes it: the new work path (it replaces the deselected one) shows.
+    crate::vector_ui::pen_down(h.state_mut(), 100.0, 150.0);
+    crate::vector_ui::pen_up(h.state_mut());
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    let shown = shown_work_path(h.state()).expect("the new path shows");
+    assert_eq!(shown.subpaths.len(), 1);
+    assert_eq!(shown.subpaths[0].knots.len(), 2);
+    // ↩ with nothing being drawn hides it; editing it by command shows it again.
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert!(shown_work_path(h.state()).is_none());
+    h.state_mut().run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [{"anchor": [0, 0]}, {"anchor": [9, 9]}]}]}})).unwrap();
+    assert!(shown_work_path(h.state()).is_some(), "a changed work path shows");
+    // Shape mode: ↩ makes the shape layer, as before; nothing is hidden.
+    h.state_mut().ui.tool_options.vector_mode = "shape".into();
+    let layers = h.state().session.active().unwrap().doc.layers.len();
+    h.state_mut().ui.pen = Some(pen());
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    let app = h.state();
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1);
+    assert!(shown_work_path(app).is_some());
+}

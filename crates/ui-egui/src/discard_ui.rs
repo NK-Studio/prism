@@ -105,6 +105,8 @@ pub fn guard_window_close(app: &mut PrismApp, ctx: &egui::Context) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         return;
     }
+    // A downloaded update armed to install starts its installer now; it waits for Prism to exit.
+    crate::update_ui::on_exit(app);
     // Leaving: through the platform's own quit where there is one (see `Services::quit`), with
     // the window left open for it to close.
     if let Some(quit) = app.services.quit.as_mut() {

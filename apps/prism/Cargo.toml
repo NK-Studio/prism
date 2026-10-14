@@ -33,6 +33,8 @@ prism-io = { workspace = true }
 prism-format = { workspace = true }
 prism-automation = { workspace = true }
 prism-ui-egui = { workspace = true }
+# In-app updates: signed feed, verified download, whole-app replacement.
+prism-updater = { workspace = true }
 # Pen tablet pressure/tilt on macOS (the workspace's one isolated unsafe helper crate).
 prism-tablet = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence"] }
@@ -55,8 +57,11 @@ fmv-macos-events = "=0.1.0"
 # pointer is when files are dropped (cursor.rs; winit 0.30 drops carry no position). Already in
 # Cargo.lock (winit, prism-tablet); pinned exactly to the same versions.
 objc2 = "=0.6.4"
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSGeometry", "NSProcessInfo", "NSString"] }
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSApplicationScripting", "NSEvent", "NSResponder", "NSScreen", "NSView", "NSWindow"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSGeometry", "NSProcessInfo", "NSString", "NSURL"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSApplicationScripting", "NSEvent", "NSOpenPanel", "NSPanel", "NSResponder", "NSSavePanel", "NSScreen", "NSView", "NSWindow"] }
+# The Save window's Other Location… panel (location_panel.rs) takes a completion block. Already in
+# Cargo.lock (objc2-app-kit); pinned exactly to the same version.
+block2 = { version = "=0.6.2", default-features = false, features = ["std"] }
 # The macOS menu bar (mac_menu.rs): a standalone native menu crate (from the tauri-apps org, but
 # not Tauri: no webview, no JS), AppKit menus behind a safe API (no GTK with default features off). Pinned exactly: review the diff before bumping.
 muda = { version = "=0.21.1", default-features = false }
@@ -68,6 +73,7 @@ dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
 # Drop position on Windows (`cursor.rs`): safe Win32 wrappers (GetCursorPos), no dependencies of
 # its own. Pinned exactly: review the diff before bumping.
 [target.'cfg(target_os = "windows")'.dependencies]
+winit = { version = "=0.30.13", default-features = false }
 # Safe Windows screen-capture bindings.
 xcap = "=0.9.8"
 winsafe = { version = "=0.0.29", default-features = false, features = ["user"] }

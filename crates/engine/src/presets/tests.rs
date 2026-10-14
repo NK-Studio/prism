@@ -436,7 +436,7 @@ fn clone_source_slots_and_identity_matches_offset() {
         // Aligned: the pairing stuck, the next stroke keeps the offset.
         let v = s.execute("cloneSource.list", json!({})).unwrap();
         assert_eq!(v["sources"][2]["offset"], json!([-30.0, -20.0]));
-        s.execute("paint.cloneStamp", json!({"points": [[50, 40]], "size": 3, "hardness": 100})).unwrap();
+        s.execute("paint.cloneStamp", json!({"points": [[50, 40]], "size": 5, "hardness": 100})).unwrap();
         let px = layer_px(&s, 50, 40);
         assert!((px[0] - 20.0 / 63.0).abs() < 0.01, "{px:?}");
     }
@@ -469,7 +469,7 @@ fn clone_source_flip_scale_rotation() {
     let mut s4 = clone_doc(8);
     s4.execute("cloneSource.set", json!({"source": [20, 20], "rotation": 45})).unwrap();
     s4.execute("paint.healingBrush", json!({"points": [[40, 24]], "size": 7})).unwrap();
-    s4.execute("paint.cloneStamp", json!({"points": [[10, 40]], "offset": [5, 0], "rotation": 0, "size": 3, "hardness": 100})).unwrap();
+    s4.execute("paint.cloneStamp", json!({"points": [[10, 40]], "offset": [5, 0], "rotation": 0, "size": 5, "hardness": 100})).unwrap();
     let px = layer_px(&s4, 10, 40);
     assert!((px[0] - 15.0 / 63.0).abs() < 0.01, "{px:?}");
 }

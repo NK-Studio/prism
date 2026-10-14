@@ -19,6 +19,13 @@ pub const SPEED_SPACING_MS: f64 = 8.0;
 
 /// Densest speed spacing, in pixels between dabs (a slow, long stroke never floods the buffer).
 const MIN_SPEED_STEP: f64 = 0.5;
+
+/// Smallest distance between dabs along the path, in pixels, whatever the Spacing percentage:
+/// Photoshop lays the dabs of a 1–100 px tip no closer than about 1 px (measured: a 20 px tip at
+/// 1–5 % spacing paints the same density as at 1 px; `cargo xtask brush-compare`, `spc-*` cases).
+/// Denser dabs would build flow and the anti-aliased edge up further than Photoshop does, which
+/// made thin lines too dark.
+pub const MIN_DAB_STEP: f64 = 1.0;
 /// Maximum airbrush catch-up dabs for one input segment.
 const MAX_AIRBRUSH_DABS_PER_SEGMENT: usize = 512;
 
@@ -35,6 +42,12 @@ fn lerp_pt(a: &StrokePoint, b: &StrokePoint, f: f64) -> StrokePoint {
         wheel: a.wheel + (b.wheel - a.wheel) * ff,
         time: a.time + (b.time - a.time) * f,
     }
+}
+
+/// A stationary stylus can still change the brush footprint or transfer. Timestamps alone
+/// must not add ink unless the brush explicitly enables time-based build-up.
+fn stylus_changed(a: &StrokePoint, b: &StrokePoint) -> bool {
+    a.pressure != b.pressure || a.tilt_x != b.tilt_x || a.tilt_y != b.tilt_y || a.rotation != b.rotation || a.wheel != b.wheel
 }
 
 // ---------------------------------------------------------------------------
@@ -82,10 +95,23 @@ impl Smoother {
             let d = (dx * dx + dy * dy).sqrt();
             if d > len {
                 let k = (d - len) / d;
-                let np = StrokePoint { x: pos.x + dx * k, y: pos.y + dy * k, ..p };
+                let np = StrokePoint { time: p.time, ..lerp_pt(&pos, &p, k) };
+                self.pos = Some(np);
+                out.push(np);
+            } else if prev_input.is_some_and(|q| q.x == p.x && q.y == p.y) && (stylus_changed(&pos, &p) || p.time > pos.time) {
+                // A pen held in place can change pressure/pose or run the airbrush clock.
+                // Movement inside the string must stay suppressed: applying every moving
+                // sample's pressure at the frozen brush anchor would inflate the stroke head.
+                let np = StrokePoint { x: pos.x, y: pos.y, ..p };
                 self.pos = Some(np);
                 out.push(np);
             }
+            return;
+        }
+        if p.x == pos.x && p.y == pos.y {
+            // No positional lag to compensate: a pen pressed in place must resize immediately.
+            self.pos = Some(p);
+            out.push(p);
             return;
         }
         // Exponential: each iteration moves `a` of the way towards the pointer.
@@ -96,7 +122,9 @@ impl Smoother {
         };
         let mut cur = pos;
         for _ in 0..iters {
-            cur = StrokePoint { x: cur.x + (p.x - cur.x) * a, y: cur.y + (p.y - cur.y) * a, ..p };
+            // Keep the sensor values at the same position along the smoothed segment. Copying
+            // the latest pressure onto a lagging position makes a releasing pen abruptly thin.
+            cur = StrokePoint { time: p.time, ..lerp_pt(&cur, &p, a) };
             out.push(cur);
         }
         self.pos = Some(cur);
@@ -108,7 +136,7 @@ impl Smoother {
             return;
         }
         if let (Some(pos), Some(last)) = (self.pos, self.last_input)
-            && (pos.x != last.x || pos.y != last.y)
+            && (pos.x != last.x || pos.y != last.y || stylus_changed(&pos, &last))
         {
             self.pos = Some(last);
             out.push(last);
@@ -142,7 +170,8 @@ pub struct StepInput {
     pub step: u64,
 }
 
-/// Walks a polyline and emits steps every `step_len(point)` pixels, plus airbrush steps in time.
+/// Walks a polyline and emits steps, each as far from the last as the step's own callback says (the
+/// spacing of the dab it laid), plus airbrush steps in time.
 #[derive(Clone, Debug)]
 pub struct PathWalker {
     last: Option<StrokePoint>,
@@ -184,17 +213,18 @@ impl PathWalker {
         self
     }
 
-    fn emit(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput)) {
+    /// Emit a step; returns the path distance `out` asks for to the next one.
+    fn emit(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput) -> f64) -> f64 {
         let s = StepInput { point, direction: self.dir, initial_direction: self.initial_dir.unwrap_or(self.dir), step: self.step };
         self.step += 1;
-        out(s);
+        out(s)
     }
 
-    pub fn push(&mut self, p: StrokePoint, step_len: &impl Fn(&StrokePoint) -> f64, out: &mut impl FnMut(StepInput)) {
+    /// Feed one point. `out` builds a step's dabs and returns the distance to the next step.
+    pub fn push(&mut self, p: StrokePoint, out: &mut impl FnMut(StepInput) -> f64) {
         let Some(a) = self.last else {
             self.last = Some(p);
             self.pending_first = Some(p);
-            self.next_at = step_len(&p);
             return;
         };
         let (dx, dy) = (p.x - a.x, p.y - a.y);
@@ -206,7 +236,7 @@ impl PathWalker {
             }
         }
         if let Some(f) = self.pending_first.take() {
-            self.emit(f, out);
+            self.next_at = self.emit(f, out).max(0.25);
         }
         if len > 1e-9 {
             // Speed spacing needs the segment's duration; without timestamps (a straight ⇧-click
@@ -216,8 +246,7 @@ impl PathWalker {
                 None => {
                     while self.next_at <= len + 1e-9 {
                         let q = lerp_pt(&a, &p, (self.next_at / len).min(1.0));
-                        self.emit(q, out);
-                        self.next_at += step_len(&q).max(0.25);
+                        self.next_at += self.emit(q, out).max(0.25);
                     }
                     self.next_at -= len;
                 }
@@ -237,6 +266,7 @@ impl PathWalker {
                 }
             }
         }
+        let mut emitted_endpoint = false;
         if let Some(iv) = self.interval {
             let dt = p.time - a.time;
             if dt > 0.0 && dt.is_finite() {
@@ -253,14 +283,20 @@ impl PathWalker {
                     self.time_acc -= iv;
                     let f = ((dt - self.time_acc) / dt).clamp(0.0, 1.0);
                     self.emit(lerp_pt(&a, &p, f), out);
+                    emitted_endpoint = f >= 1.0;
                     n += 1;
                 }
             }
         }
+        if len <= 1e-9 && stylus_changed(&a, &p) && !emitted_endpoint {
+            // Distance spacing cannot represent a pressure/pose change in place. Emit it once,
+            // keeping unchanged stationary samples inert and avoiding a duplicate airbrush dab.
+            self.next_at = self.emit(p, out).max(0.25);
+        }
         self.last = Some(p);
     }
 
-    pub fn finish(&mut self, out: &mut impl FnMut(StepInput)) {
+    pub fn finish(&mut self, out: &mut impl FnMut(StepInput) -> f64) {
         if let Some(f) = self.pending_first.take() {
             self.emit(f, out);
         }
@@ -290,7 +326,9 @@ pub fn control_angle(c: Control, fade_steps: u32, s: &StepInput) -> f32 {
     let p = &s.point;
     match c {
         Control::Off => 0.0,
-        Control::Fade => 360.0 * (s.step as f32 / fade_steps.max(1) as f32).min(1.0),
+        // 360° × the control value, as for pressure: Photoshop's Fade turns the tip clockwise by
+        // 360° / steps per step (measured, `fade2-angle`), and stops at 0° after `fade_steps`.
+        Control::Fade => 360.0 * control_value(c, fade_steps, s),
         Control::PenPressure => 360.0 * p.pressure.clamp(0.0, 1.0),
         Control::PenTilt => {
             if p.tilt_x == 0.0 && p.tilt_y == 0.0 {
@@ -306,16 +344,21 @@ pub fn control_angle(c: Control, fade_steps: u32, s: &StepInput) -> f32 {
     }
 }
 
-/// A 0..1 multiplier from a dynamic: control lerps from `minimum` to 1, jitter reduces randomly,
-/// never below `minimum`.
+/// A 0..1 multiplier from a dynamic with control value `cv`: `minimum` plus the rest scaled by the
+/// control and reduced by the jitter, `min + (1 − min)·cv·(1 − jitter·r)`. So jitter spreads evenly
+/// down to the minimum rather than piling up at it, as Photoshop's does (measured, `jit-roundness`
+/// and `jit-size-50`: uniform over [minimum, 1]).
+fn jittered(d: &Dynamic, cv: f32, r: f32) -> f32 {
+    let min = d.minimum.clamp(0.0, 1.0);
+    min + (1.0 - min) * cv.clamp(0.0, 1.0) * (1.0 - d.jitter.clamp(0.0, 1.0) * r)
+}
+
+/// [`jittered`] with the dynamic's own control (1 when the dynamic is off).
 fn scalar(d: &Dynamic, s: &StepInput, r: f32) -> f32 {
     if !d.is_active() {
         return 1.0;
     }
-    let min = d.minimum.clamp(0.0, 1.0);
-    let cv = control_value(d.control, d.fade_steps, s);
-    let v = (min + (1.0 - min) * cv) * (1.0 - d.jitter.clamp(0.0, 1.0) * r);
-    v.max(min)
+    jittered(d, control_value(d.control, d.fade_steps, s), r)
 }
 
 fn rgb_to_hsv(c: [f32; 3]) -> [f32; 3] {
@@ -367,17 +410,18 @@ pub fn dynamic_color(b: &BrushSettings, s: &StepInput, seed: u64, index: u64) ->
     [o[0], o[1], o[2], fg[3] + (bg[3] - fg[3]) * t]
 }
 
-/// Base (pre-jitter) diameter at a step: size × size control (pressure etc.). Drives spacing.
-pub fn base_diameter(b: &BrushSettings, s: &StepInput) -> f32 {
+/// A dab's diameter at a step: size × the size control (or the options bar's pressure-for-size)
+/// × the size jitter, `r` being the jitter's random number.
+pub fn dab_diameter(b: &BrushSettings, s: &StepInput, r: f32) -> f32 {
     let sd = &b.shape_dynamics;
-    let mut f = 1.0;
-    if sd.enabled && sd.size.control != Control::Off {
-        let min = sd.size.minimum.clamp(0.0, 1.0);
-        f = min + (1.0 - min) * control_value(sd.size.control, sd.size.fade_steps, s);
+    let cv = if sd.enabled && sd.size.control != Control::Off {
+        control_value(sd.size.control, sd.size.fade_steps, s)
     } else if b.pressure_size {
-        f = s.point.pressure.clamp(0.0, 1.0);
-    }
-    b.size * f
+        s.point.pressure.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    b.size * if sd.enabled { jittered(&sd.size, cv, r) } else { cv }
 }
 
 /// Builds the primary dabs of a step (Shape Dynamics, Scattering, Transfer, Color, Texture depth).
@@ -395,13 +439,16 @@ impl DabBuilder {
         Self { brush: brush.clone(), seed: brush.seed, stroke_color: None, next_index: 0 }
     }
 
-    pub fn step_len(&self, p: &StrokePoint) -> f64 {
-        let s = StepInput { point: *p, direction: 0.0, initial_direction: 0.0, step: 0 };
-        let d = base_diameter(&self.brush, &s).max(1.0);
-        f64::from(d * self.brush.spacing.max(0.01)).max(0.5)
+    /// Distance to the next step after a dab of `diameter`: Photoshop spaces dabs by the diameter of
+    /// the dab just laid (after size jitter and control; measured, `jit-size-50`: gap / previous
+    /// diameter = 2.03 ± 0.002 at 200 %) times the tip's roundness (its short axis; `spc-round30-a90`).
+    fn step_after(&self, diameter: f32) -> f64 {
+        let b = &self.brush;
+        f64::from(diameter * b.roundness.clamp(0.01, 1.0) * b.spacing.max(0.01)).max(MIN_DAB_STEP)
     }
 
-    pub fn build(&mut self, s: &StepInput, out: &mut Vec<Dab>) {
+    /// Build a step's dabs; returns the distance to the next step.
+    pub fn build(&mut self, s: &StepInput, out: &mut Vec<Dab>) -> f64 {
         let b = &self.brush;
         let seed = self.seed;
         let sd = &b.shape_dynamics;
@@ -413,24 +460,25 @@ impl DabBuilder {
         } else {
             1
         };
-        let base_d = base_diameter(b, s);
+        let mut step = None;
         for _ in 0..count {
             let i = self.next_index;
             self.next_index += 1;
             let r = |st: u64| rand01(seed, i, st);
             // Shape.
-            let mut diameter = base_d;
+            let diameter = dab_diameter(b, s, r(stream::SIZE));
+            // The step's first dab sets the spacing to the next step.
+            if step.is_none() {
+                step = Some(self.step_after(diameter));
+            }
             let mut angle = b.angle;
             let mut roundness = b.roundness.clamp(0.01, 1.0);
             let (mut fx, mut fy) = (b.flip_x, b.flip_y);
             if sd.enabled {
-                if sd.size.jitter > 0.0 {
-                    let min = sd.size.minimum.clamp(0.0, 1.0);
-                    let f = (1.0 - sd.size.jitter.clamp(0.0, 1.0) * r(stream::SIZE)).max(min);
-                    diameter *= f;
-                }
+                // Angle jitter 100 % is ±360° (Photoshop: 25 % already spreads a flat tip over every
+                // orientation, `jit2-angle-25`).
                 angle +=
-                    control_angle(sd.angle.control, sd.angle.fade_steps, s) + rand_signed(seed, i, stream::ANGLE) * sd.angle.jitter.clamp(0.0, 1.0) * 180.0;
+                    control_angle(sd.angle.control, sd.angle.fade_steps, s) + rand_signed(seed, i, stream::ANGLE) * sd.angle.jitter.clamp(0.0, 1.0) * 360.0;
                 roundness = (roundness * scalar(&sd.roundness, s, r(stream::ROUNDNESS))).clamp(0.01, 1.0);
                 if sd.flip_x_jitter && r(stream::FLIP_X) < 0.5 {
                     fx = !fx;
@@ -455,17 +503,26 @@ impl DabBuilder {
                     }
                 }
             }
+            // A dab shrunk to nothing paints nothing (Photoshop's size Fade to 0 % stops painting);
+            // below 1 px it keeps a 1 px tip and lays ink in proportion to its area.
+            if !diameter.is_finite() || diameter <= 1e-3 {
+                continue;
+            }
+            let tiny = diameter.min(1.0).powi(2);
             let radius = (diameter / 2.0).max(0.5);
             // Scatter.
             let mut c = Point::new(s.point.x, s.point.y);
             if sc.enabled && sc.scatter.jitter > 0.0 {
                 let cv = control_value(sc.scatter.control, sc.scatter.fade_steps, s);
                 let amt = f64::from(sc.scatter.jitter * cv * radius);
-                let (ox, oy) = (rand_signed(seed, i, stream::SCATTER_X) as f64 * amt, rand_signed(seed, i, stream::SCATTER_Y) as f64 * amt);
                 if sc.both_axes {
-                    c.x += ox;
-                    c.y += oy;
+                    // Any direction, up to the amount (Photoshop: the offset across the path has
+                    // sd ≈ amount / √6, `jit-scatter-200-both`, which a square spread doesn't give).
+                    let (a, d) = (f64::from(rand01(seed, i, stream::SCATTER_X)) * std::f64::consts::TAU, f64::from(rand01(seed, i, stream::SCATTER_Y)) * amt);
+                    c.x += d * a.cos();
+                    c.y += d * a.sin();
                 } else {
+                    let ox = rand_signed(seed, i, stream::SCATTER_X) as f64 * amt;
                     // Perpendicular to the direction of travel (y-down image space).
                     let (dx, dy) = (f64::from(s.direction.cos()), -f64::from(s.direction.sin()));
                     c.x += -dy * ox;
@@ -496,7 +553,7 @@ impl DabBuilder {
             out.push(Dab {
                 center: c,
                 radius,
-                alpha: flow.clamp(0.0, 1.0),
+                alpha: (flow * tiny).clamp(0.0, 1.0),
                 angle: angle.to_radians(),
                 roundness,
                 flip_x: fx,
@@ -511,6 +568,7 @@ impl DabBuilder {
                 mix,
             });
         }
+        step.unwrap_or(MIN_DAB_STEP)
     }
 }
 
@@ -525,11 +583,13 @@ impl DualBuilder {
     pub fn new(brush: &BrushSettings) -> Self {
         Self { brush: brush.clone(), next_index: 0 }
     }
-    pub fn step_len(&self, _p: &StrokePoint) -> f64 {
+    /// The Dual Brush tip's fixed spacing.
+    fn step(&self) -> f64 {
         let d = &self.brush.dual_brush;
-        f64::from(d.size.max(1.0) * d.spacing.max(0.01)).max(0.5)
+        f64::from(d.size.max(1.0) * d.spacing.max(0.01)).max(MIN_DAB_STEP)
     }
-    pub fn build(&mut self, s: &StepInput, out: &mut Vec<Dab>) {
+    /// Build a step's dabs; returns the distance to the next step.
+    pub fn build(&mut self, s: &StepInput, out: &mut Vec<Dab>) -> f64 {
         let d = &self.brush.dual_brush;
         let seed = self.brush.seed ^ 0xD0A1;
         for _ in 0..d.count.clamp(1, 16) {
@@ -566,6 +626,7 @@ impl DualBuilder {
                 mix: 1.0,
             });
         }
+        self.step()
     }
 }
 
@@ -616,20 +677,10 @@ impl DabGenerator {
     fn walk(&mut self, pts: &[StrokePoint], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
         for p in pts {
             let p = apply_pose(&self.builder.brush, *p);
-            let b = &self.builder;
-            let len = |q: &StrokePoint| b.step_len(q);
-            let mut steps = Vec::new();
-            self.walker.push(p, &len, &mut |s| steps.push(s));
-            for s in &steps {
-                self.builder.build(s, dabs);
-            }
+            let builder = &mut self.builder;
+            self.walker.push(p, &mut |s| builder.build(&s, dabs));
             if let (Some(w), Some(db)) = (self.dual_walker.as_mut(), self.dual.as_mut()) {
-                let mut steps = Vec::new();
-                let len = |q: &StrokePoint| db.step_len(q);
-                w.push(p, &len, &mut |s| steps.push(s));
-                for s in &steps {
-                    db.build(s, dual);
-                }
+                w.push(p, &mut |s| db.build(&s, dual));
             }
         }
     }
@@ -650,17 +701,10 @@ impl DabGenerator {
         let mut sm = Vec::new();
         self.smoother.finish(&mut sm);
         self.walk(&sm, dabs, dual);
-        let mut steps = Vec::new();
-        self.walker.finish(&mut |s| steps.push(s));
-        for s in &steps {
-            self.builder.build(s, dabs);
-        }
+        let builder = &mut self.builder;
+        self.walker.finish(&mut |s| builder.build(&s, dabs));
         if let (Some(w), Some(db)) = (self.dual_walker.as_mut(), self.dual.as_mut()) {
-            let mut steps = Vec::new();
-            w.finish(&mut |s| steps.push(s));
-            for s in &steps {
-                db.build(s, dual);
-            }
+            w.finish(&mut |s| db.build(&s, dual));
         }
     }
 }

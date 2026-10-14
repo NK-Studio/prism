@@ -536,8 +536,8 @@ fn brush_sections_paint_simplified_chinese_labels_and_heading() {
             _ => {}
         }
     }
-    let zh = crate::i18n::Lang::from_code("zh-hans").unwrap();
-    let mut h = app_harness_with_language(zh);
+    let ko = crate::i18n::Lang::from_code("ko").unwrap();
+    let mut h = app_harness_with_language(ko);
     h.key_press(egui::Key::F5);
     h.run_steps(3);
     let mut painted = Vec::new();
@@ -545,11 +545,11 @@ fn brush_sections_paint_simplified_chinese_labels_and_heading() {
         collect_text(&shape.shape, &mut painted);
     }
     for (name, _) in SECTIONS {
-        let translated = crate::i18n::tr(zh, name);
+        let translated = crate::i18n::tr(ko, name);
         assert!(painted.iter().any(|s| s == translated), "{name} must paint as {translated}");
         assert!(!painted.iter().any(|s| s == name), "{name} must not paint in English");
     }
-    let heading = crate::i18n::tr(zh, "Brush Tip Shape");
+    let heading = crate::i18n::tr(ko, "Brush Tip Shape");
     assert_eq!(painted.iter().filter(|s| s.as_str() == heading).count(), 2, "both the section row and heading are translated");
 }
 

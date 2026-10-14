@@ -101,11 +101,17 @@ pub fn load(app: &mut PrismApp) {
         return;
     }
     app.prefs_rt.loaded = true;
-    if let Some(text) = app.services.load_prefs.as_mut().and_then(|f| f())
-        && let Err(e) = app.session.load_prefs_json(&text)
-    {
-        app.ui.status = format!("Preferences were reset: {e}");
+    // Without a loader (tests, headless runs) there is no first launch to greet.
+    let has_loader = app.services.load_prefs.is_some();
+    let text = app.services.load_prefs.as_mut().and_then(|f| f());
+    let had_prefs_file = !has_loader || text.is_some();
+    if let Some(text) = text {
+        if let Err(e) = app.session.load_prefs_json(&text) {
+            app.ui.status = format!("Preferences were reset: {e}");
+        }
+        keep_studio_layout(app, &text);
     }
+    crate::first_run_ui::open_on_first_launch(app, had_prefs_file);
     crate::dock::restore(app);
     app.sync_recent();
     app.prefs_rt.saved_rev = app.session.prefs.rev();
@@ -196,12 +202,33 @@ fn sync_tooltips(app: &PrismApp, ctx: &egui::Context) {
     }
 }
 
+/// Layout used to come with the theme. A file from before `interface.layout` existed that chose a
+/// Studio theme keeps its roomy layout; Pro themes were compact already.
+fn keep_studio_layout(app: &mut PrismApp, text: &str) {
+    let saved: Option<Value> = serde_json::from_str(text).ok();
+    let interface = saved.as_ref().and_then(|v| v.get("interface"));
+    let chose_layout = interface.and_then(|i| i.get("layout")).is_some();
+    if !chose_layout && matches!(app.session.prefs().interface.theme, Theme::Studio | Theme::StudioLight) {
+        app.session.prefs.edit(|p| p.interface.layout = prism_engine::prefs::Layout::Comfortable);
+    }
+}
+
+/// The interface layout the preference asks for.
+pub(crate) fn layout(app: &PrismApp) -> crate::theme::Layout {
+    match app.session.prefs().interface.layout {
+        prism_engine::prefs::Layout::Compact => crate::theme::Layout::Compact,
+        prism_engine::prefs::Layout::Comfortable => crate::theme::Layout::Comfortable,
+    }
+}
+
 /// Per-frame upkeep: theme sync, persistence, autosave and the history log.
 pub fn tick(app: &mut PrismApp, ctx: &egui::Context) {
     if !app.prefs_rt.loaded {
         load(app);
     }
     sync_display_scale(app, ctx);
+    // Layout is its own preference; the theme only picks colours.
+    crate::theme::set_layout(ctx, Some(layout(app)));
     // Interface theme: a preference change applies to the UI; a theme picked from the Window
     // menu is stored as the preference.
     let pref = app.session.prefs().interface.theme;
@@ -826,6 +853,8 @@ fn choice_label(v: &str) -> String {
         "metal" => "Metal".into(),
         "gl" => "OpenGL".into(),
         "cpu" => "CPU (no GPU acceleration)".into(),
+        "compact" => "Compact (Photoshop-style)".into(),
+        "comfortable" => "Comfortable".into(),
         v => humanize(v),
     }
 }
@@ -1848,10 +1877,12 @@ mod tests {
         // Type favorites are live and can be cleared in Preferences.
         assert!(has_visible_fields(&values, "type"));
         assert!(!prefs::is_hidden("type.favoriteFonts"));
-        // Every setting of these sections is still unimplemented.
-        for section in ["integrations", "scratchDisks"] {
-            assert!(!has_visible_fields(&values, section), "{section}");
-        }
+        // Every setting of this section is still unimplemented.
+        assert!(!has_visible_fields(&values, "scratchDisks"));
+        // Integrations shows only the update check so far.
+        assert!(has_visible_fields(&values, "integrations"));
+        assert!(!prefs::is_hidden("integrations.checkForUpdates"));
+        assert!(prefs::is_hidden("integrations.controlPort"));
         // Rotate View with Trackpad is live; the other Enhanced Controls rows stay hidden.
         assert!(has_visible_fields(&values, "enhancedControls"));
         assert!(!prefs::is_hidden("enhancedControls.rotateViewWithTrackpad"));
@@ -2288,5 +2319,38 @@ mod tests {
         assert_eq!(app.ui.dialogs.iter().find(|x| x.id == d).unwrap().fields["width"], 8);
         let d = crate::menus::invoke(&mut app, &ctx, "edit.presets.presetManager", json!({})).unwrap()["dialog"].as_u64().unwrap();
         assert!(crate::dialogs::confirm(&mut app, d).is_ok());
+    }
+
+    #[test]
+    fn studio_users_keep_their_roomy_layout_after_the_split() {
+        let load = |text: &'static str| {
+            let services = crate::Services { load_prefs: Some(Box::new(move || Some(text.to_string()))), ..Default::default() };
+            PrismApp::new(prism_engine::Session::new(), services)
+        };
+        use prism_engine::prefs::Layout;
+        // Before `interface.layout`, the layout came with the theme.
+        assert_eq!(load(r#"{"interface":{"theme":"studioLight"}}"#).session.prefs().interface.layout, Layout::Comfortable);
+        assert_eq!(load(r#"{"interface":{"theme":"studio"}}"#).session.prefs().interface.layout, Layout::Comfortable);
+        assert_eq!(load(r#"{"interface":{"theme":"pro"}}"#).session.prefs().interface.layout, Layout::Compact);
+        // A choice made since is kept, whatever the theme.
+        assert_eq!(load(r#"{"interface":{"theme":"studio","layout":"compact"}}"#).session.prefs().interface.layout, Layout::Compact);
+        assert_eq!(load(r#"{"interface":{"theme":"pro","layout":"comfortable"}}"#).session.prefs().interface.layout, Layout::Comfortable);
+        // New installs: Photoshop's compact panels.
+        assert_eq!(prism_engine::prefs::Preferences::default().interface.layout, Layout::Compact);
+    }
+
+    #[test]
+    fn the_layout_preference_drives_the_panels_and_ignores_the_theme() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.run("prefs.set", json!({"values": {"interface.theme": "studioLight", "interface.layout": "compact"}})).unwrap();
+        tick(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let t = crate::theme::Tokens::get(&ctx);
+        assert!(t.pro && t.kind == ThemeKind::StudioLight, "light colours with compact panels");
+        app.run("prefs.set", json!({"path": "interface.layout", "value": "comfortable"})).unwrap();
+        tick(&mut app, &ctx);
+        assert!(!crate::theme::Tokens::get(&ctx).pro);
+        assert!(app.run("prefs.set", json!({"path": "interface.layout", "value": "huge"})).is_err(), "unknown layouts are refused");
     }
 }

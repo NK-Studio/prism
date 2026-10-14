@@ -132,17 +132,32 @@ pub fn remap_surface(s: &Surface, map: impl Fn(i32, i32) -> (i32, i32)) -> Surfa
 }
 
 /// Merge `upper` onto `lower` producing a raster layer (Layer → Merge Down).
-pub fn merge_down(doc_bounds: Rect, lower: &Layer, upper: &Layer, format: prism_color::PixelFormat) -> Layer {
-    let area = [lower, upper].iter().map(|l| l.surface().map(|s| s.content_bounds()).unwrap_or(doc_bounds)).fold(Rect::EMPTY, |a, b| a.union(&b));
-    let stack = vec![lower.clone(), upper.clone()];
-    let mut tmp = Document::new("merge", doc_bounds.size(), format.mode, format.sample);
-    tmp.layers = stack;
+pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
+    let format = doc.pixel_format();
+    let area = merge_area(doc.bounds(), [lower, upper]);
+    // The two layers alone, with the document's settings their effects read (the global light's
+    // angle, the patterns of pattern overlays, the colour profile).
+    let mut tmp = doc.clone();
+    tmp.layers = vec![lower.clone(), upper.clone()];
     let s = merge_sharing_tiles(&tmp, area, lower, upper, format).unwrap_or_else(|| prism_compose::render_to_surface(&tmp, area, format, None));
     let mut merged = Layer::new(lower.name.clone(), LayerContent::Raster(s));
     merged.id = lower.id;
     merged.blend = lower.blend;
     merged.opacity = 1.0;
     merged
+}
+
+/// What Merge Down renders: each layer's pixels grown by its effects' reach (drop shadows,
+/// glows and strokes draw beyond them, and were cut off at the pixels' edge), or the canvas for
+/// a layer without pixels of its own.
+fn merge_area(canvas: Rect, layers: [&Layer; 2]) -> Rect {
+    layers
+        .iter()
+        .map(|l| {
+            let own = l.surface().map_or(canvas, Surface::content_bounds);
+            if !own.is_empty() && prism_compose::effects::has_effects(l) { own.inflate(prism_compose::effects::margin(l)) } else { own }
+        })
+        .fold(Rect::EMPTY, |a, b| a.union(&b))
 }
 
 /// Merge Down without recompositing where it can't change anything: a tile of a plain `lower`
@@ -241,18 +256,22 @@ mod tests {
         l
     }
 
+    /// A 900 × 700 document of `fmt`, to merge layers in.
+    fn doc(fmt: PixelFormat) -> Document {
+        Document::new("merge", prism_doc::Size::new(900, 700), fmt.mode, fmt.sample)
+    }
+
     /// What Merge Down stores without the tile-sharing shortcut.
-    fn full(bounds: Rect, lower: &Layer, upper: &Layer, fmt: PixelFormat) -> Surface {
-        let area = [lower, upper].iter().map(|l| l.surface().map(|s| s.content_bounds()).unwrap_or(bounds)).fold(Rect::EMPTY, |a, b| a.union(&b));
-        let mut tmp = Document::new("merge", bounds.size(), fmt.mode, fmt.sample);
+    fn full(lower: &Layer, upper: &Layer, fmt: PixelFormat) -> Surface {
+        let mut tmp = doc(fmt);
+        let area = merge_area(tmp.bounds(), [lower, upper]);
         tmp.layers = vec![lower.clone(), upper.clone()];
         prism_compose::render_to_surface(&tmp, area, fmt, None)
     }
 
     fn check(lower: &Layer, upper: &Layer, fmt: PixelFormat, what: &str) {
-        let bounds = Rect::new(0, 0, 900, 700);
-        let got = merge_down(bounds, lower, upper, fmt);
-        assert_eq!(got.surface().unwrap(), &full(bounds, lower, upper, fmt), "{what}");
+        let got = merge_down(&doc(fmt), lower, upper);
+        assert_eq!(got.surface().unwrap(), &full(lower, upper, fmt), "{what}");
     }
 
     #[test]
@@ -323,12 +342,12 @@ mod tests {
         let mut lower = Layer::raster("photo", fmt);
         lower.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 900, 700), &[0.2, 0.5, 0.7, 1.0]);
         let upper = layer(fmt, Rect::new(300, 270, 420, 333), 1.9);
-        let merged = merge_down(Rect::new(0, 0, 900, 700), &lower, &upper, fmt);
+        let merged = merge_down(&doc(fmt), &lower, &upper);
         let ls = lower.surface().unwrap();
         let ms = merged.surface().unwrap();
         let shared = ms.tiles().filter(|(c, t)| ls.tiles().any(|(k, lt)| k == *c && std::sync::Arc::ptr_eq(lt, t))).count();
         // The stroke touches one tile; the others are the lower layer's own.
         assert_eq!(shared, ms.tile_count() - 1);
-        assert_eq!(ms, &full(Rect::new(0, 0, 900, 700), &lower, &upper, fmt));
+        assert_eq!(ms, &full(&lower, &upper, fmt));
     }
 }

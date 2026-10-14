@@ -166,6 +166,9 @@ fn color_menu_selects_modes_in_every_theme_and_workspace_restores_them() {
                 json!({"theme":theme.id(),"dockTabs":{"color":usize::from(!matches!(theme, ThemeKind::Pro | ThemeKind::ProMedium))}}),
             );
             crate::control::handle(h.state_mut(), &ctx, &req);
+            // Each theme with its own layout (the Studio ones roomy), as before layout was a setting.
+            let layout = if crate::theme::Layout::native(theme) == crate::theme::Layout::Compact { "compact" } else { "comfortable" };
+            h.state_mut().run("prefs.set", json!({"path": "interface.layout", "value": layout})).unwrap();
             h.state_mut().ui.dock_tabs.color = usize::from(!matches!(theme, ThemeKind::Pro | ThemeKind::ProMedium));
             h.run_steps(4);
             for (mode, label) in MODES {
@@ -256,6 +259,8 @@ fn both_cubes_fill_resized_docks_without_numeric_readouts() {
                         "colorPanel":{"mode":mode},"dock":{"collapsed":["properties","history","navigator"]}}),
                 );
                 crate::control::handle(h.state_mut(), &ctx, &req);
+                let layout = if crate::theme::Layout::native(theme) == crate::theme::Layout::Compact { "compact" } else { "comfortable" };
+                h.state_mut().run("prefs.set", json!({"path": "interface.layout", "value": layout})).unwrap();
                 let mut previous: Option<Rect> = None;
                 for height in [160.0, 370.0, 560.0, 160.0] {
                     h.state_mut().ui.dock.heights.insert(crate::dock::Group::Color, height);

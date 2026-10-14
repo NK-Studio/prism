@@ -1027,11 +1027,19 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
         if solo.layers.is_empty() {
             return Err(EngineError::Other("the selected layers are all hidden".into()));
         }
-        let fmt = doc.pixel_format();
-        let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
-        let mut merged = Layer::raster(top.name.clone(), fmt);
-        merged.locks = top.locks;
-        *crate::pixels_mut(&mut merged)? = prism_compose::render_to_surface(&solo, doc.bounds(), fmt, None);
+        // Shape layers only: one shape layer (the top one, with every path), as in Photoshop.
+        let shapes: Vec<&Layer> = solo.layers.iter().collect();
+        let merged = match crate::vector_cmds::merged_shape(doc, &shapes, &top) {
+            Some(shape) => shape,
+            None => {
+                let fmt = doc.pixel_format();
+                let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
+                let mut merged = Layer::raster(top.name.clone(), fmt);
+                merged.locks = top.locks;
+                *crate::pixels_mut(&mut merged)? = prism_compose::render_to_surface(&solo, doc.bounds(), fmt, None);
+                merged
+            }
+        };
         let mid = merged.id;
         // Hidden selected layers are discarded, as in Photoshop.
         for id in &ids[..ids.len() - 1] {

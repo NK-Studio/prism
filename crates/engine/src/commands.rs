@@ -721,7 +721,8 @@ fn build() -> Vec<CommandSpec> {
                 below.push(idx - 1);
                 let lower = doc.layer_at(&below).ok_or(EngineError::NoLayer(id))?.clone();
                 let upper = doc.layer(id).ok_or(EngineError::NoLayer(id))?.clone();
-                let merged = pixels::merge_down(doc.bounds(), &lower, &upper, doc.pixel_format());
+                // Two shape layers stay a shape layer (the lower one, with both paths).
+                let merged = crate::vector_cmds::merged_shape(doc, &[&lower, &upper], &lower).unwrap_or_else(|| pixels::merge_down(doc, &lower, &upper));
                 doc.remove(id);
                 *doc.layer_at_mut(&below).ok_or(EngineError::NoLayer(lower.id))? = merged;
                 *active = Some(lower.id);

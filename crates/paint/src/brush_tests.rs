@@ -30,7 +30,11 @@ fn raster(b: &BrushSettings, d: &Dab) -> (Rect, Vec<f32>) {
     (r, v)
 }
 
+/// A rasterized dab's value at a pixel; nothing outside its rectangle.
 fn at(r: &(Rect, Vec<f32>), x: i32, y: i32) -> f32 {
+    if !r.0.contains(x, y) {
+        return 0.0;
+    }
     r.1[((y - r.0.y0) * r.0.width() as i32 + (x - r.0.x0)) as usize]
 }
 
@@ -80,10 +84,13 @@ fn hardness_profile_is_monotonic() {
     for h in [0.0f32, 0.5, 1.0] {
         let b = BrushSettings { hardness: h, ..brush() };
         let r = raster(&b, &Dab::round(Point::new(50.0, 50.0), 20.0, 1.0));
-        let prof: Vec<f32> = (0..22).map(|i| at(&r, 50 + i, 50)).collect();
+        let prof: Vec<f32> = (0..36).map(|i| at(&r, 50 + i, 50)).collect();
         assert!(prof.windows(2).all(|w| w[1] <= w[0] + 1e-6), "h={h} {prof:?}");
         assert!(prof[0] > 0.99);
-        assert_eq!(prof[21], 0.0);
+        // Like Photoshop's, a soft tip's tail paints past the radius (20 px), and every tip stops
+        // before 1.7 radii.
+        assert_eq!(prof[21] > 0.03, h < 1.0, "h={h} {prof:?}");
+        assert_eq!(prof[35], 0.0);
         let mid = at(&r, 60, 50);
         if h == 1.0 {
             assert!(mid > 0.99);
@@ -99,7 +106,7 @@ fn hard_edge_is_sharp() {
     // it, with only the anti-aliasing band in between.
     let b = BrushSettings { hardness: 1.0, ..brush() };
     let r = raster(&b, &Dab::round(Point::new(50.0, 50.0), 20.0, 1.0));
-    let prof: Vec<f32> = (0..22).map(|i| at(&r, 50 + i, 50)).collect();
+    let prof: Vec<f32> = (0..23).map(|i| at(&r, 50 + i, 50)).collect();
     let band = prof.iter().filter(|&&a| (0.01..0.99).contains(&a)).count();
     assert!(band <= 3, "hardness 1 rim is {band} px wide: {prof:?}");
     assert!(prof[17] > 0.99, "translucent inside the rim: {prof:?}");
@@ -289,8 +296,13 @@ fn tilt_direction_and_rotation_drive_angle() {
     };
     let mut flat = StrokePoint::new(0.0, 0.0, 1.0);
     flat.tilt_x = 90.0;
+    // A tip shrunk to nothing paints nothing (as Photoshop's size Fade to 0 does) …
+    assert!(dabs_of(&b, &[flat]).is_empty());
+    // … and a minimum diameter keeps it painting.
+    let mut b = b;
+    b.shape_dynamics.size.minimum = 0.25;
     let d = dabs_of(&b, &[flat]);
-    assert!(d[0].radius <= 0.5 + 1e-6);
+    assert!((d[0].radius - 2.5).abs() < 1e-6, "{}", d[0].radius);
 }
 
 #[test]
@@ -446,6 +458,81 @@ fn build_up_accumulates_over_time() {
 }
 
 #[test]
+fn stationary_pressure_and_pose_changes_emit_without_motion() {
+    let b = BrushSettings {
+        size: 40.0,
+        pressure_size: true,
+        roundness: 0.3,
+        shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(Control::Rotation), ..Default::default() },
+        ..brush()
+    };
+    let a = StrokePoint::new(50.0, 50.0, 0.1);
+    let p = StrokePoint { pressure: 0.6, time: 10.0, ..a };
+    let r = StrokePoint { rotation: 90.0, time: 20.0, ..p };
+    let hold = StrokePoint { time: 5000.0, ..r };
+    let d = dabs_of(&b, &[a, p, r, hold]);
+    assert_eq!(d.len(), 3, "the unchanged hold must not accumulate ink");
+    assert_eq!(d[0].radius, 2.0);
+    assert_eq!(d[1].radius, 12.0);
+    assert_eq!(d[2].radius, 12.0);
+    assert!((d[2].angle - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+    assert!(d.iter().all(|dab| dab.center == Point::new(50.0, 50.0)));
+}
+
+#[test]
+fn stationary_pressure_growth_is_live_and_preserves_paint_at_every_depth() {
+    let b = BrushSettings { size: 40.0, pressure_size: true, hardness: 1.0, flow: 0.3, ..brush() };
+    let a = StrokePoint::new(50.0, 50.0, 0.1);
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+            let fmt = PixelFormat::new(mode, sample, true);
+            let pre = Surface::new(fmt);
+            let mut target = pre.clone();
+            let mut r = StrokeRenderer::new(&b, Some(fmt), 1.0);
+            r.push(&[a, StrokePoint { time: 10.0, ..a }]);
+            r.composite(&pre, &mut target, None, false, false);
+            assert!(target.rgba(50, 50)[3] > 0.0);
+            assert_eq!(target.rgba(60, 50)[3], 0.0);
+            r.push(&[StrokePoint { pressure: 0.8, time: 20.0, ..a }]);
+            r.composite(&pre, &mut target, None, false, false);
+            let grown = target.rgba(60, 50)[3];
+            assert!(grown > 0.0, "pressure must grow the mark before finish: {fmt:?}");
+            let center = target.rgba(50, 50)[3];
+            r.push(&[StrokePoint { pressure: 0.8, time: 2000.0, ..a }]);
+            r.composite(&pre, &mut target, None, false, false);
+            assert_eq!(target.rgba(50, 50)[3], center, "holding constant pressure must not build up");
+            r.push(&[StrokePoint { pressure: 0.1, time: 2010.0, ..a }]);
+            r.composite(&pre, &mut target, None, false, false);
+            assert_eq!(target.rgba(60, 50)[3], grown, "releasing pressure must not erase the outer mark");
+        }
+    }
+}
+
+#[test]
+fn zero_pressure_size_does_not_leave_a_minimum_dab() {
+    let b = BrushSettings { size: 40.0, pressure_size: true, ..brush() };
+    let a = StrokePoint::new(50.0, 50.0, 0.0);
+    assert!(dabs_of(&b, &[a]).is_empty());
+    let d = dabs_of(&b, &[a, StrokePoint { pressure: 0.2, ..a }, a]);
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].radius, 4.0);
+}
+
+#[test]
+fn stationary_airbrush_pressure_does_not_duplicate_time_dabs() {
+    let b = BrushSettings { size: 40.0, pressure_size: true, build_up: true, build_up_rate: 20.0, ..brush() };
+    let a = StrokePoint::new(50.0, 50.0, 0.1);
+    let z = StrokePoint { time: 100.0, pressure: 0.5, ..a };
+    let d = dabs_of(&b, &[a, z]);
+    assert_eq!(d.len(), 3, "initial dab and two 50 ms airbrush ticks");
+    assert_eq!(d.last().unwrap().radius, 10.0);
+    let early = StrokePoint { time: 10.0, ..z };
+    let d = dabs_of(&b, &[a, early]);
+    assert_eq!(d.len(), 2, "pressure must respond before the next airbrush tick");
+    assert_eq!(d.last().unwrap().radius, 10.0);
+}
+
+#[test]
 fn huge_airbrush_time_gap_emits_bounded_catch_up() {
     let b = BrushSettings { build_up: true, build_up_rate: 1000.0, ..brush() };
     let a = StrokePoint { time: 0.0, ..StrokePoint::new(20.0, 20.0, 1.0) };
@@ -580,7 +667,7 @@ fn smoothing_modes() {
     let zig: Vec<StrokePoint> = (0..40).map(|i| StrokePoint::new(i as f64 * 5.0, if i % 2 == 0 { 0.0 } else { 6.0 }, 1.0)).collect();
     let dev = |pts: &[StrokePoint]| pts.iter().map(|p| (p.y - 3.0).abs()).sum::<f64>() / pts.len() as f64;
     // Exponential smoothing reduces the zig-zag.
-    let cfg = Smoothing { amount: 0.8, ..Default::default() };
+    let cfg = Smoothing { amount: 0.8, catch_up_on_end: true, ..Default::default() };
     let sm = smooth_points(&cfg, 1.0, &zig);
     assert!(dev(&sm[5..sm.len() - 1]) < dev(&zig) * 0.5);
     // Catch-up on end finishes at the last input point; without it, the stroke ends short.
@@ -613,6 +700,131 @@ fn smoothing_modes() {
         s.push(p, &mut out);
     }
     assert!(out.last().unwrap().x < 70.0, "{}", out.last().unwrap().x);
+}
+
+#[test]
+fn maximum_smoothing_default_does_not_append_a_releasing_tail() {
+    let points: Vec<_> = (0..80)
+        .map(|i| StrokePoint { time: i as f64 * 8.0, ..StrokePoint::new(20.0 + i as f64 * 3.0, 30.0, if i < 76 { 0.8 } else { 0.8 - (i - 75) as f32 * 0.19 }) })
+        .collect();
+    // A stroke with a rounded filtered end must not acquire a long, narrow tail
+    // just because it ends. The optional catch-up setting remains available.
+    let cfg: Smoothing = serde_json::from_value(serde_json::json!({"amount": 1.0})).unwrap();
+    let mut smoother = Smoother::new(&cfg, 1.0);
+    let mut sm = Vec::new();
+    for p in &points {
+        smoother.push(*p, &mut sm);
+    }
+    let live_end = *sm.last().unwrap();
+    assert!(live_end.pressure > 0.6);
+    let count = sm.len();
+    smoother.finish(&mut sm);
+    assert_eq!(sm.len(), count, "default smoothing must stop at the filtered tip instead of extending to the low-pressure raw endpoint");
+
+    let b = BrushSettings { size: 20.0, pressure_size: true, smoothing: cfg.clone(), ..brush() };
+    let rounded = dabs_of(&b, &points);
+    assert!(rounded.last().unwrap().radius > 6.0);
+    let explicit: Smoothing = serde_json::from_value(serde_json::json!({"amount": 1.0, "catchUpOnEnd": true})).unwrap();
+    let extended = dabs_of(&BrushSettings { smoothing: explicit, ..b }, &points);
+    assert!(extended.last().unwrap().center.x > rounded.last().unwrap().center.x + 40.0);
+    assert!(extended.last().unwrap().radius < 1.0, "explicitly enabled catch-up still follows measured ending pressure");
+    // Disabling smoothing preserves the raw pressure tail, without a minimum-width clamp.
+    assert_eq!(smooth_points(&Smoothing::default(), 1.0, &points), points);
+}
+
+#[test]
+fn smoothing_keeps_pressure_at_the_smoothed_position() {
+    let cfg = Smoothing { amount: 0.5, catch_up: false, catch_up_on_end: false, ..Default::default() };
+    let a = StrokePoint { time: 0.0, ..StrokePoint::new(0.0, 0.0, 1.0) };
+    let z = StrokePoint { x: 100.0, pressure: 0.0, tilt_x: 60.0, time: 16.0, ..a };
+    for pulled_string in [false, true] {
+        let cfg = Smoothing { pulled_string, ..cfg.clone() };
+        let sm = smooth_points(&cfg, 1.0, &[a, z]);
+        let last = sm.last().unwrap();
+        assert_eq!(last.x, 50.0);
+        assert_eq!(last.pressure, 0.5, "latest zero pressure must not be attached halfway along the stroke");
+        assert_eq!(last.tilt_x, 30.0);
+        assert_eq!(last.time, 16.0, "airbrush uses the actual event clock");
+    }
+}
+
+#[test]
+fn smoothing_preserves_stationary_pressure_and_airbrush_time() {
+    let a = StrokePoint { time: 0.0, ..StrokePoint::new(50.0, 50.0, 0.1) };
+    let z = StrokePoint { pressure: 0.7, time: 10.0, ..a };
+    for pulled_string in [false, true] {
+        let b = BrushSettings {
+            size: 40.0,
+            pressure_size: true,
+            smoothing: Smoothing { amount: 0.8, pulled_string, catch_up_on_end: false, ..Default::default() },
+            ..brush()
+        };
+        let d = dabs_of(&b, &[a, z]);
+        assert_eq!(d.len(), 2);
+        assert_eq!(d.last().unwrap().radius, 14.0);
+        let b = BrushSettings { build_up: true, build_up_rate: 20.0, ..b };
+        let hold = StrokePoint { time: 100.0, ..a };
+        assert_eq!(dabs_of(&b, &[a, hold]).len(), 3);
+    }
+}
+
+#[test]
+fn pulled_string_does_not_ink_moving_pressure_samples_at_the_frozen_anchor() {
+    let b = BrushSettings {
+        size: 40.0,
+        pressure_size: true,
+        smoothing: Smoothing { amount: 0.8, pulled_string: true, catch_up_on_end: false, ..Default::default() },
+        ..brush()
+    };
+    // These raw samples travel inside the 80 px string. Pressure changes must not be
+    // mistaken for stationary painting simply because the smoothed brush does not move.
+    let points: Vec<_> = (0..10).map(|i| StrokePoint { time: i as f64 * 8.0, ..StrokePoint::new(50.0 + i as f64, 50.0, 0.1 + i as f32 * 0.1) }).collect();
+    let d = dabs_of(&b, &points);
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].radius, 2.0, "keep the real weak first contact instead of growing an anchored blob");
+    let mut held = points;
+    held.push(StrokePoint { time: 100.0, ..StrokePoint::new(59.0, 50.0, 0.8) });
+    let d = dabs_of(&b, &held);
+    assert_eq!(d.len(), 2, "a subsequent real stationary pressure change is still responsive");
+    assert_eq!(d[1].radius, 16.0);
+}
+
+#[test]
+fn pressure_strokes_match_chunking_and_tail_preview_at_every_depth() {
+    let pts: Vec<_> = [(20.0, 0.1), (20.0, 0.5), (20.0, 0.5), (32.0, 0.8), (48.0, 0.6), (60.0, 0.3), (72.0, 0.0)]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (x, p))| StrokePoint { time: i as f64 * 8.0, ..StrokePoint::new(x, 30.0, p) })
+        .collect();
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for pulled_string in [false, true] {
+            let b = BrushSettings { size: 20.0, pressure_size: true, smoothing: Smoothing { amount: 0.2, pulled_string, ..Default::default() }, ..brush() };
+            let fmt = PixelFormat::RGBA8.with_sample(sample);
+            let pre = Surface::new(fmt);
+            let mut one = pre.clone();
+            render_stroke(&mut one, &b, &pts, None, false, 1.0);
+            for chunk in [1, 2, 4, pts.len()] {
+                let mut inc = pre.clone();
+                let mut r = StrokeRenderer::new(&b, Some(fmt), 1.0);
+                for points in pts.chunks(chunk) {
+                    r.push(points);
+                    r.composite(&pre, &mut inc, None, false, false);
+                }
+                let mut preview = inc.clone();
+                if let Some(mut tail) = r.tail_preview() {
+                    tail.composite(&pre, &mut preview, None, false, false);
+                }
+                r.finish();
+                r.composite(&pre, &mut inc, None, false, false);
+                for y in 15..45 {
+                    for x in 5..85 {
+                        assert_eq!(one.pixel(x, y), inc.pixel(x, y), "chunk={chunk} {fmt:?} ({x},{y})");
+                        assert_eq!(preview.pixel(x, y), inc.pixel(x, y), "preview changed on finish: chunk={chunk} {fmt:?} ({x},{y})");
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -737,7 +949,7 @@ fn tail_preview_shows_the_stroke_as_finishing_it_would() {
     // Live previews draw the smoothing catch-up tail before the stroke ends: compositing the
     // tail preview over the incremental composite gives exactly the finished stroke.
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U16, true);
-    let b = BrushSettings { size: 9.0, smoothing: Smoothing { amount: 0.7, ..Default::default() }, ..brush() };
+    let b = BrushSettings { size: 9.0, smoothing: Smoothing { amount: 0.7, catch_up_on_end: true, ..Default::default() }, ..brush() };
     let pts: Vec<StrokePoint> = (0..12).map(|i| StrokePoint::new(5.0 + i as f64 * 9.0, 20.0 + (i % 3) as f64 * 7.0, 1.0)).collect();
     let pre = Surface::new(fmt);
     let mut live = pre.clone();
@@ -961,9 +1173,11 @@ fn huge_scatter_is_capped_and_renders_at_every_depth() {
         let b = with(j);
         assert_eq!(all_dabs(&b, &pts), capped, "scatter {j} paints like the maximum");
         let ctx = BrushContext::new(&b);
+        // Radius 10 plus the hard edge's tail, plus a pixel of slack on each side.
+        let side = 2 * ((10.0 + crate::Falloff::new(1.0, 10.0).reach_past_edge()).ceil() as u32 + 1) + 1;
         for d in &capped.0 {
             let r = ctx.dab_rect(d, false);
-            assert!(!r.is_empty() && r.width() <= 24 && r.height() <= 24, "{r:?}");
+            assert!(!r.is_empty() && r.width() <= side && r.height() <= side, "{r:?}");
         }
         for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
             let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
@@ -999,13 +1213,73 @@ fn dab_rect_of_a_far_or_non_finite_centre_does_not_overflow() {
     let ctx = BrushContext::new(&brush());
     for c in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 1e300, -1e300, f64::from(i32::MAX), f64::from(i32::MIN)] {
         let d = Dab::round(Point::new(c, c), 10.0, 1.0);
-        for r in [ctx.dab_rect(&d, false), ctx.dab_rect(&d, true), crate::retouch::dab_rect(&d)] {
+        for r in [ctx.dab_rect(&d, false), ctx.dab_rect(&d, true), crate::retouch::dab_rect(&d, 1.0), crate::retouch::dab_rect(&d, 0.0)] {
             assert!(r.x0 <= r.x1 && r.y0 <= r.y1, "centre {c}: {r:?}");
         }
     }
     let huge = Dab::round(Point::new(5.0, 5.0), f32::INFINITY, 1.0);
-    let r = crate::retouch::dab_rect(&huge);
-    assert!(r.x0 <= r.x1 && r.y0 <= r.y1, "{r:?}");
+    for hardness in [1.0, 0.0] {
+        let r = crate::retouch::dab_rect(&huge, hardness);
+        assert!(r.x0 <= r.x1 && r.y0 <= r.y1, "{r:?}");
+    }
+}
+
+/// The rasterizer's computed tips are exactly the texel model: texels at whole-pixel offsets from
+/// the dab centre (the relative radius on the ellipse, the first-order signed distance to its edge,
+/// `Falloff::at`) placed bilinearly; its shortcuts (empty beyond the tail, full inside) change
+/// nothing. Tips narrower than their tail (1 px) included.
+#[test]
+fn computed_tips_are_bilinearly_placed_texels() {
+    for (size, hardness, roundness, angle) in
+        [(1.0f32, 1.0f32, 1.0f32, 0.0f32), (3.0, 1.0, 1.0, 0.0), (9.0, 0.3, 1.0, 0.0), (60.0, 1.0, 0.2, 30.0), (40.0, 0.0, 0.5, -70.0)]
+    {
+        let b = BrushSettings { size, hardness, roundness, ..brush() };
+        let ctx = BrushContext::new(&b);
+        for centre in [Point::new(20.0, 20.0), Point::new(20.5, 20.5), Point::new(20.3, 20.7)] {
+            let mut d = Dab::round(centre, size / 2.0, 1.0);
+            d.roundness = roundness;
+            d.angle = angle.to_radians();
+            let rect = ctx.dab_rect(&d, false);
+            let mut got = Vec::new();
+            ctx.rasterize(&d, false, rect, &mut got);
+            let (r, ro) = (d.radius, d.roundness.max(0.5 / d.radius).min(1.0));
+            let rm = (r * ro).max(0.5);
+            let (major, (sn, cs)) = (rm / ro, d.angle.sin_cos());
+            let falloff = crate::Falloff::new(hardness, rm);
+            // Texel at offset (tx, ty) from the centre (y down).
+            let texel = |tx: f32, ty: f32| {
+                let (dx, dy) = (tx, -ty);
+                let (u, w) = (dx * cs + dy * sn, -dx * sn + dy * cs);
+                let (qu, qv) = (u / major, w / rm);
+                let q = (qu * qu + qv * qv).sqrt();
+                let g = if q > 1e-6 { ((qu / major).powi(2) + (qv / rm).powi(2)).sqrt() / q } else { 0.0 };
+                falloff.at(q, if g > 0.0 { (q - 1.0) / g } else { -rm })
+            };
+            for (i, v) in got.iter().enumerate() {
+                let (x, y) = (rect.x0 + (i as u32 % rect.width()) as i32, rect.y0 + (i as u32 / rect.width()) as i32);
+                let (dx, dy) = (x as f32 + 0.5 - centre.x as f32, y as f32 + 0.5 - centre.y as f32);
+                let (tx, ty) = (dx.floor(), dy.floor());
+                let (fx, fy) = (dx - tx, dy - ty);
+                let top = texel(tx, ty) * (1.0 - fx) + texel(tx + 1.0, ty) * fx;
+                let bottom = texel(tx, ty + 1.0) * (1.0 - fx) + texel(tx + 1.0, ty + 1.0) * fx;
+                let want = top * (1.0 - fy) + bottom * fy;
+                assert!((v - want).abs() < 1e-5, "size {size} round {roundness} at {centre:?} pixel ({x}, {y}): {v} vs {want}");
+            }
+        }
+    }
+}
+
+/// Flow and Opacity apply as Photoshop's 8-bit levels (halves up), whatever the document depth.
+#[test]
+fn flow_and_opacity_apply_as_photoshop_levels() {
+    use crate::brush::photoshop_level;
+    for (pct, level) in [(1.0f32, 3.0f32), (2.0, 5.0), (3.0, 8.0), (10.0, 26.0), (30.0, 77.0), (50.0, 128.0), (100.0, 255.0), (0.0, 0.0)] {
+        assert_eq!(photoshop_level(pct / 100.0), level / 255.0, "{pct} %");
+    }
+    assert_eq!(photoshop_level(f32::NAN), 0.0);
+    assert_eq!(photoshop_level(2.0), 1.0);
+    let b = BrushSettings { flow: 0.01, opacity: 0.5, ..brush() }.bounded_for_render();
+    assert_eq!((b.flow, b.opacity), (3.0 / 255.0, 128.0 / 255.0));
 }
 
 #[test]
@@ -1025,4 +1299,37 @@ fn sequence_tips_alternate_by_dab_and_survive_json() {
     let empty = BrushSettings { tip: TipShape::Sequence(vec![]), ..brush() };
     let cx = BrushContext::new(&empty);
     cx.rasterize(&dab, false, cx.dab_rect(&dab, false), &mut pixels);
+}
+
+/// Merging sampled sequences must retain rotated corners and computed soft-tip tails alike.
+#[test]
+fn sequence_and_round_tip_bounds_preserve_all_coverage() {
+    for dual in [false, true] {
+        for tip in [TipShape::Round, TipShape::Sequence(vec![GrayTile::from_fn(16, 16, |_, _| 1.0)])] {
+            let mut b = brush();
+            b.hardness = 0.0;
+            b.tip = tip.clone();
+            b.dual_brush.enabled = dual;
+            b.dual_brush.hardness = 0.0;
+            b.dual_brush.tip = tip;
+            let cx = BrushContext::new(&b);
+            let mut dab = Dab::round(Point::new(32.25, 32.75), 16.0, 1.0);
+            dab.angle = std::f32::consts::FRAC_PI_4;
+            let bounds = cx.dab_rect(&dab, dual);
+            let wide = Rect::new(-16, -16, 80, 80);
+            let mut pixels = Vec::new();
+            cx.rasterize(&dab, dual, wide, &mut pixels);
+            let mut beyond_radius = false;
+            for y in wide.y0..wide.y1 {
+                for x in wide.x0..wide.x1 {
+                    let value = pixels[((y - wide.y0) as u32 * wide.width() + (x - wide.x0) as u32) as usize];
+                    if value > 0.0 {
+                        assert!(bounds.contains(x, y), "clipped ({x},{y}), dual={dual}, tip={:?}", b.tip);
+                        beyond_radius |= (x as f64 - dab.center.x).abs() > f64::from(dab.radius);
+                    }
+                }
+            }
+            assert!(beyond_radius, "fixture must exercise coverage outside the nominal radius");
+        }
+    }
 }
