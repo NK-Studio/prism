@@ -16,7 +16,8 @@
 //! - `ui.window.attach {window}` / `ui.window.focus {window}` / `ui.window.close {window}`
 //! - Input, resize and screenshot methods accept optional `window`; omission targets the main window
 //! - `ui.drag {from:[x,y],to:[x,y],window?}`: synthetic primary-button screen-point drag
-//! - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` opens the tool's canvas context menu or Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
+//! - `ui.pointer {events: [{kind: down|move|up|cancel, x?, y?, pressure?, tiltX?, tiltY?, rotation?, time?}], modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` opens the tool's canvas context menu or Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
+//! - `ui.penTrace {enabled?, clear?}`: opt-in bounded pen packet diagnostics and replay data.
 //! - `ui.click {x, y, button?, count?}` / `ui.move {x, y}`: synthetic pointer input in screen points
 //!   (`count` at most [`MAX_CLICKS`])
 //! - `ui.key {key, command?, shift?, alt?, ctrl?}` / `ui.type {text}`: synthetic keyboard input
@@ -654,8 +655,39 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 _ => crate::doc_windows::close(app, ctx, window),
             })
         }
+        "ui.penTrace" => {
+            if let Some(value) = p.get("enabled") {
+                let Some(enabled) = value.as_bool() else { return err("enabled must be a boolean") };
+                app.stylus.trace_enabled = enabled;
+            }
+            if p.get("clear").and_then(Value::as_bool) == Some(true) {
+                app.stylus.trace.clear();
+            }
+            ok(json!({"enabled": app.stylus.trace_enabled, "capacity": 4096, "events": app.stylus.trace}))
+        }
         "ui.pointer" => {
             let Some(events) = p.get("events").and_then(Value::as_array) else { return err("missing `events`") };
+            if events.len() > 4096 {
+                return err("too many pointer events");
+            }
+            // Validate the whole batch before changing the tool or any preview.
+            for event in events {
+                if !event.is_object() || event.get("kind").is_some_and(|v| !v.is_string()) {
+                    return err("pointer events must be objects with a string kind");
+                }
+                let kind = event.get("kind").and_then(Value::as_str).unwrap_or("move");
+                if !matches!(kind, "down" | "move" | "up" | "cancel") {
+                    return err("pointer kind must be down, move, up or cancel");
+                }
+                for key in ["x", "y", "pressure", "tiltX", "tiltY", "rotation", "time"] {
+                    if let Some(value) = event.get(key) {
+                        let Some(value) = value.as_f64().filter(|v| v.is_finite()) else { return err(format!("invalid pointer {key}")) };
+                        if key == "pressure" && !(0.0..=1.0).contains(&value) || key == "time" && !(0.0..=1e12).contains(&value) {
+                            return err(format!("pointer {key} out of range"));
+                        }
+                    }
+                }
+            }
             // Modifier flags may be top-level or grouped under "modifiers".
             let m = p.get("modifiers").unwrap_or(p);
             let flag = |k: &str| m.get(k).and_then(Value::as_bool).unwrap_or(false);
@@ -707,9 +739,14 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             let space = flag("space");
             crate::crop_ui::set_space(app, space);
             for e in events {
+                if e.get("kind").and_then(Value::as_str) == Some("cancel") {
+                    crate::pen_input::cancel(app);
+                    continue;
+                }
                 let x = e.get("x").and_then(Value::as_f64).unwrap_or(0.0);
                 let y = e.get("y").and_then(Value::as_f64).unwrap_or(0.0);
                 let pr = e.get("pressure").and_then(Value::as_f64).unwrap_or(1.0) as f32;
+                app.stylus.time = e.get("time").and_then(Value::as_f64).unwrap_or(0.0);
                 let ev = match e.get("kind").and_then(Value::as_str).unwrap_or("move") {
                     "down" => ToolEvent::Down { x, y, pressure: pr },
                     "up" => ToolEvent::Up { x, y },
@@ -783,6 +820,7 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 tool_event(app, ev, mods);
             }
             app.stylus.feed.set(None);
+            app.stylus.time = 0.0;
             ok(json!({"status": app.ui.status}))
         }
         "ui.drag" => {
@@ -1061,6 +1099,215 @@ mod tests {
             Outcome::Done(v) => v,
             _ => panic!("{method}: expected an immediate reply"),
         }
+    }
+
+    fn pen_control_app() -> PrismApp {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("tools.setBrush", json!({"brush":{"size":8,"hardness":1.0,"pressureSize":true,"smoothing":{"amount":0}}})).unwrap();
+        app.ui.tool = Tool::Brush;
+        app.sync_views();
+        app
+    }
+
+    fn pen_trace_packet(phase: crate::pen_input::Phase, x: f32, pressure: f32, time: f64) -> crate::pen_input::Packet {
+        crate::pen_input::Packet {
+            source: "windowsInk",
+            id: 7,
+            device: 11,
+            phase,
+            pos: egui::pos2(x, 32.0),
+            sample: crate::stylus::PenSample { pressure, tilt_x: 15.0, ..Default::default() },
+            pressure_valid: phase != crate::pen_input::Phase::Up,
+            pressure_supported: Some(true),
+            time,
+            barrel: false,
+        }
+    }
+
+    fn record_pen_packets(app: &mut PrismApp, packets: &[crate::pen_input::Packet]) {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
+        let xf = crate::canvas::ViewXform { rect, zoom: 1.0, center: [32.0, 32.0], flip: false, rotation: 0.0 };
+        crate::pen_input::paint_packets(app, egui::ViewportId::ROOT, packets, rect, &xf, egui::Modifiers::NONE);
+    }
+
+    #[test]
+    fn pointer_optional_times_reach_stroke_and_legacy_points_stay_compatible() {
+        let mut app = pen_control_app();
+        let ctx = egui::Context::default();
+        let result = call(
+            &mut app,
+            &ctx,
+            "ui.pointer",
+            json!({"events":[
+                {"kind":"down","x":10,"y":32,"pressure":0.1,"time":100},
+                {"kind":"move","x":20,"y":32,"pressure":0.7,"time":120},
+                {"kind":"up","x":20,"y":32,"time":130}
+            ]}),
+        );
+        assert_eq!(result["ok"], true, "{result}");
+        let points = app.session.journal.last().unwrap().1["points"].as_array().unwrap();
+        assert_eq!(points.len(), 2);
+        assert_eq!(points.iter().map(|p| p[6].as_f64().unwrap()).collect::<Vec<_>>(), vec![100.0, 120.0]);
+        assert_eq!(points[0][2], json!(f64::from(0.1f32)));
+        assert_eq!(points[1][2], json!(f64::from(0.7f32)));
+        assert_eq!(app.stylus.time, 0.0, "control timestamp must not leak into the next mouse stroke");
+        let result = call(
+            &mut app,
+            &ctx,
+            "ui.pointer",
+            json!({"events":[
+                {"kind":"down","x":30,"y":32}, {"kind":"up","x":30,"y":32}
+            ]}),
+        );
+        assert_eq!(result["ok"], true, "{result}");
+        let points = app.session.journal.last().unwrap().1["points"].as_array().unwrap();
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].as_array().unwrap().len(), 3, "legacy calls retain the compact point format");
+        assert_eq!(points[0][2], 1.0);
+    }
+
+    #[test]
+    fn pointer_cancel_drops_preview_without_history_or_pressure_leak() {
+        let mut app = pen_control_app();
+        let ctx = egui::Context::default();
+        let history = app.session.active().unwrap().history.past_len();
+        let journal = app.session.journal.len();
+        assert_eq!(
+            call(
+                &mut app,
+                &ctx,
+                "ui.pointer",
+                json!({"events":[
+                    {"kind":"down","x":10,"y":32,"pressure":0.9,"tiltX":30,"time":100},
+                    {"kind":"move","x":40,"y":32,"pressure":0.8,"tiltX":20,"time":120}
+                ]})
+            )["ok"],
+            true
+        );
+        assert!(app.drag.is_some() && app.live_stroke.is_some());
+        assert_eq!(call(&mut app, &ctx, "ui.pointer", json!({"events":[{"kind":"cancel"}]}))["ok"], true);
+        assert!(app.drag.is_none() && app.live_stroke.is_none() && app.stylus.contact.is_none());
+        assert_eq!(app.stylus.feed.get(), None);
+        assert_eq!(app.stylus.time, 0.0);
+        assert_eq!(app.session.journal.len(), journal);
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        assert_eq!(
+            call(
+                &mut app,
+                &ctx,
+                "ui.pointer",
+                json!({"events":[
+                    {"kind":"down","x":32,"y":32,"pressure":0.05}, {"kind":"up","x":32,"y":32}
+                ]})
+            )["ok"],
+            true
+        );
+        let points = app.session.journal.last().unwrap().1["points"].as_array().unwrap();
+        assert_eq!(points[0][2], json!(f64::from(0.05f32)));
+        assert_eq!(points[0].as_array().unwrap().len(), 3, "canceled pose/time must not leak into a new contact");
+        assert_eq!(app.session.active().unwrap().history.past_len(), history + 1);
+    }
+
+    #[test]
+    fn pointer_batch_rejects_invalid_late_event_before_changing_tool_or_preview() {
+        let mut app = pen_control_app();
+        let ctx = egui::Context::default();
+        assert_eq!(call(&mut app, &ctx, "ui.pointer", json!({"events":[{"kind":"down","x":12,"y":32,"pressure":0.2}]}))["ok"], true);
+        let points = app.drag.as_ref().unwrap().points.clone();
+        let journal = app.session.journal.len();
+        let history = app.session.active().unwrap().history.past_len();
+        let invalid = [
+            json!(null),
+            json!("move"),
+            json!({"kind":4}),
+            json!({"kind":"teleport"}),
+            json!({"kind":"move","x":null}),
+            json!({"kind":"move","y":"bad"}),
+            json!({"kind":"move","pressure":-0.1}),
+            json!({"kind":"move","pressure":1.1}),
+            json!({"kind":"move","pressure":"light"}),
+            json!({"kind":"move","time":-1}),
+            json!({"kind":"move","time":1_000_000_000_001u64}),
+            json!({"kind":"move","time":"now"}),
+            json!({"kind":"move","tiltX":"left"}),
+            json!({"kind":"cancel","rotation":null}),
+        ];
+        for bad in invalid {
+            let result = call(
+                &mut app,
+                &ctx,
+                "ui.pointer",
+                json!({"tool":"pencil","events":[
+                    {"kind":"move","x":24,"y":32,"pressure":0.8}, bad
+                ]}),
+            );
+            assert_eq!(result["ok"], false, "{bad}: {result}");
+            assert_eq!(app.ui.tool, Tool::Brush);
+            assert_eq!(app.drag.as_ref().unwrap().points, points);
+            assert_eq!(app.session.journal.len(), journal);
+            assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        }
+        let events = vec![json!({"kind":"move","x":24,"y":32}); 4097];
+        let result = call(&mut app, &ctx, "ui.pointer", json!({"tool":"pencil","events":events}));
+        assert_eq!(result["ok"], false);
+        assert!(result["error"].as_str().unwrap().contains("too many"));
+        assert_eq!(app.ui.tool, Tool::Brush);
+        assert_eq!(app.drag.as_ref().unwrap().points, points);
+    }
+
+    #[test]
+    fn pen_trace_is_opt_in_bounded_stoppable_and_clearable() {
+        use crate::pen_input::Phase;
+        let mut app = pen_control_app();
+        let ctx = egui::Context::default();
+        let initial = call(&mut app, &ctx, "ui.penTrace", json!({}));
+        assert_eq!(initial["result"]["enabled"], false);
+        assert_eq!(initial["result"]["capacity"], 4096);
+        record_pen_packets(&mut app, &[pen_trace_packet(Phase::Move, 20.0, 0.2, 1.0)]);
+        assert!(call(&mut app, &ctx, "ui.penTrace", json!({}))["result"]["events"].as_array().unwrap().is_empty());
+        assert_eq!(call(&mut app, &ctx, "ui.penTrace", json!({"enabled":true,"clear":true}))["result"]["enabled"], true);
+        let packets: Vec<_> = (0..4105).map(|i| pen_trace_packet(Phase::Move, 20.0, 0.2, f64::from(i))).collect();
+        record_pen_packets(&mut app, &packets);
+        let trace = call(&mut app, &ctx, "ui.penTrace", json!({}));
+        let events = trace["result"]["events"].as_array().unwrap();
+        assert_eq!(events.len(), 4096);
+        assert_eq!(events.first().unwrap()["time"], 9.0, "only the oldest readings are evicted");
+        assert_eq!(events.last().unwrap()["time"], 4104.0);
+        assert_eq!(events[0]["source"], "windowsInk");
+        assert_eq!(events[0]["device"], 11);
+        assert_eq!(events[0]["pressureValid"], true);
+        assert_eq!(events[0]["pressureSupported"], true);
+        let stopped = call(&mut app, &ctx, "ui.penTrace", json!({"enabled":false}));
+        record_pen_packets(&mut app, &[pen_trace_packet(Phase::Move, 20.0, 0.3, 9999.0)]);
+        assert_eq!(call(&mut app, &ctx, "ui.penTrace", json!({}))["result"]["events"], stopped["result"]["events"]);
+        assert_eq!(call(&mut app, &ctx, "ui.penTrace", json!({"enabled":"yes","clear":true}))["ok"], false);
+        assert_eq!(app.stylus.trace.len(), 4096, "invalid enable must not clear the existing trace");
+        let cleared = call(&mut app, &ctx, "ui.penTrace", json!({"clear":true}));
+        assert_eq!(cleared["result"]["enabled"], false);
+        assert!(cleared["result"]["events"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn pen_trace_tip_contact_replays_pressure_pose_and_time_through_pointer_control() {
+        use crate::pen_input::Phase;
+        let mut app = pen_control_app();
+        let ctx = egui::Context::default();
+        assert_eq!(call(&mut app, &ctx, "ui.penTrace", json!({"enabled":true}))["ok"], true);
+        record_pen_packets(
+            &mut app,
+            &[pen_trace_packet(Phase::Down, 12.0, 0.1, 10.0), pen_trace_packet(Phase::Move, 28.0, 0.6, 20.0), pen_trace_packet(Phase::Up, 28.0, 0.0, 30.0)],
+        );
+        let original = app.session.journal.last().unwrap().1["points"].clone();
+        let trace = call(&mut app, &ctx, "ui.penTrace", json!({"enabled":false}));
+        let events = trace["result"]["events"].clone();
+        assert_eq!(events.as_array().unwrap().len(), 3);
+        assert_eq!(events[0]["x"], 12.0);
+        assert_eq!(events[0]["y"], 32.0);
+        let replay = call(&mut app, &ctx, "ui.pointer", json!({"events":events}));
+        assert_eq!(replay["ok"], true, "{replay}");
+        assert_eq!(app.session.journal.last().unwrap().1["points"], original);
     }
 
     #[test]

@@ -458,6 +458,81 @@ fn build_up_accumulates_over_time() {
 }
 
 #[test]
+fn stationary_pressure_and_pose_changes_emit_without_motion() {
+    let b = BrushSettings {
+        size: 40.0,
+        pressure_size: true,
+        roundness: 0.3,
+        shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(Control::Rotation), ..Default::default() },
+        ..brush()
+    };
+    let a = StrokePoint::new(50.0, 50.0, 0.1);
+    let p = StrokePoint { pressure: 0.6, time: 10.0, ..a };
+    let r = StrokePoint { rotation: 90.0, time: 20.0, ..p };
+    let hold = StrokePoint { time: 5000.0, ..r };
+    let d = dabs_of(&b, &[a, p, r, hold]);
+    assert_eq!(d.len(), 3, "the unchanged hold must not accumulate ink");
+    assert_eq!(d[0].radius, 2.0);
+    assert_eq!(d[1].radius, 12.0);
+    assert_eq!(d[2].radius, 12.0);
+    assert!((d[2].angle - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+    assert!(d.iter().all(|dab| dab.center == Point::new(50.0, 50.0)));
+}
+
+#[test]
+fn stationary_pressure_growth_is_live_and_preserves_paint_at_every_depth() {
+    let b = BrushSettings { size: 40.0, pressure_size: true, hardness: 1.0, flow: 0.3, ..brush() };
+    let a = StrokePoint::new(50.0, 50.0, 0.1);
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+            let fmt = PixelFormat::new(mode, sample, true);
+            let pre = Surface::new(fmt);
+            let mut target = pre.clone();
+            let mut r = StrokeRenderer::new(&b, Some(fmt), 1.0);
+            r.push(&[a, StrokePoint { time: 10.0, ..a }]);
+            r.composite(&pre, &mut target, None, false, false);
+            assert!(target.rgba(50, 50)[3] > 0.0);
+            assert_eq!(target.rgba(60, 50)[3], 0.0);
+            r.push(&[StrokePoint { pressure: 0.8, time: 20.0, ..a }]);
+            r.composite(&pre, &mut target, None, false, false);
+            let grown = target.rgba(60, 50)[3];
+            assert!(grown > 0.0, "pressure must grow the mark before finish: {fmt:?}");
+            let center = target.rgba(50, 50)[3];
+            r.push(&[StrokePoint { pressure: 0.8, time: 2000.0, ..a }]);
+            r.composite(&pre, &mut target, None, false, false);
+            assert_eq!(target.rgba(50, 50)[3], center, "holding constant pressure must not build up");
+            r.push(&[StrokePoint { pressure: 0.1, time: 2010.0, ..a }]);
+            r.composite(&pre, &mut target, None, false, false);
+            assert_eq!(target.rgba(60, 50)[3], grown, "releasing pressure must not erase the outer mark");
+        }
+    }
+}
+
+#[test]
+fn zero_pressure_size_does_not_leave_a_minimum_dab() {
+    let b = BrushSettings { size: 40.0, pressure_size: true, ..brush() };
+    let a = StrokePoint::new(50.0, 50.0, 0.0);
+    assert!(dabs_of(&b, &[a]).is_empty());
+    let d = dabs_of(&b, &[a, StrokePoint { pressure: 0.2, ..a }, a]);
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].radius, 4.0);
+}
+
+#[test]
+fn stationary_airbrush_pressure_does_not_duplicate_time_dabs() {
+    let b = BrushSettings { size: 40.0, pressure_size: true, build_up: true, build_up_rate: 20.0, ..brush() };
+    let a = StrokePoint::new(50.0, 50.0, 0.1);
+    let z = StrokePoint { time: 100.0, pressure: 0.5, ..a };
+    let d = dabs_of(&b, &[a, z]);
+    assert_eq!(d.len(), 3, "initial dab and two 50 ms airbrush ticks");
+    assert_eq!(d.last().unwrap().radius, 10.0);
+    let early = StrokePoint { time: 10.0, ..z };
+    let d = dabs_of(&b, &[a, early]);
+    assert_eq!(d.len(), 2, "pressure must respond before the next airbrush tick");
+    assert_eq!(d.last().unwrap().radius, 10.0);
+}
+
+#[test]
 fn huge_airbrush_time_gap_emits_bounded_catch_up() {
     let b = BrushSettings { build_up: true, build_up_rate: 1000.0, ..brush() };
     let a = StrokePoint { time: 0.0, ..StrokePoint::new(20.0, 20.0, 1.0) };
@@ -592,7 +667,7 @@ fn smoothing_modes() {
     let zig: Vec<StrokePoint> = (0..40).map(|i| StrokePoint::new(i as f64 * 5.0, if i % 2 == 0 { 0.0 } else { 6.0 }, 1.0)).collect();
     let dev = |pts: &[StrokePoint]| pts.iter().map(|p| (p.y - 3.0).abs()).sum::<f64>() / pts.len() as f64;
     // Exponential smoothing reduces the zig-zag.
-    let cfg = Smoothing { amount: 0.8, ..Default::default() };
+    let cfg = Smoothing { amount: 0.8, catch_up_on_end: true, ..Default::default() };
     let sm = smooth_points(&cfg, 1.0, &zig);
     assert!(dev(&sm[5..sm.len() - 1]) < dev(&zig) * 0.5);
     // Catch-up on end finishes at the last input point; without it, the stroke ends short.
@@ -625,6 +700,131 @@ fn smoothing_modes() {
         s.push(p, &mut out);
     }
     assert!(out.last().unwrap().x < 70.0, "{}", out.last().unwrap().x);
+}
+
+#[test]
+fn maximum_smoothing_default_does_not_append_a_releasing_tail() {
+    let points: Vec<_> = (0..80)
+        .map(|i| StrokePoint { time: i as f64 * 8.0, ..StrokePoint::new(20.0 + i as f64 * 3.0, 30.0, if i < 76 { 0.8 } else { 0.8 - (i - 75) as f32 * 0.19 }) })
+        .collect();
+    // A stroke with a rounded filtered end must not acquire a long, narrow tail
+    // just because it ends. The optional catch-up setting remains available.
+    let cfg: Smoothing = serde_json::from_value(serde_json::json!({"amount": 1.0})).unwrap();
+    let mut smoother = Smoother::new(&cfg, 1.0);
+    let mut sm = Vec::new();
+    for p in &points {
+        smoother.push(*p, &mut sm);
+    }
+    let live_end = *sm.last().unwrap();
+    assert!(live_end.pressure > 0.6);
+    let count = sm.len();
+    smoother.finish(&mut sm);
+    assert_eq!(sm.len(), count, "default smoothing must stop at the filtered tip instead of extending to the low-pressure raw endpoint");
+
+    let b = BrushSettings { size: 20.0, pressure_size: true, smoothing: cfg.clone(), ..brush() };
+    let rounded = dabs_of(&b, &points);
+    assert!(rounded.last().unwrap().radius > 6.0);
+    let explicit: Smoothing = serde_json::from_value(serde_json::json!({"amount": 1.0, "catchUpOnEnd": true})).unwrap();
+    let extended = dabs_of(&BrushSettings { smoothing: explicit, ..b }, &points);
+    assert!(extended.last().unwrap().center.x > rounded.last().unwrap().center.x + 40.0);
+    assert!(extended.last().unwrap().radius < 1.0, "explicitly enabled catch-up still follows measured ending pressure");
+    // Disabling smoothing preserves the raw pressure tail, without a minimum-width clamp.
+    assert_eq!(smooth_points(&Smoothing::default(), 1.0, &points), points);
+}
+
+#[test]
+fn smoothing_keeps_pressure_at_the_smoothed_position() {
+    let cfg = Smoothing { amount: 0.5, catch_up: false, catch_up_on_end: false, ..Default::default() };
+    let a = StrokePoint { time: 0.0, ..StrokePoint::new(0.0, 0.0, 1.0) };
+    let z = StrokePoint { x: 100.0, pressure: 0.0, tilt_x: 60.0, time: 16.0, ..a };
+    for pulled_string in [false, true] {
+        let cfg = Smoothing { pulled_string, ..cfg.clone() };
+        let sm = smooth_points(&cfg, 1.0, &[a, z]);
+        let last = sm.last().unwrap();
+        assert_eq!(last.x, 50.0);
+        assert_eq!(last.pressure, 0.5, "latest zero pressure must not be attached halfway along the stroke");
+        assert_eq!(last.tilt_x, 30.0);
+        assert_eq!(last.time, 16.0, "airbrush uses the actual event clock");
+    }
+}
+
+#[test]
+fn smoothing_preserves_stationary_pressure_and_airbrush_time() {
+    let a = StrokePoint { time: 0.0, ..StrokePoint::new(50.0, 50.0, 0.1) };
+    let z = StrokePoint { pressure: 0.7, time: 10.0, ..a };
+    for pulled_string in [false, true] {
+        let b = BrushSettings {
+            size: 40.0,
+            pressure_size: true,
+            smoothing: Smoothing { amount: 0.8, pulled_string, catch_up_on_end: false, ..Default::default() },
+            ..brush()
+        };
+        let d = dabs_of(&b, &[a, z]);
+        assert_eq!(d.len(), 2);
+        assert_eq!(d.last().unwrap().radius, 14.0);
+        let b = BrushSettings { build_up: true, build_up_rate: 20.0, ..b };
+        let hold = StrokePoint { time: 100.0, ..a };
+        assert_eq!(dabs_of(&b, &[a, hold]).len(), 3);
+    }
+}
+
+#[test]
+fn pulled_string_does_not_ink_moving_pressure_samples_at_the_frozen_anchor() {
+    let b = BrushSettings {
+        size: 40.0,
+        pressure_size: true,
+        smoothing: Smoothing { amount: 0.8, pulled_string: true, catch_up_on_end: false, ..Default::default() },
+        ..brush()
+    };
+    // These raw samples travel inside the 80 px string. Pressure changes must not be
+    // mistaken for stationary painting simply because the smoothed brush does not move.
+    let points: Vec<_> = (0..10).map(|i| StrokePoint { time: i as f64 * 8.0, ..StrokePoint::new(50.0 + i as f64, 50.0, 0.1 + i as f32 * 0.1) }).collect();
+    let d = dabs_of(&b, &points);
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].radius, 2.0, "keep the real weak first contact instead of growing an anchored blob");
+    let mut held = points;
+    held.push(StrokePoint { time: 100.0, ..StrokePoint::new(59.0, 50.0, 0.8) });
+    let d = dabs_of(&b, &held);
+    assert_eq!(d.len(), 2, "a subsequent real stationary pressure change is still responsive");
+    assert_eq!(d[1].radius, 16.0);
+}
+
+#[test]
+fn pressure_strokes_match_chunking_and_tail_preview_at_every_depth() {
+    let pts: Vec<_> = [(20.0, 0.1), (20.0, 0.5), (20.0, 0.5), (32.0, 0.8), (48.0, 0.6), (60.0, 0.3), (72.0, 0.0)]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (x, p))| StrokePoint { time: i as f64 * 8.0, ..StrokePoint::new(x, 30.0, p) })
+        .collect();
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for pulled_string in [false, true] {
+            let b = BrushSettings { size: 20.0, pressure_size: true, smoothing: Smoothing { amount: 0.2, pulled_string, ..Default::default() }, ..brush() };
+            let fmt = PixelFormat::RGBA8.with_sample(sample);
+            let pre = Surface::new(fmt);
+            let mut one = pre.clone();
+            render_stroke(&mut one, &b, &pts, None, false, 1.0);
+            for chunk in [1, 2, 4, pts.len()] {
+                let mut inc = pre.clone();
+                let mut r = StrokeRenderer::new(&b, Some(fmt), 1.0);
+                for points in pts.chunks(chunk) {
+                    r.push(points);
+                    r.composite(&pre, &mut inc, None, false, false);
+                }
+                let mut preview = inc.clone();
+                if let Some(mut tail) = r.tail_preview() {
+                    tail.composite(&pre, &mut preview, None, false, false);
+                }
+                r.finish();
+                r.composite(&pre, &mut inc, None, false, false);
+                for y in 15..45 {
+                    for x in 5..85 {
+                        assert_eq!(one.pixel(x, y), inc.pixel(x, y), "chunk={chunk} {fmt:?} ({x},{y})");
+                        assert_eq!(preview.pixel(x, y), inc.pixel(x, y), "preview changed on finish: chunk={chunk} {fmt:?} ({x},{y})");
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -749,7 +949,7 @@ fn tail_preview_shows_the_stroke_as_finishing_it_would() {
     // Live previews draw the smoothing catch-up tail before the stroke ends: compositing the
     // tail preview over the incremental composite gives exactly the finished stroke.
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U16, true);
-    let b = BrushSettings { size: 9.0, smoothing: Smoothing { amount: 0.7, ..Default::default() }, ..brush() };
+    let b = BrushSettings { size: 9.0, smoothing: Smoothing { amount: 0.7, catch_up_on_end: true, ..Default::default() }, ..brush() };
     let pts: Vec<StrokePoint> = (0..12).map(|i| StrokePoint::new(5.0 + i as f64 * 9.0, 20.0 + (i % 3) as f64 * 7.0, 1.0)).collect();
     let pre = Surface::new(fmt);
     let mut live = pre.clone();

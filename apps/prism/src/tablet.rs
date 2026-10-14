@@ -1,15 +1,96 @@
-//! Pen tablet pressure, tilt, rotation and eraser end on macOS.
-//! Windows receives WM_POINTER pressure through winit.
+//! Native pen adapters. Windows reads paired pointer history before winit consumes it.
 
+#[cfg(any(target_os = "macos", test))]
 use prism_tablet::Sample;
-use prism_ui_egui::stylus::{PenSample, StylusFeed};
+use prism_ui_egui::stylus::PenSample;
+#[cfg(any(target_os = "macos", test))]
+use prism_ui_egui::stylus::StylusFeed;
+
+#[cfg(target_os = "windows")]
+pub fn configure_windows(options: &mut eframe::NativeOptions) -> prism_tablet::windows_ink::PenQueue {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    let queue = prism_tablet::windows_ink::PenQueue::default();
+    let events = queue.clone();
+    let previous = options.event_loop_builder.take();
+    options.event_loop_builder = Some(Box::new(move |builder| {
+        if let Some(previous) = previous {
+            previous(builder);
+        }
+        builder.with_msg_hook(prism_tablet::windows::message_hook(events));
+    }));
+    queue
+}
+
+#[cfg(target_os = "windows")]
+pub fn connect_windows(ctx: &egui::Context, queue: prism_tablet::windows_ink::PenQueue) {
+    use prism_tablet::windows_ink::PenPhase;
+    use prism_ui_egui::pen_input::{Packet, Phase};
+    let mut windows = std::collections::HashMap::new();
+    prism_ui_egui::pen_input::install(
+        ctx,
+        Box::new(move |ctx, raw| {
+            windows.retain(|id, _| raw.viewports.contains_key(id));
+            let events = if let Some(window) = windows.get(&raw.viewport_id) {
+                queue.drain(*window)
+            } else {
+                let ids: Vec<_> = raw
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        egui::Event::Touch { id, .. } => Some(id.0),
+                        _ => None,
+                    })
+                    .collect();
+                let events = queue.drain_for_pointers(&ids);
+                if let Some(event) = events.first() {
+                    windows.insert(raw.viewport_id, event.window);
+                }
+                events
+            };
+            for error in queue.take_errors() {
+                log::warn!("pen input: {error}");
+            }
+            let scale = raw.viewports.get(&raw.viewport_id).and_then(|v| v.native_pixels_per_point).unwrap_or(1.0) * ctx.zoom_factor();
+            let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+            events
+                .into_iter()
+                .map(|event| Packet {
+                    source: "windowsInk",
+                    id: u64::from(event.pointer_id),
+                    device: event.device_id as u64,
+                    phase: match event.phase {
+                        PenPhase::Down => Phase::Down,
+                        PenPhase::Move => Phase::Move,
+                        PenPhase::Up => Phase::Up,
+                        PenPhase::Cancel => Phase::Cancel,
+                        PenPhase::Hover => Phase::Hover,
+                    },
+                    pos: egui::pos2(event.x / scale, event.y / scale),
+                    sample: PenSample {
+                        pressure: event.pressure.unwrap_or(if event.pressure_supported == Some(false) { 1.0 } else { 0.0 }),
+                        tilt_x: event.tilt_x,
+                        tilt_y: event.tilt_y,
+                        rotation: event.rotation,
+                        eraser: event.eraser,
+                    },
+                    pressure_valid: event.pressure_valid,
+                    pressure_supported: event.pressure_supported,
+                    time: event.time_ms as f64,
+                    barrel: event.barrel_button,
+                })
+                .collect()
+        }),
+    );
+}
 
 /// A tablet sample as the UI's pen sample.
+#[cfg(any(target_os = "macos", test))]
 pub fn pen_sample(s: Sample) -> PenSample {
     PenSample { pressure: s.pressure, tilt_x: s.tilt_x, tilt_y: s.tilt_y, rotation: s.rotation, eraser: s.eraser }.sanitized()
 }
 
 /// Writes tablet samples into `feed` (`None` = a mouse).
+#[cfg(any(target_os = "macos", test))]
 pub fn sink(feed: StylusFeed) -> impl Fn(Option<Sample>) + Send + 'static {
     move |s| feed.set(s.map(pen_sample))
 }

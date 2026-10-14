@@ -44,6 +44,12 @@ fn lerp_pt(a: &StrokePoint, b: &StrokePoint, f: f64) -> StrokePoint {
     }
 }
 
+/// A stationary stylus can still change the brush footprint or transfer. Timestamps alone
+/// must not add ink unless the brush explicitly enables time-based build-up.
+fn stylus_changed(a: &StrokePoint, b: &StrokePoint) -> bool {
+    a.pressure != b.pressure || a.tilt_x != b.tilt_x || a.tilt_y != b.tilt_y || a.rotation != b.rotation || a.wheel != b.wheel
+}
+
 // ---------------------------------------------------------------------------
 // Smoothing
 // ---------------------------------------------------------------------------
@@ -89,10 +95,23 @@ impl Smoother {
             let d = (dx * dx + dy * dy).sqrt();
             if d > len {
                 let k = (d - len) / d;
-                let np = StrokePoint { x: pos.x + dx * k, y: pos.y + dy * k, ..p };
+                let np = StrokePoint { time: p.time, ..lerp_pt(&pos, &p, k) };
+                self.pos = Some(np);
+                out.push(np);
+            } else if prev_input.is_some_and(|q| q.x == p.x && q.y == p.y) && (stylus_changed(&pos, &p) || p.time > pos.time) {
+                // A pen held in place can change pressure/pose or run the airbrush clock.
+                // Movement inside the string must stay suppressed: applying every moving
+                // sample's pressure at the frozen brush anchor would inflate the stroke head.
+                let np = StrokePoint { x: pos.x, y: pos.y, ..p };
                 self.pos = Some(np);
                 out.push(np);
             }
+            return;
+        }
+        if p.x == pos.x && p.y == pos.y {
+            // No positional lag to compensate: a pen pressed in place must resize immediately.
+            self.pos = Some(p);
+            out.push(p);
             return;
         }
         // Exponential: each iteration moves `a` of the way towards the pointer.
@@ -103,7 +122,9 @@ impl Smoother {
         };
         let mut cur = pos;
         for _ in 0..iters {
-            cur = StrokePoint { x: cur.x + (p.x - cur.x) * a, y: cur.y + (p.y - cur.y) * a, ..p };
+            // Keep the sensor values at the same position along the smoothed segment. Copying
+            // the latest pressure onto a lagging position makes a releasing pen abruptly thin.
+            cur = StrokePoint { time: p.time, ..lerp_pt(&cur, &p, a) };
             out.push(cur);
         }
         self.pos = Some(cur);
@@ -115,7 +136,7 @@ impl Smoother {
             return;
         }
         if let (Some(pos), Some(last)) = (self.pos, self.last_input)
-            && (pos.x != last.x || pos.y != last.y)
+            && (pos.x != last.x || pos.y != last.y || stylus_changed(&pos, &last))
         {
             self.pos = Some(last);
             out.push(last);
@@ -245,6 +266,7 @@ impl PathWalker {
                 }
             }
         }
+        let mut emitted_endpoint = false;
         if let Some(iv) = self.interval {
             let dt = p.time - a.time;
             if dt > 0.0 && dt.is_finite() {
@@ -261,9 +283,15 @@ impl PathWalker {
                     self.time_acc -= iv;
                     let f = ((dt - self.time_acc) / dt).clamp(0.0, 1.0);
                     self.emit(lerp_pt(&a, &p, f), out);
+                    emitted_endpoint = f >= 1.0;
                     n += 1;
                 }
             }
+        }
+        if len <= 1e-9 && stylus_changed(&a, &p) && !emitted_endpoint {
+            // Distance spacing cannot represent a pressure/pose change in place. Emit it once,
+            // keeping unchanged stationary samples inert and avoiding a duplicate airbrush dab.
+            self.next_at = self.emit(p, out).max(0.25);
         }
         self.last = Some(p);
     }
@@ -477,7 +505,7 @@ impl DabBuilder {
             }
             // A dab shrunk to nothing paints nothing (Photoshop's size Fade to 0 % stops painting);
             // below 1 px it keeps a 1 px tip and lays ink in proportion to its area.
-            if !(diameter > 1e-3) {
+            if !diameter.is_finite() || diameter <= 1e-3 {
                 continue;
             }
             let tiny = diameter.min(1.0).powi(2);

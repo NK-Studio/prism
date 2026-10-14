@@ -44,8 +44,8 @@ mod services;
 mod settings_migration;
 #[cfg(target_os = "windows")]
 mod window_opacity;
-// Windows gets pen pressure from winit (WM_POINTER); the web runner has its own listener.
-#[cfg(any(target_os = "macos", test))]
+// Native tablet adapters preserve data omitted by winit's mouse/touch translation.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod tablet;
 mod ui_state;
 mod updates;
@@ -263,6 +263,8 @@ fn main() -> eframe::Result {
     let presets = services::presets_dir().map(prism_engine::preset_store::open_dir_async);
     let custom_titlebar = custom_titlebar(services::prefs_file().as_deref());
     let mut options = native_options(custom_titlebar);
+    #[cfg(target_os = "windows")]
+    let pen_queue = tablet::configure_windows(&mut options);
     // eframe restores the saved window layout before our code runs; drop values that would crash it.
     ui_state::sanitize(options.persistence_path.as_deref());
     // Crash-safe GPU startup (#4): pick the backend (a marker left by a start that died in the
@@ -424,6 +426,7 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "windows")]
             {
                 app.services.window_opacity = Some(window_opacity::service());
+                tablet::connect_windows(&cc.egui_ctx, pen_queue.clone());
             }
             app.services.screen_pick = screen_color::service(cc);
             // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor

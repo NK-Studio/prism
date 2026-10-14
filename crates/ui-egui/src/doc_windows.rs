@@ -86,6 +86,14 @@ pub(crate) fn main_index(app: &PrismApp) -> Option<usize> {
 }
 
 pub(crate) fn sync(app: &mut PrismApp) {
+    // A closed native viewport may never run another input hook to drain its native Cancel.
+    // Drop the source contact here as well when document/window pruning removes its owner.
+    if app.stylus.contact.is_some_and(|(v, _)| {
+        v != ViewportId::ROOT && !app.ui.windows.iter().any(|w| w.open && viewport(Some(w.id)) == v)
+            || app.stylus.contact_document.is_some_and(|id| !app.session.documents().iter().any(|d| d.doc.id == id))
+    }) {
+        crate::pen_input::cancel(app);
+    }
     if app.ui.active_window.is_some_and(|id| !app.ui.windows.iter().any(|w| w.id == id && w.open && Some(w.document) == app.session.active_index())) {
         app.ui.active_window = None;
     }
@@ -109,6 +117,9 @@ pub(crate) fn activate(app: &mut PrismApp, document: usize, window: Option<u64>)
         app.ui.polygon.clear();
     }
     if app.session.active_index() != Some(document) || app.ui.active_window != window {
+        if app.stylus.contact.is_some() {
+            crate::pen_input::cancel(app);
+        }
         app.drag = None;
         app.live_stroke = None;
         app.move_preview = None;
@@ -223,6 +234,9 @@ pub fn attach(app: &mut PrismApp, ctx: &Context, window: u64, before: Option<Doc
         app.run("document.move", json!({"document": w.document, "to": to}))?;
     }
     let current = app.ui.windows.iter().find(|w| w.id == window).cloned().ok_or("window closed while attaching")?;
+    if app.stylus.contact.is_some_and(|(v, _)| v == viewport(Some(window))) {
+        crate::pen_input::cancel(app);
+    }
     if let Some(v) = app.ui.views.get_mut(current.document) {
         *v = current.view;
     }
@@ -237,6 +251,9 @@ pub fn attach(app: &mut PrismApp, ctx: &Context, window: u64, before: Option<Doc
 }
 
 pub(crate) fn consolidate(app: &mut PrismApp) {
+    if app.stylus.contact.is_some_and(|(v, _)| v != ViewportId::ROOT) {
+        crate::pen_input::cancel(app);
+    }
     for w in &app.ui.windows {
         if w.kind == DocWindowKind::Detached
             && let Some(v) = app.ui.views.get_mut(w.document)
@@ -254,6 +271,11 @@ pub fn close(app: &mut PrismApp, ctx: &Context, window: u64) -> Result<Value, St
     let w = app.ui.windows.iter().find(|w| w.open && w.id == window).cloned().ok_or_else(|| format!("no window {window}"))?;
     if app.ui.dialogs.iter().any(|d| d.window == Some(window)) || app.file_dialog_open() {
         return Err("close the dialog before closing this document window".into());
+    }
+    // Closing a detached owner also retargets the Session before closing its document;
+    // closing an unrelated additional view leaves the current contact alone.
+    if app.stylus.contact.is_some_and(|(v, _)| v == viewport(Some(window)) || w.kind == DocWindowKind::Detached) {
+        crate::pen_input::cancel(app);
     }
     if w.kind == DocWindowKind::Detached {
         app.session.set_active(w.document);
@@ -654,3 +676,127 @@ pub(crate) fn dialogs_here(app: &PrismApp, ctx: &Context) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod pen_lifecycle_tests {
+    use super::*;
+
+    fn app() -> PrismApp {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":64,"height":64})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.ui.tool = crate::state::Tool::Brush;
+        app.sync_views();
+        app
+    }
+
+    fn pen_down(app: &mut PrismApp, window: Option<u64>) {
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(64.0, 64.0));
+        let xf = crate::canvas::ViewXform { rect, zoom: 1.0, center: [32.0, 32.0], flip: false, rotation: 0.0 };
+        let packet = crate::pen_input::Packet {
+            source: "windowsInk",
+            id: 17,
+            device: 23,
+            phase: crate::pen_input::Phase::Down,
+            pos: egui::pos2(32.0, 32.0),
+            sample: crate::stylus::PenSample { pressure: 0.25, ..Default::default() },
+            pressure_valid: true,
+            pressure_supported: Some(true),
+            time: 100.0,
+            barrel: false,
+        };
+        crate::pen_input::paint_packets(app, viewport(window), &[packet], rect, &xf, egui::Modifiers::NONE);
+        assert!(app.stylus.contact.is_some() && app.drag.is_some() && app.live_stroke.is_some());
+        assert_eq!(app.stylus.feed.get().unwrap().pressure, 0.25);
+    }
+
+    fn assert_canceled(app: &PrismApp) {
+        assert!(app.stylus.contact.is_none() && app.stylus.contact_document.is_none());
+        assert!(app.drag.is_none() && app.live_stroke.is_none());
+        assert_eq!(app.stylus.feed.get(), None);
+        assert_eq!(app.stylus.time, 0.0);
+        assert!(!app.session.journal.iter().any(|(id, _)| id == "paint.stroke"), "closing or switching must not commit the unfinished preview");
+    }
+
+    #[test]
+    fn same_document_view_switch_cancels_but_same_view_refocus_preserves_contact() {
+        let mut app = app();
+        let ctx = Context::default();
+        let window = additional(&mut app, 0).unwrap()["window"].as_u64().unwrap();
+        pen_down(&mut app, None);
+        focus(&mut app, &ctx, window).unwrap();
+        assert_canceled(&app);
+        pen_down(&mut app, Some(window));
+        focus(&mut app, &ctx, window).unwrap();
+        assert_eq!(app.stylus.contact, Some((viewport(Some(window)), 17)));
+        assert!(app.drag.is_some() && app.live_stroke.is_some());
+        activate_main(&mut app, 0);
+        assert_canceled(&app);
+    }
+
+    #[test]
+    fn closing_additional_contact_owner_cancels_before_its_input_hook_disappears() {
+        let mut app = app();
+        let ctx = Context::default();
+        let window = additional(&mut app, 0).unwrap()["window"].as_u64().unwrap();
+        focus(&mut app, &ctx, window).unwrap();
+        pen_down(&mut app, Some(window));
+        let history = app.session.active().unwrap().history.past_len();
+        close(&mut app, &ctx, window).unwrap();
+        assert_canceled(&app);
+        assert!(!app.ui.windows.iter().any(|w| w.id == window));
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    }
+
+    #[test]
+    fn closing_unrelated_view_does_not_cancel_main_contact() {
+        let mut app = app();
+        let ctx = Context::default();
+        let window = additional(&mut app, 0).unwrap()["window"].as_u64().unwrap();
+        pen_down(&mut app, None);
+        close(&mut app, &ctx, window).unwrap();
+        assert_eq!(app.stylus.contact, Some((ViewportId::ROOT, 17)));
+        assert!(app.drag.is_some() && app.live_stroke.is_some());
+        assert_eq!(app.stylus.feed.get().unwrap().pressure, 0.25);
+    }
+
+    #[test]
+    fn reattaching_detached_owner_cancels_same_document_contact() {
+        let mut app = app();
+        let ctx = Context::default();
+        let window = detach(&mut app, &ctx, 0, None).unwrap()["window"].as_u64().unwrap();
+        pen_down(&mut app, Some(window));
+        attach(&mut app, &ctx, window, None).unwrap();
+        assert_canceled(&app);
+        assert_eq!(app.ui.active_window, None);
+        assert!(app.ui.windows.is_empty());
+    }
+
+    #[test]
+    fn consolidation_cancels_native_contact_but_preserves_main_contact() {
+        let mut app = app();
+        let ctx = Context::default();
+        let window = additional(&mut app, 0).unwrap()["window"].as_u64().unwrap();
+        focus(&mut app, &ctx, window).unwrap();
+        pen_down(&mut app, Some(window));
+        consolidate(&mut app);
+        assert_canceled(&app);
+        additional(&mut app, 0).unwrap();
+        pen_down(&mut app, None);
+        consolidate(&mut app);
+        assert_eq!(app.stylus.contact, Some((ViewportId::ROOT, 17)));
+        assert!(app.drag.is_some());
+    }
+
+    #[test]
+    fn sync_cancels_contact_when_native_owner_was_pruned() {
+        let mut app = app();
+        let ctx = Context::default();
+        let window = additional(&mut app, 0).unwrap()["window"].as_u64().unwrap();
+        focus(&mut app, &ctx, window).unwrap();
+        pen_down(&mut app, Some(window));
+        app.ui.windows.clear();
+        sync(&mut app);
+        assert_canceled(&app);
+    }
+}

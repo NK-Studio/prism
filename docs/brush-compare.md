@@ -54,6 +54,17 @@ cases, which the tool doesn't support yet.
 
 ## Limits
 
+- The current Windows investigation, comparison settings and physical-device
+  acceptance gaps are recorded in [pen input validation](pen-input-validation.md)
+  and [Photoshop analysis evidence](pen-input-analysis.md).
+- The Windows pen regression suite also replays paired pressure/coordinate/time
+  samples, including stationary pressure changes and cancellation. These tests
+  validate Prism's input pipeline and live/committed rendering, not Photoshop's
+  response to an identical physical pen motion. Use `ui.penTrace` to diagnose a
+  real device (see `control-protocol.md`); compare the same brush size, hardness,
+  spacing, minimum diameter, pressure controls and smoothing in both applications.
+  See `pen-input-analysis.md` for separately recorded static analysis evidence.
+
 - The script was verified with Photoshop 2026. Other versions may name tool options
   differently. The report lists any case whose read-back doesn't match (a section left on,
   or a value that didn't apply). Re-run the script before trusting those numbers.

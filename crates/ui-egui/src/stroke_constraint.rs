@@ -8,7 +8,8 @@
 //! - The Gradient tool's ⇧ snaps the gradient angle to 45° increments.
 //!
 //! Points go through the normal drag/`LiveStroke`/commit path, so the live preview, pen dynamics
-//! and Smoothing treat them like any other stroke points.
+//! and pen dynamics treat them like any other stroke points. A Shift-click connection
+//! completes at the clicked endpoint even when ordinary freehand end catch-up is off.
 
 use crate::state::Tool;
 
@@ -236,9 +237,11 @@ mod tests {
         // The line start survives the undo (as in Photoshop). With smoothing on, the line still
         // runs from (100, 20) exactly to the click.
         app.session.tools.brush.smoothing.amount = 0.6;
+        app.session.tools.brush.smoothing.catch_up_on_end = false;
         tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 100.0, pressure: 1.0 }, shift);
         tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 100.0 }, shift);
         assert!(alpha(&app, 20, 100) > 0.9 && alpha(&app, 40, 80) > 0.9 && alpha(&app, 90, 30) > 0.9);
+        assert!(!app.session.tools.brush.smoothing.catch_up_on_end, "the connection cannot change subsequent freehand strokes");
     }
 
     #[test]

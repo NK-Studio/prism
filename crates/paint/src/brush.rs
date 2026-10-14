@@ -344,7 +344,8 @@ pub struct Smoothing {
     pub pulled_string: bool,
     /// Keep catching up with the pointer while it pauses (uses point timestamps).
     pub catch_up: bool,
-    /// Finish the stroke at the last pointer position.
+    /// Finish the stroke at the last pointer position. Off by default: finish at
+    /// the filtered brush tip instead of extending through the pen's release tail.
     pub catch_up_on_end: bool,
     /// Divide the string length by the view zoom (the command's `zoom` param).
     pub adjust_for_zoom: bool,
@@ -352,7 +353,7 @@ pub struct Smoothing {
 
 impl Default for Smoothing {
     fn default() -> Self {
-        Self { amount: 0.0, pulled_string: false, catch_up: true, catch_up_on_end: true, adjust_for_zoom: true }
+        Self { amount: 0.0, pulled_string: false, catch_up: true, catch_up_on_end: false, adjust_for_zoom: true }
     }
 }
 

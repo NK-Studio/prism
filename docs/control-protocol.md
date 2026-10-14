@@ -1,5 +1,27 @@
 # Control protocol
 
+## Pen input diagnostics
+
+`ui.penTrace {"enabled":true,"clear":true}` enables a bounded, in-memory pen trace
+(4096 samples maximum). It is off by default. `ui.penTrace {}` reads it and
+`ui.penTrace {"enabled":false}` stops recording. Each event records its source
+(`windowsInk` or `eguiTouch`), device/contact identity, document coordinates,
+pressure validity, pressure, pose, phase and millisecond time. Inspect
+`pressureValid` before interpreting a constant pressure as a device reading.
+`pressureSupported:false` explicitly identifies an unsupported-pressure device
+using constant mouse pressure; `null` means capability is still unknown.
+Diagnostics record the selected canvas; they are not a system-wide input logger.
+
+`ui.pointer` accepts optional per-event `time` in milliseconds and `kind:"cancel"`.
+Cancel drops the uncommitted painting preview without adding history. Existing
+requests without time keep their previous format. Batches are bounded to 4096
+events and validated before dispatch; pressure must be finite and within 0..1.
+Recorded tip-contact events can be replayed through `ui.pointer` on the same
+document with matching tool/brush settings. Filter barrel-button gestures out
+of a painting replay; they belong to the separate secondary-button UI path.
+
+## Connection and authentication
+
 The desktop app listens on `127.0.0.1:<port>` (loopback only). Start it with a token file so the credential is not exposed in the process command line:
 
 ```sh
