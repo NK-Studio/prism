@@ -491,7 +491,11 @@ mod tests {
         PrismApp::setup_context(&h.ctx, theme::ThemeKind::ProMedium);
         h.run_steps(5);
         let title = h.get_by_label("프리즘").rect();
-        assert!((title.center().x - 900.0).abs() < 1.0, "centred on the window, including the macOS traffic-light inset");
+        if crate::panels::BRAND_MARK {
+            assert!(title.left() < 20.0 && title.width() < 30.0, "Windows: the labelled logo leads the bar, no centred name: {title:?}");
+        } else {
+            assert!((title.center().x - 900.0).abs() < 1.0, "centred on the window, including the macOS traffic-light inset");
+        }
         assert!(h.state().session.active().unwrap().is_dirty());
     }
 

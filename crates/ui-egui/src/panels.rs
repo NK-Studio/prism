@@ -387,7 +387,8 @@ fn color_chips(app: &mut PrismApp, ui: &mut egui::Ui) {
 
 // ----------------------------------------------------------------------------- title bar
 
-/// The app's top bar: menus, the app name and the workspace controls. With
+/// The app's top bar: menus, the app name (on Windows the app logo before the menus instead,
+/// see [`BRAND_MARK`]) and the workspace controls. With
 /// [`PrismApp::custom_titlebar`] (Windows and Linux) it is also the window's title bar, as in
 /// Photoshop on Windows: the caption buttons take its right end (`titlebar`).
 pub fn title_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
@@ -419,6 +420,9 @@ pub fn title_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
             // whatever room is left between them, shortened or dropped rather than drawn over them.
             let (mut menus_right, mut controls_left) = (full.left(), full.right());
             ui.horizontal_centered(|ui| {
+                if BRAND_MARK {
+                    brand_mark(ui, &t, &title);
+                }
                 // With the macOS menu bar the menus are at the top of the screen instead.
                 menus_right = if app.services.native_menu.is_some() { ui.cursor().left() } else { crate::menus::menu_bar(app, ui) };
                 // The menu bar takes the whole row, so the right-hand group gets its own rect:
@@ -470,7 +474,9 @@ pub fn title_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
             ui.ctx().data_mut(|d| d.insert_temp(span_id, (menus_right, controls_left)));
             let font = theme::medium(13.0);
             let galley = ui.painter().layout_no_wrap(title.clone(), font.clone(), t.text_dim);
-            if let Some(x) = title_x(ui.ctx().content_rect().center().x, menus_right, controls_left, galley.size().x) {
+            if BRAND_MARK {
+                // Windows: the logo before the menus names the app, as Photoshop's does.
+            } else if let Some(x) = title_x(ui.ctx().content_rect().center().x, menus_right, controls_left, galley.size().x) {
                 let at = egui::pos2(x, full.center().y - galley.size().y / 2.0);
                 ui.interact(egui::Rect::from_min_size(at, galley.size()), ui.id().with("app-name"), Sense::hover())
                     .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &title));
@@ -487,6 +493,40 @@ pub fn title_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
     if custom {
         crate::titlebar::caption_buttons(app, ui, bar.response.rect);
     }
+}
+
+/// Windows leads the bar with the app logo, as Photoshop does, instead of a centred app name.
+/// macOS and FreeBSD keep the centred name.
+pub(crate) const BRAND_MARK: bool = cfg!(target_os = "windows");
+const BRAND_MARK_ID: &str = "prism-brand-mark";
+
+/// The app logo at the bar's left, before the menus; labelled with the app name for screen
+/// readers. Drawn nowhere if the embedded icon fails to decode.
+fn brand_mark(ui: &mut egui::Ui, t: &Tokens, name: &str) {
+    let Some(texture) = brand_texture(ui.ctx()) else { return };
+    let side = if t.pro { 20.0 } else { 24.0 };
+    let resp = ui.add(egui::Image::new(&texture).fit_to_exact_size(vec2(side, side)).sense(Sense::hover()));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, name));
+    ui.add_space(if t.pro { 4.0 } else { 6.0 });
+}
+
+/// The 64 px app icon, decoded once per context (sharp at 2x for the 20–24 pt mark).
+pub(crate) fn brand_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new(BRAND_MARK_ID);
+    if let Some(texture) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(texture);
+    }
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/app-icon/hicolor/64x64/apps/com.nkstudio.prism.png"))
+        .inspect_err(|e| log::warn!("Prism title-bar logo: {e}"))
+        .ok()?;
+    let size = [usize::try_from(icon.width).ok()?, usize::try_from(icon.height).ok()?];
+    if size[0].checked_mul(size[1]).and_then(|n| n.checked_mul(4)) != Some(icon.rgba.len()) {
+        return None;
+    }
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, &icon.rgba);
+    let texture = ctx.load_texture(BRAND_MARK_ID, image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+    Some(texture)
 }
 
 /// Minimum space kept between the window title and the menus or controls beside it.

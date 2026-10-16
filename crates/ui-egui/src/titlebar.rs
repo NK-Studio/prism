@@ -265,14 +265,52 @@ mod tests {
         }
     }
 
+    /// The image shapes the bar painted with the brand texture.
+    fn brand_marks(w: &Win, out: &egui::FullOutput) -> Vec<Rect> {
+        fn walk(s: &egui::Shape, tex: egui::TextureId, v: &mut Vec<Rect>) {
+            match s {
+                egui::Shape::Rect(r) if r.fill_texture_id() == tex => v.push(r.rect),
+                egui::Shape::Mesh(m) if m.texture_id == tex => v.push(m.calc_bounds()),
+                egui::Shape::Vec(s) => s.iter().for_each(|s| walk(s, tex, v)),
+                _ => {}
+            }
+        }
+        let Some(tex) = w.ctx.data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::new("prism-brand-mark"))) else { return vec![] };
+        let mut v = vec![];
+        out.shapes.iter().for_each(|c| walk(&c.shape, tex.id(), &mut v));
+        v
+    }
+
     #[test]
-    fn menus_lead_the_bar_without_a_brand_icon_or_reserved_gap() {
-        let mut w = Win::new(1440.0);
-        w.frame(vec![]);
-        let out = w.frame(vec![]);
-        let file = texts(&out).into_iter().find(|(t, _)| t == "File").map(|(_, r)| r).expect("the File menu title");
-        assert!(file.left() < 30.0, "menus start at the bar's left margin: {file:?}");
-        assert!(w.ctx.data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::new("prism-brand-mark"))).is_none());
+    fn windows_leads_the_bar_with_the_logo_and_drops_the_centred_name() {
+        for width in [760.0, 1440.0] {
+            let mut w = Win::new(width);
+            w.frame(vec![]);
+            let out = w.frame(vec![]);
+            let file = texts(&out).into_iter().find(|(t, _)| t == "File").map(|(_, r)| r).expect("the File menu title");
+            let name_drawn = texts(&out).iter().any(|(t, _)| t == "Prism");
+            let marks = brand_marks(&w, &out);
+            if crate::panels::BRAND_MARK {
+                let [mark] = marks[..] else { panic!("one logo at {width}: {marks:?}") };
+                assert!(mark.left() < 14.0 && mark.width() >= 18.0 && (mark.center().y - 16.0).abs() < 1.0, "{mark:?}");
+                assert!(mark.right() < file.left() && file.left() - mark.right() < 24.0, "File follows the logo: {mark:?} {file:?}");
+                assert!(!name_drawn, "no app name drawn in the bar at {width}");
+            } else {
+                assert!(marks.is_empty(), "{marks:?}");
+                assert!(file.left() < 30.0, "menus start at the bar's left margin: {file:?}");
+                if width > 1000.0 {
+                    assert!(name_drawn, "macOS and FreeBSD keep the centred name");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_brand_texture_is_decoded_once() {
+        let ctx = egui::Context::default();
+        let first = crate::panels::brand_texture(&ctx).expect("the embedded 64 px icon decodes");
+        assert_eq!(first.size(), [64, 64]);
+        assert_eq!(crate::panels::brand_texture(&ctx).map(|t| t.id()), Some(first.id()));
     }
 
     #[test]
