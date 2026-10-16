@@ -223,6 +223,7 @@ pub fn apply_custom(app: &mut PrismApp) -> bool {
     let Some(ws) = app.session.prefs().workspaces.get(&app.ui.workspace).cloned() else { return false };
     // Workspaces saved before the dock layout existed get the default heights.
     app.ui.dock = Default::default();
+    app.ui.tools = Default::default();
     crate::dock::apply(app, &ws);
     let (sc, menus, toolbar) = (ws.get("shortcuts").cloned(), ws.get("menus").cloned(), ws.get("toolbar").cloned());
     if sc.is_some() || menus.is_some() || toolbar.is_some() {

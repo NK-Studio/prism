@@ -330,6 +330,9 @@ pub struct Panels {
     /// Window › Character / Paragraph: the Character | Paragraph dock group (#150).
     #[serde(default)]
     pub character: bool,
+    /// Window › Tool Sliders: brush Size and Opacity as long sliders (Clip Studio Paint).
+    #[serde(default)]
+    pub tool_sliders: bool,
     /// The toolbar's header chevron: two columns even when one fits (#1197).
     #[serde(default)]
     pub toolbar_double: bool,
@@ -354,6 +357,7 @@ impl Default for Panels {
             status_bar: true,
             brush_settings: false,
             character: false,
+            tool_sliders: false,
             toolbar_double: false,
             dock: true,
             hidden_by_tab: None,
@@ -994,6 +998,12 @@ pub struct UiState {
     pub brush_section: usize,
     #[serde(default)]
     pub brush_tab: usize,
+    /// Where the Tool Sliders panel sits and its size.
+    #[serde(default)]
+    pub tool_sliders: crate::tool_sliders::ToolSlidersLayout,
+    /// Where the Tools panel (the toolbar) sits: docked left or right, or floating.
+    #[serde(default)]
+    pub tools: crate::tools_window::ToolsLayout,
     /// Brushes panel: collapsed groups and the search filter.
     #[serde(default)]
     pub brushes_panel: crate::brush_panel::BrushesPanelState,
@@ -1098,6 +1108,8 @@ impl Default for UiState {
             color_panel: Default::default(),
             brush_section: 0,
             brush_tab: 0,
+            tool_sliders: Default::default(),
+            tools: Default::default(),
             brushes_panel: Default::default(),
             selection_mode: 0,
             tool_options: ToolOptions::default(),

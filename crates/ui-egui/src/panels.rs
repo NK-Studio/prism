@@ -79,32 +79,73 @@ fn visible_sections(hidden: &[String]) -> Vec<Vec<(usize, Vec<Tool>)>> {
     sections
 }
 
-pub fn toolbar(app: &mut PrismApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
+/// Sizes and slots of the toolbar for the current theme and Edit › Toolbar choices.
+pub(crate) struct ToolbarGeometry {
+    pub sections: Vec<Vec<(usize, Vec<Tool>)>>,
+    /// Two columns (the header chevron asks for them, or one column doesn't fit).
+    pub double: bool,
+    /// Tool button size.
+    pub bx: f32,
+    /// Outer width, margins included.
+    pub width: f32,
+    /// Horizontal margin.
+    pub margin: i8,
+}
+
+/// The toolbar's layout when it gets `avail_h` points of height.
+pub(crate) fn toolbar_geometry(app: &PrismApp, t: &Tokens, avail_h: f32) -> ToolbarGeometry {
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
     let sections = visible_sections(&app.session.prefs().toolbar.hidden);
-    // Two columns when the header chevron asks for them, or when one column doesn't fit.
     let slots: usize = sections.iter().map(Vec::len).sum();
-    let double = app.ui.panels.toolbar_double || toolbar_needs_double(slots, sections.len(), bx, t.pro, ui.available_rect_before_wrap().height());
-    let w = if double { w1 + bx + 2.0 } else { w1 };
-    egui::Panel::left("toolbar").resizable(false).exact_size(w).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8))).show(
+    let double = app.ui.panels.toolbar_double || toolbar_needs_double(slots, sections.len(), bx, t.pro, avail_h);
+    let width = if double { w1 + bx + 2.0 } else { w1 };
+    ToolbarGeometry { sections, double, bx, width, margin: m }
+}
+
+/// The docked toolbar (Window › Tools) at the left or right of the work area; the floating one
+/// is `tools_window::floating`. Its header row tears it off (see `tools_window`).
+pub fn toolbar(app: &mut PrismApp, ui: &mut egui::Ui) {
+    let dock = app.ui.tools.dock;
+    if dock == crate::tools_window::ToolsDock::Floating {
+        return;
+    }
+    // Docked right of the canvas or beside the panel dock's groups: flyouts open to the left.
+    let right = dock != crate::tools_window::ToolsDock::Left;
+    let t = Tokens::get(ui.ctx());
+    let geo = toolbar_geometry(app, &t, ui.available_rect_before_wrap().height());
+    let (double, bx, m) = (geo.double, geo.bx, geo.margin);
+    let panel = if right { egui::Panel::right("toolbar") } else { egui::Panel::left("toolbar") };
+    panel.resizable(false).exact_size(geo.width).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8))).show(
         ui,
         |ui| {
+            let full = ui.max_rect();
+            let panel_rect = full.expand2(vec2(m as f32, 8.0));
+            // The header row tears the panel off; Pro also has the column chevrons in it.
+            let header_h = if t.pro { 14.0 } else { 8.0 };
+            let header = Rect::from_min_size(panel_rect.min, vec2(panel_rect.width(), 8.0 + header_h));
+            crate::tools_window::docked_grip(app, ui, header, panel_rect);
             if t.pro {
-                let r = ui.max_rect();
-                ui.painter().line_segment([r.right_top() + vec2(m as f32, -8.0), r.right_bottom() + vec2(m as f32, 8.0)], Stroke::new(1.0, t.separator));
+                let edge = if right { full.left() - m as f32 } else { full.right() + m as f32 };
+                ui.painter().line_segment([pos2(edge, full.top() - 8.0), pos2(edge, full.bottom() + 8.0)], Stroke::new(1.0, t.separator));
                 // Photoshop's toolbar header chevrons switch between one and two columns.
-                let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click());
+                let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click_and_drag());
                 let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                 icons::paint(ui, cr, if double { "chevrons-left" } else { "chevrons-right" }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Toolbar")));
+                crate::tools_window::tear_off(app, ui, &resp, panel_rect.min);
                 if resp.clicked() {
                     app.ui.panels.toolbar_double = !app.ui.panels.toolbar_double;
                 }
                 ui.add_space(4.0);
+            } else {
+                // A short grip bar marks the draggable header.
+                let (gr, _) = ui.allocate_exact_size(vec2(full.width(), header_h), Sense::hover());
+                let c = gr.center();
+                for dy in [-1.5, 1.5] {
+                    ui.painter().line_segment([pos2(c.x - 8.0, c.y + dy), pos2(c.x + 8.0, c.y + dy)], Stroke::new(1.0, t.text_faint));
+                }
             }
             // Subtle violet wash at the bottom of the toolbar.
-            let full = ui.max_rect();
             if !t.bevel && !t.pro && t.dark() {
                 let mut mesh = egui::Mesh::default();
                 let r = Rect::from_min_max(pos2(full.left() - 7.0, full.bottom() - 260.0), pos2(full.right() + 7.0, full.bottom() + 8.0));
@@ -118,6 +159,19 @@ pub fn toolbar(app: &mut PrismApp, ui: &mut egui::Ui) {
                 mesh.add_triangle(0, 2, 3);
                 ui.painter().add(mesh);
             }
+            toolbar_body(app, ui, &geo, right);
+        },
+    );
+}
+
+/// Tool slots, Edit Toolbar, colour chips, Quick Mask and Screen Mode: the toolbar below its
+/// header, docked or floating. `flyouts_left` opens tool flyouts to the left (docked right).
+pub(crate) fn toolbar_body(app: &mut PrismApp, ui: &mut egui::Ui, geo: &ToolbarGeometry, flyouts_left: bool) {
+    let t = Tokens::get(ui.ctx());
+    let (double, bx) = (geo.double, geo.bx);
+    let sections = geo.sections.clone();
+    {
+        {
             ui.spacing_mut().item_spacing = vec2(2.0, 3.0);
             let flyout_id = egui::Id::new("tool-flyout");
             let held_id = flyout_id.with("held");
@@ -176,7 +230,8 @@ pub fn toolbar(app: &mut PrismApp, ui: &mut egui::Ui) {
                             {
                                 let area = egui::Area::new(key.with("flyout"))
                                     .order(egui::Order::Foreground)
-                                    .fixed_pos(anchor.right_top() + vec2(6.0, 0.0))
+                                    .pivot(if flyouts_left { Align2::RIGHT_TOP } else { Align2::LEFT_TOP })
+                                    .fixed_pos(if flyouts_left { anchor.left_top() - vec2(6.0, 0.0) } else { anchor.right_top() + vec2(6.0, 0.0) })
                                     .show(ui.ctx(), |ui| {
                                         egui::Frame::popup(ui.style()).show(ui, |ui| {
                                             let label_w = slot
@@ -278,8 +333,8 @@ pub fn toolbar(app: &mut PrismApp, ui: &mut egui::Ui) {
                     }
                 });
             }
-        },
-    );
+        }
+    }
 }
 
 /// Does the toolbar need two columns? Height of one column (header, tool slots, Edit Toolbar,
@@ -290,7 +345,8 @@ pub fn toolbar_needs_double(slots: usize, sections: usize, bx: f32, pro: bool, a
         // margins + header + slots + "…" + gap + chips (38 + swap row) + gap + 2 buttons
         16.0 + 21.0 + (slots + 1) as f32 * pitch + 8.0 + 59.0 + 8.0 + 2.0 * pitch
     } else {
-        16.0 + slots as f32 * pitch + sections.saturating_sub(1) as f32 * 12.0 + 14.0 + 59.0
+        // margins + grip + slots + dividers + gap + chips
+        16.0 + 8.0 + slots as f32 * pitch + sections.saturating_sub(1) as f32 * 12.0 + 14.0 + 59.0
     };
     needed > avail_h
 }
@@ -1094,8 +1150,14 @@ pub fn status_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
 pub fn right_dock(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let p = app.ui.panels.clone();
+    // Window › Tools can dock right beside the panel groups, between them and the icon rail.
+    let tools_here = p.toolbar && app.ui.tools.dock == crate::tools_window::ToolsDock::Panels;
     if t.pro {
         dock_panels(app, ui, &p, &t);
+        if tools_here {
+            toolbar(app, ui);
+        }
+        crate::tool_sliders::beside_panels(app, ui);
     }
     // Narrow icon rail (always visible): shows, expands or collapses panel groups.
     let (rw, rb) = if t.pro { (36.0, 28.0) } else { (44.0, 32.0) };
@@ -1124,6 +1186,10 @@ pub fn right_dock(app: &mut PrismApp, ui: &mut egui::Ui) {
         },
     );
     if !t.pro {
+        crate::tool_sliders::beside_panels(app, ui);
+        if tools_here {
+            toolbar(app, ui);
+        }
         dock_panels(app, ui, &p, &t);
     }
     crate::dock::persist(app, ui.ctx());
@@ -1142,57 +1208,70 @@ pub fn request_dock_width(ctx: &egui::Context, w: f32) {
     ctx.data_mut(|d| d.insert_temp(dock_width_id(), w));
 }
 
-fn dock_panels(app: &mut PrismApp, ui: &mut egui::Ui, p: &crate::state::Panels, t: &Tokens) {
-    use crate::dock::Group;
-    // Floating in Studio, Properties docks only in Pro (Photoshop).
-    let shown: Vec<Group> = [
-        (Group::Color, p.color),
-        (Group::Properties, t.pro && p.properties),
-        (Group::Character, p.character),
-        (Group::Navigator, p.navigator),
-        (Group::History, p.history),
-        (Group::Layers, p.layers),
-    ]
-    .into_iter()
-    .filter_map(|(g, on)| on.then_some(g))
-    .collect();
+fn dock_panels(app: &mut PrismApp, ui: &mut egui::Ui, _p: &crate::state::Panels, t: &Tokens) {
+    // Floating in Studio, Properties docks only in Pro (Photoshop): see `dock_model::group_visible`.
+    let shown = crate::dock_model::visible_groups(&app.ui, crate::dock_model::Slot::Main, t.pro);
     if shown.is_empty() {
         return;
     }
+    let iconic = app.ui.dock.main_iconic;
     let margin = if t.pro { 2 } else { 8 };
     let mut panel = egui::Panel::right("dock").resizable(true).default_size(if t.pro { 290.0 } else { 300.0 }).size_range(DOCK_WIDTH);
-    if let Some(w) = ui.ctx().data_mut(|d| d.remove_temp::<f32>(dock_width_id())) {
+    if iconic {
+        panel = panel.resizable(false).exact_size(crate::dock_float::ICONIC_W);
+    } else if let Some(w) = ui.ctx().data_mut(|d| d.remove_temp::<f32>(dock_width_id())) {
         panel = panel.exact_size(w);
     }
-    panel.frame(egui::Frame::NONE.fill(t.dock).inner_margin(egui::Margin::same(margin))).show(ui, |ui| {
-        // Groups keep their heights whatever they show (#88): see `dock`.
-        crate::dock::show(app, ui, &shown, dock_body);
+    let shown_panel = panel.frame(egui::Frame::NONE.fill(t.dock).inner_margin(egui::Margin::same(margin))).show(ui, |ui| {
+        let full = ui.available_rect_before_wrap();
+        // The bar on top collapses the column to icons (» / «), as in Photoshop.
+        let head = Rect::from_min_size(full.min, vec2(full.width(), crate::dock::COLUMN_HEADER));
+        if crate::dock_float::header(ui, head, iconic, true, "main") {
+            app.ui.dock.main_iconic = !iconic;
+            crate::dock_float::close_flyout(ui.ctx());
+        }
+        ui.advance_cursor_after_rect(head);
+        ui.add_space(2.0);
+        if iconic {
+            let area = ui.available_rect_before_wrap();
+            crate::dock_float::iconic_list(app, ui, area, &shown, true, None);
+            ui.advance_cursor_after_rect(area);
+        } else {
+            // Groups keep their heights whatever they show (#88): see `dock`.
+            crate::dock::show(app, ui, &shown, panel_body);
+        }
+        // Its left edge takes a new dock column beside it.
+        let edge = Rect::from_min_max(pos2(full.left() - 4.0, full.top()), pos2(full.left() + 8.0, full.bottom()));
+        let kind = crate::dock_drag::ZoneKind::Edge { side: crate::dock_model::Side::Right, index: 0 };
+        crate::dock_drag::add_zone(ui.ctx(), crate::dock_drag::Zone { rect: edge, kind, float: None });
     });
+    // Where Window › Tools docks beside the groups (`tools_window::drop_target_at`).
+    crate::tools_window::set_panels_edge(ui.ctx(), shown_panel.response.rect.left());
 }
 
-/// One dock group's tab content; `dock` bounds it and scrolls it when it's taller.
-fn dock_body(app: &mut PrismApp, ui: &mut egui::Ui, group: crate::dock::Group, tab: usize) {
-    use crate::dock::Group;
-    let pro = Tokens::get(ui.ctx()).pro;
-    match (group, tab) {
-        (Group::Color, 2) => crate::preset_panels::gradients_panel(app, ui),
-        (Group::Color, 3) => crate::preset_panels::patterns_panel(app, ui),
-        (Group::Color, 0) if pro => color_field(app, ui),
-        (Group::Color, _) if pro => crate::swatches_ui::panel(app, ui),
-        (Group::Color, 0) => crate::swatches_ui::panel(app, ui),
-        (Group::Color, _) => color_field(app, ui),
-        (Group::Properties, 0) => properties_body(app, ui),
-        (Group::Properties, _) => adjustments_grid(app, ui),
-        (Group::Character, tab) => crate::type_tool::character_panel(app, ui, tab == 1),
-        (Group::Navigator, 0) => navigator(app, ui),
-        (Group::Navigator, 1) => crate::tone::histogram_panel(app, ui),
-        (Group::Navigator, _) => info_panel(app, ui),
-        (Group::History, 0) => history(app, ui),
-        (Group::History, 1) => crate::actions::panel(app, ui),
-        (Group::History, _) => crate::comps_ui::panel(app, ui),
-        (Group::Layers, 0) => layers(app, ui),
-        (Group::Layers, 1) => channels(app, ui),
-        (Group::Layers, _) => crate::vector_ui::paths_panel(app, ui),
+/// One panel's content, wherever its tab is (a dock group, an extra column, a floating window or
+/// a flyout); the group bounds it and scrolls it when it's taller.
+pub(crate) fn panel_body(app: &mut PrismApp, ui: &mut egui::Ui, panel: crate::dock_model::PanelId) {
+    use crate::dock_model::PanelId as P;
+    match panel {
+        P::Gradients => crate::preset_panels::gradients_panel(app, ui),
+        P::Patterns => crate::preset_panels::patterns_panel(app, ui),
+        P::Color => color_field(app, ui),
+        P::Swatches => crate::swatches_ui::panel(app, ui),
+        P::Properties => properties_body(app, ui),
+        P::Adjustments => adjustments_grid(app, ui),
+        P::Character => crate::type_tool::character_panel(app, ui, false),
+        P::Paragraph => crate::type_tool::character_panel(app, ui, true),
+        P::Navigator => navigator(app, ui),
+        P::Histogram => crate::tone::histogram_panel(app, ui),
+        P::Info => info_panel(app, ui),
+        P::History => history(app, ui),
+        P::Actions => crate::actions::panel(app, ui),
+        P::LayerComps => crate::comps_ui::panel(app, ui),
+        P::Layers => layers(app, ui),
+        P::Channels => channels(app, ui),
+        P::Paths => crate::vector_ui::paths_panel(app, ui),
+        P::ToolSliders => crate::tool_sliders::grouped_body(app, ui),
     }
 }
 

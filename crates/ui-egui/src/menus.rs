@@ -56,6 +56,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.toggle.color", "Color", &["Window"], Some("F6")),
     ("window.toggle.brushSettings", "Brush Settings", &["Window"], Some("F5")),
     ("window.toggle.navigator", "Navigator", &["Window"], None),
+    // Clip Studio Paint's Tool Sliders: brush Size and Opacity as long sliders.
+    ("window.toggle.toolSliders", "Tool Sliders", &["Window"], None),
     ("window.toggle.toolbar", "Tools", &["Window"], None),
     // Photoshop's Tab and ⇧Tab: all panels (Tools, options bar and the dock), or only the dock.
     ("window.togglePanels", "Show/Hide All Panels", &[], Some("Tab")),
@@ -460,6 +462,7 @@ pub(crate) fn invoke_unguarded(app: &mut PrismApp, ctx: &egui::Context, id: &str
                 "toolbar" => &mut p.toolbar,
                 "options" => &mut p.options_bar,
                 "brushSettings" => &mut p.brush_settings,
+                "toolSliders" => &mut p.tool_sliders,
                 "dock" => &mut p.dock,
                 _ => return Err(format!("unknown panel in {t}")),
             };
@@ -640,6 +643,7 @@ fn checked(app: &PrismApp, id: &str) -> Option<bool> {
         "window.togglePanels" => p.toolbar || p.options_bar || p.dock,
         "window.toggle.options" => p.options_bar,
         "window.toggle.brushSettings" => p.brush_settings,
+        "window.toggle.toolSliders" => p.tool_sliders,
         _ => return None,
     })
 }
@@ -689,7 +693,7 @@ pub fn is_live(id: &str) -> bool {
 
 /// Commands outside the catalogue that belong right after a catalogue item: `(id, after)`.
 const PLACE_AFTER: &[(&str, &str)] =
-    &[("file.newFromClipboard", "file.new"), ("filter.render.relight", "filter.render.lightingEffects"), ("view.resetView", "view.flipHorizontal")];
+    &[("file.newFromClipboard", "file.new"), ("filter.render.relight", "filter.render.lightingEffects"), ("view.resetView", "view.flipHorizontal"), ("window.toggle.toolSliders", "window.panel.toolPresets")];
 
 pub fn menu_items(app: &PrismApp) -> Vec<MenuItem> {
     // 1) Photoshop's full menu tree, in Photoshop order; live where we implement the command.
@@ -1174,6 +1178,7 @@ pub fn apply_workspace(app: &mut PrismApp) {
     // Presets use the default group order, heights and tabs (Reset brings everything back).
     app.ui.dock = Default::default();
     app.ui.dock_tabs = Default::default();
+    app.ui.tools = Default::default();
     let p = &mut app.ui.panels;
     let (nav, color, layers, history, props) = match app.ui.workspace.as_str() {
         "Photography" => (true, false, true, true, true),

@@ -96,6 +96,7 @@ fn harness(app: PrismApp, size: egui::Vec2, theme: ThemeKind) -> Harness<'static
             }
             crate::panels::right_dock(app, ui);
             egui::CentralPanel::default().show(ui, |_| {});
+            crate::dock_drag::finish(app, &ctx);
         },
         app,
     );
@@ -229,10 +230,11 @@ fn double_clicking_a_tab_collapses_and_dragging_a_strip_reorders() {
     assert!(rect_of(&h, Group::Color).height() < 40.0);
     h.state_mut().ui.dock.set_collapsed(Group::Color, false);
     h.run_steps(3);
-    // Drag the Layers tab strip (right of its tabs) above Color.
+    // Drag the Layers tab strip (right of its tabs) onto the top half of Color: above it (onto
+    // Color's tab strip it would join that group instead).
     let layers = rect_of(&h, Group::Layers);
     let strip = Pos2::new(layers.right() - 60.0, layers.top() + 13.0);
-    let to = rect_of(&h, Group::Color).left_top() + vec2(120.0, 10.0);
+    let to = rect_of(&h, Group::Color).left_top() + vec2(120.0, 50.0);
     drag(&mut h, strip, to);
     assert_eq!(h.state().ui.dock.order().first(), Some(&Group::Layers));
     // A locked workspace keeps the order.
@@ -476,7 +478,7 @@ fn tab_strips_never_overlap_the_menu_button() {
         for scale in [1.0, 2.0] {
             for width in [180.0, 250.0, 290.0, 420.0] {
                 for g in Group::ALL {
-                    let tabs = g.tabs(is_pro(theme));
+                    let tabs: &'static [&'static str] = g.tabs(is_pro(theme)).leak();
                     for sel in 0..tabs.len() {
                         let mut h = Harness::builder().with_size(vec2(width, 200.0)).with_pixels_per_point(scale).build_ui_state(
                             move |ui, out: &mut StripProbe| {

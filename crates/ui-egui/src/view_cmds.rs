@@ -230,16 +230,14 @@ fn panel_tab(app: &PrismApp, id: &str) -> Option<(&'static str, usize)> {
     })
 }
 
-fn panel_state<'a>(app: &'a mut PrismApp, panel: &str) -> (&'a mut bool, &'a mut usize) {
-    let (p, t) = (&mut app.ui.panels, &mut app.ui.dock_tabs);
-    match panel {
-        "navigator" => (&mut p.navigator, &mut t.navigator),
-        "history" => (&mut p.history, &mut t.history),
-        "layers" => (&mut p.layers, &mut t.layers),
-        "color" => (&mut p.color, &mut t.color),
-        "character" => (&mut p.character, &mut t.character),
-        _ => (&mut p.properties, &mut t.properties),
-    }
+/// The dock panel a Window › <panel> (or Type › Panels) id shows.
+fn panel_id(id: &str) -> Option<crate::dock_model::PanelId> {
+    let key = match id {
+        "type.panels.character" => "character",
+        "type.panels.paragraph" => "paragraph",
+        _ => id.strip_prefix("window.panel.")?,
+    };
+    crate::dock_model::PanelId::from_key(key).filter(|p| *p != crate::dock_model::PanelId::ToolSliders)
 }
 
 /// Ids handled here (live menu items).
@@ -366,17 +364,9 @@ pub fn checked(app: &PrismApp, id: &str) -> Option<bool> {
     {
         return Some(o.arrange == k);
     }
-    if let Some((panel, tab)) = panel_tab(app, id) {
-        let (p, t) = (&app.ui.panels, &app.ui.dock_tabs);
-        let (vis, cur) = match panel {
-            "navigator" => (p.navigator, t.navigator),
-            "history" => (p.history, t.history),
-            "layers" => (p.layers, t.layers),
-            "color" => (p.color, t.color),
-            "character" => (p.character, t.character),
-            _ => (p.properties, t.properties),
-        };
-        return Some(vis && cur == tab);
+    if let Some(panel) = panel_id(id) {
+        let pro = crate::prefs_ui::layout(app) == crate::theme::Layout::Compact;
+        return Some(crate::dock_model::panel_checked(&app.ui, panel, pro));
     }
     if let Some(c) = type_checked(app, id) {
         return Some(c);
@@ -473,21 +463,12 @@ fn flag_param(p: &Value, cur: bool) -> bool {
 
 fn run(app: &mut PrismApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
     if let Some((panel, tab)) = panel_tab(app, id) {
-        let group = crate::dock::Group::from_key(panel);
-        let collapsed = group.is_some_and(|g| app.ui.dock.is_collapsed(g));
-        let (vis, cur) = panel_state(app, panel);
         // Like Photoshop: choosing a visible panel's menu item again hides it. A collapsed
-        // group is expanded instead, so the menu item always brings the panel back (#129).
-        if *vis && *cur == tab && !collapsed && !id.starts_with("type.panels.") {
-            *vis = false;
-        } else {
-            *vis = true;
-            *cur = tab;
-        }
-        let visible = *vis;
-        if let Some(g) = group.filter(|_| visible) {
-            crate::dock::reveal(app, g);
-        }
+        // group is expanded instead, so the menu item always brings the panel back (#129); a
+        // panel dragged into another group, column or floating window is found there.
+        let pro = crate::prefs_ui::layout(app) == crate::theme::Layout::Compact;
+        let force = id.starts_with("type.panels.").then_some(true);
+        let visible = panel_id(id).is_some_and(|p| crate::dock_model::toggle_panel(&mut app.ui, p, pro, force));
         return Ok(json!({"panel": panel, "tab": tab, "visible": visible}));
     }
     if id == "view.rotateView" {

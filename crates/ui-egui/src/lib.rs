@@ -56,6 +56,9 @@ pub mod distort_ui;
 pub mod doc_props_ui;
 pub mod doc_windows;
 pub mod dock;
+pub mod dock_drag;
+pub mod dock_float;
+pub mod dock_model;
 mod document_menu;
 mod duplicate_ui;
 pub mod enable_rules;
@@ -147,6 +150,8 @@ mod timeline_ui;
 mod titlebar;
 pub mod tone;
 mod tool_cursor;
+pub mod tool_sliders;
+pub mod tools_window;
 pub mod tool_feedback;
 pub mod transform_tex;
 pub mod transform_tool;
@@ -1272,11 +1277,35 @@ impl eframe::App for PrismApp {
         if chrome && self.ui.panels.status_bar {
             panels::status_bar(self, ui);
         }
-        if chrome && self.ui.panels.toolbar {
+        // Window › Tools docks at the left edge, or between the canvas and the panel dock.
+        let tools_work = ui.available_rect_before_wrap();
+        let tools_dock = self.ui.tools.dock;
+        if chrome && self.ui.panels.toolbar && tools_dock == tools_window::ToolsDock::Left {
             panels::toolbar(self, ui);
+        }
+        // Panel groups: the main dock, extra dock columns, floating windows (`dock_*`).
+        dock_model::sync(&mut self.ui);
+        if chrome {
+            dock_float::columns(self, ui, dock_model::Side::Left);
         }
         if chrome && self.ui.panels.dock {
             panels::right_dock(self, ui);
+        }
+        if chrome {
+            dock_float::columns(self, ui, dock_model::Side::Right);
+        }
+        let tools_right = ui.available_rect_before_wrap().right();
+        // Docked beside the panel groups, it falls back to the canvas' right while ⇧Tab hides them.
+        let beside_hidden_dock = tools_dock == tools_window::ToolsDock::Panels && !self.ui.panels.dock;
+        if chrome && self.ui.panels.toolbar && (tools_dock == tools_window::ToolsDock::Right || beside_hidden_dock) {
+            panels::toolbar(self, ui);
+        }
+        if chrome {
+            tools_window::track_drag(self, &ctx, tools_work, tools_right);
+        }
+        if chrome {
+            dock_float::columns(self, ui, dock_model::Side::Bottom);
+            tool_sliders::docked(self, ui);
         }
         let t = theme::Tokens::get(&ctx);
         let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
@@ -1285,6 +1314,13 @@ impl eframe::App for PrismApp {
         });
         panels::properties_window(self, &ctx);
         brush_panel::window(self, &ctx);
+        if chrome {
+            tool_sliders::window(self, &ctx);
+            tools_window::floating(self, &ctx);
+            dock_float::floats(self, &ctx);
+            dock_float::flyout(self, &ctx);
+            dock_drag::finish(self, &ctx);
+        }
         preset_panels::windows(self, &ctx);
         type_panels_ui::windows(self, &ctx);
         analysis_ui::windows(self, &ctx);

@@ -74,6 +74,57 @@ Character panel.
 Where the font lacks a symbol (e.g. ∠ ↦ ▔), draw it with the painter or use a Lucide icon; never ship
 missing-glyph boxes. Check every new panel with the offscreen snapshot tool (`docs/development.md`).
 
+## Panel docking (match Photoshop)
+
+Panels dock the way Photoshop's do. The model is `dock_model.rs` (pure data, in
+`UiState::dock`), the main column and group drawing `dock.rs`, drags and drop targets
+`dock_drag.rs`, extra columns, floating windows and icon columns `dock_float.rs`.
+
+- **Panels are tabs, tabs live in groups.** Every panel (`PanelId`: Layers, Channels, Paths,
+  Color, Swatches, Gradients, Patterns, Properties, Adjustments, Character, Paragraph,
+  Navigator, Histogram, Info, History, Actions, Layer Comps, Tool Sliders) is a tab of a panel
+  group. The six Essentials groups keep their names and `Panels` flags (so `window.toggle.*`,
+  workspaces and old saved layouts keep working); groups made by tearing tabs off are
+  `Group::Custom(n)` (serialised `"g<n>"`).
+- **Containers.** Groups stack top to bottom in the main dock column (right of the canvas,
+  beside the icon rail), in extra columns (`Column`, `side` left/right/bottom; a bottom row
+  lays its groups side by side) or in floating windows (`Float`). Stacked groups have a
+  splitter between them; columns resize at their inner edge, floating windows with the grip
+  at the bottom (height) and their right edge (width).
+- **Drags.** Drag a tab to tear it off; drag the empty part of a tab strip to move the whole
+  group (the only group of a floating window moves the window); drag a floating window's
+  title bar to move it. While dragging, the drop target shows in `docking_outline` blue:
+  an outlined tab strip with an insertion caret (join the group as a tab, which also reorders
+  tabs within a strip), a line along a group's top or bottom edge (stack above or below it; left
+  or right in a bottom row), or a bar along the canvas' left, right or bottom edge or the main
+  dock's left edge (a new dock column). Released anywhere else, a tab or group becomes a
+  floating window; a floating window just stays where it was dropped. Never at the top edge.
+  Esc cancels; Window › Workspace › Lock Workspace disables all of it.
+- **Collapse to icons.** The thin bar on top of each column (and « on a floating window's title
+  bar) collapses it to a list of icon + name rows, groups separated by a rule. A click opens the
+  panel's group in a flyout beside the list; a click elsewhere, Esc or a drag closes it.
+  Double-clicking a tab still collapses a group to its tab strip.
+- **Panel menu.** Collapse/Expand Panel Group, Move Group Up/Down (Left/Right in a bottom row),
+  Close (this tab) and Close Tab Group. A closed tab leaves its group; Window › <panel> brings
+  it back into its home group (Tool Sliders into a floating window).
+- **Window menu.** `window.panel.<panel>` finds the panel wherever it was dragged: a showing
+  panel hides its group (Photoshop), otherwise it is shown, expanded and selected.
+- **Exceptions.** Tools (the toolbar, `tools_window.rs`) is not a panel: it docks only at the
+  left or right of the work area beside other columns (or right beside the main panel groups,
+  between them and the icon rail: drop it on their left edge), never joins a group, never takes tabs
+  and never docks top or bottom (`dock_model::allowed` rejects every other target for
+  `DragKind::Tools`). Tool Sliders is an ordinary panel: drag its own window's strip onto a
+  group's strip or edge and it becomes a tab there (its sliders still lay out vertically when
+  the group is taller than wide); it keeps its own floating/edge-docked window otherwise, and like Tools it can also dock as a
+  column right beside the main panel groups (drop its strip on their left edge, below their tab
+  strips; over a tab strip it joins the group instead).
+- **Persistence and automation.** The layout (groups, tab order, selected tabs, columns and
+  sizes, floating windows' positions and sizes, collapsed and icon states) is part of
+  `UiState`, saved with workspaces and in `panelLayout` while Remember Workspace Changes is
+  on; Reset Workspace restores the Essentials arrangement. `ui.set {dock}` replaces it and
+  `ui.dock` reads it with the rects of every group, tab and icon row and applies drops,
+  toggles and icon states (`docs/control-protocol.md`).
+
 ## Title bar
 
 The app's top bar (`panels::title_bar`) contains the menus, localized Prism app name and workspace controls. Detached document windows use OS decorations with their document title, plus an internal tab for returning to the main strip, canvas, rulers, scrollbars and status bar.

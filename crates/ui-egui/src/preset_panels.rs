@@ -57,11 +57,11 @@ pub fn handles(id: &str) -> bool {
     PANELS.contains(&id)
 }
 
-/// Color card tab of a Window › Gradients / Patterns id.
-fn color_tab(id: &str) -> Option<usize> {
+/// The dock panel of a Window › Gradients / Patterns id.
+fn color_tab(id: &str) -> Option<crate::dock_model::PanelId> {
     match id {
-        "window.panel.gradients" => Some(2),
-        "window.panel.patterns" => Some(3),
+        "window.panel.gradients" => Some(crate::dock_model::PanelId::Gradients),
+        "window.panel.patterns" => Some(crate::dock_model::PanelId::Patterns),
         _ => None,
     }
 }
@@ -82,15 +82,11 @@ pub fn menu(app: &mut PrismApp, id: &str, params: &Value) -> Option<Result<Value
         return None;
     }
     let want = params.get("show").and_then(Value::as_bool);
-    if let Some(tab) = color_tab(id) {
-        // A collapsed Color group counts as not showing: the item expands it (#129).
-        let showing = app.ui.panels.color && app.ui.dock_tabs.color == tab && !app.ui.dock.is_collapsed(crate::dock::Group::Color);
-        let show = want.unwrap_or(!showing);
-        app.ui.panels.color = show || (app.ui.panels.color && app.ui.dock_tabs.color != tab);
-        if show {
-            app.ui.dock_tabs.color = tab;
-            crate::dock::reveal(app, crate::dock::Group::Color);
-        }
+    if let Some(panel) = color_tab(id) {
+        // A collapsed group counts as not showing: the item expands it (#129). The panel is
+        // found wherever it was dragged.
+        let pro = crate::prefs_ui::layout(app) == crate::theme::Layout::Compact;
+        let show = crate::dock_model::toggle_panel(&mut app.ui, panel, pro, want);
         return Some(Ok(json!({"visible": show})));
     }
     let flag = float_flag(&mut app.ui.presets_ui, id)?;
@@ -99,8 +95,9 @@ pub fn menu(app: &mut PrismApp, id: &str, params: &Value) -> Option<Result<Value
 }
 
 pub fn checked(app: &PrismApp, id: &str) -> Option<bool> {
-    if let Some(tab) = color_tab(id) {
-        return Some(app.ui.panels.color && app.ui.dock_tabs.color == tab);
+    if let Some(panel) = color_tab(id) {
+        let pro = crate::prefs_ui::layout(app) == crate::theme::Layout::Compact;
+        return Some(crate::dock_model::panel_checked(&app.ui, panel, pro));
     }
     let mut p = app.ui.presets_ui.clone();
     float_flag(&mut p, id).map(|f| *f)

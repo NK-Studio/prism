@@ -12,6 +12,10 @@
 //!   change UI state; any other field is an error ([`UI_SET_FIELDS`])
 //! - `ui.dialog.open {kind, fields?}` (kinds: newDocument, about, layerStyle {effect?}, colorPicker {target: foreground|background|shapeFill}, command {command}) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`
 //! - `ui.dialog.apply {dialog}`: commit Preferences changes without closing the dialog
+//! - `ui.dock {drop?: {payload, target}, toggle?, show?, close?, iconic?}`: panel docking (tear
+//!   tabs off, merge them into groups, stack groups, dock columns left/right/bottom, floating
+//!   windows, collapse to icons); replies with the layout and the rects of groups, tab strips and
+//!   icon rows (see `dock_float::control`)
 //! - `ui.window.open {document?}`: additional view; `ui.window.detach {document?}`: float a tab
 //! - `ui.window.attach {window}` / `ui.window.focus {window}` / `ui.window.close {window}`
 //! - Input, resize and screenshot methods accept optional `window`; omission targets the main window
@@ -80,13 +84,15 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 25] = [
+pub const UI_SET_FIELDS: [&str; 27] = [
     "tool",
     "panels",
     "dock",
     "dockTabs",
     "dockWidth",
     "colorPanel",
+    "toolSliders",
+    "tools",
     "maskTarget",
     "vectorMaskTarget",
     "selectionMode",
@@ -340,6 +346,8 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             }
         }
         "ui.menu.list" => ok(serde_json::to_value(crate::menus::menu_items(app)).unwrap_or_default()),
+        // Panel docking: read the layout and rects, drop tabs/groups/windows, toggle panels.
+        "ui.dock" => wrap(crate::dock_float::control(app, ctx, p)),
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.set" => {
             if let Some(field) = p.as_object().and_then(|o| o.keys().find(|k| !UI_SET_FIELDS.contains(&k.as_str()))) {
@@ -378,6 +386,10 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 let dock = whole_object(&app.ui.dock, p.get("dock"), "dock")?;
                 // Which chip the Color panel edits.
                 let color_panel = whole_object(&app.ui.color_panel, p.get("colorPanel"), "colorPanel")?;
+                // Tool Sliders placement and sizes (see `tool_sliders::ToolSlidersLayout`).
+                let tool_sliders = merged_object(&app.ui.tool_sliders, p.get("toolSliders"), "toolSliders")?;
+                // Where the Tools panel sits (see `tools_window::ToolsLayout`).
+                let tools = merged_object(&app.ui.tools, p.get("tools"), "tools")?;
                 let dock_width = num_field(p, "dockWidth")?;
                 let zoom = num_field(p, "zoom")?;
                 let rotation = num_field(p, "rotation")?;
@@ -494,6 +506,12 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 }
                 if let Some(v) = color_panel {
                     app.ui.color_panel = v;
+                }
+                if let Some(v) = tool_sliders {
+                    app.ui.tool_sliders = v;
+                }
+                if let Some(v) = tools {
+                    app.ui.tools = v;
                 }
                 // Right dock width in points (clamped to the dock's 250..=520 range), applied next frame.
                 if let Some(w) = dock_width {
