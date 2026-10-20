@@ -1108,9 +1108,11 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::color_cmds::specs());
     v.extend(crate::brush_cmds::specs());
     v.extend(crate::brush_preset_cmds::specs());
+    v.extend(crate::brush_sut_cmds::specs());
     v.extend(crate::eraser_cmds::specs());
     v.extend(crate::preset_import_cmds::specs());
     v.extend(crate::sut_import_cmds::specs());
+    v.extend(crate::csp_library_cmds::specs());
     v.extend(crate::swatch_cmds::specs());
     v.extend(crate::retouch_cmds::specs());
     v.extend(crate::redeye_cmds::specs());
@@ -1119,6 +1121,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::magnetic_cmds::specs());
     v.extend(crate::select_extra_cmds::specs());
     v.extend(crate::paint_cmds::specs());
+    v.extend(crate::enclose_fill_cmds::specs());
     v.extend(crate::extra_cmds::specs());
     v.extend(crate::file_cmds::specs());
     v.extend(crate::type_extra_cmds::specs());
@@ -1174,6 +1177,9 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::fx_visibility_cmds::specs());
     v.extend(crate::mask_view_cmds::specs());
     v.extend(crate::actions_cmds::specs());
+    v.extend(crate::action_edit_cmds::specs());
+    v.extend(crate::laf_import_cmds::specs());
+    v.extend(crate::atn_import_cmds::specs());
     v
 }
 

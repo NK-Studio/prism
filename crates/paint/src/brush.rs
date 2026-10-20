@@ -11,6 +11,7 @@ use prism_color::BlendMode;
 use serde::{Deserialize, Serialize};
 
 use crate::mixer::MixerSettings;
+use crate::pressure_curve::PressureCurve;
 use crate::tile::GrayTile;
 
 /// Largest brush diameter accepted by the rasterizer and brush controls.
@@ -40,8 +41,53 @@ pub enum Control {
     Direction,
 }
 
+/// An additional CSP altitude response, multiplied independently of pen pressure:
+/// `minimum + (maximum - minimum) * curve(input)`. The input runs from a horizontal pen (0) to a
+/// vertical pen or mouse (1). `minimum`/`maximum` are the multipliers at curve responses 0 and 1;
+/// like the source they need not be ordered.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "CspTiltValues")]
+pub struct CspTilt {
+    pub minimum: f32,
+    pub maximum: f32,
+    pub curve: PressureCurve,
+}
+
+#[derive(Deserialize)]
+struct CspTiltValues {
+    minimum: f32,
+    maximum: f32,
+    curve: PressureCurve,
+}
+
+impl TryFrom<CspTiltValues> for CspTilt {
+    type Error = String;
+    fn try_from(value: CspTiltValues) -> Result<Self, Self::Error> {
+        Self::new(value.minimum, value.maximum, value.curve)
+    }
+}
+
+impl CspTilt {
+    /// Five times the base value is Prism's bounded work policy, not a CSP UI limit.
+    pub fn new(minimum: f32, maximum: f32, curve: PressureCurve) -> Result<Self, String> {
+        if !(0.0..=5.0).contains(&minimum) || !(0.0..=5.0).contains(&maximum) {
+            return Err("CSP tilt limits must be finite and within 0..=5".into());
+        }
+        Ok(Self { minimum, maximum, curve })
+    }
+
+    pub fn multiplier(&self, tilt_x: f32, tilt_y: f32) -> f32 {
+        let tilt = if tilt_x.is_finite() && tilt_y.is_finite() { tilt_x.hypot(tilt_y).clamp(0.0, 90.0) } else { 0.0 };
+        let response = self.curve.sample(1.0 - tilt / 90.0);
+        // Direct Rust callers can construct the public fields without deserializing.
+        let minimum = if self.minimum.is_finite() { self.minimum.clamp(0.0, 5.0) } else { 1.0 };
+        let maximum = if self.maximum.is_finite() { self.maximum.clamp(0.0, 5.0) } else { minimum };
+        minimum + (maximum - minimum) * response
+    }
+}
+
 /// One dynamic parameter: random jitter plus a controller with a floor.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Dynamic {
     /// 0..1 random variation per dab (for scatter: the amount, may exceed 1).
@@ -51,23 +97,33 @@ pub struct Dynamic {
     pub fade_steps: u32,
     /// 0..1 floor the control/jitter may reduce the value to (minimum diameter, roundness, depth…).
     pub minimum: f32,
+    /// Independent response for this parameter when controlled by pen pressure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pressure_curve: Option<PressureCurve>,
+    /// CSP can enable pressure and tilt simultaneously for the same parameter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_tilt: Option<CspTilt>,
+    /// CSP's random control: the value is also scaled per dab by a random factor between this
+    /// minimum (0..1) and 1, on top of any pressure or tilt response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_random: Option<f32>,
 }
 
 impl Default for Dynamic {
     fn default() -> Self {
-        Self { jitter: 0.0, control: Control::Off, fade_steps: 25, minimum: 0.0 }
+        Self { jitter: 0.0, control: Control::Off, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None }
     }
 }
 
 impl Dynamic {
     pub const fn controlled(control: Control) -> Self {
-        Self { jitter: 0.0, control, fade_steps: 25, minimum: 0.0 }
+        Self { jitter: 0.0, control, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None }
     }
     pub const fn jitter(jitter: f32) -> Self {
-        Self { jitter, control: Control::Off, fade_steps: 25, minimum: 0.0 }
+        Self { jitter, control: Control::Off, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None }
     }
     pub fn is_active(&self) -> bool {
-        self.jitter > 0.0 || self.control != Control::Off
+        self.jitter > 0.0 || self.control != Control::Off || self.csp_tilt.is_some() || self.csp_random.is_some()
     }
 }
 
@@ -144,6 +200,23 @@ pub enum MaskMode {
     Height,
 }
 
+/// Clip Studio texture compositing. These modes have their own density semantics;
+/// similarly named Photoshop masks are not interchangeable at partial density.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CspTextureMode {
+    Normal,
+    Multiply,
+    Subtract,
+    Compare,
+    Outline,
+    Overlay,
+    ColorDodge,
+    ColorBurn,
+    HardMix,
+    Height,
+}
+
 /// Procedural pattern styles (generated deterministically; no bundled pattern files).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -189,6 +262,9 @@ pub struct Texture {
     /// Apply the texture to every dab (enables depth jitter) instead of once to the stroke.
     pub each_tip: bool,
     pub mode: MaskMode,
+    /// Source-specific texture behavior. When present, replaces `mode`; absent in older presets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_mode: Option<CspTextureMode>,
     /// 0..1.
     pub depth: f32,
     /// Depth jitter / control (per tip only); `minimum` is Minimum Depth.
@@ -206,6 +282,7 @@ impl Default for Texture {
             contrast: 0.0,
             each_tip: false,
             mode: MaskMode::Multiply,
+            csp_mode: None,
             depth: 1.0,
             depth_jitter: Dynamic::default(),
         }
@@ -359,6 +436,25 @@ impl Default for Smoothing {
     }
 }
 
+/// The highest CSP anti-aliasing level (strong).
+pub const CSP_ANTI_ALIAS_MAX: u8 = 3;
+
+/// `cspAntiAlias`: a level 0..=3, or the boolean older presets stored.
+fn csp_anti_alias_level<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u8>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Level {
+        Flag(bool),
+        Level(f64),
+    }
+    match Option::<Level>::deserialize(d)? {
+        None => Ok(None),
+        Some(Level::Flag(on)) => Ok(Some(u8::from(on))),
+        Some(Level::Level(n)) if n.fract() == 0.0 && (0.0..=f64::from(CSP_ANTI_ALIAS_MAX)).contains(&n) => Ok(Some(n as u8)),
+        Some(Level::Level(_)) => Err(serde::de::Error::custom("cspAntiAlias must be 0..3 (none, weak, medium, strong) or a boolean")),
+    }
+}
+
 /// A complete brush: tip shape, dynamics, and stroke-level options.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -400,9 +496,19 @@ pub struct BrushSettings {
     pub flip_y: bool,
     /// Pencil: no anti-aliasing (coverage is 0 or 1).
     pub aliased: bool,
+    /// CSP tip anti-aliasing level: 0 none, 1 weak, 2 medium, 3 strong (older presets stored
+    /// a boolean: false = 0, true = 1). Kept separate from Pencil's binary coverage threshold.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "csp_anti_alias_level")]
+    pub csp_anti_alias: Option<u8>,
+    /// CSP local tip-axis scale, independent of Photoshop roundness. 2.4 = 240%.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_tip_scale: Option<[f32; 2]>,
     // --- dynamics sections ---
     pub shape_dynamics: ShapeDynamics,
     pub scattering: Scattering,
+    /// Imported CSP spraying effect: independent particles distributed over the brush area.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_spray: Option<crate::csp_spray::CspSpray>,
     pub texture: Texture,
     pub dual_brush: DualBrush,
     pub color_dynamics: ColorDynamics,
@@ -412,11 +518,36 @@ pub struct BrushSettings {
     pub noise: bool,
     /// Watercolour look: lighter interior, darker rims; overlapping dabs don't build up.
     pub wet_edges: bool,
+    /// Imported CSP watercolor edge: stroke-level alpha added near the stroke buffer's edges.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_water_edge: Option<crate::csp_water_edge::CspWaterEdge>,
     /// Airbrush: keep depositing dabs over time while the pointer lingers.
     pub build_up: bool,
     /// Build-up rate in dabs per second.
     pub build_up_rate: f32,
     pub smoothing: Smoothing,
+    /// Imported CSP color mixing (amount/density of paint, color stretch): picks up the colour
+    /// under the brush as it moves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_mixing: Option<crate::csp_mixing::CspColorMixing>,
+    /// Imported CSP Start and end: tapers target parameters over the start and end of the path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_in_out: Option<crate::csp_in_out::CspInOut>,
+    /// Imported CSP Stabilization / Adjust by speed: a moving average of the raw input samples,
+    /// applied before Smoothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_stabilizer: Option<crate::csp_stabilizer::CspStabilizer>,
+    /// Imported CSP Ribbon: the sampled tip is laid continuously along the stroke instead of
+    /// stamped as dabs (ignored with a round tip or a spray).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_ribbon: Option<crate::csp_ribbon::CspRibbon>,
+    /// Imported CSP tip order: which tip of a multi-tip brush each dab uses (`None`: repeat).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_tip_order: Option<crate::csp_tip::CspTipOrder>,
+    /// Imported CSP colour tips: the colours of tip `i` of `tip`, painted instead of the brush
+    /// colour (`None`: that tip paints in the brush colour). Ignored with colour mixing or erasing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub csp_tip_colors: Vec<Option<crate::csp_tip::CspTipColor>>,
     /// Keep the current texture (pattern + scale) when switching to another textured preset.
     pub protect_texture: bool,
     /// Sections whose settings stay when another preset is picked (tool state, like Photoshop's locks).
@@ -448,8 +579,11 @@ impl Default for BrushSettings {
             flip_x: false,
             flip_y: false,
             aliased: false,
+            csp_anti_alias: None,
+            csp_tip_scale: None,
             shape_dynamics: ShapeDynamics::default(),
             scattering: Scattering::default(),
+            csp_spray: None,
             texture: Texture::default(),
             dual_brush: DualBrush::default(),
             color_dynamics: ColorDynamics::default(),
@@ -457,9 +591,16 @@ impl Default for BrushSettings {
             pose: Pose::default(),
             noise: false,
             wet_edges: false,
+            csp_water_edge: None,
             build_up: false,
             build_up_rate: 20.0,
             smoothing: Smoothing::default(),
+            csp_stabilizer: None,
+            csp_in_out: None,
+            csp_mixing: None,
+            csp_ribbon: None,
+            csp_tip_order: None,
+            csp_tip_colors: Vec::new(),
             protect_texture: false,
             locks: SectionLocks::default(),
             mixer: MixerSettings::default(),
@@ -486,8 +627,42 @@ impl BrushSettings {
         brush.opacity = photoshop_level(brush.opacity);
         brush.size = safe_size(brush.size);
         brush.dual_brush.size = safe_size(brush.dual_brush.size);
+        // A particle size synchronized with the brush size follows it.
+        if let Some(spray) = &mut brush.csp_spray
+            && let Some(k) = spray.size_ratio.filter(|k| k.is_finite() && *k > 0.0)
+        {
+            spray.size = safe_size(k * brush.size);
+        }
+        if let Some(level) = &mut brush.csp_anti_alias {
+            *level = (*level).min(CSP_ANTI_ALIAS_MAX);
+        }
+        if let Some(scale) = &mut brush.csp_tip_scale {
+            let diameter = brush.csp_spray.as_ref().map_or(brush.size, |s| safe_size(s.size));
+            let limit = (MAX_BRUSH_SIZE / diameter).min(10.0);
+            for axis in scale {
+                *axis = if axis.is_finite() { axis.clamp(0.01, limit) } else { 1.0 };
+            }
+        }
         brush.scattering.scatter.jitter = safe_scatter(brush.scattering.scatter.jitter);
         brush.dual_brush.scatter = safe_scatter(brush.dual_brush.scatter);
+        if let Some(spray) = &mut brush.csp_spray {
+            spray.size = safe_size(spray.size);
+            spray.count = spray.count.clamp(1, crate::csp_spray::MAX_PARTICLES);
+            spray.bias = if spray.bias.is_finite() { spray.bias.clamp(-1.0, 1.0) } else { 0.0 };
+            spray.angle = if spray.angle.is_finite() { spray.angle.rem_euclid(360.0) } else { 0.0 };
+        }
+        if let Some(edge) = &mut brush.csp_water_edge {
+            *edge = edge.bounded();
+        }
+        if let Some(mixing) = &mut brush.csp_mixing {
+            *mixing = mixing.bounded();
+        }
+        if let Some(in_out) = &mut brush.csp_in_out {
+            *in_out = in_out.bounded();
+        }
+        if let Some(stabilizer) = &mut brush.csp_stabilizer {
+            *stabilizer = stabilizer.bounded();
+        }
         brush
     }
 
@@ -503,6 +678,7 @@ impl BrushSettings {
         }
         if l.scattering {
             b.scattering = current.scattering.clone();
+            b.csp_spray = current.csp_spray.clone();
         }
         if l.texture {
             b.texture = current.texture.clone();
@@ -524,6 +700,7 @@ impl BrushSettings {
         }
         if l.wet_edges {
             b.wet_edges = current.wet_edges;
+            b.csp_water_edge = current.csp_water_edge.clone();
         }
         if l.build_up {
             b.build_up = current.build_up;
@@ -567,4 +744,7 @@ pub struct BrushPreset {
     /// Preset group (folder) in the Brushes panel, e.g. "General" or an imported file's name.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub group: String,
+    /// Explicit SUT provenance and presentation; absent in legacy/non-SUT presets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sut: Option<crate::sut::SutBrushMetadata>,
 }

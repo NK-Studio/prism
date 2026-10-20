@@ -5,7 +5,7 @@
 
 use egui::{Color32, RichText, Sense, Stroke, pos2, vec2};
 use prism_engine::BrushSettings;
-use prism_engine::paint::{self, BrushPreset, Control, Dynamic, MAX_BRUSH_SIZE, MaskMode, Pattern, PatternStyle, TipShape};
+use prism_engine::paint::{self, BrushPreset, Control, CspTextureMode, Dynamic, MAX_BRUSH_SIZE, MaskMode, Pattern, PatternStyle, TipShape};
 
 use crate::brush_preview;
 use crate::theme::{self, Tokens};
@@ -33,6 +33,19 @@ pub const MASK_MODES: [(MaskMode, &str); 10] = [
     (MaskMode::HardMix, "Hard Mix"),
     (MaskMode::LinearHeight, "Linear Height"),
     (MaskMode::Height, "Height"),
+];
+
+const CSP_TEXTURE_MODES: [(CspTextureMode, &str); 10] = [
+    (CspTextureMode::Normal, "Normal"),
+    (CspTextureMode::Multiply, "Multiply"),
+    (CspTextureMode::Subtract, "Subtract"),
+    (CspTextureMode::Compare, "Compare"),
+    (CspTextureMode::Outline, "Outline"),
+    (CspTextureMode::Overlay, "Overlay"),
+    (CspTextureMode::ColorDodge, "Color Dodge"),
+    (CspTextureMode::ColorBurn, "Color Burn"),
+    (CspTextureMode::HardMix, "Hard Mix"),
+    (CspTextureMode::Height, "Height"),
 ];
 
 const PATTERNS: [(PatternStyle, &str); 4] =
@@ -388,6 +401,7 @@ fn pattern_swatch(ui: &mut egui::Ui, tx: &paint::Texture) {
             tx.invert,
             tx.brightness,
             tx.contrast,
+            tx.csp_mode,
         ))
         .unwrap_or_default()
         .hash(&mut h);
@@ -404,10 +418,12 @@ fn pattern_swatch(ui: &mut egui::Ui, tx: &paint::Texture) {
             let px: Vec<u8> = (0..n * n)
                 .flat_map(|i| {
                     let v = img.sample_wrap((i % n) as f32, (i / n) as f32);
-                    let mut x = ((v - 0.5) * (1.0 + ct) + 0.5 + br).clamp(0.0, 1.0);
-                    if tx.invert {
-                        x = 1.0 - x;
-                    }
+                    let x = if tx.csp_mode.is_some() {
+                        paint::csp_texture::luminance(v, tx.invert, tx.brightness, tx.contrast)
+                    } else {
+                        let x = ((v - 0.5) * (1.0 + ct) + 0.5 + br).clamp(0.0, 1.0);
+                        if tx.invert { 1.0 - x } else { x }
+                    };
                     let g = (x * 255.0).round() as u8;
                     [g, g, g, 255]
                 })
@@ -455,20 +471,26 @@ fn texture(ui: &mut egui::Ui, b: &mut BrushSettings) {
         }
     }
     pct(ui, tl!("Scale"), &mut tx.scale, 10.0);
-    let mut br = (tx.brightness * 150.0).round();
-    if num(ui, tl!("Brightness"), &mut br, -150.0..=150.0, "") {
-        tx.brightness = br / 150.0;
+    let brightness_scale = if tx.csp_mode.is_some() { 100.0 } else { 150.0 };
+    let mut br = (tx.brightness * brightness_scale).round();
+    if num(ui, tl!("Brightness"), &mut br, -brightness_scale..=brightness_scale, "") {
+        tx.brightness = br / brightness_scale;
     }
-    // Photoshop's -50..100 contrast onto the model's -1..1.
-    let mut ct = if tx.contrast < 0.0 { tx.contrast * 50.0 } else { tx.contrast * 100.0 }.round();
-    if num(ui, tl!("Contrast"), &mut ct, -50.0..=100.0, "") {
-        tx.contrast = if ct < 0.0 { ct / 50.0 } else { ct / 100.0 };
+    // CSP stores symmetric percentages; legacy brushes keep Photoshop's -50..100 range.
+    let contrast_min = if tx.csp_mode.is_some() { -100.0 } else { -50.0 };
+    let mut ct = if tx.csp_mode.is_none() && tx.contrast < 0.0 { tx.contrast * 50.0 } else { tx.contrast * 100.0 }.round();
+    if num(ui, tl!("Contrast"), &mut ct, contrast_min..=100.0, "") {
+        tx.contrast = if tx.csp_mode.is_none() && ct < 0.0 { ct / 50.0 } else { ct / 100.0 };
     }
     widgets::checkbox(ui, &mut tx.each_tip, tl!("Texture Each Tip"));
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         dim(ui, tl!("Mode:"));
-        widgets::dropdown(ui, "brush-texture-mode", &mut tx.mode, &MASK_MODES, 130.0);
+        if let Some(mode) = &mut tx.csp_mode {
+            widgets::dropdown(ui, "brush-texture-mode", mode, &CSP_TEXTURE_MODES, 130.0);
+        } else {
+            widgets::dropdown(ui, "brush-texture-mode", &mut tx.mode, &MASK_MODES, 130.0);
+        }
     });
     ui.add_space(4.0);
     pct(ui, tl!("Depth"), &mut tx.depth, 1.0);

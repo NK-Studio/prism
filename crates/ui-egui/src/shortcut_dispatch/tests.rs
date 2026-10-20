@@ -492,7 +492,7 @@ fn delete_with_a_selection_clears_it() {
 #[test]
 fn named_action_function_key_replays_and_survives_preferences_roundtrip() {
     let mut h = harness();
-    let action = prism_engine::actions_cmds::Action { name: "LivePrint 2R".into(), steps: vec![("layer.new.layer".into(), json!({"name": "F6 overlay"}))] };
+    let action = prism_engine::actions_cmds::Action::new("LivePrint 2R", vec![("layer.new.layer".into(), json!({"name": "F6 overlay"}))]);
     h.state_mut().session.actions.list.push(action);
     crate::actions::assign_shortcut(h.state_mut(), "LivePrint 2R", "F6").unwrap();
     let saved = serde_json::to_value(h.state().session.prefs()).unwrap();
@@ -513,7 +513,7 @@ fn named_action_function_key_replays_and_survives_preferences_roundtrip() {
 fn assigning_action_function_key_moves_it_and_reports_failed_steps() {
     let mut h = harness();
     for name in ["first", "second"] {
-        h.state_mut().session.actions.list.push(prism_engine::actions_cmds::Action { name: name.into(), steps: vec![("no.such.command".into(), json!({}))] });
+        h.state_mut().session.actions.list.push(prism_engine::actions_cmds::Action::new(name, vec![("no.such.command".into(), json!({}))]));
     }
     crate::actions::assign_shortcut(h.state_mut(), "first", "F6").unwrap();
     crate::actions::assign_shortcut(h.state_mut(), "second", "F6").unwrap();
@@ -532,7 +532,7 @@ fn action_function_key_checks_automation_authorization() {
         .session
         .actions
         .list
-        .push(prism_engine::actions_cmds::Action { name: "restricted".into(), steps: vec![("layer.new.layer".into(), json!({"name": "should not exist"}))] });
+        .push(prism_engine::actions_cmds::Action::new("restricted", vec![("layer.new.layer".into(), json!({"name": "should not exist"}))]));
     crate::actions::assign_shortcut(h.state_mut(), "restricted", "F6").unwrap();
     h.state_mut().services.automation_command = Some(Box::new(|id, _| if id == "actions.play" { Err("denied action playback".into()) } else { Ok(()) }));
     h.state_mut().automation_input = true;
@@ -548,7 +548,7 @@ fn fit_shortcut_records_and_f6_fits_the_resized_canvas() {
     h.state_mut().run("image.canvasSize", json!({"width": 1800, "height": 1080})).unwrap();
     press(&mut h, "Cmd+0");
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    assert_eq!(h.state().session.actions.list[0].steps.iter().map(|s| s.0.as_str()).collect::<Vec<_>>(), ["image.canvasSize", "view.fitOnScreen"]);
+    assert_eq!(h.state().session.actions.list[0].steps.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["image.canvasSize", "view.fitOnScreen"]);
     let item = crate::menus::menu_items(h.state()).into_iter().find(|i| i.id == "view.fitOnScreen").unwrap();
     assert_eq!(item.shortcut.as_deref(), Some("Cmd+0"));
     crate::actions::assign_shortcut(h.state_mut(), "Resize and fit", "F6").unwrap();
@@ -565,14 +565,14 @@ fn fit_shortcut_records_and_f6_fits_the_resized_canvas() {
 #[test]
 fn f6_while_recording_records_a_named_call_not_the_child_steps() {
     let mut h = harness();
-    h.state_mut().session.actions.list.push(prism_engine::actions_cmds::Action {
-        name: "LivePrint 2R".into(),
-        steps: vec![("layer.new.layer".into(), json!({"name":"Nested overlay"})), ("view.fitOnScreen".into(), json!({}))],
-    });
+    h.state_mut().session.actions.list.push(prism_engine::actions_cmds::Action::new(
+        "LivePrint 2R",
+        vec![("layer.new.layer".into(), json!({"name":"Nested overlay"})), ("view.fitOnScreen".into(), json!({}))],
+    ));
     crate::actions::assign_shortcut(h.state_mut(), "LivePrint 2R", "F6").unwrap();
     h.state_mut().run("actions.record", json!({"name":"Action 2"})).unwrap();
     press(&mut h, "F6");
     assert_eq!(active_name(&h), "Nested overlay");
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    assert_eq!(h.state().session.actions.list[1].steps, [("actions.play".into(), json!({"action":"LivePrint 2R"}))]);
+    assert_eq!(h.state().session.actions.list[1].steps, [("actions.play".into(), json!({"action":"LivePrint 2R"})).into()]);
 }

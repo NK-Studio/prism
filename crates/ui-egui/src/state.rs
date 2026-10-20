@@ -920,6 +920,8 @@ pub struct UiState {
     pub brush_tool: Tool,
     #[serde(default)]
     pub tool_brushes: Vec<(Tool, prism_engine::paint::BrushSettings)>,
+    #[serde(default)]
+    pub tool_brush_presets: Vec<(Tool, Option<String>)>,
     /// Pen path under construction.
     #[serde(default)]
     pub pen: Option<crate::vector_ui::PenPath>,
@@ -998,12 +1000,22 @@ pub struct UiState {
     pub brush_section: usize,
     #[serde(default)]
     pub brush_tab: usize,
+    #[serde(default)]
+    pub sut_panel: crate::sut_panel::SutPanelState,
+    /// Window › Extensions › CLIP STUDIO Materials panel: checked materials, filters and the last listing.
+    #[serde(default)]
+    pub csp_library: crate::csp_library_ui::CspLibraryState,
     /// Where the Tool Sliders panel sits and its size.
     #[serde(default)]
     pub tool_sliders: crate::tool_sliders::ToolSlidersLayout,
     /// Where the Tools panel (the toolbar) sits: docked left or right, or floating.
     #[serde(default)]
     pub tools: crate::tools_window::ToolsLayout,
+    /// Clip Studio workspace: the current CSP tool and each tool's selected sub-tool id.
+    #[serde(default)]
+    pub csp_tool: crate::csp_tools::CspTool,
+    #[serde(default)]
+    pub csp_sub_tools: std::collections::BTreeMap<crate::csp_tools::CspTool, String>,
     /// Brushes panel: collapsed groups and the search filter.
     #[serde(default)]
     pub brushes_panel: crate::brush_panel::BrushesPanelState,
@@ -1073,6 +1085,7 @@ impl Default for UiState {
             canvas_tool_menu: None,
             brush_tool: Tool::Brush,
             tool_brushes: Vec::new(),
+            tool_brush_presets: Vec::new(),
             clone_source: None,
             clone_offset: None,
             pattern_stamp_phase: None,
@@ -1108,8 +1121,12 @@ impl Default for UiState {
             color_panel: Default::default(),
             brush_section: 0,
             brush_tab: 0,
+            sut_panel: Default::default(),
+            csp_library: Default::default(),
             tool_sliders: Default::default(),
             tools: Default::default(),
+            csp_tool: Default::default(),
+            csp_sub_tools: Default::default(),
             brushes_panel: Default::default(),
             selection_mode: 0,
             tool_options: ToolOptions::default(),

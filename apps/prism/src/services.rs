@@ -14,11 +14,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 /// Everything File › Open reads: Prism, Photoshop and Affinity documents, flat images, and
-/// Photoshop brushes (.abr), gradients (.grd) and swatches (.aco, .ase), which go to the preset libraries.
+/// Photoshop brushes (.abr), gradients (.grd), swatches (.aco, .ase) and actions (.atn/.laf),
+/// which go to the preset libraries.
 const OPEN_EXTS: &[&str] = &[
     "prism", "pcraft", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
     "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "sut", "grd", "svg", "svgz", "aco",
-    "ase", "af", "afdesign", "afphoto", "afpub",
+    "ase", "af", "afdesign", "afphoto", "afpub", "tool", "laf", "atn",
 ];
 
 /// Open dialog extensions that also match uppercase and mixed-case names (`IMG_0001.JPG`).
@@ -404,6 +405,13 @@ mod tests {
     use prism_format::list_recovery;
     use prism_ui_egui::{PrismApp, prefs_ui};
     use serde_json::{Value, json};
+
+    #[test]
+    fn native_open_filter_includes_all_preset_formats() {
+        for extension in prism_ui_egui::preset_files_ui::PRESET_EXTS {
+            assert!(OPEN_EXTS.contains(extension), "missing preset extension: {extension}");
+        }
+    }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]

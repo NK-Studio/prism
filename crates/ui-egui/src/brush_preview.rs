@@ -80,13 +80,14 @@ pub fn preview_sig(b: &BrushSettings) -> u64 {
     let mut h = DefaultHasher::new();
     js(&mut h, &(b.size, b.hardness, b.spacing, b.opacity, b.flow, b.pressure_size, b.pressure_opacity, b.erase, b.mode, b.angle, b.roundness));
     js(&mut h, &(b.flip_x, b.flip_y, b.aliased, b.noise, b.wet_edges, b.build_up, b.build_up_rate, b.protect_texture, b.seed));
-    js(&mut h, &(&b.shape_dynamics, &b.scattering, &b.color_dynamics, &b.transfer, &b.pose, &b.smoothing));
+    js(&mut h, &(b.csp_anti_alias, b.csp_tip_scale, &b.csp_water_edge, &b.csp_stabilizer, &b.csp_in_out, &b.csp_mixing, b.csp_ribbon));
+    js(&mut h, &(&b.shape_dynamics, &b.scattering, &b.csp_spray, &b.color_dynamics, &b.transfer, &b.pose, &b.smoothing));
     tip_shape_sig(&mut h, &b.tip);
     let d = &b.dual_brush;
     js(&mut h, &(d.enabled, d.mode, d.size, d.hardness, d.roundness, d.angle, d.spacing, d.scatter, d.both_axes, d.count, d.flip));
     tip_shape_sig(&mut h, &d.tip);
     let t = &b.texture;
-    js(&mut h, &(t.enabled, t.invert, t.scale, t.brightness, t.contrast, t.each_tip, t.mode, t.depth, t.depth_jitter));
+    js(&mut h, &(t.enabled, t.invert, t.scale, t.brightness, t.contrast, t.each_tip, t.mode, t.csp_mode, t.depth, &t.depth_jitter));
     match &t.pattern {
         Pattern::Tile(g) => tile_sig(&mut h, g),
         p => js(&mut h, p),
@@ -110,6 +111,14 @@ pub fn preview_pixels(b: &BrushSettings, w: u32, h: u32, color: [f32; 4]) -> Vec
     let k = ((h as f32 * 0.55) / brush.size.max(1.0)).min(1.0);
     brush.size = (brush.size * k).max(1.0);
     brush.dual_brush.size = (brush.dual_brush.size * k).max(1.0);
+    if let Some(spray) = &mut brush.csp_spray {
+        spray.size = (spray.size * k).max(0.5);
+    }
+    if let Some(edge) = &mut brush.csp_water_edge {
+        // Scaled with the tip so the rim keeps its proportion, but stays visible.
+        edge.radius = (edge.radius * k).max(1.0);
+        edge.blur *= k;
+    }
     brush.color = color;
     brush.erase = false;
     brush.seed = 7;

@@ -2998,6 +2998,49 @@ fontWeight	Italic	기울임
 	Top-right corner radius	오른쪽 상단 모퉁이 반경
 	Bottom-right corner radius	오른쪽 하단 모퉁이 반경
 	Bottom-left corner radius	왼쪽 하단 모퉁이 반경
+	Compare	비교
+	Outline	윤곽선
+	Customize SUT Tool Settings Display	SUT 도구 설정 표시 구성 변경
+	Restore Imported SUT Display	가져온 SUT 표시 구성 복원
+	Hide	숨기기
+	On	켜기
+	Anti-aliasing	안티에일리어싱
+	Additional settings for this sub-tool type are not mapped yet	이 보조 도구 유형의 추가 설정은 아직 지원하지 않습니다
+	Tool Settings	도구 설정
+	Advanced Settings	상세 설정
+	Show category	카테고리 표시
+	Restore imported display layout	가져온 표시 구성으로 복원
+	Show in Tool Settings	도구 설정에 표시
+	Disabled by the imported CSP settings	가져온 CSP 설정에서 비활성화됨
+	This CSP effect is not supported in Prism yet	이 CSP 효과는 아직 프리즘에서 지원하지 않습니다
+	Imported texture	가져온 텍스처
+	Texture is disabled or unavailable	텍스처가 비활성화되었거나 없습니다
+	Show texture scale	텍스처 배율 표시
+	Unsupported CSP setting	지원하지 않는 CSP 항목
+	No visible settings. Use Advanced Settings to select them.	표시 항목이 없습니다. 상세 설정에서 선택하세요.
+	Blending mode	합성 모드
+	Amount of paint	물감량
+	Density of paint	물감 농도
+	Color stretch	색 늘이기
+	Brush tip	브러시 끝
+	Texture density	텍스처 농도
+	Scale ratio	배율
+	Watercolor edge	물 가장자리
+	Edge range	범위
+	Opacity influence	투명도 영향
+	Darkness influence	명도 영향
+	Process after drag	드래그 후 처리
+	Edge blur	흐림 효과 폭
+	Applied when the stroke ends	스트로크를 마친 뒤 적용됩니다
+	Stabilization	보정
+	Adjust by speed	속도에 따라 보정
+	Vector magnet	벡터 자석
+	Ink	잉크
+	Get SUT Tool Settings Display	SUT 도구 설정 표시 구성 조회
+	Weak	약하게
+	Speed adjustment type	속도 조정 방식
+	Pointer speed	포인터 속도
+	Path speed and straightness	경로 속도와 직진성
 	Tool Sliders	도구 슬라이더
 	Tool Sliders menu	도구 슬라이더 메뉴
 	Brush Opacity	브러시 불투명도
@@ -3015,3 +3058,177 @@ fontWeight	Italic	기울임
 	Resize	크기 조절
 	Float Panel Group	패널 그룹 띄우기
 	Dock Beside Panels	패널 옆에 도킹
+	Operation	조작
+	Selection area	선택 범위
+	Auto select	자동 선택
+	Pen	펜
+	Pencil	연필
+	Airbrush	에어브러시
+	Decoration	데코레이션
+	Blend	색 혼합
+	Figure	도형
+	Text	텍스트
+	Hand	손바닥
+	Move layer	레이어 이동
+	Polyline	꺾은선 선택
+	Refer to editing layer only	편집 레이어만 참조 선택
+	Refer to all layers	다른 레이어 참조 선택
+	Pick color from layer	레이어에서 색 추출
+	Finger tip	손끝
+	Refer only to editing layer	편집 레이어만 참조
+	Refer other layers	다른 레이어 참조
+	Polygon	다각형
+	Straight line	직선
+	Rectangle	직사각형
+	Ellipse	타원
+	Linear gradient	선형 그러데이션
+	Radial gradient	원형 그러데이션
+	Vertical text	세로 텍스트
+	Clip Studio	클립 스튜디오
+	Clip Studio Paint	클립 스튜디오 페인트
+	Sub Tool	보조 도구
+	Tool Property	도구 속성
+	Sub tools are listed in the Clip Studio workspace (Window › Workspace › Clip Studio)	보조 도구는 클립 스튜디오 워크스페이스(창 › 워크스페이스 › 클립 스튜디오)에서 표시됩니다
+	Import Clip Studio sub-tools (.sut) to fill this list	클립 스튜디오 보조 도구(.sut)를 가져오면 이 목록에 표시됩니다
+	This Clip Studio sub-tool is not supported in Prism yet	이 클립 스튜디오 보조 도구는 아직 프리즘에서 지원하지 않습니다
+	This sub-tool has no settings	이 보조 도구에는 설정이 없습니다
+	Brush size	브러시 크기
+	Photoshop	포토샵
+	Ready	준비됨
+	Downloading	다운로드 중
+	Not prepared	준비되지 않음
+	Unavailable	사용할 수 없음
+	Refresh	새로 고침
+	Not imported	가져오지 못함
+	Import {n}	{n}개 가져오기
+	Import from CLIP STUDIO	클립 스튜디오에서 가져오기
+	Import from CLIP STUDIO…	클립 스튜디오에서 가져오기…
+	Imported from CLIP STUDIO	클립 스튜디오에서 가져옴
+	Imported {n} brushes from CLIP STUDIO	클립 스튜디오에서 브러시 {n}개를 가져왔습니다
+	Brushes downloaded in CLIP STUDIO are read directly from its local data. Nothing in CLIP STUDIO is changed.	클립 스튜디오에서 다운로드한 브러시를 이 컴퓨터의 로컬 데이터에서 직접 읽습니다. 클립 스튜디오의 데이터는 변경하지 않습니다.
+	No downloaded brushes were found. Download brushes in CLIP STUDIO first.	다운로드한 브러시가 없습니다. 먼저 클립 스튜디오에서 브러시를 다운로드하세요.
+	Read from CLIP STUDIO PAINT's current sub-tool library; edits made there are included	클립 스튜디오 페인트의 현재 보조 도구 목록에서 읽습니다. 그곳에서 수정한 내용이 포함됩니다.
+	Downloaded CLIP STUDIO ASSETS materials can be licensed for use in CLIP STUDIO software only; check each material's terms before using it in Prism, and never redistribute it	클립 스튜디오 ASSETS에서 받은 소재는 클립 스튜디오 소프트웨어에서만 사용하도록 허가된 경우가 있습니다. 프리즘에서 쓰기 전에 각 소재의 이용 조건을 확인하고, 절대 재배포하지 마세요.
+	The download has not finished in CLIP STUDIO; wait for it, then refresh	클립 스튜디오에서 다운로드가 아직 끝나지 않았습니다. 완료된 뒤 새로 고침하세요.
+	CLIP STUDIO PAINT has not prepared this material yet; add it as a sub-tool in CLIP STUDIO PAINT once (or restart PAINT), then refresh	클립 스튜디오 페인트가 아직 이 소재를 준비하지 않았습니다. 클립 스튜디오 페인트에서 보조 도구로 한 번 추가하거나 페인트를 다시 시작한 뒤 새로 고침하세요.
+	This material is not stored in the local CLIP STUDIO material folder and cannot be read	이 소재는 로컬 클립 스튜디오 소재 폴더에 저장되어 있지 않아 읽을 수 없습니다.
+	CLIP STUDIO appears to be running or has unsaved database changes; the newest downloads may be missing until it is closed	클립 스튜디오가 실행 중이거나 데이터베이스 변경이 아직 저장되지 않은 것 같습니다. 클립 스튜디오를 닫기 전까지 최근 다운로드가 보이지 않을 수 있습니다.
+	No CLIP STUDIO PAINT sub-tool data was found; downloaded brushes cannot be imported until CLIP STUDIO PAINT has been started	클립 스튜디오 페인트 보조 도구 데이터를 찾지 못했습니다. 클립 스튜디오 페인트를 한 번 실행해야 다운로드한 브러시를 가져올 수 있습니다.
+	Select All Ready	준비된 항목 모두 선택
+	Sub tool	보조 도구
+	Not a brush: it imports for the Clip Studio workspace (Window › Workspace › Clip Studio)	브러시가 아닙니다. 클립 스튜디오 워크스페이스(창 › 워크스페이스 › 클립 스튜디오)용으로 가져옵니다.
+
+	Action paused	액션 일시 정지
+	Default Actions	기본 액션
+	Action Set…	액션 세트…
+	Insert Stop…	중지 삽입…
+	Enable action step	액션 단계 실행
+	Show settings during playback	재생 중 설정 표시
+	Resume Action	액션 재개
+	Cancel Action Playback	액션 재생 취소
+	Stop	중지
+	Continue	계속
+	Additional settings retain their recorded values.	추가 설정은 녹화된 값을 유지합니다.
+	Duplicate Action…	액션 복제…
+	Duplicate Step	단계 복제
+	Clear Outside Selection	선택 영역 밖 지우기
+	Set	세트
+	Message	메시지
+	Allow continue	계속 허용
+	Unsupported Photoshop step	지원하지 않는 포토샵 단계
+	This enabled step prevents action playback.	이 단계가 활성화되어 있으면 액션을 재생할 수 없습니다.
+	Already in the brush library; importing again replaces it	이미 브러시 라이브러리에 있습니다. 다시 가져오면 교체됩니다
+	CLIP STUDIO Materials	CLIP STUDIO 소재
+	CLIP STUDIO was not found	CLIP STUDIO를 찾지 못했습니다
+	Check each material's licence before using it in Prism	Prism에서 쓰기 전에 소재마다 이용 조건을 확인하세요
+	Check every ready material in this collection	이 컬렉션에서 준비된 소재를 모두 선택합니다
+	Choose CLIP STUDIO data folder…	CLIP STUDIO 데이터 폴더 선택…
+	Clear selection	선택 해제
+	Download brushes or sub-tools in CLIP STUDIO, then refresh. Exported .sut, .tool and .laf files can be opened directly.	CLIP STUDIO에서 브러시나 보조 도구를 다운로드한 뒤 새로 고치세요. 내보낸 .sut, .tool, .laf 파일은 바로 열 수 있습니다.
+	Import exported CLIP STUDIO files (.sut, .tool, .laf)	내보낸 CLIP STUDIO 파일(.sut, .tool, .laf) 가져오기
+	In library	라이브러리에 있음
+	No downloaded materials yet	다운로드한 소재가 아직 없습니다
+	No materials match the filter	필터에 맞는 소재가 없습니다
+	Nothing selected	선택한 소재 없음
+	Open Files…	파일 열기…
+	Other materials	기타 소재
+	Search materials	소재 검색
+	Select all	모두 선택
+	Sub tools	보조 도구
+	{n} selected	{n}개 선택됨
+	Tags	태그
+	Filter by CLIP STUDIO user tags	CLIP STUDIO 사용자 태그로 거르기
+	Remove this tag from the filter	이 태그를 필터에서 빼기
+	Clear tags	태그 지우기
+	No other tags among these materials	이 소재들에는 다른 태그가 없습니다
+	Tags: {tags}	태그: {tags}
+	Extensions	확장
+	CLIP STUDIO	CLIP STUDIO
+@plural	{n} warning|{n} warnings	경고 {n}개
+	Imported CLIP STUDIO file	클립 스튜디오 파일 가져옴
+	Imported {brushes} brushes and {tools} sub-tools from CLIP STUDIO; sub-tools are in the Clip Studio workspace	클립 스튜디오에서 브러시 {brushes}개와 보조 도구 {tools}개를 가져왔습니다. 보조 도구는 Clip Studio 작업 영역에 있습니다
+	SUT category display flag is invalid; category headings are disabled	SUT 분류 표시 값이 올바르지 않아 분류 제목을 끕니다
+	SUT spray particle count exceeds the supported per-step budget and was limited	SUT 스프레이 입자 수가 한 번에 처리할 수 있는 양을 넘어 제한했습니다
+	SUT particle angle input controls are not supported; using the base particle angle	SUT 입자 각도 입력 조절은 지원하지 않아 기본 입자 각도를 씁니다
+	SUT brush enables a tip image without referencing one; a round tip is used	SUT 브러시가 팁 이미지를 켰지만 이미지가 없어 원형 팁을 씁니다
+	SUT tip ordering is approximated by cyclic order	SUT 팁 순서는 순환 순서로 근사합니다
+	SUT tip rotation by pen input is not supported; the tip keeps its base angle	펜 입력에 따른 SUT 팁 회전은 지원하지 않아 기본 각도를 유지합니다
+	SUT colour brush tips with colour mixing paint in each tip's mean colour; CLIP STUDIO keeps every pixel's colour	색 혼합을 쓰는 SUT 컬러 브러시 끝은 브러시 끝마다 평균 색으로 칠합니다. CLIP STUDIO는 픽셀마다 고유의 색을 유지합니다
+	SUT colour brush tip colours could not be read; the tip paints in the brush colour	SUT 컬러 브러시 끝의 색을 읽을 수 없어 브러시 색으로 칠합니다
+	SUT tip order is not supported; the tips repeat in order	지원하지 않는 SUT 브러시 끝 순서여서 순서대로 반복합니다
+	SUT tip rotation by both pen direction and pen rotation is approximated by the pen direction	펜 방향과 펜 축 회전을 함께 쓰는 SUT 팁 회전은 펜 방향으로 근사합니다
+	CLIP STUDIO setting {id}	CLIP STUDIO 설정 {id}
+	Close gap {px} px	틈 닫기 {px} px
+	Kept for CLIP STUDIO; Prism does not use this setting yet	CLIP STUDIO 설정으로 보관합니다. Prism은 아직 이 설정을 쓰지 않습니다
+	Prism fills as for “Treat semi-transparent as transparent”	Prism은 ‘연한 반투명을 투명으로 취급’처럼 칠합니다
+	Prism refers to all layers for this choice	이 선택에서 Prism은 모든 레이어를 참조합니다
+	Prism's enclose and fill already covers the line art; only shrinking changes it	Prism의 둘러싸고 칠하기는 선화까지 칠하므로 축소만 결과를 바꿉니다
+	Switch between indicator and slider	인디케이터와 슬라이더 전환
+	This CSP setting is not supported in Prism yet	이 CSP 설정은 아직 Prism에서 지원하지 않습니다
+	This length uses a unit other than pixels; Prism reads it as pixels	픽셀 이외의 단위를 쓰는 길이입니다. Prism은 픽셀로 읽습니다
+	{px} px	{px} px
+cspFill	Close gap	틈 닫기
+cspFill	Fill narrow areas	좁은 영역도 적용
+cspFill	Area scaling	영역 확대/축소
+cspFill	Scaling mode	확대/축소 방법
+cspFill	Rectangle	사각형으로 확장
+cspFill	Round	원형으로 확장
+cspFill	To darkest pixel	가장 진한 픽셀까지 확장
+cspFill	Tolerance	색의 오차
+cspFill	Refer multiple	복수 참조
+cspFill	All layers	모든 레이어
+cspFill	Reference layer	참조 레이어
+cspFill	Selected layer	선택된 레이어
+cspFill	Layer in folder	폴더 내 레이어
+cspFill	Exclude text	문자를 참조하지 않음
+cspFill	Exclude draft layers	밑그림을 참조하지 않음
+cspFill	Exclude editing layer	편집 레이어를 참조하지 않음
+cspFill	Exclude paper layer	용지를 참조하지 않음
+cspFill	Exclude locked layers	잠긴 레이어를 참조하지 않음
+cspFill	Fill up to vector path	벡터의 중심선에서 채색 중지
+cspFill	Refer to image border	화상 테두리 참조
+cspFill	Anti-aliasing	안티에일리어싱
+cspFill	Apply to connected pixels only	인접 픽셀 선택
+cspFill	Target color	대상색
+cspFill	Target all colors	모든 색 대상
+cspFill	Only transparent	투명 부분만
+cspFill	Area surrounded by transparent	투명으로 둘러싸인 부분
+cspFill	Only black	검은색 부분만
+cspFill	Area surrounded by black	검은색으로 둘러싸인 부분
+cspFill	Only white and transparent	흰색과 투명 부분만
+cspFill	Area surrounded by white and transparent	흰색과 투명으로 둘러싸인 부분
+cspFill	Treat semi-transparent as transparent	연한 반투명을 투명으로 취급
+cspFill	All enclosed areas except transparency	투명 이외와 내부의 투명
+cspFill	All enclosed areas including transparency	투명 이외는 열린 영역에도
+cspFill	Opacity	불투명도
+cspFill	Stabilization	손떨림 보정
+	SUT stabilization exceeds 100 and was limited	SUT 손떨림 보정이 100을 넘어 제한했습니다
+	SUT watercolor edge style is not supported; the standard edge is used	SUT 수채 경계 스타일은 지원하지 않아 표준 경계를 씁니다
+	SUT watercolor edge radius exceeds Prism's work limit and was limited	SUT 수채 경계 반경이 Prism 처리 한도를 넘어 제한했습니다
+	SUT brush references several textures; only the first is used	SUT 브러시가 여러 텍스처를 참조해 첫 번째만 씁니다
+	SUT emphasize texture density is approximated by extra contrast	SUT 텍스처 농도 강조는 대비를 높여 근사합니다
+	SUT pen-pressure texture density needs Apply by each plot; it is ignored	SUT 필압 텍스처 농도는 '각 점마다 적용'이 필요해 무시합니다
+	SUT texture rotation is not supported	SUT 텍스처 회전은 지원하지 않습니다
+	Enclose and Fill	둘러싸서 채우기
+	No closed area inside the lasso to fill	올가미 안에 채울 닫힌 영역이 없습니다
+	Draw a lasso around the areas to fill	채울 영역을 올가미로 둘러싸세요

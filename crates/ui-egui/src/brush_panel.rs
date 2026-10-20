@@ -174,10 +174,15 @@ pub fn commit_gesture(app: &mut PrismApp, ctx: &egui::Context, before: &BrushSet
 /// Group label for presets saved without a group.
 pub const UNGROUPED: &str = "My Brushes";
 
-/// Preset indices in panel order: groups in order of first appearance.
+/// Preset indices in panel order: groups in order of first appearance. Imported Clip Studio
+/// sub-tools that are not brushes (fill, selection, text…) belong to the Clip Studio workspace and
+/// are left out of the brush library.
 pub fn grouped_presets(presets: &[paint::BrushPreset]) -> Vec<(String, Vec<usize>)> {
     let mut out: Vec<(String, Vec<usize>)> = Vec::new();
     for (i, p) in presets.iter().enumerate() {
+        if p.sut.as_ref().is_some_and(|m| !m.kind().is_brush()) {
+            continue;
+        }
         let g = if p.group.is_empty() { UNGROUPED } else { p.group.as_str() };
         match out.iter_mut().find(|(n, _)| n == g) {
             Some((_, v)) => v.push(i),
@@ -298,6 +303,10 @@ fn section_list(app: &mut PrismApp, ui: &mut egui::Ui, b: &mut BrushSettings) {
 }
 
 fn settings_tab(app: &mut PrismApp, ui: &mut egui::Ui) {
+    if crate::sut_panel::active(app).is_some() {
+        crate::sut_panel::show(app, ui);
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let before = app.session.tools.brush.clone();
     let mut b = before.clone();
@@ -351,15 +360,18 @@ pub fn window(app: &mut PrismApp, ctx: &egui::Context) {
         .shadow(egui::Shadow { offset: [0, 10], blur: 30, spread: 0, color: t.shadow })
         .inner_margin(egui::Margin::same(10));
     let canvas = app.last_canvas_rect;
+    let sut = app.ui.brush_tab == 0 && crate::sut_panel::active(app).is_some();
+    let width = if sut { (ctx.content_rect().width() - 40.0).clamp(240.0, 380.0) } else { WIDTH };
     let mut open = true;
     egui::Window::new(tl!("Brush Settings"))
         .id(egui::Id::new("brush-settings"))
         .title_bar(false)
         .resizable(false)
+        .min_height(if sut { (ctx.content_rect().height() - 100.0).clamp(280.0, 760.0) } else { 0.0 })
         .frame(frame)
         .default_pos(egui::pos2((canvas.right() - WIDTH - 30.0).max(canvas.left() + 8.0), canvas.top() + 24.0))
         .show(ctx, |ui| {
-            ui.set_width(WIDTH);
+            ui.set_width(width);
             ui.horizontal(|ui| {
                 let mut tab = app.ui.brush_tab;
                 for (i, name) in [tl!("Brush Settings"), tl!("Brushes")].iter().enumerate() {

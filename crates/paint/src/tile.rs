@@ -208,6 +208,24 @@ impl Mips {
         let b = get(x0, y0 + 1) + (get(x0 + 1, y0 + 1) - get(x0, y0 + 1)) * tx;
         a + (b - a) * ty
     }
+
+    /// Nearest original texel for CSP AA OFF. Preserve sampled alpha instead of
+    /// thresholding a reduced/bilinearly filtered tip, which can erase tiny dabs.
+    pub fn sample_original_nearest(&self, u: f32, v: f32) -> f32 {
+        self.sample_nearest(0, u, v)
+    }
+
+    /// Nearest texel of `level` at normalised `u, v` in 0..1 (outside = 0), as CSP samples tips.
+    pub fn sample_nearest(&self, level: usize, u: f32, v: f32) -> f32 {
+        if !u.is_finite() || !v.is_finite() || !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
+            return 0.0;
+        }
+        let Some((w, h, data)) = self.levels.get(level) else {
+            return 0.0;
+        };
+        let (x, y) = ((u * *w as f32).floor() as usize, (v * *h as f32).floor() as usize);
+        y.checked_mul(*w).and_then(|at| at.checked_add(x)).and_then(|at| data.get(at)).copied().unwrap_or(0.0)
+    }
 }
 
 /// A tiling float pattern (texture), sampled with wrap-around.

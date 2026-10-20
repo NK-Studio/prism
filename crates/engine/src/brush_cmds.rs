@@ -147,11 +147,54 @@ pub fn merge_brush(base: &BrushSettings, patch: &Value, cmd: &str) -> Result<Bru
 /// stored or painted with.
 pub(crate) fn validate_brush(brush: &BrushSettings, cmd: &str) -> Result<()> {
     let max = prism_paint::MAX_BRUSH_SIZE;
+    if let Some(scale) = brush.csp_tip_scale {
+        let diameter = brush.csp_spray.as_ref().map_or(brush.size, |s| s.size);
+        if scale.iter().any(|s| !(0.01..=10.0).contains(s) || diameter * s > max) {
+            return Err(bad(cmd, "CSP tip scale must be 1..1000% and its scaled diameter at most 5000 px"));
+        }
+    }
     if !brush.size.is_finite() || brush.size > max {
         return Err(bad(cmd, format!("brush size must be finite and at most {max} px")));
     }
     if brush.dual_brush.enabled && (!brush.dual_brush.size.is_finite() || brush.dual_brush.size > max) {
         return Err(bad(cmd, format!("dual brush size must be finite and at most {max} px")));
+    }
+    if let Some(spray) = &brush.csp_spray
+        && (!(0.5..=max).contains(&spray.size)
+            || !(1..=prism_paint::csp_spray::MAX_PARTICLES).contains(&spray.count)
+            || !(-1.0..=1.0).contains(&spray.bias)
+            || !spray.angle.is_finite()
+            || spray.size_ratio.is_some_and(|k| !(k.is_finite() && k > 0.0 && k <= 100.0)))
+    {
+        return Err(bad(cmd, "invalid CSP spray particle size, size ratio, count, bias or angle"));
+    }
+    if let Some(edge) = &brush.csp_water_edge
+        && (!(0.0..=prism_paint::csp_water_edge::MAX_RADIUS).contains(&edge.radius)
+            || !(0.0..=1.0).contains(&edge.opacity)
+            || !(0.0..=1.0).contains(&edge.darkness)
+            || !(0.0..=prism_paint::csp_water_edge::MAX_BLUR).contains(&edge.blur))
+    {
+        return Err(bad(cmd, "CSP watercolor edge needs radius 0..100 px, opacity and darkness 0..1 and blur 0..500 px"));
+    }
+    if let Some(stabilizer) = &brush.csp_stabilizer
+        && (stabilizer.level > prism_paint::csp_stabilizer::MAX_LEVEL || stabilizer.stickiness > prism_paint::csp_stabilizer::MAX_LEVEL)
+    {
+        return Err(bad(cmd, "CSP stabilization and stickiness must be 0..100"));
+    }
+    if let Some(mixing) = &brush.csp_mixing
+        && [mixing.amount, mixing.density, mixing.stretch].iter().any(|v| !(0.0..=1.0).contains(v))
+    {
+        return Err(bad(cmd, "CSP color mixing amount, density and stretch must be 0..1"));
+    }
+    if let Some(in_out) = &brush.csp_in_out {
+        let max = match in_out.mode {
+            prism_paint::CspInOutMode::Length => prism_paint::csp_in_out::MAX_LENGTH,
+            prism_paint::CspInOutMode::Percent => 1.0,
+        };
+        let length_ok = |v: Option<f64>| v.is_none_or(|v| v.is_finite() && v >= 0.0 && v <= max);
+        if !length_ok(in_out.start) || !length_ok(in_out.end) || in_out.targets.iter().any(|t| !(0.0..=1.0).contains(&t.minimum)) {
+            return Err(bad(cmd, "CSP start and end needs lengths 0..100000 px (or 0..1 of the path) and minimums 0..1"));
+        }
     }
     // Scatter may exceed 1 (100 %) but not the 1000 % maximum: a huge amount pushed dab centres to
     // infinity (#977). `{:?}` keeps 1e38 short and shows infinity as `inf`.
@@ -261,10 +304,10 @@ fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
             let reflected = axis.reflect_points(&pts);
             if crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, &reflected) {
                 let pre = surf.clone();
-                let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+                let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_full_path(&pts).with_mixing_source(&pre);
                 original.push(&pts);
                 original.finish();
-                let mut mirror = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+                let mut mirror = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_full_path(&reflected).with_mixing_source(&pre);
                 mirror.push(&reflected);
                 mirror.finish();
                 original.composite_union(&mirror, &pre, surf, sel.as_ref(), lock)
@@ -369,8 +412,11 @@ impl LiveStroke {
         if pencil && flag(p, "autoErase", false) {
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
         }
-        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
-        let mirror = s.active().and_then(|st| st.symmetry_path.clone()).map(|axis| (axis, StrokeRenderer::new(&brush, Some(surf.format()), zoom)));
+        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_mixing_source(surf);
+        let mirror = s
+            .active()
+            .and_then(|st| st.symmetry_path.clone())
+            .map(|axis| (axis, StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_mixing_source(surf)));
         let pre = surf.clone();
         let mut live = Self {
             doc: std::sync::Arc::new(doc),
@@ -545,6 +591,7 @@ fn presets_list(s: &mut Session, p: &Value) -> Result<Value> {
             });
             if full {
                 v["brush"] = brush_json(&pr.brush);
+                v["sut"] = serde_json::to_value(&pr.sut).unwrap_or(Value::Null);
             }
             v
         }).collect::<Vec<_>>()
@@ -570,7 +617,15 @@ fn presets_save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(patch) => merge_brush(&s.tools.brush, patch, cmd)?,
         None => s.tools.brush.clone(),
     };
-    upsert(s, BrushPreset { name: name.clone(), brush, builtin: false, group: String::new() });
+    let source = s
+        .tools
+        .brush_preset
+        .as_deref()
+        .and_then(|n| prism_paint::presets::find(&s.tools.presets, n))
+        .or_else(|| prism_paint::presets::find(&s.tools.presets, &name));
+    let (group, sut) = source.map(|p| (p.group.clone(), p.sut.clone())).unwrap_or_default();
+    upsert(s, BrushPreset { name: name.clone(), brush, builtin: false, group, sut });
+    s.tools.brush_preset = Some(name.clone());
     Ok(json!({ "name": name, "count": s.tools.presets.len() }))
 }
 
@@ -646,8 +701,9 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let tip = GrayTile::from_f32(tw, th, &data);
     let brush = BrushSettings { tip: TipShape::Sampled(tip), size: tw.max(th) as f32, spacing: 0.25, pressure_size: false, ..BrushSettings::default() };
-    upsert(s, BrushPreset { name: name.clone(), brush: brush.clone(), builtin: false, group: String::new() });
+    upsert(s, BrushPreset { name: name.clone(), brush: brush.clone(), builtin: false, group: String::new(), sut: None });
     s.tools.brush = brush;
+    s.tools.brush_preset = Some(name.clone());
     Ok(json!({ "name": name, "width": tw, "height": th }))
 }
 
@@ -675,6 +731,11 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     }
     b = merge_brush(&b, &patch, cmd)?;
     validate_brush(&b, cmd)?;
+    if flag(p, "reset", false) {
+        s.tools.brush_preset = None;
+    } else if let Some(name) = p.get("preset").and_then(Value::as_str) {
+        s.tools.brush_preset = Some(find_preset(s, name, cmd)?.name.clone());
+    }
     let before = std::mem::replace(&mut s.tools.brush, b);
     // A coalesced gesture (one slider drag) journals as one call: remember the brush it started from.
     let key = p.get("coalesce").and_then(Value::as_str).filter(|_| p.get("preset").is_none() && p.get("reset").is_none());
@@ -712,6 +773,8 @@ pub fn brush_patch(old: &BrushSettings, new: &BrushSettings) -> Value {
     let skip = (old.tip == new.tip, old.dual_brush.tip == new.dual_brush.tip, old.texture.pattern == new.texture.pattern);
     fn diff(a: &Value, b: &Value) -> Option<Value> {
         match (a, b) {
+            // Another variant of an externally tagged enum is replaced whole (see `merge`).
+            (Value::Object(ao), Value::Object(bo)) if ao.len() == 1 && bo.len() == 1 && ao.keys().next() != bo.keys().next() => Some(b.clone()),
             (Value::Object(ao), Value::Object(bo)) => {
                 let mut out = serde_json::Map::new();
                 for (k, bv) in bo {
@@ -725,6 +788,10 @@ pub fn brush_patch(old: &BrushSettings, new: &BrushSettings) -> Value {
                             out.insert(k.clone(), bv.clone());
                         }
                     }
+                }
+                // Optional settings omitted when unset (CSP spray, water edge…) are removed with null.
+                for k in ao.keys().filter(|k| !bo.contains_key(*k)) {
+                    out.insert(k.clone(), Value::Null);
                 }
                 (!out.is_empty()).then_some(Value::Object(out))
             }

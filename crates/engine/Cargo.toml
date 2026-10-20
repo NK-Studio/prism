@@ -20,7 +20,7 @@ prism-doc = { workspace = true }
 prism-ops = { workspace = true }
 prism-compose = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 thiserror = { workspace = true }
 rayon = { workspace = true }
 prism-paint = { workspace = true }

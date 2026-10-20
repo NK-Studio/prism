@@ -69,6 +69,12 @@ People trust Prism with their work, and a crash loses it. A malformed file, a ba
 
 The maintainer explicitly authorized local, read-only REA/Ghidra analysis of the installed Photoshop 2026 executable and directly connected brush/input modules for Windows pen fidelity. This is a scoped exception to behavior-only investigation, not permission to copy proprietary code, pseudocode, shaders, profiles or assets. Preserve binary identity, evidence, inference and unknowns separately; implement Prism independently. Analysis databases, binary snapshots and decompilation stay in gitignored local output. Do not describe this investigation as strictly behavior-only clean-room research. See `docs/pen-input-analysis.md`.
 
+On 2026-10-15 the maintainer also explicitly requested REA analysis of the installed
+Clip Studio Paint to continue SUT compatibility research on `codex/feature-sut-brush`.
+The same read-only analysis and independent implementation boundary applies to its
+SUT/brush processing and directly related resources. Keep raw analysis and local SUT
+files ignored; record evidence and remaining uncertainties in `docs/sut-analysis.md`.
+
 ## 4. Picking work
 
 Priorities: important infrastructure first, then low-hanging parity, then the long tail.

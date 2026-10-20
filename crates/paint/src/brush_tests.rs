@@ -8,7 +8,7 @@ use crate::brush::*;
 use crate::dynamics::{Smoother, smooth_points};
 use crate::render::{BrushContext, StrokeRenderer, mask_combine, render_stroke};
 use crate::tile::GrayTile;
-use crate::{Dab, Stroke, StrokePoint, dabs};
+use crate::{Dab, PressureCurve, Stroke, StrokePoint, dabs};
 
 fn brush() -> BrushSettings {
     BrushSettings { pressure_size: false, spacing: 0.25, ..Default::default() }
@@ -20,6 +20,64 @@ fn line(x0: f64, x1: f64, y: f64) -> Vec<StrokePoint> {
 
 fn dabs_of(b: &BrushSettings, pts: &[StrokePoint]) -> Vec<Dab> {
     dabs(&Stroke { brush: b.clone(), points: pts.to_vec() })
+}
+
+#[test]
+fn csp_spray_separates_area_particle_size_count_and_orientation() {
+    let b = BrushSettings {
+        size: 30.0,
+        angle: 70.0,
+        csp_spray: Some(crate::CspSpray { size: 2.0, count: 8, bias: -1.0, angle: 15.0, ..Default::default() }),
+        ..brush()
+    };
+    let points = [StrokePoint::new(40.0, 50.0, 1.0)];
+    let d = dabs_of(&b, &points);
+    assert_eq!(d.len(), 8);
+    for dab in &d {
+        assert!(((dab.center.x - 40.0).hypot(dab.center.y - 50.0) - 15.0).abs() < 1e-5);
+        assert_eq!(dab.radius, 1.0);
+        assert!((dab.angle.to_degrees() - 15.0).abs() < 1e-5);
+    }
+    let mut wider = b.clone();
+    wider.size = 60.0;
+    let wide = dabs_of(&wider, &points);
+    for (a, b) in d.iter().zip(wide) {
+        assert_eq!(a.radius, b.radius);
+        assert!(((a.center.x - 40.0) * 2.0 - (b.center.x - 40.0)).abs() < 1e-5);
+    }
+    let encoded = serde_json::to_vec(&b).unwrap();
+    assert_eq!(serde_json::from_slice::<BrushSettings>(&encoded).unwrap(), b);
+    assert!(serde_json::from_str::<BrushSettings>("{}").unwrap().csp_spray.is_none());
+}
+
+#[test]
+fn csp_spray_chunking_pressure_and_work_limits() {
+    let curve = PressureCurve::new(vec![[0.0, 0.0], [1.0, 0.5]]).unwrap();
+    let dynamic = Dynamic { control: Control::PenPressure, pressure_curve: Some(curve), ..Default::default() };
+    let b = BrushSettings {
+        csp_spray: Some(crate::CspSpray { count: 8, size: 4.0, size_dynamic: dynamic.clone(), count_dynamic: dynamic, ..Default::default() }),
+        ..brush()
+    };
+    let points = line(0.0, 20.0, 10.0);
+    let whole = dabs_of(&b, &points);
+    let mut genr = crate::dynamics::DabGenerator::new(&b, 1.0);
+    let (mut chunked, mut dual) = (Vec::new(), Vec::new());
+    for point in &points {
+        genr.push(&[*point], &mut chunked, &mut dual);
+    }
+    genr.finish(&mut chunked, &mut dual);
+    assert_eq!(whole, chunked);
+    assert_eq!(dabs_of(&b, &points[..1]).len(), 4);
+    assert!(whole.iter().all(|dab| dab.radius == 1.0));
+    let mut hostile = b;
+    let spray = hostile.csp_spray.as_mut().unwrap();
+    spray.count = u32::MAX;
+    spray.size = f32::INFINITY;
+    spray.bias = f32::NAN;
+    spray.angle = f32::INFINITY;
+    let d = dabs_of(&hostile, &points[..1]);
+    assert!(d.len() <= crate::csp_spray::MAX_PARTICLES as usize);
+    assert!(d.iter().all(|d| d.center.x.is_finite() && d.center.y.is_finite() && d.angle.is_finite()));
 }
 
 fn raster(b: &BrushSettings, d: &Dab) -> (Rect, Vec<f32>) {
@@ -242,6 +300,99 @@ fn pressure_controls_size_with_minimum() {
     assert!((d[0].radius - 5.0).abs() < 1e-3, "min diameter 25 % of 40 → r 5, got {}", d[0].radius);
     assert!((d.last().unwrap().radius - 20.0).abs() < 0.5);
     assert!(d.windows(2).all(|w| w[1].radius >= w[0].radius - 1e-4));
+}
+
+#[test]
+fn pressure_curves_are_independent_and_apply_before_the_minimum() {
+    let dynamic =
+        |output| Dynamic { pressure_curve: Some(PressureCurve::new(vec![[0.0, output], [1.0, output]]).unwrap()), ..Dynamic::controlled(Control::PenPressure) };
+    let b = BrushSettings {
+        size: 40.0,
+        flow: 0.8,
+        pressure_size: true,
+        shape_dynamics: ShapeDynamics { enabled: true, size: Dynamic { minimum: 0.25, ..dynamic(0.2) }, ..Default::default() },
+        transfer: Transfer { enabled: true, opacity: dynamic(0.3), flow: dynamic(0.5), ..Default::default() },
+        texture: Texture { enabled: true, each_tip: true, depth: 0.8, depth_jitter: dynamic(0.75), ..Default::default() },
+        ..brush()
+    };
+    for pressure in [0.0, 0.5, 1.0] {
+        let dabs = dabs_of(&b, &[StrokePoint::new(20.0, 20.0, pressure)]);
+        let dab = &dabs[0];
+        assert!((dab.radius - 8.0).abs() < 1e-5, "size = 40 * (0.25 + 0.75 * 0.2)");
+        assert!((dab.opacity - 0.3).abs() < 1e-5);
+        assert!((dab.alpha - 0.4).abs() < 1e-5);
+        assert!((dab.depth - 0.6).abs() < 1e-5);
+    }
+    // A pressure response must not reshape other input sources.
+    let mut controlled = b.clone();
+    controlled.shape_dynamics.size.control = Control::Fade;
+    let with_curve = dabs_of(&controlled, &line(0.0, 100.0, 20.0));
+    controlled.shape_dynamics.size.pressure_curve = None;
+    let without_curve = dabs_of(&controlled, &line(0.0, 100.0, 20.0));
+    assert_eq!(with_curve, without_curve);
+}
+
+#[test]
+fn pressure_curve_settings_round_trip_and_old_brushes_keep_linear_pressure() {
+    let old: BrushSettings = serde_json::from_str(r#"{"shapeDynamics":{"enabled":true,"size":{"control":"penPressure"}}}"#).unwrap();
+    assert!(old.shape_dynamics.size.pressure_curve.is_none());
+    let json = serde_json::to_value(&old).unwrap();
+    assert!(json["shapeDynamics"]["size"].get("pressureCurve").is_none());
+    let mut changed = old.clone();
+    changed.shape_dynamics.size.pressure_curve = Some(PressureCurve::new(vec![[0.0, 0.0], [0.5, 0.25], [1.0, 1.0]]).unwrap());
+    let back: BrushSettings = serde_json::from_value(serde_json::to_value(&changed).unwrap()).unwrap();
+    assert_eq!(back, changed);
+    assert!(serde_json::from_str::<BrushSettings>(r#"{"shapeDynamics":{"size":{"pressureCurve":[[0,0],[0,1]]}}}"#).is_err());
+    let pressure = [StrokePoint::new(20.0, 20.0, 0.5)];
+    assert!((dabs_of(&old, &pressure)[0].radius - old.size * 0.25).abs() < 1e-5);
+    assert!((dabs_of(&changed, &pressure)[0].radius - changed.size * 0.1875).abs() < 1e-5);
+}
+
+#[test]
+fn independent_pressure_curves_render_identically_in_chunks_at_every_depth() {
+    let dynamic = |points| Dynamic { pressure_curve: Some(PressureCurve::new(points).unwrap()), ..Dynamic::controlled(Control::PenPressure) };
+    let b = BrushSettings {
+        size: 16.0,
+        shape_dynamics: ShapeDynamics { enabled: true, size: dynamic(vec![[0.0, 0.1], [0.5, 0.25], [1.0, 1.0]]), ..Default::default() },
+        transfer: Transfer {
+            enabled: true,
+            opacity: dynamic(vec![[0.0, 0.2], [0.5, 0.75], [1.0, 1.0]]),
+            flow: dynamic(vec![[0.0, 0.05], [0.5, 0.4], [1.0, 0.9]]),
+            ..Default::default()
+        },
+        texture: Texture {
+            enabled: true,
+            each_tip: true,
+            pattern: Pattern::Tile(GrayTile::from_fn(4, 4, |x, y| if x == y { 0.25 } else { 0.75 })),
+            depth_jitter: dynamic(vec![[0.0, 1.0], [0.5, 0.25], [1.0, 0.75]]),
+            ..Default::default()
+        },
+        ..brush()
+    };
+    let points: Vec<_> =
+        [(10.0, 0.1), (22.0, 0.5), (34.0, 0.9), (46.0, 0.3), (58.0, 0.0)].into_iter().map(|(x, pressure)| StrokePoint::new(x, 20.0, pressure)).collect();
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let format = PixelFormat::RGBA8.with_sample(sample);
+        let original = Surface::new(format);
+        let mut one_shot = original.clone();
+        render_stroke(&mut one_shot, &b, &points, None, false, 1.0);
+        assert!(alpha_sum(&one_shot, Rect::new(0, 0, 70, 40)) > 0.0);
+        for chunk in [1, 2, points.len()] {
+            let mut incremental = original.clone();
+            let mut renderer = StrokeRenderer::new(&b, Some(format), 1.0);
+            for part in points.chunks(chunk) {
+                renderer.push(part);
+                renderer.composite(&original, &mut incremental, None, false, false);
+            }
+            renderer.finish();
+            renderer.composite(&original, &mut incremental, None, false, false);
+            for y in 0..40 {
+                for x in 0..70 {
+                    assert_eq!(one_shot.pixel(x, y), incremental.pixel(x, y), "{format:?} chunk {chunk} at ({x}, {y})");
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -616,6 +767,256 @@ fn texture_modulates_coverage() {
     let d = dabs_of(&b, &line(0.0, 200.0, 0.0));
     assert!(d.iter().all(|x| x.depth <= 0.8 + 1e-6 && x.depth >= 0.8 * 0.25 - 1e-6));
     assert!(d.iter().any(|x| x.depth < 0.6));
+}
+
+#[test]
+fn csp_texture_rendering_and_pressure_curves_are_chunk_invariant_at_all_depths() {
+    let response = PressureCurve::new(vec![[0.0, 0.1], [0.5, 0.8], [1.0, 1.0]]).unwrap();
+    let points = [StrokePoint::new(10.0, 20.0, 0.2), StrokePoint::new(28.0, 20.0, 0.8), StrokePoint::new(46.0, 20.0, 0.4)];
+    for mode in [
+        CspTextureMode::Normal,
+        CspTextureMode::Multiply,
+        CspTextureMode::Subtract,
+        CspTextureMode::Compare,
+        CspTextureMode::Outline,
+        CspTextureMode::Overlay,
+        CspTextureMode::ColorDodge,
+        CspTextureMode::ColorBurn,
+        CspTextureMode::HardMix,
+        CspTextureMode::Height,
+    ] {
+        for each_tip in [false, true] {
+            let b = BrushSettings {
+                size: 14.0,
+                opacity: 0.7,
+                flow: 0.6,
+                texture: Texture {
+                    enabled: true,
+                    csp_mode: Some(mode),
+                    each_tip,
+                    depth: 0.5,
+                    pattern: Pattern::Tile(GrayTile::from_fn(4, 4, |x, y| if x == y { 0.25 } else { 0.75 })),
+                    depth_jitter: Dynamic { minimum: 0.2, pressure_curve: Some(response.clone()), ..Dynamic::controlled(Control::PenPressure) },
+                    ..Default::default()
+                },
+                ..brush()
+            };
+            for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let format = PixelFormat::RGBA8.with_sample(sample);
+                let original = Surface::new(format);
+                let mut full = original.clone();
+                render_stroke(&mut full, &b, &points, None, false, 1.0);
+                let mut incremental = original.clone();
+                let mut renderer = StrokeRenderer::new(&b, Some(format), 1.0);
+                for point in &points {
+                    renderer.push(std::slice::from_ref(point));
+                    renderer.composite(&original, &mut incremental, None, false, false);
+                }
+                renderer.finish();
+                renderer.composite(&original, &mut incremental, None, false, false);
+                assert!(alpha_sum(&full, Rect::new(0, 0, 60, 40)) > 0.0);
+                for y in 0..40 {
+                    for x in 0..60 {
+                        assert_eq!(full.pixel(x, y), incremental.pixel(x, y), "{mode:?}, {sample:?}, per-tip {each_tip}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn csp_texture_tone_is_applied_after_bilinear_sampling_and_old_presets_stay_legacy() {
+    let old: Texture = serde_json::from_str(r#"{"mode":"multiply","depth":0.5}"#).unwrap();
+    assert_eq!(old.csp_mode, None);
+    assert!(serde_json::to_value(&old).unwrap().get("cspMode").is_none());
+    let b = BrushSettings {
+        texture: Texture {
+            enabled: true,
+            csp_mode: Some(CspTextureMode::Multiply),
+            scale: 4.0,
+            invert: true,
+            contrast: 0.5,
+            pattern: Pattern::Tile(GrayTile::from_fn(2, 1, |x, _| if x == 0 { 0.0 } else { 1.0 })),
+            ..Default::default()
+        },
+        ..brush()
+    };
+    let ctx = BrushContext::new(&b);
+    // CSP samples integer destination coordinates: x=1 / scale4 => source .25.
+    // Contrasting endpoints first then interpolating would incorrectly give .25.
+    assert_eq!(ctx.texture_at(1, 0), 0.0);
+}
+
+#[test]
+fn csp_texture_minification_keeps_grain_and_wraps_at_integer_phase() {
+    let mut b = brush();
+    b.texture = Texture {
+        enabled: true,
+        csp_mode: Some(CspTextureMode::Multiply),
+        scale: 0.5,
+        invert: true,
+        pattern: Pattern::Tile(GrayTile::from_fn(4, 1, |x, _| if x == 1 || x == 2 { 1.0 } else { 0.0 })),
+        ..Default::default()
+    };
+    let ctx = BrushContext::new(&b);
+    assert_eq!(ctx.texture_at(0, 0), 0.0);
+    assert_eq!(ctx.texture_at(1, 0), 1.0);
+    assert_eq!(ctx.texture_at(-1, 0), 1.0);
+    assert_eq!(ctx.texture_at(2, 0), 0.0);
+    b.texture.scale = 2.0;
+    assert_eq!(BrushContext::new(&b).texture_at(1, 0), 0.5);
+    b.texture.csp_mode = None;
+    b.texture.invert = false;
+    assert_eq!(BrushContext::new(&b).texture_at(1, 0), 0.25);
+    b.texture.scale = 0.5;
+    assert_eq!(BrushContext::new(&b).texture_at(1, 0), 0.5);
+}
+
+#[test]
+fn csp_texture_mips_drop_odd_edges_and_stop_after_two_levels() {
+    let mut b = brush();
+    // 9x9 -> 4x4 -> 2x2. The right/bottom odd edge is deliberately white;
+    // including it, or selecting a third level, would change these samples.
+    b.texture = Texture {
+        enabled: true,
+        csp_mode: Some(CspTextureMode::Multiply),
+        scale: 0.25,
+        invert: true,
+        pattern: Pattern::Tile(GrayTile::from_fn(9, 9, |x, y| if x >= 8 || y >= 8 || (4..8).contains(&x) { 1.0 } else { 0.0 })),
+        ..Default::default()
+    };
+    let ctx = BrushContext::new(&b);
+    assert_eq!(ctx.texture_at(0, 0), 0.0);
+    assert_eq!(ctx.texture_at(1, 0), 1.0);
+    assert_eq!(ctx.texture_at(2, 0), 0.0);
+    assert_eq!(ctx.texture_at(-1, 0), 1.0);
+    b.texture.scale = 0.125;
+    assert_eq!(BrushContext::new(&b).texture_at(1, 0), 0.0);
+}
+
+#[test]
+fn csp_native_texture_plane_is_alpha_and_mip_rounding_is_downward() {
+    let mut b = brush();
+    b.texture = Texture {
+        enabled: true,
+        csp_mode: Some(CspTextureMode::Multiply),
+        scale: 0.5,
+        pattern: Pattern::Tile(GrayTile::from_fn(4, 4, |x, y| 1.0 - if (x + y) % 2 == 0 { 2.0 / 255.0 } else { 3.0 / 255.0 })),
+        ..Default::default()
+    };
+    assert!((BrushContext::new(&b).texture_at(0, 0) - 2.0 / 255.0).abs() < 1e-6);
+    b.texture.invert = true;
+    assert!((BrushContext::new(&b).texture_at(0, 0) - (1.0 - 2.0 / 255.0)).abs() < 1e-6);
+}
+
+#[test]
+fn csp_small_sampled_particles_keep_alpha_without_pencil_thresholding() {
+    let b = BrushSettings {
+        size: 2.0,
+        csp_anti_alias: Some(0),
+        tip: TipShape::Sampled(GrayTile::from_fn(16, 16, |x, y| if (4..12).contains(&x) && (4..12).contains(&y) { 0.4 } else { 0.0 })),
+        ..brush()
+    };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, depth, true));
+        render_stroke(&mut surface, &b, &[StrokePoint::new(20.5, 20.5, 1.0)], None, false, 1.0);
+        assert!((surface.rgba(20, 20)[3] - 0.4).abs() < 0.005, "{depth:?}");
+    }
+    let mut pencil = b.clone();
+    pencil.aliased = true;
+    assert_eq!(paint(&pencil, &[StrokePoint::new(20.5, 20.5, 1.0)], 40, 40).rgba(20, 20)[3], 0.0);
+    let m = crate::tile::Mips::new(&GrayTile::from_fn(2, 2, |x, y| if x == y { 0.3 } else { 0.8 }));
+    assert!((m.sample_original_nearest(0.1, 0.1) - 0.3).abs() < 0.0001);
+    assert_eq!(m.sample_original_nearest(-0.01, 0.2), 0.0);
+    assert_eq!(m.sample_original_nearest(f32::NAN, 0.2), 0.0);
+}
+
+#[test]
+fn csp_anti_alias_levels_sample_like_csp_and_parse_legacy_flags() {
+    // Older presets stored a boolean; levels are 0..=3.
+    let parse = |json: &str| serde_json::from_str::<BrushSettings>(json).map(|b| b.csp_anti_alias);
+    assert_eq!(parse(r#"{"cspAntiAlias": false}"#).unwrap(), Some(0));
+    assert_eq!(parse(r#"{"cspAntiAlias": true}"#).unwrap(), Some(1));
+    assert_eq!(parse(r#"{"cspAntiAlias": 3}"#).unwrap(), Some(3));
+    assert_eq!(parse(r#"{"cspAntiAlias": null}"#).unwrap(), None);
+    for bad in ["4", "1.5", "-1", "\"x\"", "1e40"] {
+        assert!(parse(&format!(r#"{{"cspAntiAlias": {bad}}}"#)).is_err(), "{bad}");
+    }
+    let b = BrushSettings { csp_anti_alias: Some(3), ..brush() };
+    assert_eq!(serde_json::from_str::<BrushSettings>(&serde_json::to_string(&b).unwrap()).unwrap(), b);
+    assert_eq!(BrushSettings { csp_anti_alias: Some(9), ..brush() }.bounded_for_render().csp_anti_alias, Some(3));
+    // A hard round dab, 20 px across, centred on a pixel corner: level 0 is binary; weak
+    // averages 2×2 samples (values in quarters); medium and strong soften the edge further.
+    let edge = |level: u8| {
+        let b = BrushSettings { size: 20.0, hardness: 1.0, pressure_size: false, csp_anti_alias: Some(level), ..brush() };
+        let s = paint(&b, &[StrokePoint::new(30.0, 30.0, 1.0)], 60, 60);
+        (0..60).map(|x| s.rgba(x, 29)[3]).collect::<Vec<_>>()
+    };
+    let none = edge(0);
+    assert!(none.iter().all(|a| *a == 0.0 || *a == 1.0), "{none:?}");
+    assert_eq!(none.iter().filter(|a| **a == 1.0).count(), 20);
+    let weak = edge(1);
+    assert!(weak.iter().all(|a| (a * 4.0 - (a * 4.0).round()).abs() < 1e-3), "{weak:?}");
+    let soft = |row: &[f32]| row.iter().filter(|a| **a > 0.0 && **a < 1.0).count();
+    let (medium, strong) = (edge(2), edge(3));
+    assert!(soft(&strong) >= soft(&medium) && soft(&medium) >= soft(&weak), "{weak:?} {medium:?} {strong:?}");
+    for row in [&weak, &medium, &strong] {
+        let total: f32 = row.iter().sum();
+        assert!((total - 20.0).abs() < 1.0, "coverage across the dab stays its diameter: {total}");
+    }
+    // A sampled tip at strong reads a reduced level, so a one-texel checkerboard averages out.
+    let checker = BrushSettings {
+        size: 8.0,
+        pressure_size: false,
+        csp_anti_alias: Some(3),
+        tip: TipShape::Sampled(GrayTile::from_fn(32, 32, |x, y| if (x + y) % 2 == 0 { 1.0 } else { 0.0 })),
+        ..brush()
+    };
+    let s = paint(&checker, &[StrokePoint::new(20.0, 20.0, 1.0)], 40, 40);
+    let a = s.rgba(20, 20)[3];
+    assert!((a - 0.5).abs() < 0.05, "{a}");
+}
+
+#[test]
+fn csp_tip_expansion_rotates_without_clipping_and_round_trips() {
+    let base = BrushSettings { size: 10.0, csp_anti_alias: Some(0), tip: TipShape::Sampled(GrayTile::from_fn(10, 10, |_, _| 1.0)), ..brush() };
+    assert_eq!(serde_json::from_str::<BrushSettings>("{}").unwrap().csp_tip_scale, None);
+    for (scale, angle, probe) in [([1.0, 2.4], 0.0, (30, 40)), ([2.4, 1.0], 0.0, (40, 30)), ([1.0, 2.4], 90.0, (40, 30))] {
+        let b = BrushSettings { csp_tip_scale: Some(scale), angle, ..base.clone() };
+        let restored: BrushSettings = serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap();
+        assert_eq!(restored.csp_tip_scale, Some(scale));
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, depth, true));
+            render_stroke(&mut surface, &restored, &[StrokePoint::new(30.5, 30.5, 1.0)], None, false, 1.0);
+            assert!(surface.rgba(probe.0, probe.1)[3] > 0.99, "{scale:?} {angle} {depth:?}");
+            assert_eq!(surface.rgba(45, 45)[3], 0.0);
+        }
+    }
+    let hostile = BrushSettings { size: 5000.0, csp_tip_scale: Some([f32::NAN, 100.0]), ..base };
+    assert_eq!(hostile.bounded_for_render().csp_tip_scale, Some([1.0, 1.0]));
+}
+
+#[test]
+fn csp_nonlinear_texture_uses_flow_scaled_coverage_and_height_ceiling() {
+    for (mode, depth) in [(CspTextureMode::Subtract, 0.5), (CspTextureMode::Height, 0.1)] {
+        let b = BrushSettings {
+            size: 12.0,
+            flow: 0.5,
+            hardness: 1.0,
+            texture: Texture {
+                enabled: true,
+                each_tip: true,
+                csp_mode: Some(mode),
+                depth,
+                pattern: Pattern::Tile(GrayTile::from_fn(1, 1, |_, _| 0.5)),
+                ..Default::default()
+            },
+            ..brush()
+        };
+        let s = paint(&b, &[StrokePoint::new(20.5, 20.5, 1.0)], 40, 40);
+        assert!((s.rgba(20, 20)[3] - 0.25).abs() < 0.005, "{mode:?}");
+    }
 }
 
 #[test]
@@ -1332,4 +1733,52 @@ fn sequence_and_round_tip_bounds_preserve_all_coverage() {
             assert!(beyond_radius, "fixture must exercise coverage outside the nominal radius");
         }
     }
+}
+
+#[test]
+fn csp_tilt_response_scales_size_by_altitude_and_mouse_is_vertical() {
+    let curve = PressureCurve::new(vec![[0.0, 1.0], [0.5, 1.0], [0.8, 0.0], [1.0, 0.0]]).unwrap();
+    let tilt = CspTilt::new(0.5, 1.0, curve.clone()).unwrap();
+    let b = BrushSettings {
+        size: 20.0,
+        shape_dynamics: ShapeDynamics { enabled: true, size: Dynamic { csp_tilt: Some(tilt.clone()), ..Default::default() }, ..Default::default() },
+        ..brush()
+    };
+    let at = |tilt_x: f32| dabs_of(&b, &[StrokePoint { tilt_x, ..StrokePoint::new(10.0, 10.0, 1.0) }])[0].radius * 2.0;
+    assert!((at(0.0) - 10.0).abs() < 1e-4, "mouse or vertical pen: input 1, response 0, 50%");
+    assert!((at(90.0) - 20.0).abs() < 1e-4, "horizontal pen: input 0, response 1, 100%");
+    // Unordered values are valid (the source interpolates either way); non-finite or huge ones are not.
+    assert!(CspTilt::new(1.5, 0.2, curve.clone()).is_ok());
+    for (lo, hi) in [(f32::NAN, 1.0), (0.5, 6.0), (-0.1, 1.0)] {
+        assert!(CspTilt::new(lo, hi, curve.clone()).is_err());
+    }
+    let json = serde_json::to_string(&tilt).unwrap();
+    assert_eq!(serde_json::from_str::<CspTilt>(&json).unwrap(), tilt);
+    assert!(serde_json::from_str::<CspTilt>(&json.replace("0.5", "9.0")).is_err());
+}
+
+#[test]
+fn csp_spray_size_ratio_follows_the_brush_size() {
+    let b = BrushSettings { size: 50.0, csp_spray: Some(crate::CspSpray { count: 4, size: 3.0, size_ratio: Some(0.2), ..Default::default() }), ..brush() };
+    let points = line(0.0, 0.0, 10.0);
+    assert!(dabs_of(&b, &points).iter().all(|d| (d.radius - 5.0).abs() < 1e-4), "particle diameter 0.2 × 50");
+    let resized = BrushSettings { size: 20.0, ..b.clone() };
+    assert!(dabs_of(&resized, &points).iter().all(|d| (d.radius - 2.0).abs() < 1e-4));
+    // Hostile ratios fall back to the stored particle size.
+    for k in [f32::NAN, -1.0, 0.0] {
+        let mut hostile = b.clone();
+        hostile.csp_spray.as_mut().unwrap().size_ratio = Some(k);
+        assert!(dabs_of(&hostile, &points).iter().all(|d| (d.radius - 1.5).abs() < 1e-4), "{k}");
+    }
+}
+
+#[test]
+fn csp_random_scales_each_dab_between_its_minimum_and_full_size() {
+    let size = Dynamic { csp_random: Some(0.5), ..Default::default() };
+    let b = BrushSettings { size: 40.0, spacing: 0.05, shape_dynamics: crate::ShapeDynamics { enabled: true, size, ..Default::default() }, ..brush() };
+    let d = dabs_of(&b, &line(0.0, 400.0, 10.0));
+    let radii: Vec<f32> = d.iter().map(|d| d.radius).collect();
+    assert!(radii.iter().all(|r| (10.0 - 1e-3..=20.0 + 1e-3).contains(r)), "{radii:?}");
+    assert!(radii.iter().any(|r| *r < 15.0) && radii.iter().any(|r| *r > 15.0), "random sizes, not one size");
+    assert_eq!(serde_json::from_value::<Dynamic>(serde_json::to_value(&b.shape_dynamics.size).unwrap()).unwrap().csp_random, Some(0.5));
 }

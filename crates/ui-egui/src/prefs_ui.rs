@@ -854,6 +854,7 @@ fn choice_label(v: &str) -> String {
         "gl" => "OpenGL".into(),
         "cpu" => "CPU (no GPU acceleration)".into(),
         "compact" => "Compact (Photoshop-style)".into(),
+        "clipStudio" => "Clip Studio Paint".into(),
         "comfortable" => "Comfortable".into(),
         v => humanize(v),
     }

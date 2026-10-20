@@ -28,6 +28,17 @@ pub fn sync_tool_brush(app: &mut PrismApp) {
     // The live brush is the outgoing tool's, so save it there before the new one takes over: any
     // edit it made since it was last active is in it, so its copy never goes stale.
     let current = app.session.tools.brush.clone();
+    let preset = app.session.tools.brush_preset.clone();
+    match app.ui.tool_brush_presets.iter_mut().find(|(t, _)| *t == app.ui.brush_tool) {
+        Some(entry) => entry.1 = preset.clone(),
+        None => app.ui.tool_brush_presets.push((app.ui.brush_tool, preset.clone())),
+    }
+    let next_preset = if app.ui.tool_brushes.iter().any(|(t, _)| *t == tool) {
+        app.ui.tool_brush_presets.iter().find(|(t, _)| *t == tool).and_then(|(_, name)| name.clone())
+    } else {
+        preset
+    };
+    app.session.tools.brush_preset = next_preset.filter(|name| app.session.tools.presets.iter().any(|p| p.name.eq_ignore_ascii_case(name)));
     save_brush(app, app.ui.brush_tool, current.clone());
     app.session.tools.brush = match app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
         Some((_, b)) => session_fields(&current, b),

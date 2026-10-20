@@ -35,7 +35,20 @@ impl Notice {
     /// `s` (the title or a line) in the current language, with [`Notice::args`] filled in.
     pub fn text(&self, s: &str) -> String {
         let args: Vec<(&str, &str)> = self.args.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        crate::i18n::fmt(crate::i18n::t(s), &args)
+        crate::i18n::fmt(&translate_line(s), &args)
+    }
+}
+
+/// `s` in the current language. Import warnings often read "<brush name>: <message>": when the
+/// whole line has no translation, the message after the first ": " is translated on its own.
+pub fn translate_line(s: &str) -> String {
+    let lang = crate::i18n::current();
+    if crate::i18n::has(lang, s) {
+        return crate::i18n::tr(lang, s).to_string();
+    }
+    match s.split_once(": ") {
+        Some((name, message)) if crate::i18n::has(lang, message) => format!("{name}: {}", crate::i18n::tr(lang, message)),
+        _ => s.to_string(),
     }
 }
 
@@ -103,7 +116,9 @@ pub fn show_toast(app: &mut PrismApp, ctx: &egui::Context) {
 pub fn post(app: &mut PrismApp, title: impl Into<String>, lines: Vec<String>, error: bool, dismiss_pref: Option<&str>) -> u64 {
     let title = title.into();
     let dismiss_pref = dismiss_pref.map(str::to_owned);
-    if let Some(at) = app.ui.notices.iter().position(|n| n.title == title && n.lines == lines && n.error == error && n.dismiss_pref == dismiss_pref && n.args.is_empty()) {
+    if let Some(at) =
+        app.ui.notices.iter().position(|n| n.title == title && n.lines == lines && n.error == error && n.dismiss_pref == dismiss_pref && n.args.is_empty())
+    {
         let notice = app.ui.notices.remove(at);
         let id = notice.id;
         app.ui.notices.push(notice);
@@ -161,9 +176,12 @@ fn dismiss(app: &mut PrismApp, id: u64) {
 pub fn io_warnings(app: &mut PrismApp, what: &str, warnings: &[String]) {
     let Some(first) = warnings.first() else { return };
     let n = warnings.len();
-    app.ui.status = if n == 1 { format!("{what}: {first}") } else { format!("{what} with {n} warnings: {first} …") };
+    let what = crate::i18n::t(what);
+    let count = crate::i18n::trn(crate::i18n::current(), n as u64, "{n} warning", "{n} warnings");
+    let first = translate_line(first);
+    app.ui.status = if n == 1 { format!("{what}: {first}") } else { format!("{what} — {count}: {first} …") };
     app.ui.status_error = true;
-    post(app, format!("{what} with {n} warning{}", if n == 1 { "" } else { "s" }), warnings.to_vec(), false, None);
+    post(app, format!("{what} — {count}"), warnings.to_vec(), false, None);
 }
 
 /// Report a failed file operation: the status bar shows it as an error and a notice keeps it on
@@ -286,6 +304,28 @@ mod tests {
         assert_eq!(app.ui.notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), ["Opened b.psd", "Saved a.png with 1 warning"], "moved to the front");
         post(&mut app, "Saved a.png with 1 warning", warn(), true, None);
         assert_eq!(app.ui.notices.len(), 3, "an error is a different notice");
+    }
+
+    #[test]
+    fn import_warnings_are_titled_and_listed_in_the_ui_language() {
+        let mut app = PrismApp::new(Session::new(), Services::default());
+        let warnings = vec!["隙間無く囲って塗るツール: SUT tip ordering is approximated by cyclic order".to_string(), "Pen: a message nobody translated".to_string()];
+        crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
+            io_warnings(&mut app, "Imported from CLIP STUDIO", &warnings);
+            let n = app.ui.notices.last().unwrap().clone();
+            assert_eq!(n.text(&n.title), "클립 스튜디오에서 가져옴 — 경고 2개");
+            // The brush name stays; the message after it is translated when the catalog has it.
+            assert_eq!(
+                n.text(&n.lines[0]),
+                "隙間無く囲って塗るツール: SUT 팁 순서는 순환 순서로 근사합니다"
+            );
+            assert_eq!(n.text(&n.lines[1]), "Pen: a message nobody translated");
+            assert!(app.ui.status.starts_with("클립 스튜디오에서 가져옴 — 경고 2개: 隙間無く囲って塗るツール: SUT 팁"), "{}", app.ui.status);
+        });
+        crate::i18n::with_language(crate::i18n::Lang::EN, || {
+            io_warnings(&mut app, "Saved a.png", &warnings[1..]);
+            assert_eq!(app.ui.notices.last().unwrap().title, "Saved a.png — 1 warning");
+        });
     }
 
     #[test]

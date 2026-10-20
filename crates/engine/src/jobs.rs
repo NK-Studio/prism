@@ -576,9 +576,7 @@ impl Session {
         // Untrusted sessions gate every command, including the ones a command runs on its own
         // behalf (`file.automate.conditionalModeChange` runs `image.mode.*`), before any side
         // effect.
-        if let Some(gate) = self.authorize {
-            gate(id, &params)?;
-        }
+        crate::action_playback::authorize_step(self, id, &params)?;
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {
             return Ok(Started::Done(v));

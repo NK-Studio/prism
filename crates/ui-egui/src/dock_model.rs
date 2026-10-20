@@ -36,10 +36,16 @@ pub enum PanelId {
     Paths,
     /// Clip Studio Paint's Tool Sliders: brush Size and Opacity (see `tool_sliders`).
     ToolSliders,
+    /// Clip Studio workspace: the current tool's sub-tools (see `sub_tool_panel`).
+    SubTool,
+    /// Clip Studio workspace: the selected sub-tool's settings.
+    ToolProperty,
+    /// Window › Extensions › CLIP STUDIO: materials downloaded in CLIP STUDIO (see `csp_library_ui`).
+    ClipStudio,
 }
 
 impl PanelId {
-    pub const ALL: [PanelId; 18] = [
+    pub const ALL: [PanelId; 21] = [
         PanelId::Color,
         PanelId::Swatches,
         PanelId::Gradients,
@@ -58,6 +64,9 @@ impl PanelId {
         PanelId::Channels,
         PanelId::Paths,
         PanelId::ToolSliders,
+        PanelId::SubTool,
+        PanelId::ToolProperty,
+        PanelId::ClipStudio,
     ];
 
     /// The tab label (English; translated where drawn).
@@ -81,6 +90,9 @@ impl PanelId {
             PanelId::Channels => "Channels",
             PanelId::Paths => "Paths",
             PanelId::ToolSliders => "Tool Sliders",
+            PanelId::SubTool => "Sub Tool",
+            PanelId::ToolProperty => "Tool Property",
+            PanelId::ClipStudio => "CLIP STUDIO",
         }
     }
 
@@ -105,6 +117,9 @@ impl PanelId {
             PanelId::Channels => "panels-top-left",
             PanelId::Paths => "spline",
             PanelId::ToolSliders => "sliders-horizontal",
+            PanelId::SubTool => "brush",
+            PanelId::ToolProperty => "settings",
+            PanelId::ClipStudio => "puzzle",
         }
     }
 
@@ -129,6 +144,9 @@ impl PanelId {
             PanelId::Channels => "channels",
             PanelId::Paths => "paths",
             PanelId::ToolSliders => "toolSliders",
+            PanelId::SubTool => "subTool",
+            PanelId::ToolProperty => "toolProperty",
+            PanelId::ClipStudio => "clipStudio",
         }
     }
 
@@ -145,13 +163,21 @@ impl PanelId {
             PanelId::Navigator | PanelId::Histogram | PanelId::Info => Group::Navigator,
             PanelId::History | PanelId::Actions | PanelId::LayerComps => Group::History,
             PanelId::Layers | PanelId::Channels | PanelId::Paths => Group::Layers,
-            PanelId::ToolSliders => return None,
+            PanelId::ToolSliders | PanelId::SubTool | PanelId::ToolProperty | PanelId::ClipStudio => return None,
         })
     }
 
     /// Panels that lay out their own list and footer, so they fill the group instead of scrolling.
     pub fn fills(self) -> bool {
-        matches!(self, PanelId::Layers | PanelId::History | PanelId::ToolSliders)
+        matches!(self, PanelId::Layers | PanelId::History | PanelId::Actions | PanelId::ToolSliders | PanelId::ClipStudio)
+    }
+
+    /// Size of the floating window a panel without a home group opens in.
+    pub fn float_size(self) -> [f32; 2] {
+        match self {
+            PanelId::ClipStudio => [380.0, 560.0],
+            _ => [180.0, 420.0],
+        }
     }
 }
 
@@ -378,6 +404,22 @@ impl DockLayout {
     }
 
     /// A new, empty custom group id.
+    /// A new dock column at the outer edge of `side` holding one group per entry of `groups`
+    /// (panels already docked elsewhere move into it). Returns the column id.
+    pub(crate) fn add_column(&mut self, side: Side, groups: Vec<Vec<PanelId>>, size: f32) -> u32 {
+        for tabs in &groups {
+            for panel in tabs {
+                for t in self.tabs.values_mut() {
+                    t.retain(|p| p != panel);
+                }
+            }
+        }
+        let groups: Vec<Group> = groups.into_iter().map(|tabs| self.new_group(tabs)).collect();
+        let id = self.new_id();
+        self.columns.insert(0, Column { id, side, groups, size, iconic: false });
+        id
+    }
+
     fn new_group(&mut self, tabs: Vec<PanelId>) -> Group {
         let mut n = self.next_id.max(1);
         while self.tabs.contains_key(&Group::Custom(n)) {
@@ -664,7 +706,7 @@ pub fn toggle_panel(ui: &mut UiState, panel: PanelId, pro: bool, show: Option<bo
             None => {
                 let g = ui.dock.new_group(vec![panel]);
                 let id = ui.dock.new_id();
-                ui.dock.floats.push(Float { id, groups: vec![g], pos: [320.0, 160.0], size: [180.0, 420.0], iconic: false });
+                ui.dock.floats.push(Float { id, groups: vec![g], pos: [320.0, 160.0], size: panel.float_size(), iconic: false });
                 g
             }
         },

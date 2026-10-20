@@ -1,5 +1,6 @@
 //! Menu bar generated from the engine command registry plus UI-level commands.
 
+use prism_engine::prefs::WorkspaceStyle;
 use serde_json::{Value, json};
 
 use crate::PrismApp;
@@ -59,6 +60,12 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     // Clip Studio Paint's Tool Sliders: brush Size and Opacity as long sliders.
     ("window.toggle.toolSliders", "Tool Sliders", &["Window"], None),
     ("window.toggle.toolbar", "Tools", &["Window"], None),
+    // Clip Studio Paint's tools and sub-tools in place of Photoshop's (one engine, another shell).
+    ("window.workspace.clipStudio", "Clip Studio", &["Window", "Workspace"], None),
+    ("window.panel.subTool", "Sub Tool", &["Window"], None),
+    ("window.panel.toolProperty", "Tool Property", &["Window"], None),
+    // Window › Extensions: Prism's own extension panels (Photoshop lists its add-on panels here).
+    ("window.extensions.clipStudio", "CLIP STUDIO Materials", &["Window", "Extensions"], None),
     // Photoshop's Tab and ⇧Tab: all panels (Tools, options bar and the dock), or only the dock.
     ("window.togglePanels", "Show/Hide All Panels", &[], Some("Tab")),
     ("window.toggle.dock", "Show/Hide Panels", &[], Some("Shift+Tab")),
@@ -111,6 +118,7 @@ fn workspace_name(id: &str) -> Option<&'static str> {
         "graphicAndWeb" => "Graphic and Web",
         "pixelArt" => "Pixel Art",
         "motion" => "Motion",
+        "clipStudio" => crate::workspace_ui::CLIP_STUDIO,
         _ => return None,
     })
 }
@@ -516,7 +524,9 @@ pub fn is_enabled(app: &PrismApp, id: &str) -> bool {
         return e;
     }
     match id {
-        "file.open" | "file.exit" | "file.clearRecent" | "help.about" | "help.systemInfo" | "help.firstRunSetup" | "help.checkForUpdates" | "edit.search" => true,
+        "file.open" | "file.exit" | "file.clearRecent" | "help.about" | "help.systemInfo" | "help.firstRunSetup" | "help.checkForUpdates" | "edit.search" => {
+            true
+        }
         i if i.starts_with("file.openRecent.") => true,
         i if crate::links::url_for(i).is_some() => true,
         i if i.starts_with("window.theme.") => true,
@@ -692,8 +702,14 @@ pub fn is_live(id: &str) -> bool {
 }
 
 /// Commands outside the catalogue that belong right after a catalogue item: `(id, after)`.
-const PLACE_AFTER: &[(&str, &str)] =
-    &[("file.newFromClipboard", "file.new"), ("filter.render.relight", "filter.render.lightingEffects"), ("view.resetView", "view.flipHorizontal"), ("window.toggle.toolSliders", "window.panel.toolPresets")];
+const PLACE_AFTER: &[(&str, &str)] = &[
+    ("file.newFromClipboard", "file.new"),
+    ("filter.render.relight", "filter.render.lightingEffects"),
+    ("view.resetView", "view.flipHorizontal"),
+    ("window.toggle.toolSliders", "window.panel.toolPresets"),
+    // Window › Extensions sits under Workspace, as in Photoshop.
+    ("window.extensions.clipStudio", "window.workspace.lockWorkspace"),
+];
 
 pub fn menu_items(app: &PrismApp) -> Vec<MenuItem> {
     // 1) Photoshop's full menu tree, in Photoshop order; live where we implement the command.
@@ -1179,6 +1195,8 @@ pub fn apply_workspace(app: &mut PrismApp) {
     app.ui.dock = Default::default();
     app.ui.dock_tabs = Default::default();
     app.ui.tools = Default::default();
+    let style = if app.ui.workspace == crate::workspace_ui::CLIP_STUDIO { WorkspaceStyle::ClipStudio } else { WorkspaceStyle::Photoshop };
+    crate::workspace_ui::set_style(app, style);
     let p = &mut app.ui.panels;
     let (nav, color, layers, history, props) = match app.ui.workspace.as_str() {
         "Photography" => (true, false, true, true, true),
@@ -1192,6 +1210,9 @@ pub fn apply_workspace(app: &mut PrismApp) {
     p.history = history;
     p.properties = props;
     p.character = false;
+    if style == WorkspaceStyle::ClipStudio {
+        crate::csp_tools::apply_workspace_layout(app);
+    }
 }
 
 #[cfg(test)]
@@ -1492,6 +1513,31 @@ mod tests {
 
         let after = harness.get_by_label_contains("Filter Gallery…").rect().top();
         assert!(after < before - 1.0, "mouse wheel should move tall menu content: {before} -> {after}");
+    }
+
+    #[test]
+    fn clip_studio_workspace_switches_the_style_and_back() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        assert_eq!(crate::workspace_ui::style(&app), WorkspaceStyle::Photoshop);
+        assert!(menu_items(&app).iter().any(|i| i.id == "window.workspace.clipStudio"));
+        invoke(&mut app, &ctx, "window.workspace.clipStudio", Value::Null).unwrap();
+        assert_eq!((app.ui.workspace.as_str(), crate::workspace_ui::style(&app)), ("Clip Studio", WorkspaceStyle::ClipStudio));
+        assert_eq!(checked(&app, "window.workspace.clipStudio"), Some(true));
+        // Reset keeps the Clip Studio workspace; a Photoshop preset switches back.
+        invoke(&mut app, &ctx, "window.workspace.resetWorkspace", Value::Null).unwrap();
+        assert_eq!(crate::workspace_ui::style(&app), WorkspaceStyle::ClipStudio);
+        invoke(&mut app, &ctx, "window.workspace.painting", Value::Null).unwrap();
+        assert_eq!(crate::workspace_ui::style(&app), WorkspaceStyle::Photoshop);
+        // Saved workspaces remember their style; agents can set it through the preferences.
+        invoke(&mut app, &ctx, "window.workspace.clipStudio", Value::Null).unwrap();
+        invoke(&mut app, &ctx, "window.workspace.newWorkspace", json!({"name": "My CSP"})).unwrap();
+        invoke(&mut app, &ctx, "window.workspace.essentials", Value::Null).unwrap();
+        invoke(&mut app, &ctx, "window.workspace.select", json!({"name": "My CSP"})).unwrap();
+        assert_eq!(crate::workspace_ui::style(&app), WorkspaceStyle::ClipStudio);
+        app.run("prefs.set", json!({"path": "workspace.style", "value": "photoshop"})).unwrap();
+        assert_eq!(crate::workspace_ui::style(&app), WorkspaceStyle::Photoshop);
+        assert!(app.run("prefs.set", json!({"path": "workspace.style", "value": "illustrator"})).is_err());
     }
 
     #[test]

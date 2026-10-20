@@ -202,6 +202,134 @@ fn set_brush_merges_fields() {
     assert_eq!(s.tools.brush.texture.pattern, chalk_pattern);
 }
 
+fn independent_pressure_curves_patch() -> Value {
+    json!({
+        "shapeDynamics": {"enabled": true, "size": {
+            "control": "penPressure", "minimum": 0.1,
+            "pressureCurve": [[0.0, 0.0], [0.25, 0.7], [1.0, 1.0]]
+        }},
+        "transfer": {"enabled": true,
+            "opacity": {"control": "penPressure", "pressureCurve": [[0.0, 0.2], [0.5, 0.3], [1.0, 0.9]]},
+            "flow": {"control": "penPressure", "pressureCurve": [[0.0, 1.0], [0.75, 0.6], [1.0, 0.1]]}
+        },
+        "texture": {"enabled": true, "eachTip": true, "depthJitter": {
+            "control": "penPressure", "pressureCurve": [[0.0, 0.4], [0.5, 0.8], [1.0, 0.5]]
+        }}
+    })
+}
+
+const PRESSURE_CURVE_PATHS: [&str; 4] =
+    ["/shapeDynamics/size/pressureCurve", "/transfer/opacity/pressureCurve", "/transfer/flow/pressureCurve", "/texture/depthJitter/pressureCurve"];
+
+#[test]
+fn set_brush_preserves_independent_pressure_curves_across_partial_patches() {
+    let mut s = session(10, 10);
+    let patch = independent_pressure_curves_patch();
+    let initial = s.execute("tools.setBrush", patch.clone()).unwrap();
+    for path in PRESSURE_CURVE_PATHS {
+        assert_eq!(initial.pointer(path), patch.pointer(path), "{path}");
+    }
+    // Editing another field inside each dynamic must retain that dynamic's imported curve.
+    for unrelated in [
+        json!({"size": 31}),
+        json!({"shapeDynamics": {"size": {"minimum": 0.3}}}),
+        json!({"transfer": {"opacity": {"jitter": 0.2}, "flow": {"minimum": 0.4}}}),
+        json!({"texture": {"depthJitter": {"jitter": 0.1}}}),
+    ] {
+        s.execute("tools.setBrush", unrelated).unwrap();
+        let actual = s.execute("brush.get", json!({})).unwrap();
+        for path in PRESSURE_CURVE_PATHS {
+            assert_eq!(actual.pointer(path), patch.pointer(path), "{path}");
+        }
+    }
+    // Clearing one response restores that controller's default without touching the others.
+    let cleared = s.execute("tools.setBrush", json!({"transfer": {"opacity": {"pressureCurve": null}}})).unwrap();
+    assert!(s.tools.brush.transfer.opacity.pressure_curve.is_none());
+    for path in [PRESSURE_CURVE_PATHS[0], PRESSURE_CURVE_PATHS[2], PRESSURE_CURVE_PATHS[3]] {
+        assert_eq!(cleared.pointer(path), patch.pointer(path), "{path}");
+    }
+}
+
+#[test]
+fn set_brush_rejects_invalid_pressure_curves_without_changing_settings() {
+    let mut s = session(10, 10);
+    let valid = independent_pressure_curves_patch();
+    s.execute("tools.setBrush", valid.clone()).unwrap();
+    let before = s.tools.brush.clone();
+    let too_many: Vec<[f64; 2]> = (0..17).map(|i| [f64::from(i) / 16.0, 0.5]).collect();
+    let malformed = [
+        json!([]),
+        json!([[0.0, 0.0]]),
+        json!(too_many),
+        json!([[-0.1, 0.0], [1.0, 1.0]]),
+        json!([[0.0, 0.0], [1.1, 1.0]]),
+        json!([[0.0, -0.1], [1.0, 1.0]]),
+        json!([[0.0, 0.0], [1.0, 1.1]]),
+        json!([[0.5, 0.0], [0.5, 1.0]]),
+        json!([[1.0, 0.0], [0.0, 1.0]]),
+        json!([[0.0, null], [1.0, 1.0]]),
+        json!([[0.0, "invalid"], [1.0, 1.0]]),
+        json!([[0.0], [1.0, 1.0]]),
+        json!([[0.0, 0.0, 0.5], [1.0, 1.0]]),
+        json!({"points": [[0.0, 0.0], [1.0, 1.0]]}),
+    ];
+    for path in PRESSURE_CURVE_PATHS {
+        for curve in &malformed {
+            let mut patch = valid.clone();
+            *patch.pointer_mut(path).unwrap() = curve.clone();
+            patch["size"] = json!(93);
+            let error = s.execute("tools.setBrush", patch).unwrap_err();
+            assert!(matches!(error, EngineError::BadParams { .. }), "{path}: {curve}: {error}");
+            assert_eq!(s.tools.brush, before, "a rejected {path} must leave all brush settings intact: {curve}");
+        }
+    }
+}
+
+#[test]
+fn csp_anti_alias_levels_validate_and_accept_legacy_flags() {
+    let mut s = session(40, 40);
+    for bad in [json!(4), json!(-1), json!(1.5), json!("strong")] {
+        let before = s.tools.brush.clone();
+        assert!(s.execute("tools.setBrush", json!({"brush": {"cspAntiAlias": bad}})).is_err(), "{bad}");
+        assert_eq!(before, s.tools.brush);
+    }
+    for (value, level) in [(json!(3), 3), (json!(false), 0), (json!(true), 1)] {
+        s.execute("tools.setBrush", json!({"brush": {"cspAntiAlias": value}})).unwrap();
+        assert_eq!(s.tools.brush.csp_anti_alias, Some(level));
+        s.execute("paint.stroke", json!({"points": [[10, 20], [30, 20]], "color": "#000000"})).unwrap();
+    }
+}
+
+#[test]
+fn brush_patch_removes_cleared_optional_settings_and_switches_enum_variants() {
+    let cmd = "tools.setBrush";
+    let curve = prism_paint::PressureCurve::new(vec![[0.0, 0.0], [0.5, 1.0], [1.0, 1.0]]).unwrap();
+    let full = BrushSettings {
+        csp_anti_alias: Some(0),
+        csp_tip_scale: Some([1.0, 2.4]),
+        csp_spray: Some(prism_paint::CspSpray::default()),
+        csp_water_edge: Some(prism_paint::CspWaterEdge::default()),
+        shape_dynamics: prism_paint::ShapeDynamics {
+            enabled: true,
+            size: prism_paint::Dynamic { pressure_curve: Some(curve), ..prism_paint::Dynamic::controlled(prism_paint::Control::PenPressure) },
+            ..Default::default()
+        },
+        texture: prism_paint::Texture { pattern: prism_paint::Pattern::Tile(GrayTile::from_fn(4, 4, |x, _| x as f32 / 4.0)), ..Default::default() },
+        ..Default::default()
+    };
+    let mut cleared = full.clone();
+    cleared.csp_anti_alias = None;
+    cleared.csp_tip_scale = None;
+    cleared.csp_spray = None;
+    cleared.csp_water_edge = None;
+    cleared.shape_dynamics.size.pressure_curve = None;
+    cleared.texture.pattern = prism_paint::Pattern::Procedural { style: prism_paint::PatternStyle::Dots, size: 32, seed: 2 };
+    for (from, to) in [(&full, &cleared), (&cleared, &full)] {
+        let patch = brush_patch(from, to);
+        assert_eq!(merge_brush(from, &patch, cmd).unwrap(), *to, "{patch}");
+    }
+}
+
 #[test]
 fn set_brush_keeps_untouched_bitmaps_and_replaces_touched_ones() {
     let tile = |w, h, k: u32| GrayTile::from_fn(w, h, move |x, y| ((x * k + y) % 5) as f32 / 4.0);
@@ -649,4 +777,114 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
     let d: Vec<f64> = r["damage"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
     let (cx, cy, radius) = (d[0] + d[2] / 2.0, d[1] + d[3] / 2.0, f64::from(s.tools.brush.size) / 2.0);
     assert!((cx - 10.0).hypot(cy - 10.0) <= 2.0 * radius + 1.5 && d[2] == d[3], "{r}");
+}
+
+#[test]
+fn csp_spray_command_validation_and_persistence() {
+    let mut s = session(48, 48);
+    for spray in [json!({"size": 1e38}), json!({"count": 0}), json!({"count": 257}), json!({"bias": 2}), json!({"angle": 1e39}), json!({"sizeRatio": -1}), json!({"sizeRatio": 1000})] {
+        let before = s.tools.brush.clone();
+        assert!(s.execute("tools.setBrush", json!({"brush": {"cspSpray": spray}})).is_err());
+        assert_eq!(before, s.tools.brush);
+    }
+    s.execute("tools.setBrush", json!({"brush": {"cspSpray": {"size": 2, "count": 8, "bias": -1}}})).unwrap();
+    let serialized = serde_json::to_vec(&s.tools.brush).unwrap();
+    assert_eq!(serde_json::from_slice::<prism_paint::BrushSettings>(&serialized).unwrap(), s.tools.brush);
+    assert!(s.execute("paint.stroke", json!({"points": [[12, 12], [32, 24]]})).is_ok());
+}
+
+#[test]
+fn csp_water_edge_command_validation_persistence_and_after_drag_halo() {
+    let mut s = session(64, 64);
+    for edge in [json!({"radius": -1}), json!({"radius": 101}), json!({"opacity": 2}), json!({"darkness": -0.5}), json!({"blur": 1e39}), json!({"radius": "x"})]
+    {
+        let before = s.tools.brush.clone();
+        assert!(s.execute("tools.setBrush", json!({"brush": {"cspWaterEdge": edge}})).is_err(), "{edge}");
+        assert_eq!(before, s.tools.brush);
+    }
+    s.execute("tools.setBrush", json!({"brush": {"size": 8, "cspWaterEdge": {"radius": 2, "opacity": 0.15, "blur": 6, "afterDrag": true}}})).unwrap();
+    let edge = s.tools.brush.csp_water_edge.clone().unwrap();
+    assert_eq!((edge.radius, edge.opacity, edge.blur, edge.after_drag), (2.0, 0.15, 6.0, true));
+    let serialized = serde_json::to_vec(&s.tools.brush).unwrap();
+    assert_eq!(serde_json::from_slice::<prism_paint::BrushSettings>(&serialized).unwrap(), s.tools.brush);
+    // The committed stroke's damage includes the blurred halo around the dabs.
+    let r = s.execute("paint.stroke", json!({"points": [[20, 32], [44, 32]]})).unwrap();
+    let d: Vec<f64> = r["damage"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    assert!(d[1] < 32.0 - 4.0 - 1.0 && d[3] > 8.0 + 2.0, "{r}");
+    s.execute("tools.setBrush", json!({"brush": {"cspWaterEdge": null}})).unwrap();
+    assert!(s.tools.brush.csp_water_edge.is_none());
+}
+
+#[test]
+fn csp_stabilizer_command_validation_and_persistence() {
+    let mut s = session(48, 48);
+    for stabilizer in [json!({"level": 101}), json!({"stickiness": 500}), json!({"level": -1}), json!({"level": "x"})] {
+        let before = s.tools.brush.clone();
+        assert!(s.execute("tools.setBrush", json!({"brush": {"cspStabilizer": stabilizer}})).is_err(), "{stabilizer}");
+        assert_eq!(before, s.tools.brush);
+    }
+    s.execute("tools.setBrush", json!({"brush": {"cspStabilizer": {"level": 10, "adjustBySpeed": true}}})).unwrap();
+    let serialized = serde_json::to_vec(&s.tools.brush).unwrap();
+    assert_eq!(serde_json::from_slice::<prism_paint::BrushSettings>(&serialized).unwrap(), s.tools.brush);
+    let points: Vec<_> = (0..30).map(|i| json!([4 + i, 20 + i % 3, 1.0, 0, 0, 0, i * 8])).collect();
+    assert!(s.execute("paint.stroke", json!({"points": points})).is_ok());
+    s.execute("tools.setBrush", json!({"brush": {"cspStabilizer": null}})).unwrap();
+    assert!(s.tools.brush.csp_stabilizer.is_none());
+}
+
+#[test]
+fn csp_start_and_end_validation_and_tapered_commit() {
+    let mut s = session(80, 40);
+    for in_out in [
+        json!({"mode": "percent", "start": 2.0, "targets": [{"param": "size", "minimum": 0}]}),
+        json!({"start": -1.0, "targets": [{"param": "size", "minimum": 0}]}),
+        json!({"start": 5.0, "targets": [{"param": "size", "minimum": 3}]}),
+        json!({"start": 5.0, "targets": [{"param": "colour", "minimum": 0}]}),
+    ] {
+        let before = s.tools.brush.clone();
+        assert!(s.execute("tools.setBrush", json!({"brush": {"cspInOut": in_out}})).is_err(), "{in_out}");
+        assert_eq!(before, s.tools.brush);
+    }
+    s.execute("tools.setBrush", json!({"brush": {"size": 10, "cspInOut": {"start": 20, "end": 20, "targets": [{"param": "size", "minimum": 0}]}}})).unwrap();
+    let serialized = serde_json::to_vec(&s.tools.brush).unwrap();
+    assert_eq!(serde_json::from_slice::<prism_paint::BrushSettings>(&serialized).unwrap(), s.tools.brush);
+    s.execute("paint.stroke", json!({"points": [[5, 20], [75, 20]], "color": "#000000"})).unwrap();
+    // Composite alpha 3 px off the stroke's centre line (transparent document).
+    let mut alpha = |x: i64| serde_json::from_value::<Vec<f32>>(s.execute("document.pixel", json!({"x": x, "y": 23})).unwrap()).unwrap()[3];
+    assert!(alpha(40) > 0.5, "full size in the middle");
+    let (start, end) = (alpha(8), alpha(72));
+    assert!(start < 0.1 && end < 0.1, "tapered at both ends: {start} {end}");
+}
+
+#[test]
+fn csp_color_mixing_validation_and_pick_up_on_the_layer() {
+    let mut s = session(80, 40);
+    for mixing in [json!({"amount": 2}), json!({"density": -1}), json!({"stretch": 1e39}), json!({"amount": "x"})] {
+        let before = s.tools.brush.clone();
+        assert!(s.execute("tools.setBrush", json!({"brush": {"cspMixing": mixing}})).is_err(), "{mixing}");
+        assert_eq!(before, s.tools.brush);
+    }
+    // A red stroke, then a blue mixing stroke that starts on it.
+    s.execute("tools.setBrush", json!({"brush": {"size": 10, "pressureSize": false}})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[5, 20], [30, 20]], "color": "#ff0000"})).unwrap();
+    s.execute("tools.setBrush", json!({"brush": {"cspMixing": {"amount": 0.2, "density": 1, "stretch": 0.5}}})).unwrap();
+    let serialized = serde_json::to_vec(&s.tools.brush).unwrap();
+    assert_eq!(serde_json::from_slice::<prism_paint::BrushSettings>(&serialized).unwrap(), s.tools.brush);
+    s.execute("paint.stroke", json!({"points": [[10, 20], [70, 20]], "color": "#0000ff"})).unwrap();
+    let px = serde_json::from_value::<Vec<f32>>(s.execute("document.pixel", json!({"x": 50, "y": 20})).unwrap()).unwrap();
+    assert!(px[0] > 0.1 && px[2] > 0.1, "red carried into the blue stroke: {px:?}");
+}
+
+#[test]
+fn csp_tip_scale_validation_preserves_state_and_paints() {
+    let mut s = session(48, 48);
+    for scale in [json!([0, 1]), json!([1, 11]), json!([1e39, 1]), json!([1])] {
+        let before = s.tools.brush.clone();
+        assert!(s.execute("tools.setBrush", json!({"brush":{"cspTipScale":scale}})).is_err());
+        assert_eq!(s.tools.brush, before);
+    }
+    assert!(s.execute("tools.setBrush", json!({"brush":{"size":5000,"cspTipScale":[1,2.4]}})).is_err());
+    s.execute("tools.setBrush", json!({"brush":{"size":15,"cspTipScale":[1,2.4]}})).unwrap();
+    assert_eq!(s.tools.brush.csp_tip_scale, Some([1.0, 2.4]));
+    assert!(s.execute("paint.stroke", json!({"points":[[12,12],[32,24]]})).is_ok());
 }

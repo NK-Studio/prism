@@ -97,8 +97,22 @@ fn open(app: &mut PrismApp, kind: &str, f: Value) -> Result<Value, String> {
     Ok(json!({"dialog": kind}))
 }
 
+/// The built-in workspace that switches the shell to Clip Studio Paint's tools.
+pub const CLIP_STUDIO: &str = "Clip Studio";
+
 /// Built-in workspace names (Window › Workspace presets).
-const PRESETS: [&str; 6] = ["Essentials", "Photography", "Painting", "Pixel Art", "Graphic and Web", "Motion"];
+const PRESETS: [&str; 7] = ["Essentials", "Photography", "Painting", "Pixel Art", "Graphic and Web", "Motion", CLIP_STUDIO];
+
+/// The workspace style the shell shows (Photoshop's tools or Clip Studio Paint's).
+pub fn style(app: &PrismApp) -> prism_engine::prefs::WorkspaceStyle {
+    app.session.prefs().workspace.style
+}
+
+pub fn set_style(app: &mut PrismApp, style: prism_engine::prefs::WorkspaceStyle) {
+    if app.session.prefs().workspace.style != style {
+        app.session.prefs.edit(|p| p.workspace.style = style);
+    }
+}
 
 /// Run a shell command, or open its dialog. `None` when `id` isn't ours.
 pub fn menu(app: &mut PrismApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -174,7 +188,15 @@ fn new_workspace(app: &mut PrismApp, p: &Value) -> Result<Value, String> {
         return Err(format!("\"{name}\" is a built-in workspace"));
     }
     let prefs = app.session.prefs().clone();
-    let mut ws = json!({"panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "colorPanel": app.ui.color_panel});
+    let mut ws = json!({
+        "panels": app.ui.panels,
+        "dockTabs": app.ui.dock_tabs,
+        "dock": app.ui.dock,
+        "colorPanel": app.ui.color_panel,
+        "toolSliders": app.ui.tool_sliders,
+        "tools": app.ui.tools,
+        "style": style(app),
+    });
     if p.get("keyboardShortcuts").and_then(Value::as_bool) == Some(true) {
         ws["shortcuts"] = json!(prefs.shortcuts);
     }
@@ -225,6 +247,8 @@ pub fn apply_custom(app: &mut PrismApp) -> bool {
     app.ui.dock = Default::default();
     app.ui.tools = Default::default();
     crate::dock::apply(app, &ws);
+    // Workspaces saved before styles existed are Photoshop workspaces.
+    set_style(app, ws.get("style").and_then(|s| serde_json::from_value(s.clone()).ok()).unwrap_or_default());
     let (sc, menus, toolbar) = (ws.get("shortcuts").cloned(), ws.get("menus").cloned(), ws.get("toolbar").cloned());
     if sc.is_some() || menus.is_some() || toolbar.is_some() {
         app.session.prefs.edit(|p| {

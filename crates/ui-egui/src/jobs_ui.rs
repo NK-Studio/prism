@@ -172,15 +172,20 @@ fn on_event(app: &mut PrismApp, e: JobEvent) {
         JobOutcome::Done(v) if matches!(e.command.as_str(), "brush.presets.importAbr" | "brush.presets.importSut") => {
             let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);
             let group = v.get("group").and_then(Value::as_str).unwrap_or_default();
-            app.ui.status = format!("Imported {n} brushes from {group}");
+            let brushes = v.get("brushes").and_then(Value::as_u64).unwrap_or(n);
+            app.ui.status = if brushes == 0 { format!("Imported {n} Clip Studio sub-tools from {group}") } else { format!("Imported {n} brushes from {group}") };
             app.ui.status_error = false;
-            app.ui.panels.brush_settings = true;
-            app.ui.brush_tab = 1;
+            // Non-brush sub-tools belong to the Clip Studio workspace's Sub Tool panel.
+            if brushes > 0 {
+                app.ui.panels.brush_settings = true;
+                app.ui.brush_tab = 1;
+            }
             if e.command == "brush.presets.importSut" {
                 let warnings: Vec<String> = v.get("warnings").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
-                notices::io_warnings(app, "Imported CSP brush", &warnings);
+                notices::io_warnings(app, tl!("Imported CLIP STUDIO file"), &warnings);
             }
         }
+        JobOutcome::Done(v) if e.command == "brush.cspLibrary.import" => crate::csp_library_ui::imported(app, &v),
         JobOutcome::Done(_) => {
             app.sync_views();
             app.ui.status = e.label;

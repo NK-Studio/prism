@@ -72,6 +72,9 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let pr = s.tools.presets.get_mut(i).ok_or_else(|| bad(cmd, "no such preset"))?;
     if pr.name != new {
+        if s.tools.brush_preset.as_ref().is_some_and(|name| name.eq_ignore_ascii_case(&pr.name)) {
+            s.tools.brush_preset = Some(new.clone());
+        }
         pr.name = new.clone();
         pr.builtin = false;
         s.brush_presets_changed();
@@ -234,7 +237,7 @@ mod tests {
     fn with_groups() -> Session {
         let mut s = Session::new();
         for (n, g) in [("A1", "Alpha"), ("A2", "Alpha"), ("A3", "Alpha"), ("B1", "Beta"), ("B2", "Beta")] {
-            s.tools.presets.push(BrushPreset { name: n.into(), brush: Default::default(), builtin: false, group: g.into() });
+            s.tools.presets.push(BrushPreset { name: n.into(), brush: Default::default(), builtin: false, group: g.into(), sut: None });
         }
         s
     }

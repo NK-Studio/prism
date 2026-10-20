@@ -476,7 +476,8 @@ pub fn show(app: &mut PrismApp, ui: &mut egui::Ui) {
                 let name = new_preset_name(&app.session.tools.presets);
                 run_or_status(app, "brush.presets.save", json!({ "name": name }));
             }
-            if icons::button(ui, "folder-open", 24.0, false, &format!("{} (.abr, .sut)", tl!("Import Brushes…"))).clicked() {
+            // CLIP STUDIO materials have their own panel: Window › Extensions › CLIP STUDIO Materials.
+            if icons::button(ui, "folder-open", 24.0, false, &format!("{} (.abr)", tl!("Import Brushes…"))).clicked() {
                 let _ = app.open_dialog_file();
             }
         });

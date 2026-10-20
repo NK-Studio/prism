@@ -7,6 +7,11 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod action_edit_cmds;
+mod atn_import_cmds;
+mod atn_mapping;
+pub mod action_model;
+pub mod action_playback;
 pub mod actions_cmds;
 pub mod adjust_cmds;
 pub mod adjust_params;
@@ -17,18 +22,21 @@ pub mod automate_cmds;
 pub mod brush_cmds;
 pub mod brush_key_cmds;
 pub mod brush_preset_cmds;
+pub mod brush_sut_cmds;
 pub mod build_info;
 mod canvas_geom;
 pub mod channel_cmds;
 pub mod color_cmds;
 pub mod commands;
 pub mod comps_cmds;
+pub mod csp_library_cmds;
 pub mod cutout_cmds;
 pub mod display_color;
 pub mod distort_cmds;
 pub mod document_preset_cmds;
 pub mod edit_cmds;
 pub mod edit_menu_cmds;
+mod enclose_fill_cmds;
 pub mod eraser_cmds;
 pub mod extra_cmds;
 pub mod file_cmds;
@@ -47,6 +55,7 @@ pub mod hidden_target;
 pub mod image_cmds;
 pub mod inspect;
 pub mod jobs;
+mod laf_import_cmds;
 pub mod layer_copy_cmds;
 pub mod layer_label_cmds;
 pub mod layer_menu_cmds;
@@ -241,6 +250,8 @@ pub struct ToolState {
     pub foreground: [f32; 4],
     pub background: [f32; 4],
     pub brush: prism_paint::BrushSettings,
+    /// Selected library preset, retained while its drawing settings are edited.
+    pub brush_preset: Option<String>,
     /// Brush presets (built-ins plus user presets; see `brush.presets.*`).
     pub presets: Vec<prism_paint::BrushPreset>,
     /// Bumped whenever `presets` changes ([`Session::brush_presets_changed`]); the preset store
@@ -261,6 +272,7 @@ impl Default for ToolState {
             // Photoshop's Brush tool starts at 10 % Smoothing.
             brush: prism_paint::BrushSettings { smoothing: prism_paint::brush::Smoothing { amount: 0.1, ..Default::default() }, ..Default::default() },
             presets: prism_paint::presets::builtin(),
+            brush_preset: None,
             presets_rev: 0,
             mixer: Default::default(),
             brush_gesture: None,

@@ -4,7 +4,8 @@
 //! a directory next to the preferences (desktop: `<config dir>/Presets`):
 //!
 //! - `<group>-<hash>.pcbrushes`: one JSON file per preset group (folder) holding the presets'
-//!   settings with every bitmap (sampled tip, Dual Brush tip, texture tile) replaced by a
+//!   settings with every bitmap (sampled tip, Dual Brush tip, texture tile, the tips of a
+//!   multi-tip brush and the red, green and blue planes of CSP colour tips) replaced by a
 //!   reference to a tip file;
 //! - `tips/<hash>.pctip`: content-addressed bitmaps, deflated, stored at 8 bits per sample when
 //!   the tip came from 8-bit data and 16 bits otherwise. Renaming or re-grouping a preset only
@@ -32,7 +33,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 
-use prism_paint::{BrushPreset, BrushSettings, GrayTile, Pattern, TipShape};
+use prism_paint::{BrushPreset, BrushSettings, CspTipColor, GrayTile, Pattern, TipShape};
 use serde::{Deserialize, Serialize};
 
 use crate::Session;
@@ -294,11 +295,17 @@ struct TipRefs {
     dual_tip: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     texture: Option<String>,
+    /// The tips of a multi-tip brush, in order (older files keep them in the settings).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sequence: Vec<String>,
+    /// CSP colour tips: the red, green and blue planes of each tip, stored as 8-bit tips.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tip_colors: Vec<Option<[String; 3]>>,
 }
 
 impl TipRefs {
     fn hashes(&self) -> impl Iterator<Item = &String> {
-        [&self.tip, &self.dual_tip, &self.texture].into_iter().flatten()
+        [&self.tip, &self.dual_tip, &self.texture].into_iter().flatten().chain(&self.sequence).chain(self.tip_colors.iter().flatten().flatten())
     }
 }
 
@@ -307,6 +314,8 @@ impl TipRefs {
 struct StoredPreset {
     name: String,
     brush: BrushSettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sut: Option<serde_json::Value>,
     #[serde(default)]
     tips: TipRefs,
 }
@@ -318,6 +327,36 @@ struct GroupFile {
     version: u32,
     group: String,
     presets: Vec<StoredPreset>,
+}
+
+/// Presentation corruption must not discard otherwise usable brush settings.
+fn read_sut_metadata(value: Option<serde_json::Value>, name: &str, warnings: &mut Vec<String>) -> Option<prism_paint::sut::SutBrushMetadata> {
+    use prism_paint::sut::{MAX_SUT_DISPLAY_ITEMS, PARAMETER_KEYS, SutBrushMetadata};
+    let value = value?;
+    let parsed = serde_json::from_value::<SutBrushMetadata>(value);
+    let Ok(mut metadata) = parsed else {
+        warnings.push(format!("brush presets: {name}: invalid SUT display metadata ignored; import the SUT again"));
+        return None;
+    };
+    let original = metadata.clone();
+    metadata.original.visible.truncate(MAX_SUT_DISPLAY_ITEMS);
+    let mut seen = HashSet::new();
+    metadata.original.visible.retain(|id| seen.insert(*id));
+    if let Some(custom) = &mut metadata.custom {
+        custom.visible.truncate(MAX_SUT_DISPLAY_ITEMS);
+        seen.clear();
+        custom.visible.retain(|id| seen.insert(*id) && (metadata.original.visible.contains(id) || PARAMETER_KEYS.iter().any(|(known, _)| known == id)));
+    }
+    metadata.texture_name = metadata.texture_name.chars().take(1024).collect();
+    metadata.parameters.retain(|key, value| {
+        value.is_finite()
+            && value.abs() <= 1_000_000.0
+            && prism_paint::sut::is_retained_key(key)
+    });
+    if metadata != original {
+        warnings.push(format!("brush presets: {name}: invalid or oversized SUT display values were removed"));
+    }
+    Some(metadata)
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -370,7 +409,24 @@ fn split_tips(mut b: BrushSettings) -> (BrushSettings, [Option<GrayTile>; 3]) {
     (b, [tip, dual, texture])
 }
 
-/// The opposite of [`split_tips`]: `None` when a referenced tip is missing.
+/// Take a multi-tip brush's tips and its colour tips (as red, green and blue planes; colours that
+/// do not fit their size are dropped) out of its settings: they are stored as tip files too.
+fn split_tip_sets(b: &mut BrushSettings) -> (Vec<GrayTile>, Vec<Option<[GrayTile; 3]>>) {
+    let sequence = match &mut b.tip {
+        TipShape::Sequence(tips) => std::mem::take(tips),
+        _ => Vec::new(),
+    };
+    let planes = |c: &CspTipColor| {
+        let n = (c.width as usize).checked_mul(c.height as usize)?;
+        (n > 0 && c.rgb.len() == n.checked_mul(3)?).then(|| {
+            [0, 1, 2].map(|k| GrayTile { width: c.width, height: c.height, data: c.rgb.iter().skip(k).step_by(3).map(|v| u16::from(*v) * 257).collect() })
+        })
+    };
+    let colors = std::mem::take(&mut b.csp_tip_colors).iter().map(|c| c.as_ref().and_then(planes)).collect();
+    (sequence, colors)
+}
+
+/// The opposite of [`split_tips`] and [`split_tip_sets`]: `None` when a referenced tip is missing.
 fn join_tips(mut b: BrushSettings, refs: &TipRefs, tips: &HashMap<String, GrayTile>) -> Option<BrushSettings> {
     if let Some(h) = &refs.tip {
         b.tip = TipShape::Sampled(tips.get(h)?.clone());
@@ -380,6 +436,21 @@ fn join_tips(mut b: BrushSettings, refs: &TipRefs, tips: &HashMap<String, GrayTi
     }
     if let Some(h) = &refs.texture {
         b.texture.pattern = Pattern::Tile(tips.get(h)?.clone());
+    }
+    if !refs.sequence.is_empty() {
+        b.tip = TipShape::Sequence(refs.sequence.iter().map(|h| tips.get(h).cloned()).collect::<Option<_>>()?);
+    }
+    if !refs.tip_colors.is_empty() {
+        let color = |hashes: &[String; 3]| {
+            let [r, g, bl] = [tips.get(&hashes[0])?, tips.get(&hashes[1])?, tips.get(&hashes[2])?];
+            let same = [g, bl].iter().all(|p| (p.width, p.height, p.data.len()) == (r.width, r.height, r.data.len()));
+            same.then(|| CspTipColor {
+                width: r.width,
+                height: r.height,
+                rgb: r.data.iter().zip(&g.data).zip(&bl.data).flat_map(|((r, g), b)| [*r, *g, *b].map(|v| ((u32::from(v) + 128) / 257) as u8)).collect(),
+            })
+        };
+        b.csp_tip_colors = refs.tip_colors.iter().map(|c| c.as_ref().map(color).map_or(Some(None), |c| c.map(Some))).collect::<Option<_>>()?;
     }
     Some(b)
 }
@@ -507,7 +578,8 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
             match join_tips(sp.brush, &sp.tips, &tips) {
                 Some(brush) => {
                     hashes.extend(sp.tips.hashes().cloned());
-                    items.push(BrushPreset { name: sp.name, brush, builtin: false, group: g.group.clone() });
+                    let sut = read_sut_metadata(sp.sut, &sp.name, &mut warnings);
+                    items.push(BrushPreset { name: sp.name, brush, builtin: false, group: g.group.clone(), sut });
                 }
                 None => missing += 1,
             }
@@ -550,7 +622,7 @@ fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Vec<
         }
     };
     match serde_json::from_slice::<crate::actions_cmds::ActionsFile>(&bytes) {
-        Ok(file) if file.version == 1 => file.actions,
+        Ok(file) if matches!(file.version, 1 | 2) => file.actions,
         Ok(file) => {
             warnings.push(format!("actions: {ACTIONS_FILE} skipped: unsupported version {}", file.version));
             Vec::new()
@@ -692,31 +764,26 @@ impl PresetStore {
         let mut hashes = Vec::new();
         let mut new_bytes = 0u64;
         for p in items {
-            let (brush, bitmaps) = split_tips(p.brush.clone());
+            let (mut brush, bitmaps) = split_tips(p.brush.clone());
+            let (tip_set, colors) = split_tip_sets(&mut brush);
+            let mut store = |t: &GrayTile| self.store_tip(t, &p.name, others, &mut new_bytes).inspect(|h| hashes.push(h.clone()));
             let mut refs = [None, None, None];
             for (slot, t) in refs.iter_mut().zip(bitmaps) {
-                let Some(t) = t else { continue };
-                if !t.is_valid() {
-                    return Err(format!("preset `{}` has an invalid tip", p.name));
+                if let Some(t) = t {
+                    *slot = Some(store(&t)?);
                 }
-                let h = tip_hash(&t);
-                if !self.tips.contains_key(&h) {
-                    let bytes = encode_tip(&t);
-                    if bytes.is_empty() || bytes.len() as u64 > MAX_TIP_BYTES {
-                        return Err(format!("the tip of `{}` is too large to save", p.name));
-                    }
-                    new_bytes += bytes.len() as u64;
-                    if others + new_bytes > MAX_STORE_BYTES {
-                        return Err(format!("the preset store is full ({} MB limit)", MAX_STORE_BYTES >> 20));
-                    }
-                    self.backend.write(&tip_file(&h), &bytes)?;
-                    self.tips.insert(h.clone(), bytes.len() as u64);
-                }
-                hashes.push(h.clone());
-                *slot = Some(h);
+            }
+            let sequence = tip_set.iter().map(&mut store).collect::<Result<_, _>>()?;
+            let mut tip_colors = Vec::with_capacity(colors.len());
+            for c in &colors {
+                tip_colors.push(match c {
+                    Some([r, g, b]) => Some([store(r)?, store(g)?, store(b)?]),
+                    None => None,
+                });
             }
             let [tip, dual_tip, texture] = refs;
-            stored.push(StoredPreset { name: p.name.clone(), brush, tips: TipRefs { tip, dual_tip, texture } });
+            let sut = p.sut.as_ref().map(serde_json::to_value).transpose().map_err(|e| e.to_string())?;
+            stored.push(StoredPreset { name: p.name.clone(), brush, sut, tips: TipRefs { tip, dual_tip, texture, sequence, tip_colors } });
         }
         let gf = GroupFile { format: GROUP_FORMAT.into(), version: 1, group: group.to_string(), presets: stored };
         let bytes = serde_json::to_vec(&gf).map_err(|e| e.to_string())?;
@@ -731,6 +798,28 @@ impl PresetStore {
         Ok(())
     }
 
+    /// Write tip `t` of preset `name` unless the store has it; returns its hash. `others` is the
+    /// store's size without this group, `new_bytes` what this group has added so far.
+    fn store_tip(&mut self, t: &GrayTile, name: &str, others: u64, new_bytes: &mut u64) -> Result<String, String> {
+        if !t.is_valid() {
+            return Err(format!("preset `{name}` has an invalid tip"));
+        }
+        let h = tip_hash(t);
+        if !self.tips.contains_key(&h) {
+            let bytes = encode_tip(t);
+            if bytes.is_empty() || bytes.len() as u64 > MAX_TIP_BYTES {
+                return Err(format!("the tip of `{name}` is too large to save"));
+            }
+            *new_bytes += bytes.len() as u64;
+            if others + *new_bytes > MAX_STORE_BYTES {
+                return Err(format!("the preset store is full ({} MB limit)", MAX_STORE_BYTES >> 20));
+            }
+            self.backend.write(&tip_file(&h), &bytes)?;
+            self.tips.insert(h.clone(), bytes.len() as u64);
+        }
+        Ok(h)
+    }
+
     /// Write the Actions list when `rev` differs from the last load or write.
     /// An oversized list is warned once and not retried. An I/O error is warned and retried
     /// on the next command.
@@ -738,7 +827,7 @@ impl PresetStore {
         if self.actions_rev == rev {
             return;
         }
-        let file = crate::actions_cmds::ActionsFile { version: 1, actions: list.to_vec() };
+        let file = crate::actions_cmds::ActionsFile { version: 2, actions: list.to_vec() };
         let bytes = match serde_json::to_vec_pretty(&file) {
             Ok(b) => b,
             Err(e) => {
@@ -768,7 +857,10 @@ impl Session {
     /// Record a brush preset change (create, delete, rename, import…): the attached store, if
     /// any, syncs after the running command.
     pub fn brush_presets_changed(&mut self) {
-        self.tools.presets_rev += 1;
+        if self.tools.brush_preset.as_ref().is_some_and(|name| !self.tools.presets.iter().any(|p| p.name.eq_ignore_ascii_case(name))) {
+            self.tools.brush_preset = None;
+        }
+        self.tools.presets_rev = self.tools.presets_rev.wrapping_add(1);
     }
 
     /// Attach a loaded store: merge its presets into the library (a stored preset replaces the

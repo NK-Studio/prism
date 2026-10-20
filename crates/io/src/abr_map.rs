@@ -25,7 +25,11 @@ pub const MAX_PATTERN_EDGE: u32 = 1024;
 #[derive(Clone, Debug, Default)]
 pub struct AbrImport {
     pub presets: Vec<BrushPreset>,
+    /// What was lost or approximated and the user can act on or should know before painting.
     pub warnings: Vec<String>,
+    /// Background facts that need no action (where the settings were read from, values kept but
+    /// not editable). Reported to agents beside the warnings; the app doesn't raise a notice.
+    pub notes: Vec<String>,
     /// File version (1, 2, 6…).
     pub version: u16,
 }
@@ -84,7 +88,7 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &prism_raster::Interrupt) ->
                 }
             };
             let name = if b.name.trim().is_empty() { default_name } else { b.name.trim().to_string() };
-            out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string() });
+            out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string(), sut: None });
         }
     } else if f.presets.is_empty() {
         // Tips without a settings section (early v6 files): one preset per tip.
@@ -92,14 +96,14 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &prism_raster::Interrupt) ->
             step(i)?;
             let (tip, size) = m.tip(s);
             let brush = BrushSettings { pressure_size: false, spacing: 0.25, size, tip, ..Default::default() };
-            out.presets.push(BrushPreset { name: format!("Sampled Brush {}", i + 1), brush, builtin: false, group: group.to_string() });
+            out.presets.push(BrushPreset { name: format!("Sampled Brush {}", i + 1), brush, builtin: false, group: group.to_string(), sut: None });
         }
     } else {
         for (i, d) in f.presets.iter().enumerate() {
             step(i)?;
             let name = text(d, "Nm  ").filter(|n| !n.trim().is_empty()).map(|n| n.trim().to_string()).unwrap_or_else(|| format!("Brush {}", i + 1));
             match m.preset(d) {
-                Some(brush) => out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string() }),
+                Some(brush) => out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string(), sut: None }),
                 None => {
                     m.warnings.insert(format!("\"{name}\": its sampled tip is missing from the file; skipped"));
                 }
@@ -276,6 +280,9 @@ impl Mapper<'_> {
             control,
             fade_steps: num(d, "fStp").map_or(25, |v| v.clamp(1.0, 9999.0) as u32),
             minimum: pct(d, "Mnm ").unwrap_or(0.0).clamp(0.0, 1.0),
+            pressure_curve: None,
+            csp_tilt: None,
+            csp_random: None,
         }
     }
 

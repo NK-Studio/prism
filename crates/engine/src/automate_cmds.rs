@@ -106,8 +106,20 @@ fn check_known(steps: &[(String, Value)], cmd: &str) -> Result<()> {
 fn run_steps(s: &mut Session, steps: &[(String, Value)]) -> Vec<Value> {
     let mut results = Vec::new();
     for (id, params) in steps {
+        let already_paused = s.actions.paused.is_some();
         match s.execute(id, params.clone()) {
-            Ok(r) => results.push(json!({"command": id, "result": r})),
+            Ok(r) => {
+                if let Some(error) = crate::actions_cmds::nested_failure(id, &r) {
+                    // Script runners have no continuation protocol. Discard a paused
+                    // child explicitly and stop before any later script edits.
+                    if !already_paused {
+                        s.actions.paused = None;
+                    }
+                    results.push(json!({"command":id,"error":error}));
+                    break;
+                }
+                results.push(json!({"command": id, "result": r}));
+            }
             Err(e) => {
                 results.push(json!({"command": id, "error": e.to_string()}));
                 break;

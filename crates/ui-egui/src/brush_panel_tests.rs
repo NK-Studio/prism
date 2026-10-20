@@ -24,7 +24,7 @@ fn sections_with_boxes_have_flags() {
 
 /// What each section's controls edit, set to non-default values.
 fn edit_section(i: usize, b: &mut BrushSettings) {
-    let dynamic = |jitter: f32, control: Control, minimum: f32| paint::Dynamic { jitter, control, fade_steps: 40, minimum };
+    let dynamic = |jitter: f32, control: Control, minimum: f32| paint::Dynamic { jitter, control, fade_steps: 40, minimum, pressure_curve: None, csp_tilt: None, csp_random: None };
     match i {
         0 => {
             b.size = 87.0;
@@ -365,7 +365,7 @@ fn drop_targets_and_actions_reorder_presets() {
     use crate::brushes_tab::{Action, apply, drop_target, group_key};
     let mut app = app();
     for (n, g) in [("A1", "Alpha"), ("A2", "Alpha"), ("A3", "Alpha"), ("B1", "Beta")] {
-        app.session.tools.presets.push(paint::BrushPreset { name: n.into(), brush: Default::default(), builtin: false, group: g.into() });
+        app.session.tools.presets.push(paint::BrushPreset { name: n.into(), brush: Default::default(), builtin: false, group: g.into(), sut: None });
     }
     let p = &app.session.tools.presets;
     // Dropping A1 on A3's lower half lands after A3 (index 2 once A1 is out); on its upper half, before it.
@@ -443,6 +443,55 @@ fn preview_strip_re_renders_only_when_the_brush_changes() {
     h.state_mut().session.tools.brush.color = [1.0, 0.0, 0.0, 1.0];
     h.run_steps(3);
     assert_eq!(brush_preview::render_count(&ctx), n0 + 1);
+}
+
+#[test]
+fn csp_texture_dropdown_edits_the_csp_mode_and_replays_its_patch() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(0, 3);
+    h.state_mut().run("tools.setBrush", json!({"texture":{"enabled":true,"mode":"colorBurn","cspMode":"normal"}})).unwrap();
+    h.run_steps(4);
+    let before = h.state().session.tools.brush.clone();
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|node| node.value().as_deref() == Some("Normal"))
+        .expect("the CSP texture mode dropdown displays Normal")
+        .click();
+    h.run_steps(2);
+    for label in ["Compare", "Outline", "Color Dodge", "Color Burn", "Hard Mix", "Height"] {
+        assert!(h.query_all_by_label(label).next().is_some(), "CSP texture choice {label}");
+    }
+    assert!(h.query_all_by_label("Darken").next().is_none());
+    h.get_by_label("Outline").click();
+    h.run_steps(4);
+    let after = &h.state().session.tools.brush;
+    assert_eq!(after.texture.csp_mode, Some(paint::CspTextureMode::Outline));
+    assert_eq!(after.texture.mode, MaskMode::ColorBurn);
+    let (command, params) = last_journal(h.state()).unwrap();
+    assert_eq!(command, "tools.setBrush");
+    assert_eq!(params["brush"], json!({"texture":{"cspMode":"outline"}}));
+    let mut replay = prism_engine::Session::new();
+    replay.tools.brush = before;
+    replay.execute(&command, params).unwrap();
+    assert_eq!(&replay.tools.brush, after);
+    replay.execute("brush.presets.save", json!({"name":"CSP texture choice"})).unwrap();
+    replay.execute("tools.setBrush", json!({"reset":true})).unwrap();
+    replay.execute("tools.setBrush", json!({"preset":"CSP texture choice"})).unwrap();
+    assert_eq!(replay.tools.brush.texture, after.texture);
+}
+
+#[test]
+fn csp_texture_mode_changes_invalidate_the_stroke_preview() {
+    let mut h = harness(0, 3);
+    h.state_mut().run("tools.setBrush", json!({"texture":{"enabled":true,"cspMode":"normal"}})).unwrap();
+    h.run_steps(4);
+    let ctx = h.ctx.clone();
+    let before = brush_preview::render_count(&ctx);
+    h.state_mut().run("tools.setBrush", json!({"texture":{"cspMode":"multiply"}})).unwrap();
+    h.run_steps(4);
+    // Both the stroke strip and the texture swatch cache depend on CSP mode semantics.
+    assert_eq!(brush_preview::render_count(&ctx), before + 2);
+    h.run_steps(4);
+    assert_eq!(brush_preview::render_count(&ctx), before + 2);
 }
 
 #[test]
@@ -688,4 +737,20 @@ fn hand_tool_offers_scale_buttons_and_requests_the_right_view() {
     h.run_steps(1);
     assert!(h.state().ui.views[0].fill_pending);
     assert!(!h.state().ui.views[0].fit_pending);
+}
+
+#[test]
+fn csp_spray_preview_cache_tracks_particle_settings() {
+    let mut brush = prism_engine::BrushSettings::default();
+    let plain = crate::brush_preview::preview_sig(&brush);
+    brush.csp_spray = Some(paint::CspSpray::default());
+    let sprayed = crate::brush_preview::preview_sig(&brush);
+    assert_ne!(plain, sprayed);
+    brush.csp_spray.as_mut().unwrap().bias = -1.0;
+    assert_ne!(sprayed, crate::brush_preview::preview_sig(&brush));
+    let unstretched = crate::brush_preview::preview_sig(&brush);
+    brush.csp_tip_scale = Some([1.0, 2.4]);
+    assert_ne!(unstretched, crate::brush_preview::preview_sig(&brush));
+    let pixels = crate::brush_preview::preview_pixels(&brush, 180, 60, [1.0, 0.0, 0.0, 1.0]);
+    assert!(pixels.chunks_exact(4).any(|p| p[3] > 0));
 }

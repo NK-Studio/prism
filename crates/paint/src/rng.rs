@@ -55,6 +55,13 @@ pub mod stream {
     pub const DUAL_FLIP: u64 = 18;
     pub const WET: u64 = 19;
     pub const MIX: u64 = 20;
+    pub const SPRAY_SIZE: u64 = 21;
+    pub const SPRAY_RADIUS_A: u64 = 22;
+    pub const SPRAY_RADIUS_B: u64 = 23;
+    pub const SPRAY_POSITION: u64 = 24;
+    pub const PAINT_AMOUNT: u64 = 25;
+    pub const PAINT_DENSITY: u64 = 26;
+    pub const TIP: u64 = 27;
 }
 
 /// Seed derived from arbitrary bytes (FNV-1a then mixed), for commands without an explicit seed.

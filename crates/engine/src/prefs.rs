@@ -263,6 +263,14 @@ pub struct Workspace {
     pub large_tabs: bool,
     pub enable_narrow_options_bar: bool,
     pub remember_workspace_changes: bool,
+    /// Which application's tools the shell shows: Photoshop's (the default) or Clip Studio
+    /// Paint's tools with their sub-tools.
+    pub style: WorkspaceStyle,
+}
+
+choice! {
+    /// Which application's tools the shell shows.
+    WorkspaceStyle { Photoshop = "photoshop", ClipStudio = "clipStudio" } default Photoshop
 }
 
 impl Default for Workspace {
@@ -275,6 +283,7 @@ impl Default for Workspace {
             large_tabs: false,
             enable_narrow_options_bar: false,
             remember_workspace_changes: true,
+            style: WorkspaceStyle::Photoshop,
         }
     }
 }
@@ -922,6 +931,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "general.imageInterpolation" => Interpolation::NAMES,
         "interface.theme" => Theme::NAMES,
         "interface.layout" => Layout::NAMES,
+        "workspace.style" => WorkspaceStyle::NAMES,
         "interface.canvasColor" => CanvasColor::NAMES,
         "interface.canvasBorder" => CanvasBorder::NAMES,
         "interface.uiScale" => UiScale::NAMES,

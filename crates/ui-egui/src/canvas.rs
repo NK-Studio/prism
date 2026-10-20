@@ -3709,6 +3709,10 @@ pub fn selection_drag_kind(app: &PrismApp, tool: Tool, p: [f64; 2], mods: egui::
     if !(clicky || matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso)) || (clicky && !app.ui.polygon.is_empty()) {
         return None;
     }
+    // An enclose-and-fill lasso always draws its outline: it never makes or moves a selection.
+    if tool == Tool::Lasso && crate::enclose_fill_ui::active(app) {
+        return None;
+    }
     // ⌘ cuts, ⌘⌥ copies (`select.float`'s `copy`).
     let cut = mods.command && !mods.shift;
     if let Some(f) = app.session.active().and_then(prism_engine::float_cmds::floating) {
@@ -3820,6 +3824,10 @@ pub(crate) fn finish_gesture(app: &mut PrismApp, d: Drag) {
         Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => crate::retouch_ui::finish_patch(app, d.start, [end[0], end[1]]),
         Tool::ContentAwareMove if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
             crate::retouch_ui::finish_content_aware_move(app, d.start, [end[0], end[1]])
+        }
+        Tool::Lasso if crate::enclose_fill_ui::active(app) => {
+            let pts: Vec<[f64; 2]> = d.points.iter().map(|p| [p[0], p[1]]).collect();
+            crate::enclose_fill_ui::finish(app, &pts);
         }
         Tool::Lasso | Tool::Patch | Tool::ContentAwareMove => {
             let pts: Vec<[f64; 2]> = d.points.iter().map(|p| [p[0], p[1]]).collect();

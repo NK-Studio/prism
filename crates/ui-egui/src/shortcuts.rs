@@ -402,18 +402,25 @@ pub fn handle(app: &mut PrismApp, ctx: &egui::Context) {
     // Tool keys; pressing the key of the current group cycles within it. With Preferences ›
     // Tools › Use Shift Key for Tool Switch, only ⇧+key cycles and the plain key keeps the
     // group's current tool.
-    let shift_switch = app.session.prefs().tools.use_shift_key_for_tool_switch;
-    for t in Tool::ALL {
-        let Some(k) = Key::from_name(&t.key().to_string()) else { continue };
-        let cycle_shift = shift_switch && ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, k));
-        if cycle_shift || pressed(k) {
-            let group: Vec<Tool> = Tool::ALL.iter().copied().filter(|x| x.key() == t.key()).collect();
-            app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
-                Some(i) if shift_switch && !cycle_shift => group[i],
-                Some(i) => group[(i + 1) % group.len()],
-                None => group[0],
-            };
+    // The Clip Studio workspace uses CSP's tool keys.
+    if crate::csp_tools::active(app) {
+        if crate::csp_tools::shortcut(app, ctx) {
             return;
+        }
+    } else {
+        let shift_switch = app.session.prefs().tools.use_shift_key_for_tool_switch;
+        for t in Tool::ALL {
+            let Some(k) = Key::from_name(&t.key().to_string()) else { continue };
+            let cycle_shift = shift_switch && ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, k));
+            if cycle_shift || pressed(k) {
+                let group: Vec<Tool> = Tool::ALL.iter().copied().filter(|x| x.key() == t.key()).collect();
+                app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
+                    Some(i) if shift_switch && !cycle_shift => group[i],
+                    Some(i) => group[(i + 1) % group.len()],
+                    None => group[0],
+                };
+                return;
+            }
         }
     }
     // 1–0 set opacity, ⇧1–0 flow or fill (`opacity_keys`).

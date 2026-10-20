@@ -226,6 +226,10 @@ fn panel_tab(app: &PrismApp, id: &str) -> Option<(&'static str, usize)> {
         "window.panel.paragraph" | "type.panels.paragraph" => ("character", 1),
         "window.panel.swatches" => ("color", usize::from(pro)),
         "window.panel.color" => ("color", usize::from(!pro)),
+        // Panels without an Essentials group (Clip Studio workspace, Window › Extensions).
+        "window.panel.subTool" => ("subTool", 0),
+        "window.panel.toolProperty" => ("toolProperty", 0),
+        "window.extensions.clipStudio" => ("clipStudio", 0),
         _ => return None,
     })
 }
@@ -235,6 +239,7 @@ fn panel_id(id: &str) -> Option<crate::dock_model::PanelId> {
     let key = match id {
         "type.panels.character" => "character",
         "type.panels.paragraph" => "paragraph",
+        "window.extensions.clipStudio" => "clipStudio",
         _ => id.strip_prefix("window.panel.")?,
     };
     crate::dock_model::PanelId::from_key(key).filter(|p| *p != crate::dock_model::PanelId::ToolSliders)
@@ -306,6 +311,9 @@ pub fn handles(id: &str) -> bool {
             | "window.panel.adjustments"
             | "type.panels.character"
             | "type.panels.paragraph"
+            | "window.panel.subTool"
+            | "window.panel.toolProperty"
+            | "window.extensions.clipStudio"
     )
 }
 

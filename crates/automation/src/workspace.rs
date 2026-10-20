@@ -259,13 +259,21 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
 
 fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
     match id {
-        "brush.presets.importAbr" | "brush.presets.importSut" | "gradient.presets.importGrd" | "plugin.install" | "swatches.import" => {
+        "brush.presets.importAbr"
+        | "brush.presets.importSut"
+        | "actions.importLaf"
+        | "actions.importAtn"
+        | "gradient.presets.importGrd"
+        | "plugin.install"
+        | "swatches.import" => {
             // `data` wins over `path` in these commands; any `path` without it reads the filesystem.
             params.get("data").is_none() && params.get("path").is_some()
         }
         // With a `path` the file is written there; without one the bytes come back as `data`.
         "swatches.export" => params.get("path").is_some(),
         "plugin.reload" => true,
+        // Always read the installed CLIP STUDIO's user data folder (default or `root`).
+        "brush.cspLibrary.list" | "brush.cspLibrary.import" => true,
         _ => false,
     }
 }
@@ -588,6 +596,10 @@ mod tests {
         for (id, params) in [
             ("brush.presets.importAbr", serde_json::json!({"path": "/outside/set.abr"})),
             ("brush.presets.importSut", serde_json::json!({"path": "/outside/set.sut"})),
+            ("actions.importLaf", serde_json::json!({"path": "/outside/set.laf"})),
+            ("actions.importAtn", serde_json::json!({"path": "/outside/set.atn"})),
+            ("brush.cspLibrary.list", serde_json::json!({})),
+            ("brush.cspLibrary.import", serde_json::json!({"uuids": ["id"]})),
             ("gradient.presets.importGrd", serde_json::json!({"path": "/outside/set.grd"})),
             ("plugin.install", serde_json::json!({"path": "/outside/plugin.wasm"})),
             ("plugin.reload", serde_json::json!({"path": "/outside/plugins"})),
@@ -601,6 +613,9 @@ mod tests {
         for (id, params) in [
             ("brush.presets.importAbr", serde_json::json!({"data": "QUJD"})),
             ("brush.presets.importSut", serde_json::json!({"data": "QUJD"})),
+            ("actions.importLaf", serde_json::json!({"data": "QUJD"})),
+            ("actions.importAtn", serde_json::json!({"data": "QUJD"})),
+            ("actions.importAtn", serde_json::json!({"data": "QUJD", "path": "/outside/ignored.atn"})),
             ("gradient.presets.importGrd", serde_json::json!({"data": "QUJD"})),
             ("plugin.install", serde_json::json!({"data": "QUJD"})),
             ("swatches.import", serde_json::json!({"data": "QUJD"})),

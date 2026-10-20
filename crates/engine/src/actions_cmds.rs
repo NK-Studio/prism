@@ -21,14 +21,7 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
-/// One recorded action. `steps` is the `[[id, params], …]` shape `file.automate.batch` and
-/// droplets already accept.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Action {
-    pub name: String,
-    #[serde(default)]
-    pub steps: Vec<(String, Value)>,
-}
+pub use crate::action_model::{Action, ActionStep};
 
 /// On-disk form of [`ActionState::list`] (`actions.json` in the preset store).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -54,6 +47,10 @@ pub struct ActionState {
     /// Bumped whenever `list` changes, so the preset store can skip unchanged writes.
     #[serde(skip)]
     pub rev: u64,
+    #[serde(skip)]
+    pub paused: Option<crate::action_playback::Paused>,
+    #[serde(skip)]
+    pub authorizers: Vec<crate::action_playback::Authorizer>,
 }
 
 impl ActionState {
@@ -101,7 +98,7 @@ fn num(v: &Value) -> Option<i64> {
     v.as_i64().or_else(|| v.as_f64().filter(|f| f.is_finite()).map(|f| f.round() as i64))
 }
 
-fn resolve(list: &[Action], p: &Value, cmd: &str) -> Result<usize> {
+pub(crate) fn resolve(list: &[Action], p: &Value, cmd: &str) -> Result<usize> {
     let Some(v) = p.get("action") else {
         return Err(bad(cmd, "needs \"action\" (a name or an index)"));
     };
@@ -124,7 +121,7 @@ fn resolve(list: &[Action], p: &Value, cmd: &str) -> Result<usize> {
     }
 }
 
-fn from_step(p: &Value, len: usize) -> Result<usize> {
+pub(crate) fn from_step(p: &Value, len: usize) -> Result<usize> {
     let Some(v) = p.get("from") else { return Ok(0) };
     if v.is_null() {
         return Ok(0);
@@ -145,16 +142,19 @@ fn from_step(p: &Value, len: usize) -> Result<usize> {
 }
 
 fn list(s: &mut Session, _p: &Value) -> Result<Value> {
-    let actions: Vec<Value> = s.actions.list.iter().map(|a| json!({"name": a.name, "steps": a.steps.len()})).collect();
+    let actions: Vec<Value> = s.actions.list.iter().map(|a| json!({"name": a.name, "set":a.set, "steps": a.steps.len()})).collect();
     let recording = s.actions.recording.and_then(|(_, i)| s.actions.list.get(i).map(|a| a.name.clone()));
-    Ok(json!({"actions": actions, "recording": recording}))
+    Ok(json!({"actions": actions, "recording": recording, "paused":s.actions.paused.as_ref().map(|p| &p.reason)}))
 }
 
 fn get(s: &mut Session, p: &Value) -> Result<Value> {
     let idx = resolve(&s.actions.list, p, "actions.get")?;
     let action = &s.actions.list[idx];
-    let steps: Vec<Value> = action.steps.iter().map(|(id, params)| json!([id, params])).collect();
-    Ok(json!({"name": action.name, "steps": steps}))
+    let steps = match crate::atn_import_cmds::preflight(&s.actions.list, action, 0) {
+        Ok(()) => crate::action_model::batch_steps(action),
+        Err(reason) => vec![json!([crate::atn_import_cmds::UNSUPPORTED, {"reason":reason}])],
+    };
+    Ok(json!({"name": action.name, "set":action.set, "steps": steps, "items":action.steps}))
 }
 
 fn record(s: &mut Session, p: &Value) -> Result<Value> {
@@ -180,7 +180,11 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         if s.actions.list.iter().any(|action| action.name == name) {
             return Err(bad("actions.record", "an action with this name already exists"));
         }
-        s.actions.list.push(Action { name, steps: Vec::new() });
+        let mut action = Action::new(name, Vec::new());
+        if let Some(set) = p.get("set") {
+            action.set = crate::action_edit_cmds::valid_name(set)?;
+        }
+        s.actions.list.push(action);
         s.actions.touch();
         s.actions.list.len() - 1
     };
@@ -195,7 +199,7 @@ pub fn pending_steps(s: &Session, action: usize) -> impl Iterator<Item = &(Strin
     s.journal.iter().skip(from).filter(|(id, _)| replayable(id))
 }
 
-fn flush_recording(s: &mut Session) -> Result<()> {
+pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
     let Some((_, idx)) = s.actions.recording else { return Ok(()) };
     if idx >= s.actions.list.len() {
         return Err(bad("actions.stop", "the action being recorded no longer exists"));
@@ -203,7 +207,7 @@ fn flush_recording(s: &mut Session) -> Result<()> {
     let steps: Vec<_> = pending_steps(s, idx).cloned().collect();
     s.actions.recording = Some((s.journal.len(), idx));
     if !steps.is_empty() {
-        s.actions.list[idx].steps.extend(steps);
+        s.actions.list[idx].steps.extend(steps.into_iter().map(ActionStep::from));
         s.actions.touch();
     }
     Ok(())
@@ -218,33 +222,6 @@ fn stop(s: &mut Session, _p: &Value) -> Result<Value> {
     s.actions.recording = None;
     let action = &s.actions.list[idx];
     Ok(json!({"action": action.name, "steps": action.steps.len()}))
-}
-
-fn run_recorded(s: &mut Session, steps: &[(String, Value)], from: usize) -> (u64, Option<Value>) {
-    let mut ran = 0u64;
-    let mut failed = None;
-    for (i, (id, params)) in steps.iter().enumerate().skip(from) {
-        if let Some(auth) = s.authorize
-            && let Err(e) = auth(id, params)
-        {
-            failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
-            break;
-        }
-        match s.execute(id, params.clone()) {
-            Ok(value) => {
-                if let Some(error) = nested_failure(id, &value) {
-                    failed = Some(json!({"step": i, "id": id, "error": error}));
-                    break;
-                }
-                ran += 1;
-            }
-            Err(e) => {
-                failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
-                break;
-            }
-        }
-    }
-    (ran, failed)
 }
 
 /// Suspend recording while a called action executes. Keep its commands in the journal
@@ -273,7 +250,13 @@ pub fn finish_playback(s: &mut Session, recording: Option<(usize, usize)>, actio
 /// Nested playback returns a structured failure even though the command itself succeeded.
 /// Promote it to the caller's failed step so no later parent steps run after a child fails.
 pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
-    (id == "actions.play").then(|| value.get("failed")).flatten().map(|failure| {
+    if value.get("ok").and_then(Value::as_bool) == Some(false) {
+        return Some(format!("command `{id}` reported a failed operation: {value}"));
+    }
+    if matches!(id, "actions.play" | "actions.resume") && value.get("paused").is_some_and(|v| !v.is_null()) {
+        return Some(format!("command `{id}` requires interactive action playback"));
+    }
+    matches!(id, "actions.play" | "actions.resume").then(|| value.get("failed")).flatten().filter(|f| f.is_object()).map(|failure| {
         format!(
             "action `{}` step {} failed: {}",
             value.get("action").and_then(Value::as_str).unwrap_or(""),
@@ -284,18 +267,11 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
 }
 
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
-    let (action, from) = playback_plan(s, p)?;
-    let recording = begin_playback(s, &action)?;
-    let (ran, failed) = run_recorded(s, &action.steps, from);
-    finish_playback(s, recording, &action, from);
-    Ok(match failed {
-        Some(f) => json!({"action": action.name, "ran": ran, "failed": f}),
-        None => json!({"action": action.name, "ran": ran}),
-    })
+    crate::action_playback::run(s, p, false)
 }
 
-fn not_playing(s: &Session, cmd: &str) -> Result<()> {
-    if s.actions.playing > 0 { Err(bad(cmd, "cannot edit actions during playback")) } else { Ok(()) }
+pub(crate) fn not_playing(s: &Session, cmd: &str) -> Result<()> {
+    if s.actions.playing > 0 || s.actions.paused.is_some() { Err(bad(cmd, "cannot edit actions during playback")) } else { Ok(()) }
 }
 
 /// Move to a final zero-based index, either in an action's steps or in the action list.
@@ -328,7 +304,11 @@ fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
         if to >= s.actions.list.len() {
             return Err(bad("actions.move", "destination is out of range"));
         }
-        let moved = s.actions.list.remove(idx);
+        let set = p.get("set").map(crate::action_edit_cmds::valid_name).transpose()?;
+        let mut moved = s.actions.list.remove(idx);
+        if let Some(set) = set {
+            moved.set = set;
+        }
         let result = json!({"action": moved.name, "index": to});
         s.actions.list.insert(to, moved);
         if let Some((_, recording)) = s.actions.recording.as_mut() {
@@ -387,7 +367,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Move Action or Step",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "step":index?, "to":index}. Move a step within its action, or the action itself. to is the final zero-based index. Pending recorded steps can be moved."##,
+            params: r##"{"action":name|index, "step":index?, "to":index, "set":str?}. Move a step within its action, or the action itself (optionally to another set). to is the final zero-based index. Pending recorded steps can be moved."##,
             enabled: always,
             run: move_item,
             journal: false,
@@ -407,7 +387,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Get Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index} → {name, steps:[[id, params]…]} (the shape file.automate.batch and droplets take)"##,
+            params: r##"{"action":name|index} → {name,set,items:[{id,params,enabled,dialog,source?}],steps:[[id,params]…]}. items preserves all steps. steps is a batch plan: disabled items omitted, interactive items guarded."##,
             enabled: always,
             run: get,
             journal: false,
@@ -417,7 +397,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Record Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str? (new action, default "Action N")} or {"action":name|index} (append) → {action, index}"##,
+            params: r##"{"name":str?,"set":str?} (new action, default "Action N" in "Default Actions") or {"action":name|index} (append) → {action, index}"##,
             enabled: always,
             run: record,
             journal: false,
@@ -437,7 +417,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Play Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "from":step?} → {action, ran, failed?:{step, id, error}}. step and from are 0-based. Stops at the first error (the command still returns ok, with failed set) and leaves one history step per step that ran. Nested calls are supported up to 16 levels; cycles are rejected. Recording stores a named call rather than its expanded commands. Each step is checked with Session::authorize when one is installed."##,
+            params: r##"{"action":name|index,"from":step?} → {action,ran,failed?:{step,id,error},paused?:{kind,action,step,params?,message?}}. Zero-based from. Enabled steps run in order; dialogs pause before execution, inserted stops after the stop. Resume with actions.resume, discard with actions.cancel. Nested calls up to 16 levels; 100000 steps per run. Every resumed/nested command is authorized. Errors keep completed edits."##,
             enabled: always,
             run: play,
             journal: false,
@@ -581,7 +561,7 @@ mod tests {
         s.execute("actions.record", json!({})).unwrap();
         s.execute("layer.new.layer", json!({"name": "One"})).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
-        s.actions.list[0].steps.push(("not.a.command".into(), json!({})));
+        s.actions.list[0].steps.push(("not.a.command".into(), json!({})).into());
         s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
         let r = s.execute("actions.play", json!({"action": "Action 1"})).unwrap();
         assert_eq!(r["ran"], 1);
@@ -597,7 +577,7 @@ mod tests {
     #[test]
     fn play_refuses_recursion() {
         let mut s = Session::new();
-        s.actions.list.push(Action { name: "Loop".into(), steps: vec![("actions.play".into(), json!({"action": "Loop"}))] });
+        s.actions.list.push(Action::new("Loop", vec![("actions.play".into(), json!({"action": "Loop"}))]));
         let r = s.execute("actions.play", json!({"action": "Loop"})).unwrap();
         assert_eq!(r["ran"], 0);
         assert_eq!(r["failed"]["id"], "actions.play");
@@ -612,9 +592,7 @@ mod tests {
         }
         let mut s = Session::new();
         s.authorize = Some(deny_file);
-        s.actions
-            .list
-            .push(Action { name: "Open".into(), steps: vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))] });
+        s.actions.list.push(Action::new("Open", vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))]));
         let r = s.execute("actions.play", json!({"action": "Open"})).unwrap();
         assert_eq!(r["ran"], 0);
         assert_eq!(r["failed"]["step"], 0);
@@ -670,9 +648,9 @@ mod tests {
         assert!(s.actions.rev > rev);
         s.execute("layer.new.layer", json!({"name": "After"})).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
-        assert_eq!(s.actions.list[0].steps.iter().map(|(_, p)| p["name"].as_str().unwrap()).collect::<Vec<_>>(), ["Kept", "After"]);
+        assert_eq!(s.actions.list[0].steps.iter().map(|step| step.params["name"].as_str().unwrap()).collect::<Vec<_>>(), ["Kept", "After"]);
         s.execute("actions.delete", json!({"action": "Edit", "step": 0})).unwrap();
-        assert_eq!(s.actions.list[0].steps[0].1["name"], "After");
+        assert_eq!(s.actions.list[0].steps[0].params["name"], "After");
         let saved = serde_json::to_string(&s.actions.list).unwrap();
         s.actions.list = serde_json::from_str(&saved).unwrap();
         s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
@@ -687,15 +665,15 @@ mod tests {
     fn nested_call_records_one_named_step_and_tracks_child_edits() {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
-        s.actions.list.push(Action { name: "Child".into(), steps: vec![("layer.new.layer".into(), json!({"name": "Child layer"}))] });
+        s.actions.list.push(Action::new("Child", vec![("layer.new.layer".into(), json!({"name": "Child layer"}))]));
         s.execute("actions.record", json!({"name": "Parent"})).unwrap();
         s.execute("layer.new.layer", json!({"name": "Before"})).unwrap();
         s.execute("actions.play", json!({"action": 0})).unwrap();
         assert_eq!(pending_steps(&s, 1).cloned().collect::<Vec<_>>(), [("actions.play".into(), json!({"action": "Child"}))]);
         s.execute("layer.new.layer", json!({"name": "After"})).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
-        assert_eq!(s.actions.list[1].steps.iter().map(|st| st.0.as_str()).collect::<Vec<_>>(), ["layer.new.layer", "actions.play", "layer.new.layer"]);
-        s.actions.list[0].steps.push(("layer.new.layer".into(), json!({"name": "Added later"})));
+        assert_eq!(s.actions.list[1].steps.iter().map(|st| st.id.as_str()).collect::<Vec<_>>(), ["layer.new.layer", "actions.play", "layer.new.layer"]);
+        s.actions.list[0].steps.push(("layer.new.layer".into(), json!({"name": "Added later"})).into());
         s.execute("actions.move", json!({"action": "Child", "to": 1})).unwrap();
         let saved = serde_json::to_string(&s.actions.list).unwrap();
         s.actions.list = serde_json::from_str(&saved).unwrap();
@@ -712,15 +690,12 @@ mod tests {
     #[test]
     fn nested_failure_cycles_depth_and_authorization_stop_parent() {
         let mut s = Session::new();
-        s.actions.list.push(Action {
-            name: "A".into(),
-            steps: vec![("actions.play".into(), json!({"action": "B"})), ("file.new".into(), json!({"width": 2,"height": 2}))],
-        });
-        s.actions.list.push(Action { name: "B".into(), steps: vec![("actions.play".into(), json!({"action": "A"}))] });
+        s.actions.list.push(Action::new("A", vec![("actions.play".into(), json!({"action": "B"})), ("file.new".into(), json!({"width": 2,"height": 2}))]));
+        s.actions.list.push(Action::new("B", vec![("actions.play".into(), json!({"action": "A"}))]));
         let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
         assert!(r["failed"]["error"].as_str().unwrap().contains("recursive"));
         assert!(s.documents().is_empty());
-        s.actions.list[1].steps = vec![("file.new".into(), json!({"width": 2,"height": 2}))];
+        s.actions.list[1].steps = vec![("file.new".into(), json!({"width": 2,"height": 2})).into()];
         s.authorize = Some(|id, _| if id == "file.new" { Err(EngineError::Other("denied nested file".into())) } else { Ok(()) });
         let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
         assert!(r["failed"]["error"].as_str().unwrap().contains("denied nested file"));
@@ -728,10 +703,9 @@ mod tests {
         s.authorize = None;
         s.actions.list.clear();
         for i in 0..17 {
-            s.actions.list.push(Action {
-                name: format!("N{i}"),
-                steps: if i < 16 { vec![("actions.play".into(), json!({"action":format!("N{}", i + 1)}))] } else { vec![] },
-            });
+            s.actions
+                .list
+                .push(Action::new(format!("N{i}"), if i < 16 { vec![("actions.play".into(), json!({"action":format!("N{}", i + 1)}))] } else { vec![] }));
         }
         let r = s.execute("actions.play", json!({"action": "N0"})).unwrap();
         assert!(r["failed"]["error"].as_str().unwrap().contains("16 levels"));
@@ -766,7 +740,7 @@ mod tests {
         assert_eq!(s.journal, journal);
         s.execute("layer.new.layer", json!({"name":"Four"})).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
-        assert_eq!(s.actions.list[0].steps.iter().map(|st| st.1["name"].as_str().unwrap()).collect::<Vec<_>>(), ["Three", "Two", "One", "Four"]);
+        assert_eq!(s.actions.list[0].steps.iter().map(|st| st.params["name"].as_str().unwrap()).collect::<Vec<_>>(), ["Three", "Two", "One", "Four"]);
         s.execute("file.new", json!({"width":4,"height":4})).unwrap();
         s.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(s.active().unwrap().doc.layers.iter().skip(1).map(|l| l.name.as_str()).collect::<Vec<_>>(), ["Three", "Two", "One", "Four"]);
@@ -775,7 +749,7 @@ mod tests {
     #[test]
     fn new_names_do_not_collide_with_named_calls() {
         let mut s = Session::new();
-        s.actions.list.push(Action { name: "Action 2".into(), steps: vec![] });
+        s.actions.list.push(Action::new("Action 2", vec![]));
         assert_eq!(s.execute("actions.record", json!({})).unwrap()["action"], "Action 3");
         s.execute("actions.stop", json!({})).unwrap();
         assert!(s.execute("actions.record", json!({"name":"Action 2"})).is_err());
@@ -787,7 +761,7 @@ mod tests {
         let mut s = Session::new();
         s.execute("file.new", json!({"width":4,"height":4})).unwrap();
         for name in ["A", "B", "C"] {
-            s.actions.list.push(Action { name: name.into(), steps: vec![] });
+            s.actions.list.push(Action::new(name, vec![]));
         }
         s.execute("actions.record", json!({"action":"B"})).unwrap();
         s.execute("layer.new.layer", json!({"name":"before"})).unwrap();

@@ -248,6 +248,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                     }
                     crate::filter_dialog::body(ui, &mut fields)
                 }
+                DialogKind::Command if fields.contains_key("__actions") => crate::actions::body(ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__form") => crate::view_cmds::form_body(ui, &mut fields),
                 DialogKind::Command => {}
                 DialogKind::LayerStyle => crate::layer_style::body(app, ui, &mut fields),
@@ -293,6 +294,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                             tl!("Export")
                         } else {
                             crate::file_ui::ok_label(&d.fields)
+                                .or_else(|| (fields.get("__allowContinue").and_then(Value::as_bool) == Some(true)).then(|| tl!("Continue")))
                                 .or_else(|| crate::save_ui::owns(&d.fields).then(|| tl!("Save")))
                                 .or_else(|| crate::first_run_ui::owns(&fields).then(|| crate::first_run_ui::ok_label(&fields)))
                                 .unwrap_or(tl!("OK"))
@@ -489,6 +491,7 @@ fn confirm_inner(app: &mut PrismApp, id: u64) -> Result<Value, String> {
             }
             r
         }
+        DialogKind::Command if d.fields.contains_key("__actions") => crate::actions::confirm(app, &d.fields),
         DialogKind::Command if crate::fill_ui::owns(&d.fields) => crate::fill_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
         DialogKind::Command if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),

@@ -96,8 +96,8 @@ pub(crate) struct ToolbarGeometry {
 pub(crate) fn toolbar_geometry(app: &PrismApp, t: &Tokens, avail_h: f32) -> ToolbarGeometry {
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
     let sections = visible_sections(&app.session.prefs().toolbar.hidden);
-    let slots: usize = sections.iter().map(Vec::len).sum();
-    let double = app.ui.panels.toolbar_double || toolbar_needs_double(slots, sections.len(), bx, t.pro, avail_h);
+    let (slots, groups) = if crate::csp_tools::active(app) { crate::csp_tools::slot_count() } else { (sections.iter().map(Vec::len).sum(), sections.len()) };
+    let double = app.ui.panels.toolbar_double || toolbar_needs_double(slots, groups, bx, t.pro, avail_h);
     let width = if double { w1 + bx + 2.0 } else { w1 };
     ToolbarGeometry { sections, double, bx, width, margin: m }
 }
@@ -115,53 +115,50 @@ pub fn toolbar(app: &mut PrismApp, ui: &mut egui::Ui) {
     let geo = toolbar_geometry(app, &t, ui.available_rect_before_wrap().height());
     let (double, bx, m) = (geo.double, geo.bx, geo.margin);
     let panel = if right { egui::Panel::right("toolbar") } else { egui::Panel::left("toolbar") };
-    panel.resizable(false).exact_size(geo.width).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8))).show(
-        ui,
-        |ui| {
-            let full = ui.max_rect();
-            let panel_rect = full.expand2(vec2(m as f32, 8.0));
-            // The header row tears the panel off; Pro also has the column chevrons in it.
-            let header_h = if t.pro { 14.0 } else { 8.0 };
-            let header = Rect::from_min_size(panel_rect.min, vec2(panel_rect.width(), 8.0 + header_h));
-            crate::tools_window::docked_grip(app, ui, header, panel_rect);
-            if t.pro {
-                let edge = if right { full.left() - m as f32 } else { full.right() + m as f32 };
-                ui.painter().line_segment([pos2(edge, full.top() - 8.0), pos2(edge, full.bottom() + 8.0)], Stroke::new(1.0, t.separator));
-                // Photoshop's toolbar header chevrons switch between one and two columns.
-                let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click_and_drag());
-                let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-                icons::paint(ui, cr, if double { "chevrons-left" } else { "chevrons-right" }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Toolbar")));
-                crate::tools_window::tear_off(app, ui, &resp, panel_rect.min);
-                if resp.clicked() {
-                    app.ui.panels.toolbar_double = !app.ui.panels.toolbar_double;
-                }
-                ui.add_space(4.0);
-            } else {
-                // A short grip bar marks the draggable header.
-                let (gr, _) = ui.allocate_exact_size(vec2(full.width(), header_h), Sense::hover());
-                let c = gr.center();
-                for dy in [-1.5, 1.5] {
-                    ui.painter().line_segment([pos2(c.x - 8.0, c.y + dy), pos2(c.x + 8.0, c.y + dy)], Stroke::new(1.0, t.text_faint));
-                }
+    panel.resizable(false).exact_size(geo.width).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8))).show(ui, |ui| {
+        let full = ui.max_rect();
+        let panel_rect = full.expand2(vec2(m as f32, 8.0));
+        // The header row tears the panel off; Pro also has the column chevrons in it.
+        let header_h = if t.pro { 14.0 } else { 8.0 };
+        let header = Rect::from_min_size(panel_rect.min, vec2(panel_rect.width(), 8.0 + header_h));
+        crate::tools_window::docked_grip(app, ui, header, panel_rect);
+        if t.pro {
+            let edge = if right { full.left() - m as f32 } else { full.right() + m as f32 };
+            ui.painter().line_segment([pos2(edge, full.top() - 8.0), pos2(edge, full.bottom() + 8.0)], Stroke::new(1.0, t.separator));
+            // Photoshop's toolbar header chevrons switch between one and two columns.
+            let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click_and_drag());
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            icons::paint(ui, cr, if double { "chevrons-left" } else { "chevrons-right" }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Toolbar")));
+            crate::tools_window::tear_off(app, ui, &resp, panel_rect.min);
+            if resp.clicked() {
+                app.ui.panels.toolbar_double = !app.ui.panels.toolbar_double;
             }
-            // Subtle violet wash at the bottom of the toolbar.
-            if !t.bevel && !t.pro && t.dark() {
-                let mut mesh = egui::Mesh::default();
-                let r = Rect::from_min_max(pos2(full.left() - 7.0, full.bottom() - 260.0), pos2(full.right() + 7.0, full.bottom() + 8.0));
-                let top = Color32::TRANSPARENT;
-                let bottom = Color32::from_rgba_unmultiplied(90, 70, 190, 34);
-                mesh.colored_vertex(r.left_top(), top);
-                mesh.colored_vertex(r.right_top(), top);
-                mesh.colored_vertex(r.right_bottom(), bottom);
-                mesh.colored_vertex(r.left_bottom(), bottom);
-                mesh.add_triangle(0, 1, 2);
-                mesh.add_triangle(0, 2, 3);
-                ui.painter().add(mesh);
+            ui.add_space(4.0);
+        } else {
+            // A short grip bar marks the draggable header.
+            let (gr, _) = ui.allocate_exact_size(vec2(full.width(), header_h), Sense::hover());
+            let c = gr.center();
+            for dy in [-1.5, 1.5] {
+                ui.painter().line_segment([pos2(c.x - 8.0, c.y + dy), pos2(c.x + 8.0, c.y + dy)], Stroke::new(1.0, t.text_faint));
             }
-            toolbar_body(app, ui, &geo, right);
-        },
-    );
+        }
+        // Subtle violet wash at the bottom of the toolbar.
+        if !t.bevel && !t.pro && t.dark() {
+            let mut mesh = egui::Mesh::default();
+            let r = Rect::from_min_max(pos2(full.left() - 7.0, full.bottom() - 260.0), pos2(full.right() + 7.0, full.bottom() + 8.0));
+            let top = Color32::TRANSPARENT;
+            let bottom = Color32::from_rgba_unmultiplied(90, 70, 190, 34);
+            mesh.colored_vertex(r.left_top(), top);
+            mesh.colored_vertex(r.right_top(), top);
+            mesh.colored_vertex(r.right_bottom(), bottom);
+            mesh.colored_vertex(r.left_bottom(), bottom);
+            mesh.add_triangle(0, 1, 2);
+            mesh.add_triangle(0, 2, 3);
+            ui.painter().add(mesh);
+        }
+        toolbar_body(app, ui, &geo, right);
+    });
 }
 
 /// Tool slots, Edit Toolbar, colour chips, Quick Mask and Screen Mode: the toolbar below its
@@ -169,7 +166,13 @@ pub fn toolbar(app: &mut PrismApp, ui: &mut egui::Ui) {
 pub(crate) fn toolbar_body(app: &mut PrismApp, ui: &mut egui::Ui, geo: &ToolbarGeometry, flyouts_left: bool) {
     let t = Tokens::get(ui.ctx());
     let (double, bx) = (geo.double, geo.bx);
-    let sections = geo.sections.clone();
+    // The Clip Studio workspace shows CSP's tools instead (sub-tools are in the Sub Tool panel).
+    let sections = if crate::csp_tools::active(app) {
+        crate::csp_tools::toolbar_slots(app, ui, double, bx);
+        Vec::new()
+    } else {
+        geo.sections.clone()
+    };
     {
         {
             ui.spacing_mut().item_spacing = vec2(2.0, 3.0);
@@ -441,6 +444,7 @@ pub fn title_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
                         ("Photography".to_string(), tl!("Photography")),
                         ("Painting".to_string(), tl!("Painting")),
                         ("Graphic and Web".to_string(), tl!("Graphic and Web")),
+                        (crate::workspace_ui::CLIP_STUDIO.to_string(), tl!("Clip Studio")),
                     ];
                     // A narrow bar drops the theme toggle (Preferences), then search
                     // (Edit › Search), and narrows
@@ -1312,6 +1316,9 @@ pub(crate) fn panel_body(app: &mut PrismApp, ui: &mut egui::Ui, panel: crate::do
         P::Channels => channels(app, ui),
         P::Paths => crate::vector_ui::paths_panel(app, ui),
         P::ToolSliders => crate::tool_sliders::grouped_body(app, ui),
+        P::SubTool => crate::sub_tool_panel::body(app, ui),
+        P::ToolProperty => crate::sub_tool_panel::property_body(app, ui),
+        P::ClipStudio => crate::csp_library_ui::body(app, ui),
     }
 }
 

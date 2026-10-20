@@ -679,7 +679,17 @@ fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32) 
 
 /// What `prefs.panelLayout` holds: the live layout and open panels.
 fn snapshot(app: &PrismApp) -> Value {
-    json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "colorPanel": app.ui.color_panel, "toolSliders": app.ui.tool_sliders, "tools": app.ui.tools})
+    json!({
+        "workspace": app.ui.workspace,
+        "panels": app.ui.panels,
+        "dockTabs": app.ui.dock_tabs,
+        "dock": app.ui.dock,
+        "colorPanel": app.ui.color_panel,
+        "toolSliders": app.ui.tool_sliders,
+        "tools": app.ui.tools,
+        "cspTool": app.ui.csp_tool,
+        "cspSubTools": app.ui.csp_sub_tools,
+    })
 }
 
 /// Remember the layout in the preferences once the user lets go of the mouse (Workspace ›
@@ -714,6 +724,12 @@ pub fn apply(app: &mut PrismApp, v: &Value) {
     }
     if let Some(s) = v.get("tools").and_then(|s| serde_json::from_value(s.clone()).ok()) {
         app.ui.tools = s;
+    }
+    if let Some(s) = v.get("cspTool").and_then(|s| serde_json::from_value(s.clone()).ok()) {
+        app.ui.csp_tool = s;
+    }
+    if let Some(s) = v.get("cspSubTools").and_then(|s| serde_json::from_value(s.clone()).ok()) {
+        app.ui.csp_sub_tools = s;
     }
     if let Some(c) = v.get("colorPanel").and_then(|c| serde_json::from_value(c.clone()).ok()) {
         app.ui.color_panel = c;

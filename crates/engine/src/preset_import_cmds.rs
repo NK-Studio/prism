@@ -105,6 +105,9 @@ pub(crate) fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: pr
     }
     let mut taken: Vec<String> = s.tools.presets.iter().map(|x| x.name.clone()).collect();
     let mut names = Vec::with_capacity(imp.presets.len());
+    // Clip Studio sub-tools that are not brushes (fill, selection…) are kept for the Clip Studio
+    // workspace; they never become the current brush.
+    let brushes = imp.presets.iter().filter(|x| x.sut.as_ref().is_none_or(|m| m.kind().is_brush())).count();
     for mut preset in imp.presets {
         preset.name = unique(&preset.name, &taken);
         taken.push(preset.name.clone());
@@ -114,11 +117,14 @@ pub(crate) fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: pr
     s.brush_presets_changed();
     if p.get("select").and_then(Value::as_bool).unwrap_or(false)
         && let Some(first) = names.first()
-        && let Some(pr) = prism_paint::presets::find(&s.tools.presets, first)
+        && let Some(pr) = prism_paint::presets::find(&s.tools.presets, first).filter(|pr| pr.sut.as_ref().is_none_or(|m| m.kind().is_brush()))
     {
         s.tools.brush = pr.brush.clone().picked_over(&s.tools.brush);
+        s.tools.brush_preset = Some(pr.name.clone());
     }
-    Ok(json!({ "group": group, "imported": names, "count": names.len(), "version": imp.version, "warnings": imp.warnings }))
+    Ok(
+        json!({ "group": group, "imported": names, "count": names.len(), "brushes": brushes, "version": imp.version, "warnings": imp.warnings, "notes": imp.notes }),
+    )
 }
 
 /// Brush-file import command specs.

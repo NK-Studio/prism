@@ -16,6 +16,8 @@ corpus = []
 heif = ["prism-codecs/heif"]
 
 [dependencies]
+blowfish = "0.9.1"
+flate2 = { workspace = true }
 resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 
 prism-geom = { workspace = true }
@@ -41,7 +43,6 @@ blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 [dev-dependencies]
 crc32fast = "1.5"
 prism-affinity = { workspace = true, features = ["synth"] }
-flate2 = { workspace = true }
 prism-psd = { workspace = true, features = ["testgen"] }
 prism-raw = { workspace = true, features = ["testgen"] }
 proptest = { workspace = true }

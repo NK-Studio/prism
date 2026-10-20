@@ -47,10 +47,11 @@ pub mod comps_ui;
 pub mod control;
 pub mod credits;
 pub mod crop_ui;
+pub mod csp_library_ui;
+pub mod csp_tools;
 pub mod cursor_pack;
 pub mod dialogs;
 pub mod direct_select;
-pub(crate) mod path_select;
 pub mod discard_ui;
 pub mod distort_ui;
 pub mod doc_props_ui;
@@ -62,6 +63,8 @@ pub mod dock_model;
 mod document_menu;
 mod duplicate_ui;
 pub mod enable_rules;
+pub mod csp_fill_property;
+pub mod enclose_fill_ui;
 pub mod eraser_ui;
 pub mod export_dialog;
 pub mod file_dialog;
@@ -70,9 +73,7 @@ pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
 pub mod first_run_ui;
-pub mod update_ui;
 pub mod floating_window;
-pub mod save_ui;
 pub mod gallery_ui;
 pub mod gpu_canvas;
 pub mod gpu_status;
@@ -112,6 +113,8 @@ pub mod palette;
 pub mod panels;
 pub mod parity;
 pub mod patch_preview;
+pub(crate) mod path_select;
+pub mod pen_input;
 pub mod perspective_ui;
 pub mod plugin_ui;
 pub mod point_curve;
@@ -127,6 +130,7 @@ pub mod retouch_ui;
 mod rgb_histogram;
 pub mod rotate_view;
 pub mod rulers;
+pub mod save_ui;
 pub mod screen_picker;
 pub mod scrollbars;
 mod shape_color_ui;
@@ -141,7 +145,8 @@ pub mod state;
 pub mod stroke_constraint;
 pub mod stroke_trail;
 pub mod stylus;
-pub mod pen_input;
+pub mod sub_tool_panel;
+pub mod sut_panel;
 pub mod swatches_ui;
 mod tab_strip;
 pub mod theme;
@@ -150,14 +155,15 @@ mod timeline_ui;
 mod titlebar;
 pub mod tone;
 mod tool_cursor;
+pub mod tool_feedback;
 pub mod tool_sliders;
 pub mod tools_window;
-pub mod tool_feedback;
 pub mod transform_tex;
 pub mod transform_tool;
 pub mod type_panels_ui;
 pub mod type_tool;
 mod type_transform;
+pub mod update_ui;
 mod variables_ui;
 pub mod vector_ui;
 pub mod view_cmds;
@@ -765,6 +771,8 @@ impl PrismApp {
         let shape_from_work = id == "path.makeShape" && params.get("name").and_then(Value::as_str).is_none_or(|n| n == "work");
         let r = if id == "actions.play" {
             actions::play(self, &params)
+        } else if id == "actions.resume" {
+            actions::resume(self, &params)
         } else if prism_engine::actions_cmds::shell_view_command(id) {
             actions::run_view(self, id, params)
         } else {

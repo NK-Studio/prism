@@ -213,8 +213,13 @@ pub struct UiSetParams {
     /// studioLight), brushSection, brushTab, brushesView, brushPicker ([x, y] opens the
     /// Brush Preset picker there, null closes it), brushPickerView, brushSize, gradientBlendMode
     /// (a blend mode name, for the Gradient tool), gradientClassic (bool),
-    /// typeFontFilter (all or korean, for both type font pickers). Other fields are an
-    /// error.
+    /// typeFontFilter (all or korean, for both type font pickers), toolSliders and tools (where
+    /// those panels dock), sutDetails and sutTextureScaleExpanded (Tool Property view), arrow
+    /// and lineRoundTips (Line tool options), actions (panel view: selected,
+    /// selected_step, expanded, collapsed_sets), cspLibraryOpen (bool: shows
+    /// the Window › Extensions › CLIP STUDIO Materials panel with a fresh listing, false hides it),
+    /// cspLibraryView (list or grid: one column or two) and cspLibraryTags (array of CLIP STUDIO
+    /// user tags every listed material must carry; [] clears). Other fields are an error.
     pub fields: Value,
 }
 

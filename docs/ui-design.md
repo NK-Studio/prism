@@ -82,7 +82,8 @@ Panels dock the way Photoshop's do. The model is `dock_model.rs` (pure data, in
 
 - **Panels are tabs, tabs live in groups.** Every panel (`PanelId`: Layers, Channels, Paths,
   Color, Swatches, Gradients, Patterns, Properties, Adjustments, Character, Paragraph,
-  Navigator, Histogram, Info, History, Actions, Layer Comps, Tool Sliders) is a tab of a panel
+  Navigator, Histogram, Info, History, Actions, Layer Comps, Tool Sliders, Sub Tool, Tool
+  Property, and the Window › Extensions panels such as CLIP STUDIO Materials) is a tab of a panel
   group. The six Essentials groups keep their names and `Panels` flags (so `window.toggle.*`,
   workspaces and old saved layouts keep working); groups made by tearing tabs off are
   `Group::Custom(n)` (serialised `"g<n>"`).
@@ -124,6 +125,18 @@ Panels dock the way Photoshop's do. The model is `dock_model.rs` (pure data, in
   on; Reset Workspace restores the Essentials arrangement. `ui.set {dock}` replaces it and
   `ui.dock` reads it with the rects of every group, tab and icon row and applies drops,
   toggles and icon states (`docs/control-protocol.md`).
+
+## Clip Studio workspace
+
+`workspace.style` (`photoshop` | `clipStudio`, Preferences › Workspace) picks which
+application's tools the shell shows; engine, documents and renderer are the same. Window ›
+Workspace › Clip Studio sets it and docks a left column with **Sub Tool** above **Tool
+Property** (`sub_tool_panel.rs`); every other built-in workspace sets it back to Photoshop.
+In the Clip Studio style the Tools window draws `csp_tools::SECTIONS` (CSP's tool set and
+keys: P, B, E, J, G, U, T, M, W, I, K, H, Z) instead of Photoshop's 53 tools; each CSP tool
+runs on an existing Prism tool and remembers its sub-tool (`UiState::csp_tool`,
+`csp_sub_tools`, saved with the layout). Unsupported sub-tools stay listed, greyed with a
+tooltip. Agents drive it with `ui.cspTool` (`docs/control-protocol.md`).
 
 ## Title bar
 

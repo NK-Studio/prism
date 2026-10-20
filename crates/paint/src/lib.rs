@@ -20,21 +20,38 @@ use serde::{Deserialize, Serialize};
 
 pub mod bg_erase;
 pub mod brush;
+pub mod csp_in_out;
+pub mod csp_mixing;
+pub mod csp_ribbon;
+pub mod csp_spray;
+pub mod csp_stabilizer;
+pub mod csp_texture;
+pub mod csp_tip;
+pub mod csp_water_edge;
 pub mod dynamics;
 pub mod mixer;
 pub mod presets;
+pub mod pressure_curve;
 pub mod procedural;
 pub mod render;
 pub mod replace;
 pub mod retouch;
 pub mod rng;
+pub mod sut;
 pub mod tile;
 
 pub use brush::{
-    BrushPreset, BrushSettings, ColorDynamics, Control, DualBrush, Dynamic, MAX_BRUSH_SIZE, MAX_SCATTER, MaskMode, Pattern, PatternStyle, Pose, Scattering,
-    SectionLocks, ShapeDynamics, Smoothing, Texture, TipShape, Transfer,
+    BrushPreset, BrushSettings, CSP_ANTI_ALIAS_MAX, ColorDynamics, Control, CspTextureMode, CspTilt, DualBrush, Dynamic, MAX_BRUSH_SIZE, MAX_SCATTER, MaskMode, Pattern,
+    PatternStyle, Pose, Scattering, SectionLocks, ShapeDynamics, Smoothing, Texture, TipShape, Transfer,
 };
+pub use csp_in_out::{CspInOut, CspInOutMode, CspInOutParam, CspInOutTarget};
+pub use csp_mixing::CspColorMixing;
+pub use csp_spray::CspSpray;
+pub use csp_tip::{CspTipColor, CspTipOrder};
+pub use csp_stabilizer::CspStabilizer;
+pub use csp_water_edge::CspWaterEdge;
 pub use mixer::MixerSettings;
+pub use pressure_curve::PressureCurve;
 pub use render::{BrushContext, StrokeRenderer, grid_center, grid_square, render_stroke};
 pub use tile::GrayTile;
 
@@ -102,6 +119,12 @@ pub struct Dab {
     /// Mixer Brush multipliers of Wet and Mix (Transfer › Wetness/Mix Jitter), 1 = as set.
     pub wet: f32,
     pub mix: f32,
+    /// CSP color mixing: amount and density of paint for this dab (1 = brush colour, full flow).
+    pub paint_amount: f32,
+    pub paint_density: f32,
+    /// CSP Ribbon: this dab is a slice of the tip laid along the path (`center` and `radius`
+    /// then describe the slice roughly, for colour pick-up).
+    pub ribbon: Option<csp_ribbon::RibbonSlice>,
 }
 
 impl Dab {
@@ -123,6 +146,9 @@ impl Dab {
             proj_scale: 1.0,
             wet: 1.0,
             mix: 1.0,
+            paint_amount: 1.0,
+            paint_density: 1.0,
+            ribbon: None,
         }
     }
 }
@@ -130,6 +156,7 @@ impl Dab {
 /// All primary dabs of a stroke (smoothing, pose, spacing, build-up and dynamics applied).
 pub fn dabs(stroke: &Stroke) -> Vec<Dab> {
     let mut g = dynamics::DabGenerator::new(&stroke.brush, 1.0);
+    g.set_full_path(&stroke.points);
     let (mut out, mut dual) = (Vec::new(), Vec::new());
     g.push(&stroke.points, &mut out, &mut dual);
     g.finish(&mut out, &mut dual);
@@ -438,3 +465,12 @@ mod tests {
 
 #[cfg(test)]
 mod brush_tests;
+
+#[cfg(test)]
+mod csp_water_edge_render_tests;
+
+#[cfg(test)]
+mod csp_ribbon_tests;
+
+#[cfg(test)]
+mod csp_tip_tests;

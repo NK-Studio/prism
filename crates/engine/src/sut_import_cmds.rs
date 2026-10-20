@@ -17,8 +17,8 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         "Import CSP Brush",
         false,
         move |ctx| {
-            let (bytes, stem) = crate::preset_import_cmds::file_bytes_with_limit(&params, "brush.presets.importSut", ".sut file", 64 << 20)?;
-            let group = match params.get("group") {
+            let (bytes, stem) = crate::preset_import_cmds::file_bytes_with_limit(&params, "brush.presets.importSut", ".sut or .tool file", 64 << 20)?;
+            let mut group = match params.get("group") {
                 Some(v) => v
                     .as_str()
                     .map(str::trim)
@@ -29,9 +29,19 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
                 None => "Clip Studio Paint".into(),
             };
             ctx.check()?;
-            let imp = ctx
+            let mut imp = ctx
                 .stage(0.0, 1.0, "Reading CSP brush", |ctl| prism_io::sut::read_sut(&bytes, &group, ctl))
                 .map_err(|e| if ctx.cancelled() { EngineError::Cancelled } else { bad(e) })?;
+            // Downloaded materials all have names like material_0.tool. Keep their own
+            // groups so opening a second tool does not replace the first one's group.
+            if params.get("group").is_none() && bytes.starts_with(b"\x89C2F\r\n\x1a\n") {
+                if let Some(preset) = imp.presets.first() {
+                    group = preset.name.clone();
+                }
+                for preset in &mut imp.presets {
+                    preset.group = group.clone();
+                }
+            }
             Ok((group, imp))
         },
         move |s, (group, imp)| {
@@ -50,7 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Import Clip Studio Paint Brush…",
         menu: &[],
         shortcut: None,
-        params: r#"{"path":".sut file"?,"data":base64 bytes?,"group":string?=file name,"replace":bool=true,"select":bool=false}"#,
+        params: r#"{"path":".sut or .tool file"?,"data":base64 bytes?,"group":string?=file name,"replace":bool=true,"select":bool=false}"#,
         enabled: |_| Ok(()),
         run: import,
         journal: true,
@@ -79,6 +89,24 @@ mod tests {
             assert_eq!(s.tools.brush, brush);
         }
     }
+    #[test]
+    fn non_brush_sub_tools_import_but_never_become_the_brush() {
+        let mut s = Session::new();
+        let brush = s.tools.brush.clone();
+        let fill = prism_paint::BrushPreset {
+            name: "Bucket".into(),
+            brush: Default::default(),
+            builtin: false,
+            group: String::new(),
+            sut: Some(prism_paint::sut::SutBrushMetadata { input_op: 50, output_op: 50, ..Default::default() }),
+        };
+        let imp = prism_io::abr_map::AbrImport { presets: vec![fill], ..Default::default() };
+        let r = crate::preset_import_cmds::add_abr_presets(&mut s, &json!({"select": true}), "CSP".into(), imp).unwrap();
+        assert_eq!((r["count"].as_u64(), r["brushes"].as_u64()), (Some(1), Some(0)));
+        assert_eq!(s.tools.brush, brush);
+        assert!(s.tools.presets.iter().any(|p| p.name == "Bucket"));
+    }
+
     /// Local user-owned oracle; never bundled or committed.
     #[test]
     #[ignore = "set PRISM_TEST_SUT to a local brush"]
@@ -179,8 +207,7 @@ mod tests {
                             format!("{} ({}{})", ts.len(), sizes.join(", "), if ts.len() > 4 { ", …" } else { "" })
                         }
                     };
-                    let warnings: Vec<String> =
-                        result["warnings"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(str::to_string)).collect();
+                    let warnings: Vec<String> = result["warnings"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(str::to_string)).collect();
                     for w in &warnings {
                         *warning_counts.entry(w.clone()).or_default() += 1;
                     }
@@ -199,13 +226,7 @@ mod tests {
                         "✅"
                     };
                     let texture = if brush.texture.enabled { "yes" } else { "" };
-                    format!(
-                        "| {status} | {} | {} | {tips} | {texture} | {:.1} | {painted} | {} | {ms} |",
-                        cell(&rel),
-                        cell(name),
-                        brush.size,
-                        warnings.len()
-                    )
+                    format!("| {status} | {} | {} | {tips} | {texture} | {:.1} | {painted} | {} | {ms} |", cell(&rel), cell(name), brush.size, warnings.len())
                 }
                 Ok(Err(e)) => {
                     failed += 1;

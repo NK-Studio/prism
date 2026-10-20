@@ -84,8 +84,9 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 27] = [
+pub const UI_SET_FIELDS: [&str; 33] = [
     "tool",
+    "actions",
     "panels",
     "dock",
     "dockTabs",
@@ -103,6 +104,11 @@ pub const UI_SET_FIELDS: [&str; 27] = [
     "theme",
     "brushSection",
     "brushTab",
+    "sutDetails",
+    "cspLibraryOpen",
+    "cspLibraryView",
+    "cspLibraryTags",
+    "sutTextureScaleExpanded",
     "brushesView",
     "brushPicker",
     "brushPickerView",
@@ -118,6 +124,24 @@ pub const UI_SET_FIELDS: [&str; 27] = [
 /// feeds in its own frame before replying, so `count` sizes both the input queue and the wait;
 /// the same ceiling as the steps of one batch request.
 pub const MAX_CLICKS: u64 = 256;
+
+#[cfg(test)]
+mod action_view_tests {
+    use super::*;
+    #[test]
+    fn action_view_state_is_drivable_and_rejects_bad_fields_atomically() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let (request, _) = ControlRequest::new("ui.set", json!({"actions":{"selected":0,"expanded":[true],"collapsed_sets":["Other"]}}));
+        let _ = handle(&mut app, &ctx, &request);
+        assert_eq!(app.ui.actions.selected, Some(0));
+        assert_eq!(app.ui.actions.expanded, [true]);
+        let old = app.ui.actions.clone();
+        let (request, _) = ControlRequest::new("ui.set", json!({"actions":{"selected":1,"unexpected":true}}));
+        let _ = handle(&mut app, &ctx, &request);
+        assert_eq!(app.ui.actions, old);
+    }
+}
 
 fn ok(v: Value) -> Outcome {
     Outcome::Done(json!({"ok": true, "result": v}))
@@ -349,6 +373,36 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
         // Panel docking: read the layout and rects, drop tabs/groups/windows, toggle panels.
         "ui.dock" => wrap(crate::dock_float::control(app, ctx, p)),
         "ui.inspect" => ok(inspect(app, ctx)),
+        // Clip Studio workspace: pick a CSP tool (`tool`) and/or one of its sub-tools (`subTool`,
+        // a name from the reply's `subTools`); with no fields, report the current ones.
+        "ui.cspTool" => {
+            if let Some(name) = p.get("tool") {
+                let Some(name) = name.as_str() else { return err("`tool` must be a Clip Studio tool name") };
+                if let Err(e) = crate::csp_tools::set_from_name(app, name) {
+                    return err(e);
+                }
+            }
+            if let Some(name) = p.get("subTool") {
+                let Some(name) = name.as_str() else { return err("`subTool` must be a sub-tool name") };
+                let tool = app.ui.csp_tool;
+                let Some(sub) = crate::sub_tool_panel::sub_tools(app, tool).into_iter().find(|s| s.name == name) else {
+                    return err(format!("no sub-tool `{name}` under {}", tool.label()));
+                };
+                if !sub.usable {
+                    return err(format!("sub-tool `{name}` is not supported in Prism yet"));
+                }
+                crate::sub_tool_panel::apply(app, tool, &sub);
+            }
+            let subs: Vec<Value> =
+                crate::sub_tool_panel::sub_tools(app, app.ui.csp_tool).into_iter().map(|s| json!({"name": s.name, "usable": s.usable})).collect();
+            ok(json!({
+                "active": crate::csp_tools::active(app),
+                "tool": app.ui.csp_tool,
+                "subTool": crate::sub_tool_panel::current(app).map(|s| s.name),
+                "subTools": subs,
+                "prismTool": format!("{:?}", app.ui.tool),
+            }))
+        }
         "ui.set" => {
             if let Some(field) = p.as_object().and_then(|o| o.keys().find(|k| !UI_SET_FIELDS.contains(&k.as_str()))) {
                 return err(format!("unknown field `{field}` (fields: {})", UI_SET_FIELDS.join(", ")));
@@ -379,6 +433,10 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 let line_round_tips = bool_field(p, "lineRoundTips")?;
                 let gradient_classic = bool_field(p, "gradientClassic")?;
                 let panels = merged_object(&app.ui.panels, p.get("panels"), "panels")?;
+                let actions: Option<crate::actions::ActionsUi> = merged_object(&app.ui.actions, p.get("actions"), "actions")?;
+                if actions.as_ref().is_some_and(|a| a.expanded.len() > 4096 || a.collapsed_sets.len() > 4096) {
+                    return Err("actions view is limited to 4096 rows".into());
+                }
                 let mask_target = bool_field(p, "maskTarget")?;
                 let vector_mask_target = bool_field(p, "vectorMaskTarget")?;
                 let selection_mode = uint_field(p, "selectionMode")?;
@@ -422,6 +480,22 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 };
                 let brush_section = uint_field(p, "brushSection")?;
                 let brush_tab = uint_field(p, "brushTab")?;
+                let sut_details = bool_field(p, "sutDetails")?;
+                let csp_library_open = bool_field(p, "cspLibraryOpen")?;
+                let csp_library_view: Option<crate::csp_library_ui::View> = match p.get("cspLibraryView") {
+                    Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("cspLibraryView: {e} (list, grid)"))?,
+                    None => None,
+                };
+                let csp_library_tags: Option<Vec<String>> = match p.get("cspLibraryTags") {
+                    Some(v) => Some(
+                        serde_json::from_value::<Vec<String>>(v.clone())
+                            .ok()
+                            .filter(|tags| tags.len() <= 64 && tags.iter().all(|t| !t.trim().is_empty() && t.chars().count() <= 64))
+                            .ok_or("cspLibraryTags: an array of at most 64 non-empty tag strings")?,
+                    ),
+                    None => None,
+                };
+                let sut_texture_scale_expanded = bool_field(p, "sutTextureScaleExpanded")?;
                 let brushes_view = match p.get("brushesView") {
                     Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("brushesView: {e} (list, grid)"))?,
                     None => None,
@@ -485,6 +559,9 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 if let Some(v) = panels {
                     app.ui.panels = v;
                 }
+                if let Some(v) = actions {
+                    app.ui.actions = v;
+                }
                 if let Some(m) = mask_target {
                     app.ui.mask_target = m;
                     app.ui.vector_mask_target &= !m;
@@ -544,6 +621,24 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 }
                 if let Some(i) = brush_tab {
                     app.ui.brush_tab = (i as usize).min(1);
+                }
+                if let Some(value) = sut_details {
+                    app.ui.sut_panel.details = value;
+                }
+                // Opening shows the CLIP STUDIO Materials panel and lists the downloads again.
+                match csp_library_open {
+                    Some(true) => crate::csp_library_ui::open(app),
+                    Some(false) => crate::csp_library_ui::close(app),
+                    None => {}
+                }
+                if let Some(v) = csp_library_view {
+                    app.ui.csp_library.view = v;
+                }
+                if let Some(tags) = csp_library_tags {
+                    app.ui.csp_library.tags = tags;
+                }
+                if let Some(value) = sut_texture_scale_expanded {
+                    app.ui.sut_panel.texture_scale_expanded = value;
                 }
                 if let Some(v) = brushes_view {
                     app.ui.brushes_panel.view = v;
@@ -1116,6 +1211,22 @@ mod tests {
         match handle(app, ctx, &req) {
             Outcome::Done(v) => v,
             _ => panic!("{method}: expected an immediate reply"),
+        }
+    }
+
+    #[test]
+    fn csp_tool_control_picks_tools_and_sub_tools_and_rejects_bad_input() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.clipStudio", Value::Null).unwrap();
+        let r = call(&mut app, &ctx, "ui.cspTool", json!({"tool": "fill", "subTool": "Refer other layers"}));
+        let res = &r["result"];
+        assert_eq!((res["active"].as_bool(), res["tool"].as_str(), res["subTool"].as_str()), (Some(true), Some("fill"), Some("Refer other layers")), "{r}");
+        assert!(app.ui.tool_options.sample_all_layers);
+        assert_eq!(res["prismTool"], "PaintBucket");
+        for bad in [json!({"tool": 3}), json!({"tool": "lasso"}), json!({"subTool": "nope"}), json!({"subTool": false})] {
+            let r = call(&mut app, &ctx, "ui.cspTool", bad.clone());
+            assert_eq!(r["ok"], false, "{bad} -> {r}");
         }
     }
 
@@ -1916,10 +2027,10 @@ mod tests {
     fn actions_play_checks_each_step_over_control() {
         let services = crate::Services { automation_authorize: Some(deny_ambient_file), ..Default::default() };
         let mut app = PrismApp::new(prism_engine::Session::new(), services);
-        app.session.actions.list.push(prism_engine::actions_cmds::Action {
-            name: "Open".into(),
-            steps: vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))],
-        });
+        app.session.actions.list.push(prism_engine::actions_cmds::Action::new(
+            "Open",
+            vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))],
+        ));
         let ctx = egui::Context::default();
         let r = call(&mut app, &ctx, "engine.execute", json!({"command": "actions.play", "params": {"action": "Open"}}));
         assert_eq!(r["ok"], true, "{r}");
@@ -1934,10 +2045,10 @@ mod tests {
     fn actions_play_checks_each_step_for_synthetic_input() {
         let services = crate::Services { automation_authorize: Some(deny_ambient_file), ..Default::default() };
         let mut app = PrismApp::new(prism_engine::Session::new(), services);
-        app.session.actions.list.push(prism_engine::actions_cmds::Action {
-            name: "Open".into(),
-            steps: vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))],
-        });
+        app.session.actions.list.push(prism_engine::actions_cmds::Action::new(
+            "Open",
+            vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))],
+        ));
         app.automation_input = true;
         let r = app.run("actions.play", json!({"action": "Open"})).unwrap();
         assert_eq!(r["ran"], 0, "{r}");

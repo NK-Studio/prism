@@ -45,7 +45,7 @@ fn tip16(w: u32, h: u32, seed: u32) -> GrayTile {
 
 fn sampled(name: &str, group: &str, tip: GrayTile) -> BrushPreset {
     let brush = BrushSettings { size: 42.0, spacing: 0.1, tip: TipShape::Sampled(tip), ..Default::default() };
-    BrushPreset { name: name.into(), brush, builtin: false, group: group.into() }
+    BrushPreset { name: name.into(), brush, builtin: false, group: group.into(), sut: None }
 }
 
 fn user(s: &Session) -> Vec<BrushPreset> {
@@ -161,6 +161,56 @@ fn commands_persist_and_delete_removes_from_disk() {
     assert_eq!(dir.files(), [INDEX_FILE], "the group file and its tip are gone");
     let (t, _) = session(&dir);
     assert!(prism_paint::presets::find(&t.tools.presets, "Doodle").is_none());
+}
+
+#[test]
+fn sampled_preset_preserves_four_independent_pressure_curves_on_disk() {
+    use prism_paint::{Control, CspTextureMode, Dynamic, PressureCurve};
+
+    let dir = TempDir::new("pressure-curves");
+    let (mut s, warnings) = session(&dir);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let dynamic = |points: [[f64; 2]; 3], minimum| Dynamic {
+        control: Control::PenPressure,
+        minimum,
+        pressure_curve: Some(PressureCurve::new(points.to_vec()).unwrap()),
+        ..Default::default()
+    };
+    // Original synthetic coordinates and bitmaps model four separately imported effectors.
+    let mut preset = sampled("Four responses", "Synthetic SUT", tip16(17, 13, 9));
+    preset.brush.shape_dynamics.enabled = true;
+    preset.brush.shape_dynamics.size = dynamic([[0.0, 0.0], [0.25, 0.7], [1.0, 1.0]], 0.15);
+    preset.brush.transfer.enabled = true;
+    preset.brush.transfer.opacity = dynamic([[0.0, 0.2], [0.5, 0.3], [1.0, 0.9]], 0.25);
+    preset.brush.transfer.flow = dynamic([[0.0, 1.0], [0.75, 0.6], [1.0, 0.1]], 0.35);
+    preset.brush.texture.enabled = true;
+    preset.brush.texture.each_tip = true;
+    preset.brush.texture.csp_mode = Some(CspTextureMode::Outline);
+    preset.brush.texture.pattern = Pattern::Tile(tip8(11, 7, 3));
+    preset.brush.texture.depth_jitter = dynamic([[0.0, 0.4], [0.5, 0.8], [1.0, 0.5]], 0.45);
+    preset.brush.csp_spray = Some(prism_paint::CspSpray {
+        size: 2.5,
+        count: 9,
+        bias: -0.75,
+        size_dynamic: dynamic([[0.0, 0.1], [0.4, 0.8], [1.0, 1.0]], 0.2),
+        count_dynamic: dynamic([[0.0, 0.8], [0.7, 0.2], [1.0, 0.1]], 0.3),
+        ..Default::default()
+    });
+    s.tools.presets.push(preset.clone());
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    assert_eq!(dir.files().iter().filter(|name| name.ends_with(".pcbrushes")).count(), 1);
+    drop(s);
+
+    let (mut restored, warnings) = session(&dir);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let loaded = prism_paint::presets::find(&restored.tools.presets, &preset.name).expect("saved sampled preset reloads");
+    assert_eq!(loaded, &preset, "all effectors, floors, CSP texture modes and sampled assets must survive a fresh session");
+    // Preset selection retains the current session's smoothing setting (BrushSettings::picked_over).
+    let mut expected_selection = preset.brush.clone();
+    expected_selection.smoothing = restored.tools.brush.smoothing.clone();
+    restored.execute("tools.setBrush", json!({"preset": preset.name})).unwrap();
+    assert_eq!(restored.tools.brush, expected_selection);
 }
 
 #[test]
@@ -379,11 +429,127 @@ fn multi_tip_brush_survives_store_restart() {
     let dir = TempDir::new("multi-tip");
     let (mut s, warnings) = session(&dir);
     assert!(warnings.is_empty());
-    let brush = BrushSettings { tip: TipShape::Sequence(vec![tip8(20, 16, 1), tip16(12, 12, 2)]), size: 17.0, ..Default::default() };
+    let brush =
+        BrushSettings { tip: TipShape::Sequence(vec![tip8(20, 16, 1), tip16(12, 12, 2)]), size: 17.0, csp_tip_scale: Some([1.0, 2.4]), ..Default::default() };
     s.tools.brush = brush.clone();
     s.execute("brush.presets.save", json!({"name":"Multi-tip"})).unwrap();
     s.sync_preset_store();
     let (t, warnings) = session(&dir);
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(prism_paint::presets::find(&t.tools.presets, "Multi-tip").unwrap().brush.tip, brush.tip);
+    assert_eq!(prism_paint::presets::find(&t.tools.presets, "Multi-tip").unwrap().brush.csp_tip_scale, brush.csp_tip_scale);
+}
+
+#[test]
+fn colour_tips_and_tip_order_are_stored_as_tip_files() {
+    use prism_paint::{CspTipColor, CspTipOrder};
+    let dir = TempDir::new("colour-tips");
+    let (mut s, warnings) = session(&dir);
+    assert!(warnings.is_empty());
+    let rgb = |w: u32, h: u32| CspTipColor { width: w, height: h, rgb: (0..w * h * 3).map(|i| (i * 37 % 256) as u8).collect() };
+    let mut preset = sampled("Colour tips", "CSP", tip8(20, 16, 1));
+    preset.brush.tip = TipShape::Sequence(vec![tip8(20, 16, 1), tip16(12, 12, 2), tip8(9, 5, 3)]);
+    preset.brush.csp_tip_colors = vec![Some(rgb(20, 16)), None, Some(rgb(9, 5))];
+    preset.brush.csp_tip_order = Some(CspTipOrder::Reverse);
+    // Colours that do not fit their size are dropped, not saved as a broken tip.
+    let mut broken = sampled("Broken colours", "CSP", tip8(4, 4, 9));
+    broken.brush.csp_tip_colors = vec![Some(CspTipColor { width: 4, height: 4, rgb: vec![1, 2, 3] })];
+    s.tools.presets.extend([preset.clone(), broken]);
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let files = dir.files();
+    // Three tips, the 12×12 one 16-bit; two colour tips of three 8-bit planes each.
+    assert_eq!(files.iter().filter(|f| f.starts_with("tips/")).count(), 4 + 6, "{files:?}");
+    let group = files.iter().find(|f| f.ends_with(".pcbrushes")).unwrap();
+    let json = std::fs::read_to_string(dir.0.join(group)).unwrap();
+    assert!(!json.contains("cspTipColors") && json.contains("tipColors") && json.contains("\"sequence\""), "bitmaps live in tip files");
+    let (t, warnings) = session(&dir);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(prism_paint::presets::find(&t.tools.presets, "Colour tips").unwrap().brush, preset.brush);
+    assert!(prism_paint::presets::find(&t.tools.presets, "Broken colours").unwrap().brush.csp_tip_colors.iter().all(Option::is_none));
+    // A missing colour plane skips the group with a warning, like a missing tip.
+    let green = rgb(9, 5).rgb.iter().skip(1).step_by(3).map(|v| u16::from(*v) * 257).collect();
+    std::fs::remove_file(dir.0.join(tip_file(&tip_hash(&GrayTile { width: 9, height: 5, data: green })))).unwrap();
+    let (u, warnings) = session(&dir);
+    assert!(warnings.iter().any(|w| w.contains("missing or unreadable tips")), "{warnings:?}");
+    assert!(prism_paint::presets::find(&u.tools.presets, "Colour tips").is_none());
+}
+
+#[test]
+fn sut_display_metadata_survives_store_restart_and_restore() {
+    use prism_paint::sut::{SutBrushMetadata, SutDisplay};
+    let dir = TempDir::new("sut-display");
+    let (mut s, warnings) = session(&dir);
+    assert!(warnings.is_empty());
+    let mut preset = sampled("SUT sample", "SUT", tip8(7, 9, 1));
+    preset.sut = Some(SutBrushMetadata {
+        original: SutDisplay { visible: vec![1000, 10], show_categories: false },
+        custom: None,
+        input_op: 1,
+        output_op: 2,
+        parameters: [
+            ("Opacity".into(), 90.0),
+            ("PrismTextureScaleFactor".into(), 2.0),
+            ("FillReferMultiLayer".into(), 1.0),
+            ("FillColorMargin".into(), 20.0),
+            ("FillContinuousPixel".into(), 1.0),
+            ("FillAntiAlias".into(), 1.0),
+            ("GradationShapeKind".into(), 2.0),
+            ("GradationDither".into(), 1.0),
+            ("GradationReverseSaved".into(), 0.0),
+            ("TextFontSize".into(), 12.0),
+            ("TextVertical".into(), 1.0),
+        ]
+        .into(),
+        node_icon: 0,
+        texture_name: "Paper".into(),
+    });
+    s.tools.presets.push(preset);
+    s.execute("brush.sutDisplay.set", json!({"name":"SUT sample","parameter":10,"visible":false,"showCategories":true})).unwrap();
+    s.sync_preset_store();
+    let expected = prism_paint::presets::find(&s.tools.presets, "SUT sample").unwrap().clone();
+    let (mut restored, warnings) = session(&dir);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(prism_paint::presets::find(&restored.tools.presets, "SUT sample"), Some(&expected));
+    restored.execute("tools.setBrush", json!({"preset":"SUT sample"})).unwrap();
+    restored.execute("brush.sutDisplay.reset", json!({})).unwrap();
+    restored.sync_preset_store();
+    let (again, warnings) = session(&dir);
+    assert!(warnings.is_empty());
+    let metadata = prism_paint::presets::find(&again.tools.presets, "SUT sample").unwrap().sut.as_ref().unwrap();
+    assert!(metadata.custom.is_none());
+    assert_eq!(metadata.original.visible, [1000, 10]);
+}
+
+#[test]
+fn malformed_sut_metadata_keeps_valid_brush_and_bounds_presentation() {
+    let dir = TempDir::new("sut-corrupt");
+    let (mut s, _) = session(&dir);
+    s.execute("brush.presets.save", json!({"name":"Keep brush"})).unwrap();
+    s.sync_preset_store();
+    let file = dir.files().into_iter().find(|f| f.ends_with(GROUP_EXT)).unwrap();
+    let backend = DirBackend::new(&dir.0);
+    let mut group: serde_json::Value = serde_json::from_slice(&backend.read(&file, MAX_GROUP_BYTES).unwrap()).unwrap();
+    group["presets"][0]["sut"] = json!({"original":{"visible":[1000]}});
+    backend.write(&file, &serde_json::to_vec(&group).unwrap()).unwrap();
+    let opened = open_dir(&dir.0);
+    assert_eq!(opened.presets.len(), 1);
+    assert_eq!(opened.presets[0].name, "Keep brush");
+    assert!(opened.presets[0].sut.is_none());
+    assert!(opened.warnings.iter().any(|warning| warning.contains("SUT display metadata")));
+    let mut warnings = Vec::new();
+    let metadata = read_sut_metadata(
+        Some(json!({
+            "original":{"visible":(0..700).collect::<Vec<_>>(),"show_categories":false},
+            "input_op":10,"output_op":10,"parameters":{"Opacity":90,"Arbitrary":2,"BrushSize":1e20},
+            "texture_name":"a".repeat(2048)
+        })),
+        "Bounded",
+        &mut warnings,
+    )
+    .unwrap();
+    assert_eq!(metadata.original.visible.len(), prism_paint::sut::MAX_SUT_DISPLAY_ITEMS);
+    assert_eq!(metadata.texture_name.len(), 1024);
+    assert_eq!(metadata.parameters.len(), 1);
+    assert!(!warnings.is_empty());
 }
