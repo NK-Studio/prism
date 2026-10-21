@@ -93,37 +93,82 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     response(s, i, cmd)
 }
 
-/// Change imported sub-tool settings (the CSP Tool Property of fill, auto select, gradient and
-/// text sub-tools): `values` maps allowlisted keys to finite numbers; `null` removes a value.
+/// Change imported sub-tool settings (the CSP Tool Property of non-brush sub-tools, see
+/// `prism_paint::sut_catalog`): `values` maps allowlisted keys to finite numbers up to
+/// `MAX_SETTING_VALUE` (32-bit colour channels), or the text keys (font names) to strings of at
+/// most `MAX_SETTING_CHARS` characters; `null` removes a value. `gradient` replaces the
+/// gradient's stops (`null` removes it).
 fn settings(s: &mut Session, p: &Value) -> Result<Value> {
+    use prism_paint::csp_gradient::CspGradient;
+    use prism_paint::sut::{MAX_SETTING_CHARS, MAX_SETTING_VALUE, clean_text, is_retained_key, is_string_key};
+    enum Change {
+        Number(Option<f64>),
+        Text(Option<String>),
+    }
     let cmd = "brush.sutSettings.set";
     let i = index(s, p, cmd)?;
-    let values = p.get("values").and_then(Value::as_object).ok_or_else(|| bad(cmd, "values must be an object"))?;
-    if values.is_empty() || values.len() > 64 {
+    let empty = serde_json::Map::new();
+    let values = match p.get("values") {
+        None if p.get("gradient").is_some() => &empty,
+        v => v.and_then(Value::as_object).ok_or_else(|| bad(cmd, "values must be an object"))?,
+    };
+    if values.len() > 64 || (values.is_empty() && p.get("gradient").is_none()) {
         return Err(bad(cmd, "values must hold 1 to 64 settings"));
     }
     let mut changes = Vec::with_capacity(values.len());
     for (key, value) in values {
-        if !prism_paint::sut::is_retained_key(key) || key == "PrismTextureScaleFactor" {
+        let change = if is_string_key(key) {
+            Change::Text(match value {
+                Value::Null => None,
+                Value::String(t) if t.chars().count() <= MAX_SETTING_CHARS && !clean_text(t).is_empty() => Some(clean_text(t)),
+                _ => return Err(bad(cmd, "font names must be non-empty strings of at most 256 characters, or null")),
+            })
+        } else if is_retained_key(key) && key != "PrismTextureScaleFactor" {
+            Change::Number(match value {
+                Value::Null => None,
+                v => Some(v.as_f64().filter(|v| v.is_finite() && v.abs() <= MAX_SETTING_VALUE).ok_or_else(|| bad(cmd, "setting values must be finite numbers or null"))?),
+            })
+        } else {
             return Err(bad(cmd, "unknown sub-tool setting"));
+        };
+        changes.push((key.clone(), change));
+    }
+    let gradient = match p.get("gradient") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(v) => {
+            let g: CspGradient = serde_json::from_value(v.clone())
+                .map_err(|_| bad(cmd, r#"gradient is {"stops":[{"position":0..1,"color":"foreground"|"background"|{"rgb":[r,g,b]},"opacity":0..1,"curve":[[x,y],…]?},…]}"#))?;
+            if !g.is_valid() {
+                return Err(bad(cmd, "a gradient needs 2 to 256 stops sorted by position, values in 0..1 and at most 64 curve points sorted by x"));
+            }
+            Some(Some(g))
         }
-        let value = match value {
-            Value::Null => None,
-            v => Some(v.as_f64().filter(|v| v.is_finite() && v.abs() <= 1_000_000.0).ok_or_else(|| bad(cmd, "setting values must be finite numbers or null"))?),
-        };
-        changes.push((key.clone(), value));
-    }
+    };
     let metadata = s.tools.presets.get_mut(i).and_then(|preset| preset.sut.as_mut()).ok_or_else(|| bad(cmd, "preset has no SUT settings; import its SUT again"))?;
-    for (key, value) in changes {
-        match value {
-            Some(v) => metadata.parameters.insert(key, v),
-            None => metadata.parameters.remove(&key),
-        };
+    for (key, change) in changes {
+        match change {
+            Change::Number(Some(v)) => {
+                metadata.parameters.insert(key, v);
+            }
+            Change::Number(None) => {
+                metadata.parameters.remove(&key);
+            }
+            Change::Text(Some(t)) => {
+                metadata.strings.insert(key, t);
+            }
+            Change::Text(None) => {
+                metadata.strings.remove(&key);
+            }
+        }
     }
-    let parameters = metadata.parameters.clone();
+    if let Some(g) = gradient {
+        metadata.gradient = g;
+    }
+    let mut out = json!({"values": metadata.parameters, "strings": metadata.strings, "gradient": metadata.gradient});
     s.brush_presets_changed();
-    let name = s.tools.presets.get(i).map(|p| p.name.clone()).unwrap_or_default();
-    Ok(json!({"name": name, "values": parameters}))
+    out["name"] = json!(s.tools.presets.get(i).map(|p| p.name.clone()).unwrap_or_default());
+    Ok(out)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -133,7 +178,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Change Imported Sub-tool Settings",
             menu: &[],
             shortcut: None,
-            params: r#"{"name":preset?=selected,"values":{key:number|null}} → {name,values}"#,
+            params: r#"{"name":preset?=selected,"values":{key:number|null, fontKey:string|null}?,"gradient":{"stops":[{"position":0..1,"color":"foreground"|"background"|{"rgb":[r,g,b]},"opacity":0..1,"curve":[[x,y],…]?},…]}|null?} → {name,values,strings,gradient}"#,
             enabled: |_| Ok(()),
             run: settings,
             journal: true,
@@ -193,6 +238,7 @@ mod tests {
                 parameters: Default::default(),
                 node_icon: 0,
                 texture_name: "Texture".into(),
+                ..Default::default()
             }),
         }
     }
@@ -212,6 +258,8 @@ mod tests {
             json!({"name":"SUT sample","values":{"PrismTextureScaleFactor":1}}),
             json!({"name":"SUT sample","values":{"FillCloseGap":"5"}}),
             json!({"name":"SUT sample","values":{"FillCloseGap":1e300}}),
+            json!({"name":"SUT sample","values":{"TextEdgeColorRed":4294967296.0}}),
+            json!({"name":"SUT sample","values":{"TextFontName":1}}),
             json!({"name":"SUT sample","values":{}}),
             json!({"name":"SUT sample","values":[1]}),
             json!({"name":"SUT sample"}),
@@ -223,6 +271,34 @@ mod tests {
         }
         let p = s.tools.presets.iter().find(|p| p.name == "SUT sample").unwrap();
         assert_eq!(p.sut.as_ref().unwrap().parameters.len(), 1);
+        // Every family's catalogued keys are settable, 32-bit colour channels included.
+        let r = s.execute("brush.sutSettings.set", json!({"name":"SUT sample","values":{"SelectCreateType":2,"TextEdgeColorRed":4294967295u32,"SpuitReferType":0}})).unwrap();
+        assert_eq!(r["values"]["TextEdgeColorRed"], json!(4294967295.0));
+        assert_eq!(r["values"]["SelectCreateType"], json!(2.0));
+        // Font names are text; gradients replace the stops; hostile ones change nothing.
+        let r = s.execute("brush.sutSettings.set", json!({"name":"SUT sample","values":{"TextFontName":" Noto Sans KR ","TextRubyFontName":"Meiryo"}})).unwrap();
+        assert_eq!(r["strings"], json!({"TextFontName":"Noto Sans KR","TextRubyFontName":"Meiryo"}));
+        let stops = json!({"stops":[{"position":0.0,"color":"foreground","opacity":1.0,"curve":[[0.0,0.0],[1.0,0.0]]},{"position":1.0,"color":{"rgb":[1.0,0.5,0.0]},"opacity":0.5}]});
+        let r = s.execute("brush.sutSettings.set", json!({"name":"SUT sample","gradient":stops})).unwrap();
+        assert_eq!(r["gradient"]["stops"][1]["color"], json!({"rgb":[1.0,0.5,0.0]}));
+        let before = s.tools.presets.clone();
+        for bad in [
+            json!({"name":"SUT sample","values":{"TextFontName":""}}),
+            json!({"name":"SUT sample","values":{"TextFontName":"x".repeat(300)}}),
+            json!({"name":"SUT sample","values":{"TextFontName":["a"]}}),
+            json!({"name":"SUT sample","values":{"FillCloseGap":1},"gradient":{"stops":[]}}),
+            json!({"name":"SUT sample","gradient":{"stops":[{"position":0.0,"color":"foreground","opacity":1.0}]}}),
+            json!({"name":"SUT sample","gradient":{"stops":[{"position":1.0,"color":"foreground","opacity":1.0},{"position":0.0,"color":"background","opacity":1.0}]}}),
+            json!({"name":"SUT sample","gradient":{"stops":[{"position":0.0,"color":"pink","opacity":1.0},{"position":1.0,"color":"background","opacity":1.0}]}}),
+            json!({"name":"SUT sample","gradient":{"stops":[{"position":0.0,"color":"foreground","opacity":2.0},{"position":1.0,"color":"background","opacity":1.0}]}}),
+            json!({"name":"SUT sample","gradient":{"stops":[{"position":0.0,"color":{"rgb":[1e40,0,0]},"opacity":1.0},{"position":1.0,"color":"background","opacity":1.0}]}}),
+            json!({"name":"SUT sample","gradient":7}),
+        ] {
+            assert!(s.execute("brush.sutSettings.set", bad.clone()).is_err(), "{bad}");
+            assert_eq!(s.tools.presets, before, "{bad}");
+        }
+        let r = s.execute("brush.sutSettings.set", json!({"name":"SUT sample","values":{"TextRubyFontName":null},"gradient":null})).unwrap();
+        assert_eq!((r["strings"].clone(), r["gradient"].clone()), (json!({"TextFontName":"Noto Sans KR"}), Value::Null));
         // A preset without SUT settings is refused.
         s.tools.presets.push(BrushPreset { sut: None, name: "Plain".into(), ..sample() });
         assert!(s.execute("brush.sutSettings.set", json!({"name":"Plain","values":{"FillCloseGap":1}})).is_err());

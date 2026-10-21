@@ -42,10 +42,12 @@ pub enum PanelId {
     ToolProperty,
     /// Window › Extensions › CLIP STUDIO: materials downloaded in CLIP STUDIO (see `csp_library_ui`).
     ClipStudio,
+    /// Clip Studio workspace: RGB / HLS / CMY sliders for the tool colours (see `color_slider_ui`).
+    ColorSlider,
 }
 
 impl PanelId {
-    pub const ALL: [PanelId; 21] = [
+    pub const ALL: [PanelId; 22] = [
         PanelId::Color,
         PanelId::Swatches,
         PanelId::Gradients,
@@ -67,6 +69,7 @@ impl PanelId {
         PanelId::SubTool,
         PanelId::ToolProperty,
         PanelId::ClipStudio,
+        PanelId::ColorSlider,
     ];
 
     /// The tab label (English; translated where drawn).
@@ -93,6 +96,7 @@ impl PanelId {
             PanelId::SubTool => "Sub Tool",
             PanelId::ToolProperty => "Tool Property",
             PanelId::ClipStudio => "CLIP STUDIO",
+            PanelId::ColorSlider => "Color Slider",
         }
     }
 
@@ -120,6 +124,7 @@ impl PanelId {
             PanelId::SubTool => "brush",
             PanelId::ToolProperty => "settings",
             PanelId::ClipStudio => "puzzle",
+            PanelId::ColorSlider => "sliders-horizontal",
         }
     }
 
@@ -147,6 +152,7 @@ impl PanelId {
             PanelId::SubTool => "subTool",
             PanelId::ToolProperty => "toolProperty",
             PanelId::ClipStudio => "clipStudio",
+            PanelId::ColorSlider => "colorSlider",
         }
     }
 
@@ -163,7 +169,7 @@ impl PanelId {
             PanelId::Navigator | PanelId::Histogram | PanelId::Info => Group::Navigator,
             PanelId::History | PanelId::Actions | PanelId::LayerComps => Group::History,
             PanelId::Layers | PanelId::Channels | PanelId::Paths => Group::Layers,
-            PanelId::ToolSliders | PanelId::SubTool | PanelId::ToolProperty | PanelId::ClipStudio => return None,
+            PanelId::ToolSliders | PanelId::SubTool | PanelId::ToolProperty | PanelId::ClipStudio | PanelId::ColorSlider => return None,
         })
     }
 
@@ -176,6 +182,7 @@ impl PanelId {
     pub fn float_size(self) -> [f32; 2] {
         match self {
             PanelId::ClipStudio => [380.0, 560.0],
+            PanelId::ColorSlider => [300.0, 170.0],
             _ => [180.0, 420.0],
         }
     }

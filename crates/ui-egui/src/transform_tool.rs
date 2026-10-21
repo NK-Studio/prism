@@ -1241,6 +1241,13 @@ pub fn split(app: &mut PrismApp, id: &str, at: Option<[f64; 2]>) -> Result<(), S
     edit_session_warp(app, id, &p)
 }
 
+/// Is a transform box open? Like Photoshop, it is modal: the toolbar shows no tool selected and
+/// the canvas acts as the box's tool, whatever tool was picked (temporary Space / middle-button
+/// panning still works).
+pub fn modal(app: &PrismApp) -> bool {
+    app.ui.transform.is_some()
+}
+
 /// Cursor for hovering a document point while transforming. `alt` is Option, which arms a quick
 /// split while a warp is active.
 pub fn cursor(app: &PrismApp, p: [f64; 2], alt: bool) -> Option<CursorIcon> {
@@ -2286,6 +2293,47 @@ mod tests {
         let st = app.session.active().unwrap();
         assert_eq!(st.history.past_len(), steps + 1);
         assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds(), prism_geom::Rect::new(28, 8, 44, 24));
+    }
+
+    /// Free Transform is modal: started from the Hand tool, the canvas shows the box's cursors
+    /// and a drag moves the box instead of panning (Space still pans).
+    #[test]
+    fn hand_tool_gives_way_to_free_transform() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut app = app_with_square(64, prism_geom::Rect::new(8, 8, 56, 56));
+        app.ui.tool = Tool::Hand;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
+            PrismApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        let lit = |h: &egui_kittest::Harness<'_, PrismApp>| h.get_by_label("Hand Tool").accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+        assert!(lit(&h), "the Hand is lit before the transform");
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+        h.run_steps(2);
+        assert!(!lit(&h), "no tool is lit while transforming");
+        let c = h.state().last_canvas_rect.center() - vec2(60.0, 40.0);
+        h.event(egui::Event::PointerMoved(c));
+        h.run_steps(2);
+        let cursor = h.output().platform_output.cursor_icon;
+        assert!(!matches!(cursor, CursorIcon::Grab | CursorIcon::Grabbing), "the box's cursor, not the Hand's: {cursor:?}");
+        let center = h.state().ui.views[0].center;
+        let quad = h.state().ui.transform.as_ref().unwrap().quad;
+        h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run();
+        for k in 1..=5 {
+            h.event(egui::Event::PointerMoved(c + vec2(8.0 * k as f32, 0.0)));
+            h.run();
+        }
+        let dragging = h.output().platform_output.cursor_icon;
+        assert!(!matches!(dragging, CursorIcon::Grab | CursorIcon::Grabbing), "dragging the box: {dragging:?}");
+        h.event(egui::Event::PointerButton { pos: c + vec2(40.0, 0.0), button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+        let app = h.state();
+        assert_eq!(app.ui.tool, Tool::Hand, "the picked tool is kept for after the transform");
+        assert_eq!(app.ui.views[0].center, center, "no pan");
+        assert!(app.ui.transform.as_ref().unwrap().quad[0][0] > quad[0][0] + 1.0, "the drag moved the box");
     }
 
     /// #1400: selecting another layer while transforming applies the box to the layer it was on,

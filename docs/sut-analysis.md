@@ -1053,7 +1053,8 @@ Imported function sub-tools map their tool-property columns onto Prism's tool op
 (inferred from the column names and the defaults, not traced): `FillReferMultiLayer` ≠ 0 →
 sample all layers; `FillColorMargin` (percent) × 2.55 → tolerance; `FillContinuousPixel` →
 contiguous; `FillAntiAlias` → anti-alias; `GradationShapeKind` 0 → linear, otherwise radial;
-`GradationDither`, `GradationReverseSaved` → dither, reverse; `TextFontSize` → type size;
+`GradationDither` → dither (`GradationReverseSaved` was mapped to reverse until 2026-10-21; see
+Gradient data); `TextFontSize` → type size;
 `TextVertical` → vertical type.
 
 ## Login redirects and an installed-app SUT bridge (2026-10-18)
@@ -1624,8 +1625,9 @@ so that setting no longer warns.
   see Ribbon.
 - ~~Rotation flag `0x40` (39 brushes)~~, ~~tip order types 1–3 (33 brushes)~~ and ~~colour tips
   (28 brushes)~~: implemented on 2026-10-19, see the next section.
-- Smaller items: particle angle input controls (6), colour mixing type 2 (5), dual brush (3),
-  spray size unit 2 (3), speed control `0x40` (1), fade start/end (1).
+- Smaller items: particle angle input controls (6), colour mixing type 2 (5), ~~dual brush
+  (3)~~ (2026-10-20, see Blending modes, colour jitter and dual brush), spray size unit 2 (3),
+  speed control `0x40` (1), fade start/end (1).
 
 ## Tip order, rotation input and colour tips (2026-10-19)
 
@@ -1791,4 +1793,177 @@ it.
 - Not reproduced: CSP's tip order types for the next tip (cyclic), dual brush on the ribbon, the +180° selector case, fixed-point sampling; no
   matched CSP stroke was compared, so this is behavioural, not pixel, parity. Colour tips on
   ribbons: see Tip order, rotation input and colour tips.
+
+
+## Blending modes, colour jitter and dual brush (2026-10-20)
+
+Same CLIP STUDIO PAINT 5.0.4.0 executable (SHA-256 above). Authorized read-only direct Ghidra
+decompilation (`-readOnly -noanalysis`, a copy of the `Persist` project in the session's scratch
+folder), the installed English and Korean resource labels and the shipped default sub-tools
+(`EditImageTool.todb`, read through a copy). These are not REA Evidence records; no decompiled
+code is copied into Prism. Raw outputs stay in the session scratch folder.
+
+### Brush blending mode (`CompositeMode`, property 30)
+
+**Evidence.** CLIP STUDIO's ABR import converts Photoshop's blend-mode key to the brush's property
+30 in `0x142f09ff0` (called from the ABR bridge `0x142f0b9d0` with `0x1e`). Its 32 string
+globals are initialized at `0x140111510`–`0x140111ae0` from these literals; the conversion gives:
+`Nrml` 0, `Drkn` 1, `Mltp` 2, `CBrn` 3, `linearBurn` 4, `Sbtr` and `blendSubtraction` 5,
+`darkerColor` 6, `Lghn` 7, `Scrn` 8, `CDdg` 10, `linearDodge` 12, `lighterColor` 13, `Ovrl` 14,
+`SftL` 15, `HrdL` 16, `vividLight` 17, `linearLight` 18, `pinLight` 19, `hardMix` 20, `Dfrn` 21,
+`Xclu` 22, `H   ` 23, `Strt` 24, `Clr ` 25, `Lmns` 26, `Clar` 27, `Bhnd` 29, `blendDivide` 36
+(`Dslv` is initialized but not converted). The same bridge sets 33 or 32 for the two ABR tool
+kinds that carry an exposure (dodge and burn). The brush settings builder `0x142b80a20` stores
+property 30 at `+0x2a8` and treats 27 and 35 as erasing (`(mode - 27) & ~8 == 0` skips the
+colour-jitter block); it also resets the mode to 0 when colour mixing (`0x43e`) is on and the
+mixing type (`0x438`) is not 2.
+
+**Inference.** Every linked code matches the position of its label in the resource list that
+starts with Unknown (Normal 0 … Brightness 26, Erase 27, Dissolve 28, Background 29, Through 30,
+Replace alpha 31, Black burn 32, White burn 33, Compare density 34, Erase (compare) 35, Divide 36),
+so the unlinked codes 9, 11, 28, 30, 31, 34 and 35 are taken from that order. CLIP STUDIO maps
+Photoshop's Color Dodge to Glow dodge (10) and Linear Dodge to Add (Glow) (12), so its own Color
+dodge (9) and Add (11) differ from Photoshop's; Prism approximates them with a warning. The
+shipped sub-tools agree: the erasers use 27, the watercolour brushes 2, Textured pen 31.
+
+**Prism.** `crates/paint/src/csp_blend.rs` holds the table. Mapped codes set
+`BrushSettings.mode`; Erase sets the new `cspErase`, so the brush erases with any tool
+(`resolve_brush`); Through and Black/White burn paint in Normal with a warning; unknown or
+non-integral codes paint in Normal with a warning. The builder's colour-mixing reset is applied.
+Tool Property shows the mode list for mapped codes and the CLIP STUDIO name otherwise.
+
+**Stroke modes (2026-10-21).** Background (29), Replace alpha (31), Compare density (34) and
+Erase (compare) (35) set the new `BrushSettings.cspStroke` and composite in the stroke commit
+(`csp_blend::stroke_native`, called from `StrokeRenderer::composite`). The installed resources
+have only the labels ("Change blending mode to …"), no help text, and the per-pixel compositing
+was not traced, so **every formula is inferred** from the label and the builder's erase test. With
+stroke alpha `k` (coverage × opacity × selection), pixel alpha `d`, source colour `s`:
+
+- Background: the pixel over the stroke, `a = d + k·(1 − d)`, colour `(c·d + s·k·(1 − d)) / a`.
+- Replace alpha: the brush colour at the stroke opacity `o` replaces the pixel, weighted by the
+  coverage `w = k / o` (premultiplied interpolation: `a = d·(1 − w) + o·w`). Textured pen (31)
+  is the only shipped user.
+- Compare density: `a = max(d, k)`, the colour of the denser one (the stroke's when `k > d`).
+- Erase (compare): `a = min(d, 1 − k)`; it also sets `cspErase` (the builder's erase test covers
+  35), so it erases with any tool and skips colour jitter, and repeating a stroke erases no more.
+
+Locked transparency keeps the alpha (Background and Erase (compare) then change nothing; Replace
+alpha and Compare density only recolour). Formats without alpha are opaque, so only Replace alpha
+changes them. Colour mixing ignores the mode, as the builder resets it.
+
+### Colour jitter
+
+**Evidence.** In `0x142b80a20`, when `BrushChangePatternColor` (0x44e) is on, hue 0x44f is stored
+divided by 360, saturation 0x451 and luminosity 0x453 divided by 100, the sub-colour blend 0x44d
+divided by 100, with the effectors 0x450, 0x452 and 0x454 (and 0x44c for the sub colour by
+the same pattern, not read in the decompiled part). The per-dab evaluator
+`0x1422e09a0` returns the value unchanged without an effector and the value times the effector's
+output with one. The shipped effectors' random minimum is stored as a signed −100 (word 24), so
+the random factor runs from −1 to 1: a symmetric spread of ±value. `0x142b62a10` gates the
+per-stroke group on `BrushChangeStrokeColor` (0x4f6).
+
+**Inference.** The per-stroke amounts (`BrushStrokeHueChange` 0x4f7 … `BrushStrokeSubColor`
+0x4fa) are taken as the same symmetric spread once a stroke (not traced). Which colour
+`BrushChangeColorTarget` 2 varies is from the help text.
+
+**Prism.** Color Dynamics: hue jitter `2·|h|/360` (Prism spreads ±180°·j), saturation and
+brightness jitter `|v|/100` (±), foreground/background jitter the sub-colour amount, per tip or
+(per stroke only) once a stroke. A random minimum above −100 keeps its spread width and warns that
+CLIP STUDIO's range is one-sided; other inputs on a jitter warn; a jitter without the random input
+is a constant shift Prism can't apply (warning, dropped). Erasing brushes skip colour jitter.
+
+### Smaller brush options
+
+- `BrushContinuousPlot` (0x413, Continuous spraying): Build-up on, at Prism's default rate (CLIP
+  STUDIO's timer is not traced).
+- `BrushSizeSyncViewScale` (0x3ea): the new `cspSizeByView`; a stroke at zoom z paints
+  `size / z` (the label and help text; the formula is inferred). The cursor outline does not
+  follow yet.
+- `BrushUseRevision`/`BrushRevision` (0x47e/0x47f, post correction) and `BrushUseReferLayer`
+  (0x4e2): warn (Prism's Smoothing is a tool option, not a preset setting; there is no reference
+  layer). Every shipped brush stores `BrushRevision` 10 with post correction off.
+- `BrushBlur` (0x444) and `BrushBlurLinkSize` (0x443): the running-colour blur of colour mixing
+  type 1 (help text), already covered by the type-1 warning.
+
+### Dual brush
+
+**Evidence.** CLIP STUDIO's ABR dual-brush mode converter `0x142f0a3f0` returns `Mltp` 1,
+`Drkn` 4, `Ovrl` 7, `CDdg` 8, `CBrn` 9, `linearBurn` 10, `hardMix` 11, `linearHeight` 12 (1 by
+default) for `DualBrushCompositeMode`. **Inference:** 0, 2, 3, 5, 6 from the dual mode label order
+(Normal, Multiply, Add (Glow), Subtract, Darken, Lighten, Screen, Overlay, Color dodge, Color
+burn, Linear burn, Hard mix, Height (Linear)), which matches every linked code. Normal, Add
+(Glow), Lighten and Screen add the second brush's opacity outside the first (help text: "the
+opacity of the second brush will be applied"); `DualSize` behaves as pixels (shipped values track
+the main size after rescaling, e.g. 60.000000000000050 for a 60 px brush). **Inference
+(2026-10-21):** how the opacity adds is not traced; Prism takes each label's alpha formula with
+the stroke coverage `c` and the dual coverage `t`: Normal and Screen `1 − (1 − c)(1 − t)`, Add
+(Glow) `min(1, c + t)`, Lighten `max(c, t)`, before the stroke opacity.
+
+**Prism.** `crates/io/src/sut/dual.rs`: masking modes map onto Prism's Dual Brush (Multiply,
+Subtract, Darken, Overlay, Color Dodge, Color Burn, Linear Burn, Hard Mix, Linear Height); the
+adding modes (2026-10-21) set `DualBrush.cspAdd`, and the renderer composites the union of both
+coverages: dual-only pixels and tiles paint too (`coverage_at`, `dense_coverage`, the bounds and
+the incremental dirty tiles include them), in the brush colour. Tip images (`DualPatternImageArray`, colours unused) or a round tip with
+`DualHardness`; size; spacing through the main brush's spacing rules on the `Dual*` keys;
+thickness as roundness (turned a quarter for a squashed width); rotation; spray as particle size
+plus scatter `area / particle` on both axes and count `DualSprayDensity` (≤ 16). Not run (one
+warning names them): flow, size/flow/spacing/thickness/spray dynamics, rotation inputs, texture,
+ribbon, continuous spraying, blend by darken, vertical flip, tip order, spray deviation, fixed
+spray, units.
+
+### Measured on the local library
+
+`csp_library_local`: 153/153 materials import, 151 brushes paint, 0 failed strokes. Warnings
+changed from 18 materials to 46: the three "UseDualBrush is not supported" became one dual brush
+running with named exceptions (Crystal sparkles) and two adding-mode warnings (D/Kaminari,
+D/Raigeki); new warnings are post correction (22), Compare density (12, the Chainmail and lightning
+brushes) and a constant sub-colour blend (11, the "sub blend" Sparkle-Lei and 2-C brushes). Coverage
+differs from the previous run only for Crystal sparkles (21 → 28) and one brush within 3 %.
+
+2026-10-21, with the stroke modes and adding dual modes running: 153/153 import, 151 brushes paint,
+0 failed strokes; materials with warnings 46 → 44. The Compare density warning is gone from all 12
+(Chainmail ×8, Ikazuchi ×2, D/Kaminari, D/Raigeki), and so is the adding-mode warning for
+D/Kaminari and D/Raigeki; their dual brush now reaches its tips and stops at "some referenced SUT
+dual brush tips are missing" (the download cache lacks those materials), so it is still off there.
+No stroke coverage changed: the check paints on an empty layer, where Compare density equals Normal.
+
+## Gradient data and font names (2026-10-21)
+
+Read-only copies of the installed `Settings/PAINT/Tool/<language>/EditImageTool.todb` (english,
+japanese, korean) and the user's own tool database were read with SQLite; no executable code
+was decompiled for this. Prism's decoder is an independent implementation
+(`crates/paint/src/csp_gradient.rs`); its tests use synthetic blobs, not CLIP STUDIO's data.
+
+### Gradient data (`GradationData`, Tool Property 5400)
+
+A blob of 80–448 bytes in the 12 default gradient sub-tools. Observed layout, all big-endian:
+
+| Part | Content |
+|---|---|
+| header, 6 × u32 | header size (24), stop record size (28), stop count, curve point size (16), then 1 and 3 (meaning unknown; same in every default) |
+| stop record, 7 × u32 | red, green, blue, opacity (32-bit, `0xFFFFFFFF` = full; colours repeat the byte, `0x73737373`), flags, position (`0x8000` = the end of the bar, `0x4000` the middle), number of curve points |
+| curve points, after all stops | for each stop in order, its points as two f64 (x, y), both 0..1 |
+
+Flags: the low nibble picks the colour (0 the stored colour, 1 the main drawing colour, 2 the sub
+drawing colour; *Foreground to background* is 1 → 2, *Foreground to transparent* is 1 → white at
+opacity 0); `0x10` is set on stops that have curve points. A stop's curve shapes the segment to
+the next stop: x is the fraction along it, y the share of the next stop's colour. Observed shapes:
+`(0,0) (1,0)` holds the first colour to the next stop (the *Stripe* tools' hard edge, with
+`GradationRepeatType` 1 repeating it), `(0,0) (1,1)` is straight, and 3–4 point curves bend the
+sky and sunset gradients. How CLIP STUDIO interpolates between the points is **not traced**;
+Prism uses a monotone cubic (inference). The decoded 12 defaults look as CLIP STUDIO's bar shows
+them (black → red → orange → yellow for *Sunset*, a seven-colour *Rainbow*).
+
+`GradationReverseSaved` is 1 in every default (and in the user's database), while every default's
+first stop is the colour CLIP STUDIO draws at the drag's start (main colour for *Foreground to
+transparent*). So it is not the flip state; it may record that stops are saved in the current
+orientation (unverified). Prism no longer maps it to the Gradient tool's Reverse.
+
+### Font names (`TextFontName`, `TextFontUniqueName`, `TextRubyFontName`)
+
+The text writer stores these keys (executable strings at file offsets 72555280 and 72555536 sit
+with the other text keys), but every default text sub-tool, in every language and in the user's
+database, stores NULL for all three: CLIP STUDIO falls back to its default font. Their stored
+type when set is not observed; Prism reads SQLite text and UTF-8 blobs, keeps at most 256
+characters without control characters, and reports anything else as a warning.
 

@@ -8,6 +8,7 @@ use super::{
     Row, active_variant, read_tool, reference_paths,
     sqlite::{Database, Value},
 };
+use super::layer_material::{INFO_LIMIT, LayerMaterial, MaterialInfo, parse_info};
 use crate::abr_map::AbrImport;
 use std::path::{Path, PathBuf};
 
@@ -59,6 +60,8 @@ pub enum Status {
     NoCache,
     /// The material is not stored below the local material folder.
     UnsupportedLocation,
+    /// A layer material whose file is not on disk.
+    Missing,
 }
 
 impl Status {
@@ -68,6 +71,7 @@ impl Status {
             Self::Downloading => "downloading",
             Self::NoCache => "noCache",
             Self::UnsupportedLocation => "unsupportedLocation",
+            Self::Missing => "missing",
         }
     }
     /// What the user can do about a brush that is not ready.
@@ -79,6 +83,7 @@ impl Status {
                 Some("CLIP STUDIO PAINT has not prepared this material yet; add it as a sub-tool in CLIP STUDIO PAINT once (or restart PAINT), then refresh")
             }
             Self::UnsupportedLocation => Some("This material is not stored in the local CLIP STUDIO material folder and cannot be read"),
+            Self::Missing => Some("The material's file is missing; download it again in CLIP STUDIO, then refresh"),
         }
     }
 }
@@ -86,6 +91,8 @@ impl Status {
 /// The catalog's material kinds that are CLIP STUDIO PAINT sub-tools: brushes, and other
 /// sub-tools (fill, selection, …) that import for the Clip Studio workspace.
 pub const TOOL_KINDS: [&str; 2] = ["brush", "other_tool"];
+/// The catalog's material kinds that are layer materials (images, special rulers).
+pub const LAYER_KINDS: [&str; 1] = ["image"];
 
 /// One downloaded sub-tool material.
 #[derive(Clone, Debug, PartialEq)]
@@ -105,6 +112,20 @@ pub struct LibraryBrush {
     pub tags: Vec<String>,
 }
 
+/// One downloaded layer material: an image, or a layer carrying special rulers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryLayer {
+    pub uuid: String,
+    pub name: String,
+    /// The downloaded collection it belongs to (empty when unknown).
+    pub catalog: String,
+    pub status: Status,
+    pub thumbnail: Option<PathBuf>,
+    pub tags: Vec<String>,
+    /// From the material's `icedata/layerData.xml`.
+    pub info: MaterialInfo,
+}
+
 /// One downloaded collection (catalog) and its cover image (`thumbnail/catalogThumb.png`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Catalog {
@@ -119,7 +140,9 @@ pub struct Catalog {
 pub struct Library {
     pub root: PathBuf,
     pub brushes: Vec<LibraryBrush>,
-    /// The collections the brushes belong to, in catalog order.
+    /// Downloaded layer materials, in catalog order.
+    pub layers: Vec<LibraryLayer>,
+    /// The collections the brushes and layer materials belong to, in catalog order.
     pub catalogs: Vec<Catalog>,
     /// Folder-wide notices (license terms, stale snapshot, missing PAINT data).
     pub notices: Vec<String>,
@@ -153,8 +176,30 @@ pub fn list(root: &Path) -> Result<Library> {
             tags: e.tags.clone(),
         })
         .collect();
+    let layers = snap
+        .layer_entries
+        .iter()
+        .map(|e| {
+            let reference = |file: &str| format!("{}:{file}", e.folder());
+            let info = materials
+                .as_deref()
+                .and_then(|m| resolve(m, &reference("icedata:layerData.xml")).ok())
+                .and_then(|p| read_limited(&p, INFO_LIMIT).ok())
+                .map(|b| parse_info(&String::from_utf8_lossy(&b)))
+                .unwrap_or_default();
+            LibraryLayer {
+                uuid: e.uuid.clone(),
+                name: e.name.clone(),
+                catalog: e.catalog.clone(),
+                status: snap.layer_status(e),
+                thumbnail: image(reference("thumbnail:thumbnail.png")),
+                tags: e.tags.clone(),
+                info,
+            }
+        })
+        .collect();
     let mut catalogs: Vec<Catalog> = Vec::new();
-    for e in snap.entries.iter().filter(|e| !e.catalog.is_empty()) {
+    for e in snap.entries.iter().chain(&snap.layer_entries).filter(|e| !e.catalog.is_empty()) {
         if !catalogs.iter().any(|c| c.name == e.catalog) {
             catalogs.push(Catalog {
                 name: e.catalog.clone(),
@@ -163,7 +208,7 @@ pub fn list(root: &Path) -> Result<Library> {
             });
         }
     }
-    Ok(Library { root: root.to_path_buf(), brushes, catalogs, notices: snap.notices })
+    Ok(Library { root: root.to_path_buf(), brushes, layers, catalogs, notices: snap.notices })
 }
 
 /// Largest preview image read by [`thumbnail_bytes`].
@@ -211,7 +256,39 @@ pub fn import(root: &Path, uuid: &str, group: Option<&str>, ctl: &prism_raster::
     Ok((group, imp))
 }
 
-/// A downloaded catalog brush.
+/// Import one downloaded layer material by material UUID: its name, the decoded layers and
+/// what its `layerData.xml` says.
+pub fn import_layer(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) -> Result<(String, LayerMaterial, MaterialInfo)> {
+    ctl.check().map_err(|e| e.to_string())?;
+    let snap = Snapshot::read(root)?;
+    let entry = snap.layer_entries.iter().find(|e| e.uuid == uuid).ok_or_else(|| format!("no downloaded CLIP STUDIO layer material has the id {uuid}"))?;
+    let status = snap.layer_status(entry);
+    if !matches!(status, Status::Ready(_)) {
+        return Err(format!("{}: {}", entry.name, status.guidance().unwrap_or("not ready")));
+    }
+    let path = snap.layer_file(entry).ok_or("the downloaded layer material file is no longer available; refresh and try again")?;
+    let (material, info) = read_layer_file(&path, ctl)?;
+    Ok((entry.name.clone(), material, info))
+}
+
+/// Read a layer material file (`data/material_0.layer`), or the material folder holding one.
+/// The material's `icedata/layerData.xml` beside `data/` is read when present.
+pub fn read_layer_file(path: &Path, ctl: &prism_raster::Interrupt) -> Result<(LayerMaterial, MaterialInfo)> {
+    let file = if path.is_dir() { path.join("data").join("material_0.layer") } else { path.to_path_buf() };
+    let bytes = read_limited(&file, MATERIAL_LIMIT)?;
+    let material = super::layer_material::read(&bytes, ctl).map_err(|e| format!("{}: {e}", file.display()))?;
+    let info = file
+        .parent()
+        .and_then(Path::parent)
+        .map(|folder| folder.join("icedata").join("layerData.xml"))
+        .filter(|p| p.is_file())
+        .and_then(|p| read_limited(&p, INFO_LIMIT).ok())
+        .map(|b| parse_info(&String::from_utf8_lossy(&b)))
+        .unwrap_or_default();
+    Ok((material, info))
+}
+
+/// A downloaded catalog brush or layer material.
 struct Entry {
     uuid: String,
     name: String,
@@ -235,6 +312,7 @@ impl Entry {
 struct Snapshot {
     materials: PathBuf,
     entries: Vec<Entry>,
+    layer_entries: Vec<Entry>,
     caches: Vec<(CacheSource, Vec<Row>, Vec<Row>)>,
     notices: Vec<String>,
 }
@@ -289,7 +367,8 @@ impl Snapshot {
             _ => Tags::default(),
         };
         drop(bytes);
-        let entries = catalog_entries(&modifiers, &meta, &tags);
+        let entries = catalog_entries(&modifiers, &meta, &tags, &TOOL_KINDS);
+        let layer_entries = catalog_entries(&modifiers, &meta, &tags, &LAYER_KINDS);
 
         let mut caches = Vec::new();
         match paint_folder(root) {
@@ -319,7 +398,7 @@ impl Snapshot {
         if stale {
             notices.push("CLIP STUDIO appears to be running or has unsaved database changes; the newest downloads may be missing until it is closed".into());
         }
-        Ok(Self { materials: root.join(MATERIALS), entries, caches, notices })
+        Ok(Self { materials: root.join(MATERIALS), entries, layer_entries, caches, notices })
     }
 
     fn tool(&self, source: CacheSource, uuid: &str) -> Option<(&Row, &Row)> {
@@ -340,6 +419,21 @@ impl Snapshot {
             .find(|s| self.tool(*s, &e.uuid).is_some())
             .or_else(|| self.raw_tool(e).map(|_| CacheSource::MaterialFile))
             .map_or(Status::NoCache, Status::Ready)
+    }
+
+    fn layer_status(&self, e: &Entry) -> Status {
+        if !e.local {
+            return Status::UnsupportedLocation;
+        }
+        if e.pending {
+            return Status::Downloading;
+        }
+        self.layer_file(e).map_or(Status::Missing, |_| Status::Ready(CacheSource::MaterialFile))
+    }
+
+    fn layer_file(&self, e: &Entry) -> Option<PathBuf> {
+        let root = std::fs::canonicalize(&self.materials).ok()?;
+        resolve(&root, &format!("{}:data:material_0.layer", e.folder())).ok()
     }
 
     fn raw_tool(&self, e: &Entry) -> Option<PathBuf> {
@@ -403,7 +497,7 @@ impl Tags {
 }
 
 /// Downloaded sub-tools, joined to their collection names, in catalog order.
-fn catalog_entries(modifiers: &[Row], meta: &[Row], tags: &Tags) -> Vec<Entry> {
+fn catalog_entries(modifiers: &[Row], meta: &[Row], tags: &Tags, kinds: &[&str]) -> Vec<Entry> {
     let meta_of = |id: i64| meta.iter().find(|m| int(m, "ModifierID") == id);
     let collection = |path: &str| {
         modifiers
@@ -421,7 +515,7 @@ fn catalog_entries(modifiers: &[Row], meta: &[Row], tags: &Tags) -> Vec<Entry> {
         let Some(d) = meta_of(int(m, "_PW_ID")) else { continue };
         let uuid = text(m, "MaterialUuid");
         let kind = text(d, "MaterialKind");
-        if !TOOL_KINDS.contains(&kind) || int(d, "Downloaded") == 0 || uuid.is_empty() || out.iter().any(|e| e.uuid == uuid) {
+        if !kinds.contains(&kind) || int(d, "Downloaded") == 0 || uuid.is_empty() || out.iter().any(|e| e.uuid == uuid) {
             continue;
         }
         let path = text(m, "Path");

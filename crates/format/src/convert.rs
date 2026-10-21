@@ -199,6 +199,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         blend_if: l.blend_if.clone(),
         advanced: l.advanced,
         video: l.video.as_ref().map(|v| video_m(v, sink)),
+        special_rulers: l.special_rulers.clone(),
     }
 }
 
@@ -498,6 +499,13 @@ impl Loader<'_> {
             blend_if: m.blend_if.clone(),
             advanced: m.advanced,
             video: m.video.as_ref().map(|v| self.video(v)).transpose()?,
+            special_rulers: match &m.special_rulers {
+                Some(r) => {
+                    r.validate().map_err(|e| FormatError::corrupt(format!("layer {:?}: {e}", m.name)))?;
+                    Some(r.clone())
+                }
+                None => None,
+            },
         })
     }
 

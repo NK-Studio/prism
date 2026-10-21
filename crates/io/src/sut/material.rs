@@ -212,10 +212,21 @@ fn linked_raster_within(db: &Database<'_>, max_pixels: usize) -> Result<Material
     if !(0..=256).contains(&opacity) || integer(layer, "LayerVisibility")? != 1 {
         return Err(invalid());
     }
+    let mut raster = mipmap_raster(db, layer, integer(layer, "ResizableOriginalMipmap")?, max_pixels)?;
+    if opacity < 256 {
+        for a in &mut raster.alpha {
+            *a = ((u32::from(*a) * opacity as u32 + 128) / 256) as u8;
+        }
+    }
+    Ok(raster)
+}
+
+/// The pixels of `layer`'s mipmap `mipmap` at 100 % (one level), without the layer's opacity.
+pub(super) fn mipmap_raster(db: &Database<'_>, layer: &Row, mipmap: i64, max_pixels: usize) -> Result<MaterialRaster> {
     let layer_id = integer(layer, "MainId")?;
     let canvas = integer(layer, "CanvasId")?;
     let mipmaps = db.table("Mipmap")?;
-    let mip = unique(&mipmaps, "MainId", integer(layer, "ResizableOriginalMipmap")?)?;
+    let mip = unique(&mipmaps, "MainId", mipmap)?;
     if integer(mip, "MipmapCount")? != 1 || integer(mip, "LayerId")? != layer_id || integer(mip, "CanvasId")? != canvas {
         return Err(invalid());
     }
@@ -229,14 +240,7 @@ fn linked_raster_within(db: &Database<'_>, max_pixels: usize) -> Result<Material
     if integer(off, "LayerId")? != layer_id || integer(off, "CanvasId")? != canvas {
         return Err(invalid());
     }
-    let mut raster =
-        decode_tiles(off.get("Attribute").and_then(Value::blob).ok_or_else(invalid)?, off.get("BlockData").and_then(Value::blob).ok_or_else(invalid)?, max_pixels)?;
-    if opacity < 256 {
-        for a in &mut raster.alpha {
-            *a = ((u32::from(*a) * opacity as u32 + 128) / 256) as u8;
-        }
-    }
-    Ok(raster)
+    decode_tiles(off.get("Attribute").and_then(Value::blob).ok_or_else(invalid)?, off.get("BlockData").and_then(Value::blob).ok_or_else(invalid)?, max_pixels)
 }
 
 struct Cursor<'a> {

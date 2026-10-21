@@ -49,6 +49,25 @@ fn curve(blob: &[u8]) -> Result<PressureCurve, String> {
     PressureCurve::new(points)
 }
 
+/// The active input controls of an effector and its random minimum in percent, signed: colour
+/// jitter stores -100 (a random factor between -1 and 1). Size and the other controls read by
+/// [`read`] use 0..100.
+pub(super) fn controls(blob: &[u8]) -> Result<(u32, i32), String> {
+    let header = length(blob, 0)?;
+    if !(40..=65_536).contains(&header) || header > blob.len() {
+        return Err("invalid SUT effector header length".into());
+    }
+    let random_min = i32::from_be_bytes(word(blob, 24)?.to_be_bytes()).clamp(-100, 100);
+    Ok((word(blob, 4)? & word(blob, 8)?, random_min))
+}
+
+/// Whether an effector varies its value with any input (pressure, tilt, speed, random…).
+pub(super) fn is_dynamic(blob: &[u8]) -> bool {
+    controls(blob).is_ok_and(|(active, _)| active != 0)
+}
+
+pub(super) const RANDOM_CONTROL: u32 = RANDOM;
+
 /// Header layout (big-endian u32): 0 header length, 4 supported controls, 8 active controls,
 /// 12 pressure minimum %, 16 tilt value % at response 0, 20/24 speed/random minimums %, 32/36/44
 /// curve block lengths (pressure, tilt, speed), 40 tilt value % at response 1 (100 before 44-byte

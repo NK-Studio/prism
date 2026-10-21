@@ -17,7 +17,12 @@ const MODES: [(ColorPanelMode, &str); 4] = [
 ];
 
 pub(crate) fn panel_menu(app: &mut PrismApp, ui: &mut egui::Ui) {
+    // Clip Studio keeps its sliders in the Color Slider panel, so the Color panel offers no HSB Sliders.
+    let csp = crate::csp_tools::active(app);
     for (mode, label) in MODES {
+        if csp && mode == ColorPanelMode::HsbSliders {
+            continue;
+        }
         let selected = app.ui.color_panel.mode == mode;
         let label = crate::i18n::t(label);
         let response = ui.selectable_label(selected, format!("{} {label}", if selected { "✓" } else { "  " }));
@@ -29,14 +34,14 @@ pub(crate) fn panel_menu(app: &mut PrismApp, ui: &mut egui::Ui) {
             if mode == ColorPanelMode::ColorWheel {
                 let group = crate::dock::Group::Color;
                 let width = crate::dock::last_rects(ui.ctx()).into_iter().find(|(g, _)| *g == group).map_or(290.0, |(_, rect)| rect.width());
-                app.ui.dock.heights.insert(group, app.ui.dock.height(group).max(width.min(420.0) + 150.0));
+                app.ui.dock.heights.insert(group, app.ui.dock.height(group).max((width.min(420.0) + 150.0).max(WHEEL_GROUP_MIN)));
             }
             ui.close();
         }
     }
 }
 
-fn color(app: &PrismApp) -> [f32; 4] {
+pub(super) fn color(app: &PrismApp) -> [f32; 4] {
     if app.ui.color_panel.background { app.session.tools.background } else { app.session.tools.foreground }
 }
 
@@ -44,7 +49,7 @@ fn hsv_key(background: bool) -> egui::Id {
     egui::Id::new(("color-panel-hsva", background))
 }
 
-fn current(app: &PrismApp, ui: &egui::Ui) -> egui::ecolor::Hsva {
+pub(super) fn current(app: &PrismApp, ui: &egui::Ui) -> egui::ecolor::Hsva {
     let background = app.ui.color_panel.background;
     let rgb = color(app);
     let stored: Option<egui::ecolor::Hsva> = ui.data(|d| d.get_temp(hsv_key(background)));
@@ -70,7 +75,7 @@ fn display(hsv: egui::ecolor::Hsva) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-fn apply(app: &mut PrismApp, ui: &egui::Ui, hsv: egui::ecolor::Hsva) {
+pub(super) fn apply(app: &mut PrismApp, ui: &egui::Ui, hsv: egui::ecolor::Hsva) {
     let background = app.ui.color_panel.background;
     let rgb = hsva_srgb(hsv);
     let hex = crate::color_picker_ui::hex([rgb[0], rgb[1], rgb[2]]);
@@ -87,6 +92,18 @@ pub(crate) fn show_mode(app: &mut PrismApp, ui: &mut egui::Ui, mode: ColorPanelM
     match mode {
         ColorPanelMode::HueCube | ColorPanelMode::BrightnessCube => {
             cube(app, ui, mode);
+            return;
+        }
+        // Clip Studio's Color Wheel panel: the wheel and the chips; the sliders are the separate
+        // Color Slider panel (`color_slider_ui`).
+        ColorPanelMode::ColorWheel | ColorPanelMode::HsbSliders if crate::csp_tools::active(app) => {
+            ui.add_space(4.0);
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let (chips, _) = ui.allocate_exact_size(vec2(38.0, 38.0), Sense::hover());
+                field_chips(app, ui, chips);
+                wheel(app, ui);
+            });
             return;
         }
         ColorPanelMode::ColorWheel => {
@@ -122,7 +139,7 @@ fn slider_header(app: &mut PrismApp, ui: &mut egui::Ui) {
     });
 }
 
-fn component(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, gradient: &[Color32]) -> bool {
+pub(super) fn component(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, gradient: &[Color32]) -> bool {
     let width = (ui.available_width() - 94.0).max(60.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -317,9 +334,22 @@ fn wheel_part(rect: Rect, p: Pos2) -> Option<WheelPart> {
     }
 }
 
+/// The smallest wheel (points, margin included): like Photoshop's Color Wheel, a short panel
+/// scrolls rather than shrinking the wheel below a usable size. Only a narrower panel is smaller.
+pub(crate) const MIN_WHEEL: f32 = 220.0;
+/// The Color group height (tab strip, HSB header and a [`MIN_WHEEL`] wheel) the dock keeps while
+/// the wheel shows, so the splitter stops where Photoshop's does instead of squashing the wheel.
+pub(crate) const WHEEL_GROUP_MIN: f32 = MIN_WHEEL + 150.0;
+
+/// The least height the dock gives a group whose active tab is the Color panel, when the
+/// current mode needs more than the group's own minimum (Photoshop's Color Wheel).
+pub(crate) fn group_min_height(app: &PrismApp) -> Option<f32> {
+    (app.ui.color_panel.mode == ColorPanelMode::ColorWheel && !crate::csp_tools::active(app)).then_some(WHEEL_GROUP_MIN)
+}
+
 fn wheel(app: &mut PrismApp, ui: &mut egui::Ui) {
-    // Use the space below the HSB header. Small groups can scroll below the minimum size.
-    let room = (ui.clip_rect().bottom() - ui.cursor().top() - 6.0).max(80.0);
+    // Use the space below the HSB header, but never less than the minimum wheel.
+    let room = (ui.clip_rect().bottom() - ui.cursor().top() - 6.0).max(MIN_WHEEL);
     let size = ui.available_width().min(room).clamp(80.0, 420.0);
     let (outer, response) = ui.allocate_exact_size(vec2(ui.available_width(), size), Sense::click_and_drag());
     let rect = Rect::from_center_size(outer.center(), vec2(size - 14.0, size - 14.0));

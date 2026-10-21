@@ -1104,6 +1104,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::smartselect_cmds::specs());
     v.extend(crate::cutout_cmds::specs());
     v.extend(crate::symmetry_cmds::specs());
+    v.extend(crate::special_ruler_cmds::specs());
     v.extend(crate::edit_cmds::specs());
     v.extend(crate::color_cmds::specs());
     v.extend(crate::brush_cmds::specs());
@@ -1113,6 +1114,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::preset_import_cmds::specs());
     v.extend(crate::sut_import_cmds::specs());
     v.extend(crate::csp_library_cmds::specs());
+    v.extend(crate::csp_material_cmds::specs());
     v.extend(crate::swatch_cmds::specs());
     v.extend(crate::retouch_cmds::specs());
     v.extend(crate::redeye_cmds::specs());

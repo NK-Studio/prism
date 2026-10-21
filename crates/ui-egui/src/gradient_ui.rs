@@ -578,7 +578,7 @@ pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform) {
 // ---------------------------------------------------------------- options bar
 
 /// A ramp of RGBA stops over a checkerboard in `r`.
-fn paint_ramp(p: &egui::Painter, r: Rect, sample: impl Fn(f32) -> [f32; 4]) {
+pub(crate) fn paint_ramp(p: &egui::Painter, r: Rect, sample: impl Fn(f32) -> [f32; 4]) {
     widgets::checker(p, r, 5.0);
     let n = 64;
     let mut mesh = egui::Mesh::default();

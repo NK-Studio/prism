@@ -2,6 +2,8 @@
 //! for bringing CLIP STUDIO materials into Prism. It lists the sub-tools downloaded into the
 //! installed CLIP STUDIO PAINT (`brush.cspLibrary.list`) by collection, with CLIP STUDIO's own
 //! previews, and imports the checked ones (`brush.cspLibrary.import`) without a SUT export.
+//! Layer materials (images, special rulers) are listed too and go into the open document as
+//! layers (`layer.cspMaterial.import`).
 //! Materials narrow by kind, search text and CLIP STUDIO's user tags, and show as a one-column
 //! list or a two-column grid of larger previews.
 //! Exported files (`.sut`, `.tool`, `.laf`) come in through Open Files…. Materials that are not
@@ -22,6 +24,8 @@ pub enum KindFilter {
     Brushes,
     /// Fill, selection and other sub-tools: they import for the Clip Studio workspace.
     SubTools,
+    /// Images and special rulers: they are added to the open document as layers.
+    Layers,
 }
 
 /// How the materials are laid out.
@@ -122,7 +126,7 @@ fn report(app: &mut PrismApp, r: Result<Value, String>) {
 }
 
 fn materials(listing: &Value) -> impl Iterator<Item = &Value> {
-    listing["brushes"].as_array().into_iter().flatten()
+    listing["brushes"].as_array().into_iter().flatten().chain(listing["layers"].as_array().into_iter().flatten())
 }
 
 fn is_ready(b: &Value) -> bool {
@@ -133,6 +137,15 @@ fn is_sub_tool(b: &Value) -> bool {
     b["kind"] == "other_tool"
 }
 
+/// A layer material (image or special ruler), added to the document rather than the library.
+fn is_layer(b: &Value) -> bool {
+    b["kind"] == "image"
+}
+
+fn is_ruler(b: &Value) -> bool {
+    is_layer(b) && b["ruler"] == true
+}
+
 /// The brush group an import lands in (the collection name, as `brush.cspLibrary.import` picks).
 fn group_of(b: &Value) -> &str {
     b["catalog"].as_str().map(str::trim).filter(|c| !c.is_empty()).unwrap_or("CLIP STUDIO")
@@ -140,6 +153,9 @@ fn group_of(b: &Value) -> &str {
 
 /// Is a material of this name already in the brush library, in its collection's group?
 fn in_library(app: &PrismApp, b: &Value) -> bool {
+    if is_layer(b) {
+        return false;
+    }
     let (Some(name), group) = (b["name"].as_str(), group_of(b)) else { return false };
     app.session.tools.presets.iter().any(|p| !p.builtin && p.name == name && p.group == group)
 }
@@ -161,8 +177,9 @@ fn tags_of<'a>(listing: &'a Value, b: &'a Value) -> Vec<&'a str> {
 fn passes(state: &CspLibraryState, filter: KindFilter, listing: &Value, b: &Value) -> bool {
     let kind_ok = match filter {
         KindFilter::All => true,
-        KindFilter::Brushes => !is_sub_tool(b),
+        KindFilter::Brushes => !is_sub_tool(b) && !is_layer(b),
         KindFilter::SubTools => is_sub_tool(b),
+        KindFilter::Layers => is_layer(b),
     };
     if !kind_ok {
         return false;
@@ -237,7 +254,21 @@ pub fn imported(app: &mut PrismApp, v: &Value) {
 }
 
 fn import_selected(app: &mut PrismApp) {
-    let uuids = app.ui.csp_library.selected.clone();
+    let selected = app.ui.csp_library.selected.clone();
+    if selected.is_empty() {
+        return;
+    }
+    let layer_ids: Vec<String> = app
+        .ui
+        .csp_library
+        .listing
+        .as_ref()
+        .map(|l| materials(l).filter(|b| is_layer(b)).filter_map(|b| b["uuid"].as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let (layers, uuids): (Vec<String>, Vec<String>) = selected.into_iter().partition(|id| layer_ids.contains(id));
+    if !layers.is_empty() {
+        add_layers(app, &layers);
+    }
     if uuids.is_empty() {
         return;
     }
@@ -246,6 +277,39 @@ fn import_selected(app: &mut PrismApp) {
         Ok(_) => {}
         Err(e) => notices::error(app, format!("{}: {e}", tl!("Import from CLIP STUDIO"))),
     }
+}
+
+/// Add layer materials to the open document, each as its own history step.
+fn add_layers(app: &mut PrismApp, uuids: &[String]) {
+    if app.session.active().is_none() {
+        notices::error(app, tl!("Open or create a document first: layer materials are added to it as layers").to_string());
+        return;
+    }
+    let root = app.ui.csp_library.root.clone();
+    let (mut added, mut rulers, mut warnings) = (0, 0, Vec::new());
+    for uuid in uuids {
+        let mut p = json!({ "uuid": uuid });
+        if let Some(root) = &root {
+            p["root"] = json!(root);
+        }
+        match app.run("layer.cspMaterial.import", p) {
+            Ok(v) => {
+                added += 1;
+                rulers += v["rulers"].as_u64().unwrap_or(0);
+                let name = v["name"].as_str().unwrap_or_default().to_string();
+                warnings.extend(v["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).map(|w| format!("{name}: {w}")));
+            }
+            Err(e) => warnings.push(format!("{}: {e}", tl!("Not added"))),
+        }
+    }
+    app.ui.status = if rulers > 0 {
+        crate::i18n::fmt(tl!("Added {n} CLIP STUDIO materials with {rulers} special rulers; strokes snap to them"), &[("n", &added.to_string()), ("rulers", &rulers.to_string())])
+    } else {
+        crate::i18n::fmt(tl!("Added {n} CLIP STUDIO materials to the document"), &[("n", &added.to_string())])
+    };
+    app.ui.status_error = added == 0;
+    notices::io_warnings(app, tl!("Added from CLIP STUDIO"), &warnings);
+    app.ui.csp_library.selected.retain(|id| !uuids.contains(id));
 }
 
 fn status_label(status: &str) -> &'static str {
@@ -396,8 +460,8 @@ fn header(app: &mut PrismApp, ui: &mut egui::Ui, t: &Tokens, action: &mut Action
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let count = |f: KindFilter| state.listing.as_ref().map_or(0, |l| materials(l).filter(|b| passes(state, f, l, b)).count());
-        let counts = [KindFilter::All, KindFilter::Brushes, KindFilter::SubTools].map(count);
-        let kinds = [(KindFilter::All, tl!("All")), (KindFilter::Brushes, tl!("Brushes")), (KindFilter::SubTools, tl!("Sub tools"))];
+        let counts = [KindFilter::All, KindFilter::Brushes, KindFilter::SubTools, KindFilter::Layers].map(count);
+        let kinds = [(KindFilter::All, tl!("All")), (KindFilter::Brushes, tl!("Brushes")), (KindFilter::SubTools, tl!("Sub tools")), (KindFilter::Layers, tl!("Layers"))];
         for ((f, label), n) in kinds.into_iter().zip(counts) {
             if widgets::pill_tab(ui, &format!("{label} {n}"), state.filter == f).clicked() {
                 state.filter = f;
@@ -665,8 +729,15 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
     } else if resp.hovered() && ready {
         p.rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.6));
     }
-    let glyph = if is_sub_tool(b) { "paint-bucket" } else { "brush" };
-    let kind = if is_sub_tool(b) { tl!("Sub tool") } else { tl!("Brush") };
+    let (glyph, kind) = if is_ruler(b) {
+        ("ruler", tl!("Special ruler"))
+    } else if is_layer(b) {
+        ("image", tl!("Image"))
+    } else if is_sub_tool(b) {
+        ("paint-bucket", tl!("Sub tool"))
+    } else {
+        ("brush", tl!("Brush"))
+    };
     let detail = format!("{}  ·  {kind}", status_label(b["status"].as_str().unwrap_or_default()));
     let name_color = if ready { t.text } else { t.text_dim };
     let dot_color = if ready { Color32::from_rgb(0x4c, 0xaf, 0x50) } else { t.warning };
@@ -719,6 +790,11 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
         }
         if is_sub_tool(b) {
             ui.label(tl!("Not a brush: it imports for the Clip Studio workspace (Window › Workspace › Clip Studio)"));
+        }
+        if is_ruler(b) {
+            ui.label(tl!("Adds a layer carrying its special ruler to the open document; brush strokes snap to it (View › Snap To › Special Ruler)"));
+        } else if is_layer(b) {
+            ui.label(tl!("Adds a layer to the open document"));
         }
         if owned {
             ui.label(tl!("Already in the brush library; importing again replaces it"));

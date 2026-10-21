@@ -11,6 +11,8 @@ use crate::{PrismApp, icons, widgets};
 
 #[path = "color_panel_ui.rs"]
 pub(crate) mod color_panel_ui;
+#[path = "color_slider_ui.rs"]
+pub(crate) mod color_slider_ui;
 
 // ----------------------------------------------------------------------------- toolbar
 
@@ -197,9 +199,10 @@ pub(crate) fn toolbar_body(app: &mut PrismApp, ui: &mut egui::Ui, geo: &ToolbarG
                         for (slot_index, slot) in row.iter() {
                             let key = egui::Id::new(("tool-slot", *slot_index));
                             let tool = slot_tool(ui, app.ui.tool, slot, key);
-                            let sel = slot.contains(&app.ui.tool);
+                            let sel = slot.contains(&app.ui.tool) && !crate::transform_tool::modal(app);
                             let tip = if tool.key() == '\0' { tl!(tool.label()).to_string() } else { format!("{}  ({})", tl!(tool.label()), tool.key()) };
                             let resp = icons::button(ui, icons::tool_icon(tool), bx, sel, &tip);
+                            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, sel, tl!(tool.label())));
                             if slot.len() > 1 {
                                 let r = resp.rect;
                                 let tri = vec![r.right_bottom() + vec2(-2.0, -2.0), r.right_bottom() + vec2(-6.0, -2.0), r.right_bottom() + vec2(-2.0, -6.0)];
@@ -612,7 +615,13 @@ pub fn options_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
                     crate::chrome_ui::home_button(app, ui);
                     widgets::vline(ui, 22.0);
                 }
-                let _ = icons::button(ui, icons::tool_icon(app.ui.tool), if t.pro { 26.0 } else { 28.0 }, !t.pro, tl!(app.ui.tool.label()));
+                // While a transform box is open it is the tool (Photoshop shows its icon here).
+                let (icon, label) = if crate::transform_tool::modal(app) {
+                    ("scaling", tl!("Free Transform"))
+                } else {
+                    (icons::tool_icon(app.ui.tool), tl!(app.ui.tool.label()))
+                };
+                let _ = icons::button(ui, icon, if t.pro { 26.0 } else { 28.0 }, !t.pro, label);
                 if t.pro {
                     let (r, _) = ui.allocate_exact_size(vec2(10.0, 20.0), Sense::hover());
                     icons::paint(ui, r, "chevron-down", 10.0, t.text_faint);
@@ -1319,6 +1328,7 @@ pub(crate) fn panel_body(app: &mut PrismApp, ui: &mut egui::Ui, panel: crate::do
         P::SubTool => crate::sub_tool_panel::body(app, ui),
         P::ToolProperty => crate::sub_tool_panel::property_body(app, ui),
         P::ClipStudio => crate::csp_library_ui::body(app, ui),
+        P::ColorSlider => color_slider_ui::body(app, ui),
     }
 }
 

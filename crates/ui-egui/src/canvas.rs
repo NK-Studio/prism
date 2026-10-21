@@ -119,6 +119,8 @@ pub struct Drag {
     pub connects_previous: bool,
     /// ⇧ constraint of a painting stroke (stroke_constraint.rs).
     pub constrain: Option<crate::stroke_constraint::Axis>,
+    /// CLIP STUDIO special ruler the stroke snaps to (special_ruler_ui.rs).
+    pub ruler: Option<prism_engine::special_ruler_snap::StrokeSnapper>,
     /// Modifiers held now (updated on every pointer event of the gesture).
     pub live: egui::Modifiers,
     /// Which of the modifiers held at the press have been released since.
@@ -143,6 +145,7 @@ impl Drag {
             erase,
             connects_previous: false,
             constrain: None,
+            ruler: None,
             live: modifiers,
             released: egui::Modifiers::NONE,
             reposition: false,
@@ -2295,6 +2298,9 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
     let tool = match temporary {
         Some(t) => t.tool(),
         None if middle => Tool::Hand,
+        // An open transform box owns the canvas (Photoshop): the Hand, Zoom or a brush picked
+        // before ⌘T neither pans nor paints, and the box's handles show their cursors.
+        None if crate::transform_tool::modal(app) => Tool::Move,
         None => app.ui.tool,
     };
     if primary
@@ -2626,6 +2632,10 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         if app.ui.view.shows(app.ui.view.show.canvas_guides) {
             crate::rulers::draw_guides(app, &painter, &xf, &doc);
         }
+        if app.ui.view.extras {
+            let layer = app.session.documents().get(idx).and_then(|st| st.active_layer);
+            crate::special_ruler_ui::draw(app, &painter, &xf, &doc, layer);
+        }
         draw_drag_preview(app, &painter, &xf);
         crate::zoom_tool::draw(&ctx, &painter);
         let resizing = crate::brush_resize::draw(app, &painter, &xf);
@@ -2648,11 +2658,15 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         crate::gradient_ui::draw_overlay(app, &painter, &xf);
         crate::slice_ui::draw_overlay(app, &painter, &xf);
         // Tool cursors (Photoshop-style).
-        let guide_hover = response.hover_pos().filter(|_| tool == Tool::Move).and_then(|p| {
+        let guide_hover = response.hover_pos().filter(|_| tool == Tool::Move && !crate::transform_tool::modal(app)).and_then(|p| {
             let d = xf.to_doc(p);
             crate::rulers::guide_at(app, d[0], d[1])
         });
-        if let Some((vertical, _)) = guide_hover {
+        let ruler_cursor = response.hover_pos().and_then(|p| crate::special_ruler_ui::handles::cursor(app, xf.to_doc(p)));
+        if let Some(c) = ruler_cursor {
+            let c = response.hover_pos().map_or(c, |p| crate::cursor_pack::stock(&ctx, p, c));
+            ui.ctx().set_cursor_icon(c);
+        } else if let Some((vertical, _)) = guide_hover {
             let icon = if vertical { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical };
             let icon = response.hover_pos().map_or(icon, |p| crate::cursor_pack::stock(&ctx, p, icon));
             ui.ctx().set_cursor_icon(icon);
@@ -3370,6 +3384,7 @@ fn tool_move(app: &mut PrismApp, x: f64, y: f64, pressure: f32, mods: egui::Modi
         // ⇧: straight 0/45/90° strokes, 45° gradient angles (stroke_constraint.rs).
         let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
         let [x, y] = crate::stroke_constraint::constrain(d.tool, &mut d.constrain, d.start, last, [x, y], mods.shift, zoom);
+        let [x, y] = crate::special_ruler_ui::snap(d, [x, y], mods.shift);
         let sample = app.stylus.sample().unwrap_or_default();
         let pose_changed = app.stylus.stroke.last().is_some_and(|p| *p != [sample.tilt_x, sample.tilt_y, sample.rotation]);
         let timed_build_up = app.session.tools.brush.build_up && app.stylus.times.last().is_some_and(|t| app.stylus.time > *t);
@@ -3388,6 +3403,10 @@ pub fn tool_event(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) {
     crate::transform_tool::end_if_left(app);
     let mods = crate::workspace_ui::sticky_mods(app, mods);
     if crate::arrow_handles_ui::pointer(app, ev, mods) || crate::shape_corners_ui::pointer(app, ev, mods) {
+        return;
+    }
+    // Special ruler handles (Move tool on a ruler layer, as CLIP STUDIO's Operation tool).
+    if crate::special_ruler_ui::handles::pointer(app, ev, mods) {
         return;
     }
     if app.ui.transform.is_none() && crate::type_transform::pointer(app, ev, mods) {
@@ -3623,6 +3642,10 @@ pub fn tool_event(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) {
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
             let mut drag = Drag::new(tool, from.unwrap_or([x, y]), points, mods, erase);
             drag.connects_previous = from.is_some();
+            // A ⇧-click connection is a straight line of its own; rulers snap freehand strokes.
+            if from.is_none() && !mods.shift {
+                drag.ruler = crate::special_ruler_ui::snapper(app, tool, [x, y]);
+            }
             app.drag = Some(drag);
             app.trail = None;
             app.stylus.begin_stroke();
@@ -3661,6 +3684,7 @@ pub fn tool_event(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) {
             }
             let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
             let [x, y] = crate::stroke_constraint::constrain(d.tool, &mut d.constrain, d.start, last, [x, y], mods.shift, zoom);
+            let [x, y] = crate::special_ruler_ui::snap(&mut d, [x, y], mods.shift);
             // A Move-tool click (released where it was pressed) selects, it never moves: snapping
             // the release point would otherwise nudge the layer onto a nearby edge.
             if d.tool == Tool::Move && d.points.len() < 2 && matches!(raw, ToolEvent::Up { x, y } if [x, y] == d.start) {

@@ -1,5 +1,6 @@
 use super::*;
 use prism_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
+use prism_paint::csp_gradient::{CspGradient, CspGradientStop, CspStopColor};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -503,6 +504,13 @@ fn sut_display_metadata_survives_store_restart_and_restore() {
         .into(),
         node_icon: 0,
         texture_name: "Paper".into(),
+        strings: [("TextFontName".into(), "Noto Sans KR".into()), ("TextRubyFontName".into(), "游ゴシック".into())].into(),
+        gradient: Some(CspGradient {
+            stops: vec![
+                CspGradientStop { position: 0.0, color: CspStopColor::Foreground, opacity: 1.0, curve: vec![[0.0, 0.0], [0.4, 0.1], [1.0, 1.0]] },
+                CspGradientStop { position: 1.0, color: CspStopColor::Rgb([0.25, 0.5, 1.0]), opacity: 0.0, curve: vec![] },
+            ],
+        }),
     });
     s.tools.presets.push(preset);
     s.execute("brush.sutDisplay.set", json!({"name":"SUT sample","parameter":10,"visible":false,"showCategories":true})).unwrap();
@@ -542,7 +550,9 @@ fn malformed_sut_metadata_keeps_valid_brush_and_bounds_presentation() {
         Some(json!({
             "original":{"visible":(0..700).collect::<Vec<_>>(),"show_categories":false},
             "input_op":10,"output_op":10,"parameters":{"Opacity":90,"Arbitrary":2,"BrushSize":1e20},
-            "texture_name":"a".repeat(2048)
+            "texture_name":"a".repeat(2048),
+            "strings":{"TextFontName":format!("\u{7}{}", "f".repeat(400)),"Arbitrary":"x","TextRubyFontName":"  "},
+            "gradient":{"stops":[{"position":2.0,"color":"foreground","opacity":-1.0},{"position":0.5,"color":{"rgb":[0.0,9.0,0.5]},"opacity":1.0,"curve":[[1.0,0.0],[0.0,0.0]]}]}
         })),
         "Bounded",
         &mut warnings,
@@ -551,5 +561,16 @@ fn malformed_sut_metadata_keeps_valid_brush_and_bounds_presentation() {
     assert_eq!(metadata.original.visible.len(), prism_paint::sut::MAX_SUT_DISPLAY_ITEMS);
     assert_eq!(metadata.texture_name.len(), 1024);
     assert_eq!(metadata.parameters.len(), 1);
+    // Text is cleaned and capped; unknown and empty keys go.
+    assert_eq!(metadata.strings.len(), 1);
+    assert_eq!(metadata.strings.get("TextFontName").map(|s| s.chars().count()), Some(prism_paint::sut::MAX_SETTING_CHARS));
+    // The gradient is clamped and sorted, not dropped.
+    let g = metadata.gradient.as_ref().unwrap();
+    assert_eq!((g.stops[0].position, g.stops[1].position, g.stops[1].opacity), (0.5, 1.0, 0.0));
+    assert_eq!(g.stops[0].color, CspStopColor::Rgb([0.0, 1.0, 0.5]));
+    assert_eq!(g.stops[0].curve, vec![[0.0, 0.0], [1.0, 0.0]]);
     assert!(!warnings.is_empty());
+    // A gradient with fewer than two stops is dropped.
+    let metadata = read_sut_metadata(Some(json!({"original":{"visible":[],"show_categories":false},"input_op":52,"output_op":52,"parameters":{},"texture_name":"","gradient":{"stops":[]}})), "One", &mut warnings).unwrap();
+    assert!(metadata.gradient.is_none());
 }

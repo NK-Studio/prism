@@ -221,12 +221,12 @@ fn compact_wheel_fills_remaining_space_without_hex_rgb_readout() {
             let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
             app.ui.color_panel.mode = ColorPanelMode::ColorWheel;
             let mut h = Harness::builder()
-                .with_size(vec2(width, 240.0))
+                .with_size(vec2(width, 320.0))
                 .with_pixels_per_point(scale)
                 .build_ui_state(|ui, app: &mut PrismApp| show_mode(app, ui, ColorPanelMode::ColorWheel), app);
             PrismApp::setup_context(&h.ctx, ThemeKind::ProMedium);
             h.run_steps(4);
-            let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 240.0));
+            let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 320.0));
             assert!(screen.contains_rect(h.get_by_label("Color wheel").rect()));
             for field in h.query_all_by_role(egui::accesskit::Role::SpinButton) {
                 assert!(screen.contains_rect(field.rect()), "{width} @ {scale}: {:?}", field.rect());
@@ -236,6 +236,60 @@ fn compact_wheel_fills_remaining_space_without_hex_rgb_readout() {
             let wheel = h.get_by_label("Color wheel").rect();
             assert!(wheel.bottom() > screen.bottom() - 20.0, "wheel fills the space freed by the removed row");
         }
+    }
+}
+
+#[test]
+fn short_space_keeps_a_usable_wheel_instead_of_shrinking_it() {
+    for width in [250.0, 320.0] {
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+        app.ui.color_panel.mode = ColorPanelMode::ColorWheel;
+        let mut h = Harness::builder()
+            .with_size(vec2(width, 160.0))
+            .build_ui_state(|ui, app: &mut PrismApp| show_mode(app, ui, ColorPanelMode::ColorWheel), app);
+        PrismApp::setup_context(&h.ctx, ThemeKind::ProMedium);
+        h.run_steps(4);
+        let wheel = h.get_by_label("Color wheel").rect();
+        assert!(wheel.height() >= MIN_WHEEL - 0.5, "{width}: {wheel:?}");
+    }
+}
+
+#[test]
+fn wheel_mode_grows_the_color_group_and_stops_the_splitter_at_its_minimum() {
+    for theme in [ThemeKind::ProMedium, ThemeKind::ALL[ThemeKind::ALL.len() - 1]] {
+        let mut h = Harness::builder().with_size(vec2(1200.0, 1000.0)).build_eframe(move |cc| {
+            PrismApp::setup_context(&cc.egui_ctx, theme);
+            PrismApp::new(prism_engine::Session::new(), Default::default())
+        });
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        let (req, _rx) = crate::control::ControlRequest::new(
+            "ui.set",
+            json!({"theme":theme.id(),"dockWidth":300,"dockTabs":{"color":usize::from(!matches!(theme, ThemeKind::Pro | ThemeKind::ProMedium))},
+                "colorPanel":{"mode":ColorPanelMode::ColorWheel}}),
+        );
+        crate::control::handle(h.state_mut(), &ctx, &req);
+        let layout = if crate::theme::Layout::native(theme) == crate::theme::Layout::Compact { "compact" } else { "comfortable" };
+        h.state_mut().run("prefs.set", json!({"path": "interface.layout", "value": layout})).unwrap();
+        h.state_mut().ui.dock.heights.insert(crate::dock::Group::Color, 200.0);
+        h.run_steps(8);
+        assert!(h.state().ui.dock.height(crate::dock::Group::Color) >= WHEEL_GROUP_MIN, "{theme:?}");
+        let group = crate::dock::last_rects(&ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Color).unwrap().1;
+        let wheel = h.get_by_label("Color wheel").rect();
+        assert!(wheel.height() >= MIN_WHEEL - 0.5 && group.contains_rect(wheel), "{theme:?}: {wheel:?} in {group:?}");
+        // Dragging the splitter below the group upward stops at the minimum.
+        let from = pos2(group.center().x, group.bottom() + crate::dock::GAP / 2.0);
+        h.hover_at(from);
+        h.step();
+        h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        for k in 1..=6 {
+            h.hover_at(from - vec2(0.0, 40.0 * k as f32));
+            h.step();
+        }
+        h.event(Event::PointerButton { pos: from - vec2(0.0, 240.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(4);
+        let height = h.state().ui.dock.height(crate::dock::Group::Color);
+        assert!((height - WHEEL_GROUP_MIN).abs() < 1.0, "{theme:?}: {height}");
     }
 }
 

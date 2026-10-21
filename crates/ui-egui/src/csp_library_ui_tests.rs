@@ -244,14 +244,71 @@ fn panel_state_is_driven_through_the_control_channel() {
     assert!(app.ui.csp_library.error.is_some(), "listed again on open");
     call(&mut app, json!({"cspLibraryOpen": false}));
     assert!(!crate::dock_model::panel_showing(&app.ui, PanelId::ClipStudio, pro));
-    call(&mut app, json!({"cspLibraryView": "grid", "cspLibraryTags": ["lace", "레이스"]}));
+    call(&mut app, json!({"cspLibraryView": "grid", "cspLibraryTags": ["lace", "레이스"], "cspLibraryFilter": "layers"}));
     assert_eq!(app.ui.csp_library.view, View::Grid);
+    assert_eq!(app.ui.csp_library.filter, KindFilter::Layers);
     assert_eq!(app.ui.csp_library.tags, ["lace", "레이스"]);
     // Bad values change nothing.
-    for bad in [json!({"cspLibraryView": "cards"}), json!({"cspLibraryTags": "lace"}), json!({"cspLibraryTags": [""]}), json!({"cspLibraryTags": [3]})] {
+    for bad in [json!({"cspLibraryView": "cards"}), json!({"cspLibraryFilter": "rulers"}), json!({"cspLibraryTags": "lace"}), json!({"cspLibraryTags": [""]}), json!({"cspLibraryTags": [3]})] {
         let (req, _rx) = crate::control::ControlRequest::new("ui.set", bad);
         let _ = crate::control::handle(&mut app, &ctx, &req);
     }
     assert_eq!(app.ui.csp_library.view, View::Grid);
     assert_eq!(app.ui.csp_library.tags, ["lace", "레이스"]);
+    assert_eq!(app.ui.csp_library.filter, KindFilter::Layers);
+}
+
+fn with_layers() -> Value {
+    let mut l = listing();
+    l["layers"] = json!([
+        {"uuid": "r", "name": "Isometric ruler", "kind": "image", "catalog": "Iso", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "ruler": true, "tiling": false},
+        {"uuid": "g", "name": "Isometric grid", "kind": "image", "catalog": "Iso", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "ruler": false, "tiling": true}
+    ]);
+    l
+}
+
+#[test]
+fn layer_materials_have_their_own_filter_and_need_a_document() {
+    let mut app = app();
+    app.ui.csp_library.listing = Some(with_layers());
+    let mut h = harness(app);
+    assert!(h.query_by_label("Isometric ruler").is_some(), "All lists layer materials too");
+    h.state_mut().ui.csp_library.filter = KindFilter::Layers;
+    h.run_steps(2);
+    assert!(h.query_by_label("Ink pen").is_none() && h.query_by_label("Isometric grid").is_some());
+    h.state_mut().ui.csp_library.filter = KindFilter::Brushes;
+    h.run_steps(2);
+    assert!(h.query_by_label("Isometric ruler").is_none() && h.query_by_label("Ink pen").is_some());
+    assert!(!in_library(h.state(), &json!({"name": "Isometric ruler", "kind": "image", "catalog": "Iso"})));
+
+    // No document: nothing is added and the selection stays for a second try.
+    let mut a = super::tests::app();
+    a.ui.csp_library.listing = Some(with_layers());
+    a.ui.csp_library.selected = vec!["r".into()];
+    import_selected(&mut a);
+    assert_eq!(a.ui.csp_library.selected, ["r"]);
+    // With a document, a material that cannot be read is reported, not added.
+    a.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let layers = a.session.active().unwrap().doc.layers.len();
+    import_selected(&mut a);
+    assert!(a.ui.status_error && a.ui.csp_library.selected.is_empty());
+    assert_eq!(a.session.active().unwrap().doc.layers.len(), layers);
+}
+
+/// The user's own downloaded "Isometric ruler and grid" (ASSETS 1758445); never bundled.
+#[test]
+#[ignore = "reads the local CLIP STUDIO user data folder (PRISM_TEST_CSP_ROOT or the default)"]
+fn local_isometric_ruler_is_added_from_the_panel() {
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+    app.ui.csp_library.root = std::env::var_os("PRISM_TEST_CSP_ROOT").map(|r| r.to_string_lossy().into_owned());
+    app.session.execute("file.new", json!({"width": 1280, "height": 720})).unwrap();
+    refresh(&mut app);
+    let listing = app.ui.csp_library.listing.clone().unwrap();
+    assert!(materials(&listing).any(|b| b["uuid"] == "2dedbf35ba-a641-3e9e-79ad-6950ad1a78" && is_ruler(b)));
+    app.ui.csp_library.selected = vec!["2dedbf35ba-a641-3e9e-79ad-6950ad1a78".into(), "8f65f2e32e-6d42-c3a8-ddbc-3cd24d4dd0".into()];
+    import_selected(&mut app);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let doc = &app.session.active().unwrap().doc;
+    assert!(doc.layers.iter().any(|l| l.name == "Isometric ruler" && l.special_rulers.is_some()));
+    assert!(doc.layers.iter().any(|l| l.name == "Isometric grid"));
 }

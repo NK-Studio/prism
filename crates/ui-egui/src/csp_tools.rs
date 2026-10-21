@@ -253,7 +253,7 @@ pub fn toolbar_slots(app: &mut PrismApp, ui: &mut egui::Ui, double: bool, bx: f3
             ui.horizontal(|ui| {
                 for &tool in row {
                     let tip = format!("{}  ({})", tl!(tool.label()), tool.key());
-                    let on = app.ui.csp_tool == tool;
+                    let on = app.ui.csp_tool == tool && !crate::transform_tool::modal(app);
                     let resp = icons::button(ui, tool.icon(), bx, on, &tip);
                     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, tl!(tool.label())));
                     if resp.clicked() {
@@ -265,10 +265,18 @@ pub fn toolbar_slots(app: &mut PrismApp, ui: &mut egui::Ui, double: bool, bx: f3
     }
 }
 
-/// Set up the Clip Studio workspace's panels: Sub Tool above Tool Property in a left column.
+/// Set up the Clip Studio workspace's panels: Sub Tool, Tool Property and Color Slider in a left
+/// column, and the Color panel showing the wheel alone.
 pub fn apply_workspace_layout(app: &mut PrismApp) {
     use crate::dock_model::{PanelId, Side};
-    app.ui.dock.add_column(Side::Left, vec![vec![PanelId::SubTool], vec![PanelId::ToolProperty]], 250.0);
+    let column = app.ui.dock.add_column(Side::Left, vec![vec![PanelId::SubTool], vec![PanelId::ToolProperty], vec![PanelId::ColorSlider]], 250.0);
+    if let Some(sliders) = app.ui.dock.columns.iter().find(|c| c.id == column).and_then(|c| c.groups.last().copied()) {
+        app.ui.dock.heights.insert(sliders, 150.0);
+    }
+    // Clip Studio's Color Wheel; its sliders are the Color Slider panel.
+    app.ui.color_panel.mode = crate::state::ColorPanelMode::ColorWheel;
+    let color = crate::dock::Group::Color;
+    app.ui.dock.heights.insert(color, app.ui.dock.height(color).max(360.0));
     let tool = app.ui.csp_tool;
     select(app, tool);
 }

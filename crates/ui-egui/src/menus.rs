@@ -64,8 +64,11 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.workspace.clipStudio", "Clip Studio", &["Window", "Workspace"], None),
     ("window.panel.subTool", "Sub Tool", &["Window"], None),
     ("window.panel.toolProperty", "Tool Property", &["Window"], None),
+    ("window.panel.colorSlider", "Color Slider", &["Window"], None),
     // Window › Extensions: Prism's own extension panels (Photoshop lists its add-on panels here).
     ("window.extensions.clipStudio", "CLIP STUDIO Materials", &["Window", "Extensions"], None),
+    // CLIP STUDIO's Snap to Special Ruler (no default shortcut: its ⌘2 is Photoshop's).
+    ("view.snapTo.specialRuler", "Special Ruler", &["View", "Snap To"], None),
     // Photoshop's Tab and ⇧Tab: all panels (Tools, options bar and the dock), or only the dock.
     ("window.togglePanels", "Show/Hide All Panels", &[], Some("Tab")),
     ("window.toggle.dock", "Show/Hide Panels", &[], Some("Shift+Tab")),
@@ -709,6 +712,7 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("window.toggle.toolSliders", "window.panel.toolPresets"),
     // Window › Extensions sits under Workspace, as in Photoshop.
     ("window.extensions.clipStudio", "window.workspace.lockWorkspace"),
+    ("view.snapTo.specialRuler", "view.snapTo.documentBounds"),
 ];
 
 pub fn menu_items(app: &PrismApp) -> Vec<MenuItem> {

@@ -84,7 +84,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 33] = [
+pub const UI_SET_FIELDS: [&str; 34] = [
     "tool",
     "actions",
     "panels",
@@ -107,6 +107,7 @@ pub const UI_SET_FIELDS: [&str; 33] = [
     "sutDetails",
     "cspLibraryOpen",
     "cspLibraryView",
+    "cspLibraryFilter",
     "cspLibraryTags",
     "sutTextureScaleExpanded",
     "brushesView",
@@ -486,6 +487,10 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                     Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("cspLibraryView: {e} (list, grid)"))?,
                     None => None,
                 };
+                let csp_library_filter: Option<crate::csp_library_ui::KindFilter> = match p.get("cspLibraryFilter") {
+                    Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("cspLibraryFilter: {e} (all, brushes, subTools, layers)"))?,
+                    None => None,
+                };
                 let csp_library_tags: Option<Vec<String>> = match p.get("cspLibraryTags") {
                     Some(v) => Some(
                         serde_json::from_value::<Vec<String>>(v.clone())
@@ -636,6 +641,9 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 }
                 if let Some(tags) = csp_library_tags {
                     app.ui.csp_library.tags = tags;
+                }
+                if let Some(f) = csp_library_filter {
+                    app.ui.csp_library.filter = f;
                 }
                 if let Some(value) = sut_texture_scale_expanded {
                     app.ui.sut_panel.texture_scale_expanded = value;
@@ -1129,6 +1137,7 @@ pub fn inspect(app: &PrismApp, ctx: &egui::Context) -> Value {
         "update": app.ui.update,
         "shapeCorners": crate::shape_corners_ui::inspect(app),
         "arrowHandles": crate::arrow_handles_ui::inspect(app),
+        "specialRulerHandles": crate::special_ruler_ui::handles::current(app),
         "layerMenu": app.ui.layer_menu,
         "brushPicker": app.ui.brush_picker.map(|pos| json!({
             "pos": pos,

@@ -3190,41 +3190,41 @@ fontWeight	Italic	기울임
 	This CSP setting is not supported in Prism yet	이 CSP 설정은 아직 Prism에서 지원하지 않습니다
 	This length uses a unit other than pixels; Prism reads it as pixels	픽셀 이외의 단위를 쓰는 길이입니다. Prism은 픽셀로 읽습니다
 	{px} px	{px} px
-cspFill	Close gap	틈 닫기
-cspFill	Fill narrow areas	좁은 영역도 적용
-cspFill	Area scaling	영역 확대/축소
-cspFill	Scaling mode	확대/축소 방법
-cspFill	Rectangle	사각형으로 확장
-cspFill	Round	원형으로 확장
-cspFill	To darkest pixel	가장 진한 픽셀까지 확장
-cspFill	Tolerance	색의 오차
-cspFill	Refer multiple	복수 참조
-cspFill	All layers	모든 레이어
-cspFill	Reference layer	참조 레이어
-cspFill	Selected layer	선택된 레이어
-cspFill	Layer in folder	폴더 내 레이어
-cspFill	Exclude text	문자를 참조하지 않음
-cspFill	Exclude draft layers	밑그림을 참조하지 않음
-cspFill	Exclude editing layer	편집 레이어를 참조하지 않음
-cspFill	Exclude paper layer	용지를 참조하지 않음
-cspFill	Exclude locked layers	잠긴 레이어를 참조하지 않음
-cspFill	Fill up to vector path	벡터의 중심선에서 채색 중지
-cspFill	Refer to image border	화상 테두리 참조
-cspFill	Anti-aliasing	안티에일리어싱
-cspFill	Apply to connected pixels only	인접 픽셀 선택
-cspFill	Target color	대상색
-cspFill	Target all colors	모든 색 대상
-cspFill	Only transparent	투명 부분만
-cspFill	Area surrounded by transparent	투명으로 둘러싸인 부분
-cspFill	Only black	검은색 부분만
-cspFill	Area surrounded by black	검은색으로 둘러싸인 부분
-cspFill	Only white and transparent	흰색과 투명 부분만
-cspFill	Area surrounded by white and transparent	흰색과 투명으로 둘러싸인 부분
-cspFill	Treat semi-transparent as transparent	연한 반투명을 투명으로 취급
-cspFill	All enclosed areas except transparency	투명 이외와 내부의 투명
-cspFill	All enclosed areas including transparency	투명 이외는 열린 영역에도
-cspFill	Opacity	불투명도
-cspFill	Stabilization	손떨림 보정
+cspTool	Close gap	틈 닫기
+cspTool	Fill narrow areas	좁은 영역도 적용
+cspTool	Area scaling	영역 확대/축소
+cspTool	Scaling mode	확대/축소 방법
+cspTool.scale	Rectangle	사각형으로 확장
+cspTool.scale	Round	원형으로 확장
+cspTool.scale	To darkest pixel	가장 진한 픽셀까지 확장
+cspTool	Tolerance	색의 오차
+cspTool	Refer multiple	복수 참조
+cspTool	All layers	모든 레이어
+cspTool	Reference layer	참조 레이어
+cspTool	Selected layer	선택된 레이어
+cspTool	Layer in folder	폴더 내 레이어
+cspTool	Exclude text	문자를 참조하지 않음
+cspTool	Exclude draft layers	밑그림을 참조하지 않음
+cspTool	Exclude editing layer	편집 레이어를 참조하지 않음
+cspTool	Exclude paper layer	용지를 참조하지 않음
+cspTool	Exclude locked layers	잠긴 레이어를 참조하지 않음
+cspTool	Fill up to vector path	벡터의 중심선에서 채색 중지
+cspTool	Refer to image border	화상 테두리 참조
+cspTool	Anti-aliasing	안티에일리어싱
+cspTool	Apply to connected pixels only	인접 픽셀 선택
+cspTool	Target color	대상색
+cspTool	Target all colors	모든 색 대상
+cspTool	Only transparent	투명 부분만
+cspTool	Area surrounded by transparent	투명으로 둘러싸인 부분
+cspTool	Only black	검은색 부분만
+cspTool	Area surrounded by black	검은색으로 둘러싸인 부분
+cspTool	Only white and transparent	흰색과 투명 부분만
+cspTool	Area surrounded by white and transparent	흰색과 투명으로 둘러싸인 부분
+cspTool	Treat semi-transparent as transparent	연한 반투명을 투명으로 취급
+cspTool	All enclosed areas except transparency	투명 이외와 내부의 투명
+cspTool	All enclosed areas including transparency	투명 이외는 열린 영역에도
+cspTool	Opacity	불투명도
+cspTool	Stabilization	손떨림 보정
 	SUT stabilization exceeds 100 and was limited	SUT 손떨림 보정이 100을 넘어 제한했습니다
 	SUT watercolor edge style is not supported; the standard edge is used	SUT 수채 경계 스타일은 지원하지 않아 표준 경계를 씁니다
 	SUT watercolor edge radius exceeds Prism's work limit and was limited	SUT 수채 경계 반경이 Prism 처리 한도를 넘어 제한했습니다
@@ -3235,3 +3235,257 @@ cspFill	Stabilization	손떨림 보정
 	Enclose and Fill	둘러싸서 채우기
 	No closed area inside the lasso to fill	올가미 안에 채울 닫힌 영역이 없습니다
 	Draw a lasso around the areas to fill	채울 영역을 올가미로 둘러싸세요
+	Color Slider	컬러 슬라이더
+# cspTool: CLIP STUDIO PAINT's own Tool Property terms (resource E79C2AC5-…, see
+# docs/csp-subtool-gaps.md), so imported sub-tools read as they do in CLIP STUDIO.
+# cspTool.<area>: the same English label translated differently there.
+cspTool	Blending mode	합성 모드
+cspTool	None	없음
+cspTool	Weak	약
+cspTool	Medium	중
+cspTool	Strong	강
+cspTool	Adjust by speed	속도에 의한 손떨림 보정
+cspTool	Stabilization mode	보정 타입
+cspTool	Reduce stabilization when drawing quickly	재빨리 그렸을 때 약한 보정
+cspTool	Increase stabilization when drawing slowly	천천히 그렸을 때 보정 적용
+cspTool	Brush Size	브러시 크기
+cspTool	Specify by size on screen	화면상의 크기로 지정
+cspTool	Brush density	브러시 농도
+cspTool	Hardness	경도
+cspTool	Starting and ending	시작점과 끝점
+cspTool	How to specify	지정 방법
+cspTool	Specify length	길이 지정
+cspTool	By percentage	백분율 지정
+cspTool	Fade	페이드
+cspTool	Effect	적용 대상
+cspTool	Starting	시작점
+cspTool	Ending	끝점
+cspTool	Sharp angles	모서리를 뾰족하게 처리
+cspTool	Vector magnet	벡터 흡착
+cspTool	Brush shape	브러시 모양
+cspTool	Selection mode	선택 추가
+cspTool.select	Selection mode	작성 방법
+cspTool	New selection	신규 선택
+cspTool	Add to selection	추가 선택
+cspTool	Remove from selection	부분 해제
+cspTool	Select from selection	선택 중을 선택
+cspTool	Toggle selection	선택 상태 전환
+cspTool	Interlock selection and image	선택 범위와 화상을 연동
+cspTool	Line/Fill	선/채색
+cspTool	Create fill	채색 작성
+cspTool	Create line	선 작성
+cspTool	Create both line and fill	선과 채색 작성
+cspTool	Adjust angle after fixed	확정 후 각도 조정
+cspTool	Start from center	중심부터 시작
+cspTool	Snap angle	각도 단위
+cspTool	Enable snapping	표시 메뉴에 따라 스냅
+cspTool	Figure	도형
+cspTool	Rectangle	직사각형
+cspTool	Ellipse	타원
+cspTool	Polygon	다각형
+cspTool	Number of corners	다각형의 정점 수
+cspTool	Aspect type	종횡 지정
+cspTool	Free	자유
+cspTool	Specified ratio	비율 지정
+cspTool	W	가로
+cspTool	H	세로
+cspTool	Roundness of corner	모서리의 둥글기
+cspTool	Curve	곡선
+cspTool	Straight line	직선
+cspTool	Spline	스플라인
+cspTool	Quadratic Bezier	2차 베지에
+cspTool	Cubic Bezier	3차 베지에
+cspTool	Close line	선 닫기
+cspTool	By click	클릭으로 지정
+cspTool	By drag	드래그로 지정
+cspTool	Show line preview	예측선 표시
+cspTool	Add/delete control points while drawing	작성 도중 제어점 추가/삭제
+cspTool	Lasso selection mode	영역 작성 방법
+cspTool	Single stroke	1스트로크로 확정
+cspTool	Multiple input (freehand and lasso)	여러 번 조작(프리핸드 및 꺾은선)
+cspTool	Magnetic lasso	참조 레이어에 흡착
+cspTool	Magnet settings	흡착 동작
+cspTool	All	모두
+cspTool	Freehand only	프리핸드만
+cspTool	Polyline only	꺾은선만
+cspTool	Snap to vector paths	벡터 중심선에 흡착
+cspTool	Mode	모드
+cspTool.move	Mode	이동 대상
+cspTool	Layer	레이어
+cspTool	Halftone dots of tone	톤 망점
+cspTool	Rotate the halftone dots of tone	톤 망점 회전
+cspTool	Grid/Ruler Bar	그리드/눈금자
+cspTool	Move the object at the clicked position	클릭 위치에 있는 대상 이동
+cspTool	Move layers in the selected area	선택 범위 내 레이어 이동
+cspTool	Moved layers become selected	이동 대상을 선택 상태로 변경
+cspTool	Keep original image	원본 화상 남기기
+cspTool.select	Exclude text	문자를 선택하지 않음
+cspTool.select	Exclude draft layers	밑그림을 선택하지 않음
+cspTool.select	Exclude locked layers	잠긴 레이어를 선택하지 않음
+cspTool.select	Exclude fill layers	채우기를 선택하지 않음
+cspTool	Selectable object	선택 가능한 오브젝트
+cspTool	Operation of transparent part	투명 부분의 조작
+cspTool	Snap to other frame borders	다른 컷 테두리에 스냅
+cspTool	Keep gutters aligned	다른 컷 테두리를 연동
+cspTool.frame	None	연동하지 않음
+cspTool.frame	Horizontal & adjacent	일부 연동
+cspTool.frame	All	연동함
+cspTool	Change thickness while scaling	확대/축소 시 굵기 변경
+cspTool	Reference	참조위치
+cspTool	Current Layer	편집 레이어
+cspTool	Top layer	최상위 레이어
+cspTool	Image	표시상 이미지
+cspTool	Average color	주위색
+cspTool	Show color picker circle	펜으로 써클 표시
+cspTool	Include vector path	중심선도 포함
+cspTool	Reference overflow frame	작화 프레임 참조
+cspTool	Dust size	잡티 크기
+cspTool	Remove dust from transparency	불투명한 점 지우기
+cspTool	Remove dust from white background	흰 바탕 안의 점 지우기
+cspTool	Fill transparent gaps with surrounding color	투명한 구멍을 주위색으로 채우기
+cspTool	Fill transparent gaps with foreground color	투명한 구멍을 그리기색으로 채우기
+cspTool	Select dust on transparency	불투명한 점 선택
+cspTool	Select dust on white background	흰 바탕 안의 점 선택
+cspTool	Select transparent hole	투명한 구멍 선택
+cspTool	Black	검은색
+cspTool	Do not cover black	검은색을 대상으로 하지 않기
+cspTool	Cover black	검은색을 대상으로 하기
+cspTool	Replace black with drawing color	검은색을 그리기색으로 바꾸기
+cspTool	Transparent color	투명색
+cspTool	Do not cover transparency	투명을 대상으로 하지 않기
+cspTool	Cover transparency	투명을 대상으로 하기
+cspTool	Replace transparency with drawing color	투명을 그리기색으로 바꾸기
+cspTool	Output Settings	혼합율 설정
+cspTool	Gradient	그라데이션
+cspTool	Flip	반전
+cspTool	Shape	모양
+cspTool	Circle	원
+cspTool	Edge process	끝부분 처리
+cspTool	Do not repeat	반복 없음
+cspTool	Repeat	반복
+cspTool	Reverse	반환
+cspTool	Not draw	그리지 않음
+cspTool	Where to create	그리기 대상
+cspTool	Draw on editing layer	편집 대상 레이어에 그리기
+cspTool	Create gradient layer	그라데이션 레이어를 작성
+cspTool	Dithering	디더링
+cspTool	Font	글꼴
+cspTool	Size	크기
+cspTool	Style	스타일
+cspTool	Text direction	문자 방향
+cspTool	Horizontal	가로쓰기
+cspTool	Vertical	세로쓰기
+cspTool.text	Horizontal	좌우 반전
+cspTool.text	Vertical	상하 반전
+cspTool	Alignment	줄 맞춤
+cspTool	Left/Top	왼쪽/위
+cspTool	Center	가운데
+cspTool	Right/Bottom	오른쪽/아래
+cspTool	Justify	균등 분할
+cspTool	Line space	줄 간격
+cspTool	Auto TateChuYoko (Horizontal in Vertical)	자동 문자 회전
+cspTool	Reading size (%)	윗주 크기(%)
+cspTool	Character spacing	문자 간격
+cspTool	Show resize handle	리사이즈 핸들 표시
+cspTool	Display quality while editing	편집 시 표시 품질
+cspTool	High quality	고품질
+cspTool	Fast	고속
+cspTool	How to add	추가 방법
+cspTool	Create layer always	항상 레이어를 작성
+cspTool	Add to selected text	선택 중인 텍스트에 추가
+cspTool	Detect position	삽입 위치 자동 판별
+cspTool	Outline	윤곽선 문자
+cspTool	Reading font	윗주 글꼴
+cspTool	Reading position	윗주 위치
+cspTool	Align to start	선두 맞춤
+cspTool	Align to center	가운데 맞춤
+cspTool	Align to end	끝 맞춤
+cspTool	Adjust reading	윗주 조정
+cspTool	Space between reading and main text	윗주와 본문의 간격
+cspTool	Reading space	윗주 문자 간격
+cspTool	Canvas setting	캔버스 설정
+cspTool	On	ON
+cspTool	Off	OFF
+cspTool	Text color	텍스트 색
+cspTool	Type	종류
+cspTool	Color	색
+cspTool	Horizontal ratio	수평 비율
+cspTool	Vertical ratio	수직 비율
+cspTool	Condense text	문자 간격 조정
+cspTool	Use half-width punctuation marks	구두점 문자 폭의 반각 설정
+cspTool	Wrap text at frame	프레임 내에서 줄 바꿈
+cspTool	Background color	배경색
+cspTool	Position in frame	프레임 맞춤
+cspTool	Edge	테두리
+cspTool	Thickness of edges	테두리 두께
+cspTool	Edge color	테두리색
+cspTool	Rotation angle	회전각
+cspTool	Skew (horizontal)	기울기(가로)
+cspTool	Skew (vertical)	기울기(세로)
+cspTool.transform	Mode	변형 방법
+cspTool	Scale/Rotate	확대/축소/회전
+cspTool	Scale	확대/축소
+cspTool	Rotate	회전
+cspTool	Skew	평행 왜곡
+cspTool	Scale/Rotate/Skew	확대/축소 회전, 평행 왜곡
+cspTool	Keep aspect ratio	종횡비 고정
+cspTool	Drag	드래그
+cspTool	Create text box	텍스트 박스 작성
+cspTool	Select text	텍스트 선택
+cspTool	Apply to	설정 대상
+cspTool	New only	신규만
+cspTool	Selected text	선택 중
+cspTool	Version	버전
+cspTool	Ligatures	합자
+cspTool	Kerning	커닝
+cspTool	Manual	수치 지정
+cspTool	Metrics	메트릭스
+cspTool	Contextual alternates	전후 관계에 따라 달라지는 자형
+cspTool	Circular text	원형 배치
+cspTool	Radius	원의 반경
+cspTool	Direction	배치 방향
+cspTool	Clockwise	시계 방향
+cspTool	Counter-clockwise	반시계 방향
+cspTool	Space evenly	균등 배치
+	Prism draws an ellipse gradient as a circle	Prism은 타원 그라데이션을 원으로 그립니다
+	Prism uses the Normal blending mode	Prism은 표준 합성 모드를 사용합니다
+	Prism picks the displayed color	Prism은 표시된 색을 추출합니다
+	Prism does not import this setting yet	Prism은 아직 이 설정을 가져오지 않습니다
+	CLIP STUDIO value {n}	CLIP STUDIO 값 {n}
+	CLIP STUDIO's codes for this setting are not traced; it shows the stored number	이 설정의 CLIP STUDIO 코드는 확인되지 않아 저장된 숫자를 표시합니다
+	Behind	배경
+	Through	통과
+	Replace alpha	투명도 바꾸기
+	Black burn	블랙 번
+	White burn	화이트 닷지
+	Compare density	비교(농도)
+	Erase (compare)	삭제(비교)
+	Dimmed settings are kept for CLIP STUDIO; Prism does not use them yet	흐리게 표시된 설정은 CLIP STUDIO용으로 보관하며 Prism은 아직 쓰지 않습니다
+	Gradient bar	그라데이션 막대
+	Reverse gradient	그라데이션 반전
+	Main color	메인 컬러
+	Sub color	서브 컬러
+	Specified color	지정 색
+	Stop color	정지점 색상
+	Stop opacity	정지점 불투명도
+	No gradient is stored; Prism paints its current gradient	저장된 그라데이션이 없습니다. Prism은 현재 그라데이션으로 칠합니다
+	Curves next to the main or sub color run straight in Prism	메인 컬러나 서브 컬러에 붙은 곡선은 Prism에서 직선으로 이어집니다
+	This font is not installed; the Type tool keeps its font	이 글꼴이 설치되어 있지 않습니다. 문자 도구는 현재 글꼴을 유지합니다
+	Special Ruler	특수 자
+	List Special Rulers	특수 자 목록
+	Parallel Line Ruler	평행선 자
+	Perspective Ruler	퍼스자
+	Edit Special Ruler	특수 자 편집
+	Delete Special Ruler	특수 자 삭제
+	Show Special Ruler	특수 자 표시
+	Snap Points to Special Rulers	특수 자에 점 스냅
+	Special ruler	특수 자
+	Add CLIP STUDIO Material	클립 스튜디오 소재 추가
+	Not added	추가되지 않음
+	Added from CLIP STUDIO	클립 스튜디오에서 추가함
+	Adds a layer to the open document	열린 문서에 레이어로 추가합니다
+	Adds a layer carrying its special ruler to the open document; brush strokes snap to it (View › Snap To › Special Ruler)	특수 자가 든 레이어를 열린 문서에 추가합니다. 브러시 획이 특수 자에 스냅됩니다(보기 › 스냅 대상 › 특수 자)
+	Open or create a document first: layer materials are added to it as layers	먼저 문서를 열거나 새로 만드세요. 레이어 소재는 문서에 레이어로 추가됩니다
+	Added {n} CLIP STUDIO materials with {rulers} special rulers; strokes snap to them	클립 스튜디오 소재 {n}개와 특수 자 {rulers}개를 추가했습니다. 획이 특수 자에 스냅됩니다
+	Added {n} CLIP STUDIO materials to the document	클립 스튜디오 소재 {n}개를 문서에 추가했습니다
+	The material's file is missing; download it again in CLIP STUDIO, then refresh	소재 파일이 없습니다. 클립 스튜디오에서 다시 다운로드한 뒤 새로 고치세요

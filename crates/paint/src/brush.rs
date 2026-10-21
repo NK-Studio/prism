@@ -200,6 +200,55 @@ pub enum MaskMode {
     Height,
 }
 
+/// A CLIP STUDIO stroke blending mode Prism runs without a [`prism_color::BlendMode`] equivalent
+/// (codes and inferred formulas: [`crate::csp_blend`]). Each composites the stroke's alpha `k`
+/// (coverage × opacity × selection) against the pre-stroke pixel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CspStrokeMode {
+    /// Background (29): paints under the existing alpha (`dst` over the stroke).
+    Behind,
+    /// Replace alpha (31): the brush colour at the stroke opacity replaces the pixel, weighted
+    /// by the coverage.
+    ReplaceAlpha,
+    /// Compare density (34): alpha `max(dst, k)`, the denser of the two colours.
+    CompareDensity,
+    /// Erase (compare) (35): alpha `min(dst, 1 − k)`; the brush erases with any tool.
+    EraseCompare,
+}
+
+impl CspStrokeMode {
+    /// The mode erases (the brush is an eraser with whichever tool runs it).
+    pub fn erases(self) -> bool {
+        self == Self::EraseCompare
+    }
+}
+
+/// A CLIP STUDIO dual brush mode that adds the second brush's opacity outside the first (codes:
+/// [`crate::csp_blend::CSP_DUAL_MODES`]): stroke coverage `c` and dual coverage `t` combine into
+/// `Normal`/`Screen` `1 − (1 − c)(1 − t)`, `Add` `min(1, c + t)`, `Lighten` `max(c, t)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CspDualAdd {
+    Normal,
+    Add,
+    Lighten,
+    Screen,
+}
+
+impl CspDualAdd {
+    /// Combine stroke coverage `c` with dual coverage `t` (both clamped to 0..1).
+    pub fn combine(self, c: f32, t: f32) -> f32 {
+        let (c, t) = (c.clamp(0.0, 1.0), t.clamp(0.0, 1.0));
+        let r = match self {
+            Self::Normal | Self::Screen => 1.0 - (1.0 - c) * (1.0 - t),
+            Self::Add => c + t,
+            Self::Lighten => c.max(t),
+        };
+        if r.is_finite() { r.clamp(0.0, 1.0) } else { 0.0 }
+    }
+}
+
 /// Clip Studio texture compositing. These modes have their own density semantics;
 /// similarly named Photoshop masks are not interchangeable at partial density.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,6 +354,10 @@ pub struct DualBrush {
     pub both_axes: bool,
     pub count: u32,
     pub flip: bool,
+    /// Imported CSP adding mode: the second brush adds opacity outside the first instead of
+    /// masking it (`mode` is then unused).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_add: Option<CspDualAdd>,
 }
 
 impl Default for DualBrush {
@@ -322,6 +375,7 @@ impl Default for DualBrush {
             both_axes: false,
             count: 1,
             flip: false,
+            csp_add: None,
         }
     }
 }
@@ -548,6 +602,17 @@ pub struct BrushSettings {
     /// colour (`None`: that tip paints in the brush colour). Ignored with colour mixing or erasing.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub csp_tip_colors: Vec<Option<crate::csp_tip::CspTipColor>>,
+    /// Imported CSP Erase blending mode: the brush erases with whichever tool runs it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_erase: bool,
+    /// Imported CSP stroke blending mode without a Prism blend mode (Background, Replace alpha,
+    /// Compare density, Erase (compare)); `mode` is then Normal. Ignored with colour mixing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_stroke: Option<CspStrokeMode>,
+    /// Imported CSP size synchronized with the view scale: the size is in screen pixels, so a
+    /// stroke at zoom `z` paints `size / z` image pixels.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_size_by_view: bool,
     /// Keep the current texture (pattern + scale) when switching to another textured preset.
     pub protect_texture: bool,
     /// Sections whose settings stay when another preset is picked (tool state, like Photoshop's locks).
@@ -601,6 +666,9 @@ impl Default for BrushSettings {
             csp_ribbon: None,
             csp_tip_order: None,
             csp_tip_colors: Vec::new(),
+            csp_erase: false,
+            csp_stroke: None,
+            csp_size_by_view: false,
             protect_texture: false,
             locks: SectionLocks::default(),
             mixer: MixerSettings::default(),
@@ -664,6 +732,18 @@ impl BrushSettings {
             *stabilizer = stabilizer.bounded();
         }
         brush
+    }
+
+    /// The brush a stroke at view zoom `zoom` paints with when its size follows the view scale
+    /// ([`Self::csp_size_by_view`]); `None` when it doesn't. Hostile zooms are bounded.
+    pub fn csp_size_by_view_at(&self, zoom: f32) -> Option<Self> {
+        if !self.csp_size_by_view {
+            return None;
+        }
+        let zoom = if zoom.is_finite() { zoom.clamp(0.01, 100.0) } else { 1.0 };
+        let mut b = self.clone();
+        b.size = (b.size / zoom).clamp(0.5, MAX_BRUSH_SIZE);
+        Some(b)
     }
 
     /// This brush (a preset) picked while `current` is the tool's brush: Smoothing is a tool

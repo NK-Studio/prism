@@ -2,7 +2,7 @@
 //! workspace: they run on the Lasso, and closing the outline runs `paint.encloseFill` instead
 //! of making a selection. Tolerance, reference layers and anti-aliasing are tool options (set
 //! from the SUT by `sub_tool_panel::apply`); close gap and expansion come from the sub-tool's
-//! settings, which `csp_fill_property` shows and edits.
+//! settings, which `csp_tool_property` shows and edits.
 use serde_json::{Value, json};
 
 use crate::PrismApp;

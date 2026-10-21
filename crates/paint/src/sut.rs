@@ -1,4 +1,5 @@
 //! Imported Clip Studio sub-tool presentation, independent of brush rendering.
+use crate::csp_gradient::CspGradient;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -32,8 +33,9 @@ pub fn is_known_parameter(id: u32) -> bool {
 }
 
 /// Imported scalar values kept beside [`PARAMETER_KEYS`]: the extra sources of compound and
-/// conditional brush controls, and the settings of fill, auto select, gradient and text
-/// sub-tools (the Clip Studio workspace shows and runs them). Nothing else is persisted.
+/// conditional brush controls. The settings of the other families (fill, auto select, selection,
+/// gradient, figure, text, eyedropper, operation) are the numeric keys of the Tool Property
+/// catalogue ([`crate::sut_catalog`]). Nothing else is persisted.
 pub const RETAINED_KEYS: &[&str] = &[
     "BrushSizeUnit",
     "BrushVerticalThicknes",
@@ -47,41 +49,34 @@ pub const RETAINED_KEYS: &[&str] = &[
     "TextureStressDensity",
     "TextureForPlot",
     "PrismTextureScaleFactor",
-    // Fill and auto select (property IDs 5000–5300).
-    "FillReferMultiLayer",
-    "FillReferLayerType",
-    "FillNotReferText",
-    "FillNotReferDraft",
-    "FillNotReferCurrent",
-    "FillNotReferPaper",
-    "FillNotReferLocked",
-    "FillReferVectorCenter",
-    "FillIncludeVectorCenter",
-    "FillReferFrame",
-    "FillReferDrawFrame",
-    "FillColorMargin",
-    "FillContinuousPixel",
-    "FillAntiAlias",
-    "FillUseCloseGap",
-    "FillCloseGap",
-    "FillCloseGapUnit",
-    "FillSoakIntoNarrowArea",
-    "FillUseExpand",
-    "FillExpandLength",
-    "FillExpandLengthUnit",
-    "FillExpandType",
-    "CloseFillReferColorType",
-    // Gradient and text.
-    "GradationShapeKind",
-    "GradationDither",
-    "GradationReverseSaved",
-    "TextFontSize",
-    "TextVertical",
 ];
 
-/// Whether an imported value named `key` is kept (see [`RETAINED_KEYS`]).
+/// The largest imported setting value kept (see [`crate::sut_catalog::MAX_SETTING_VALUE`]).
+pub use crate::sut_catalog::MAX_SETTING_VALUE;
+
+/// Every key an imported sub-tool keeps: [`PARAMETER_KEYS`], [`RETAINED_KEYS`] and the Tool
+/// Property catalogue's numeric keys (some appear in more than one).
+pub fn retained_keys() -> impl Iterator<Item = &'static str> {
+    PARAMETER_KEYS.iter().map(|(_, key)| *key).chain(RETAINED_KEYS.iter().copied()).chain(crate::sut_catalog::numeric_keys())
+}
+
+/// Whether an imported value named `key` is kept (see [`retained_keys`]).
 pub fn is_retained_key(key: &str) -> bool {
-    PARAMETER_KEYS.iter().any(|(_, known)| *known == key) || RETAINED_KEYS.contains(&key)
+    retained_keys().any(|known| known == key)
+}
+
+/// The longest imported text value kept, in characters (font names are far shorter).
+pub const MAX_SETTING_CHARS: usize = 256;
+
+/// Whether an imported text value named `key` is kept (see [`crate::sut_catalog::string_keys`]).
+pub fn is_string_key(key: &str) -> bool {
+    crate::sut_catalog::string_keys().any(|known| known == key)
+}
+
+/// An imported text value as kept: control characters removed, trimmed, at most
+/// [`MAX_SETTING_CHARS`] characters.
+pub fn clean_text(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).take(MAX_SETTING_CHARS).collect::<String>().trim().to_string()
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +100,13 @@ pub struct SutBrushMetadata {
     /// Allowlisted imported scalar values, including unsupported/disabled rows.
     pub parameters: BTreeMap<String, f64>,
     pub texture_name: String,
+    /// Allowlisted imported text values (font names, [`crate::sut_catalog::string_keys`]), each
+    /// at most [`MAX_SETTING_CHARS`] characters.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub strings: BTreeMap<String, String>,
+    /// The gradient of a gradient sub-tool (`GradationData`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient: Option<CspGradient>,
 }
 
 fn is_zero(v: &i64) -> bool {

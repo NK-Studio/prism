@@ -350,9 +350,14 @@ fn read_sut_metadata(value: Option<serde_json::Value>, name: &str, warnings: &mu
     metadata.texture_name = metadata.texture_name.chars().take(1024).collect();
     metadata.parameters.retain(|key, value| {
         value.is_finite()
-            && value.abs() <= 1_000_000.0
+            && value.abs() <= prism_paint::sut::MAX_SETTING_VALUE
             && prism_paint::sut::is_retained_key(key)
     });
+    metadata.strings.retain(|key, value| {
+        *value = prism_paint::sut::clean_text(value);
+        !value.is_empty() && prism_paint::sut::is_string_key(key)
+    });
+    metadata.gradient = metadata.gradient.take().and_then(prism_paint::csp_gradient::CspGradient::sanitized);
     if metadata != original {
         warnings.push(format!("brush presets: {name}: invalid or oversized SUT display values were removed"));
     }

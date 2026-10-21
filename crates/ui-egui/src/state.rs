@@ -847,6 +847,18 @@ pub struct ColorPanelState {
     /// The panel edits the background colour (its chip was clicked), not the foreground.
     pub background: bool,
     pub mode: ColorPanelMode,
+    /// The Color Slider panel's colour model (Clip Studio Paint's RGB | HLS | CMY tabs).
+    pub slider: ColorSliderMode,
+}
+
+/// Colour model of the Color Slider panel (`color_slider_ui`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ColorSliderMode {
+    #[default]
+    Rgb,
+    Hls,
+    Cmy,
 }
 
 /// The Save window's memory: folders and formats used last, whether Advanced was open, and the

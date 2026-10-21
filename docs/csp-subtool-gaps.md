@@ -1,6 +1,6 @@
 # CLIP STUDIO sub-tool coverage
 
-Measured on 2026-10-19 for CLIP STUDIO PAINT 5.0.4.0 (the executable identified in
+Measured on 2026-10-19 (updated 2026-10-21) for CLIP STUDIO PAINT 5.0.4.0 (the executable identified in
 [sut-analysis.md](sut-analysis.md)). Prism imports CLIP STUDIO sub-tools (`.sut`, downloaded
 `.tool`) and shows them in the Clip Studio workspace. This page lists, for every setting CLIP
 STUDIO shows in **Tool Property** for its own default sub-tools, what Prism does with it, so
@@ -18,23 +18,30 @@ ignores it. *Not read*: dropped on import.
 
 | Family | Default sub-tools | Items in Tool Property | Runs, editable | Runs, set at import | Approximated | Shown, not run | Not read |
 |---|---|---|---|---|---|---|---|
-| Pen/pencil | 12 | 18 | 9 | 3 | 3 | 0 | 3 |
-| Brush/airbrush/decoration/blend | 81 | 57 | 11 | 19 | 7 | 0 | 20 |
-| Eraser | 8 | 14 | 6 | 2 | 1 | 0 | 5 |
+| Pen/pencil | 12 | 18 | 10 | 3 | 2 | 0 | 3 |
+| Brush/airbrush/decoration/blend | 81 | 57 | 12 | 28 | 7 | 0 | 10 |
+| Eraser | 8 | 14 | 6 | 4 | 1 | 0 | 3 |
 | Copy stamp | 1 | 7 | 1 | 2 | 2 | 0 | 2 |
 | Dot pen | 1 | 1 | 0 | 1 | 0 | 0 | 0 |
-| Fill | 11 | 24 | 6 | 0 | 2 | 4 | 12 |
-| Selection / auto select | 12 | 27 | 5 | 0 | 2 | 4 | 16 |
-| Gradient | 12 | 10 | 1 | 1 | 0 | 0 | 8 |
-| Figure | 8 | 20 | 0 | 0 | 0 | 0 | 20 |
-| Text | 2 | 46 | 1 | 1 | 0 | 0 | 44 |
-| Eyedropper | 2 | 3 | 0 | 0 | 0 | 0 | 3 |
-| Operation | 5 | 14 | 0 | 0 | 0 | 0 | 14 |
+| Fill | 11 | 24 | 6 | 0 | 2 | 15 | 1 |
+| Selection / auto select | 12 | 27 | 10 | 0 | 2 | 15 | 0 |
+| Gradient | 12 | 10 | 4 | 0 | 1 | 5 | 0 |
+| Figure | 8 | 20 | 4 | 0 | 0 | 14 | 2 |
+| Text | 2 | 46 | 3 | 1 | 0 | 41 | 1 |
+| Eyedropper | 2 | 3 | 0 | 0 | 1 | 2 | 0 |
+| Operation | 5 | 14 | 1 | 0 | 0 | 13 | 0 |
 | Frame, balloon, speed lines, ruler, correction, view, other | 50 | 108 | 0 | 0 | 0 | 0 | 108 |
-| **All** | **205** | **349** | **40** | **29** | **17** | **8** | **255** |
+| **All** | **205** | **349** | **57** | **39** | **18** | **105** | **130** |
 
-Across all families, 69 of 349 items run in Prism; 255 are not read at all. Brush-type
-sub-tools are mostly covered; everything else is a shell around the Prism tool it runs on.
+Across all families, 114 of 349 items run in Prism (57 editable, 39 set at import, 18
+approximated) and 105 more are shown and editable for a round trip; 130 are not read, 108 of
+them on sub-tools Prism does not run (frames, balloons, speed lines, rulers, correction, view).
+The brush blending mode, colour jitter, continuous spraying, view-scale size and dual brush
+were added on 2026-10-20 (Per family › Pen, pencil, brush…); font names and gradient stops on
+2026-10-21 (Per family › Gradient, Text).
+Since 2026-10-20 every family Prism runs shows CLIP STUDIO's own Tool Property, drawn from one
+catalogue (below); before, only brushes, fill and auto select did (69 of 349 ran, 255 were not
+read).
 
 ## Method and evidence
 
@@ -43,6 +50,7 @@ sub-tools are mostly covered; everything else is a shell around the Prism tool i
 | `Settings/PAINT/Tool/english/EditImageTool.todb` and `UXEditImageTool.todb` (installed) | every default sub-tool: operations, icon, its settings, and `VariantShowParam`, the list of property IDs Tool Property shows | read-only SQLite on copies |
 | `CLIPStudioPaint.exe` settings writers `0x142b5ee30` (common), `0x142b8fff0` (brush), `0x142b96820` (view), `0x142ba2830` (selection, figure), `0x142ba9360` (move layer), `0x142bb5870` (fill, gradient), `0x142bbd1e0` (object), `0x142bca960` (frame, balloon), `0x142bdd390` (text), `0x142befa80` (vector), `0x142bf4df0` (ruler), `0x142bf8ed0` (light table) | 440 property IDs with their column keys and value type (each writer reads property *n*, then writes it under key *k*) | authorized read-only Ghidra decompilation (direct, not REA Evidence) |
 | `resource/<language>/E79C2AC5-BC3F-4838-9E87-F49B629F84B5`, `742DEA58-ED6B-4402-BC11-20DFC6D08040` | Tool Property labels, their help text and list choices, in every language (the Korean labels in the fill table are CLIP STUDIO's own) | string extraction |
+| `resource/<language>/E79C2AC5-…` string tables (sections of id, offset, length records) | the same label at the same index in every language, so English and Korean pair exactly; the Tool Property labels, choices and help are in sections 14 (common), 23 (brush), 45 (fill, gradient), 51 (operation, eyedropper), 56 (object), 62 (selection, figure), 63 (text) | parsed (`scratchpad res2.py`), read-only copy |
 | Prism source | which keys the importer, the brush Tool Property (`sut_panel.rs`) and the Clip Studio workspace read | code scan |
 
 The scripts and outputs are in ignored `target/rea-tools/csp/subtool-gaps/` (`keyfuncs.mjs`
@@ -55,8 +63,17 @@ shape; 3600, 3700–3702, lasso options; 5401/5402, a gradient's colours).
 1. **Tool Property was Prism's, not CLIP STUDIO's.** Only brush-type sub-tools rendered CLIP
    STUDIO's own item list (16 property IDs with controls). Fill, auto select, gradient and text
    sub-tools showed a fixed Prism layout (tolerance, contiguous, all layers, anti-aliasing,
-   reverse, dither, size), and their other settings were read-only text or nothing. Fixed for
-   fill and auto select in this change (below); still open for the others.
+   reverse, dither, size), and their other settings were read-only text or nothing. Fixed on
+   2026-10-20 for every family Prism runs: `prism_paint::sut_catalog` lists 140 Tool Property
+   items (ID, keys, control, range, unit, CLIP STUDIO label) and `csp_tool_property.rs` draws a
+   sub-tool's own list from it, in its order, with CLIP STUDIO's English and Korean labels
+   (translation context `cspTool`). Every numeric item is editable and saved with the sub-tool
+   (`brush.sutSettings.set`); items Prism does not run say so; the importer keeps every
+   catalogued key (`retained_keys`), including 32-bit colour channels. Since 2026-10-21 font
+   names (`strings`, text keys of `sut_catalog::string_keys`) and gradient stops
+   (`SutBrushMetadata::gradient`) are imported and editable too. Not editable: the start/end
+   target curve, the paint-gap blend graph and composite groups without keys (1900 brush shape,
+   7056).
 2. **CLIP STUDIO's control kinds.** Tool Property uses more than sliders: the five-step
    *indicator* (Close gap, default steps 1, 3, 5, 10 and 20 px, see below), a checkbox paired with
    a value (Close gap, Area scaling), icon groups (Refer multiple: All layers, Reference layer,
@@ -111,14 +128,14 @@ Not read or approximated, by how many default sub-tools show it:
 
 | Setting | Tools | Gap |
 |---|---|---|
-| `CompositeMode` (30) | 39 | brush blending mode: only Normal maps; CSP's codes (incl. Behind, Erase, Compare density, Replace alpha) are not traced |
-| `BrushHueChange`, `BrushSaturationChange`, `BrushValueChange` (1103–1107), `BrushChangeColorTarget` (1280), `BrushChangeStrokeColor` | 15–16 | colour jitter not read (Prism has Color Dynamics) |
-| `BrushRevision` (1151) | 11 | not read |
-| `BrushContinuousPlot` (1043) | 6 | not read (Prism has Build-up) |
-| `BrushSizeSyncViewScale` | 2–4 | not read |
-| `BrushBlur`, `BrushBlurLinkSize` | 2 | blend tools' blur not read |
-| `BrushUseReferLayer` | 1 | blend referring to other layers not read |
-| `UseDualBrush`, `Dual*` (50000–50146) | 7 | dual brush not run |
+| `CompositeMode` (30) | 39 | done 2026-10-20: codes traced (sut-analysis.md › Blending modes); mapped modes edit in Tool Property, Erase erases with any tool; 2026-10-21: Background (Behind), Replace alpha, Compare density and Erase (compare) composite as their own stroke modes (inferred formulas, `csp_blend::stroke_native`); Through and Black/White burn paint in Normal with a warning; Color dodge (9) and Add (11) are approximated |
+| `BrushHueChange`, `BrushSaturationChange`, `BrushValueChange` (1103–1107), `BrushChangeColorTarget` (1280), `BrushChangeStrokeColor` | 15–16 | done 2026-10-20 onto Color Dynamics (random spread; constant shifts, one-sided ranges and non-random inputs warn; sub color only is approximated) |
+| `BrushRevision` (1151) | 11 | post correction warns when on (every shipped brush has it off); Prism's Smoothing is a tool option |
+| `BrushContinuousPlot` (1043) | 6 | done 2026-10-20: Build-up at Prism's rate (CSP's rate not traced) |
+| `BrushSizeSyncViewScale` | 2–4 | done 2026-10-20: the size is in screen pixels (`size / zoom`); the cursor outline does not follow yet |
+| `BrushBlur`, `BrushBlurLinkSize` | 2 | running-colour blur of colour mixing type 1, which is approximated by blending (warns) |
+| `BrushUseReferLayer` | 1 | warns: Prism has no reference layer |
+| `UseDualBrush`, `Dual*` (50000–51141) | 7 | done 2026-10-20 for the masking modes (tips, size, spacing, thickness, rotation, spray); 2026-10-21: Normal, Add (Glow), Lighten and Screen add the second brush's opacity outside the first (`DualBrush.cspAdd`, union coverage); dual flow, dynamics, texture and ribbon warn |
 | `BrushVectorMagnetPower` (1241), `BrushVectorEraserType`, `BrushVectorEraserReferAllLayer` | 6–8 | vector-only; Prism has no vector layers |
 | `BrushEraseAllLayer` | 1 | not read |
 | `BrushSizeUnit`, `BrushSpraySizeUnit` | all | units other than pixels warn |
@@ -126,7 +143,7 @@ Not read or approximated, by how many default sub-tools show it:
 
 ### Fill and auto select
 
-Done in this change: the Tool Property items render in CLIP STUDIO's order with its labels and
+Done on 2026-10-19: the Tool Property items render in CLIP STUDIO's order with its labels and
 controls and are saved with the sub-tool; enclose and fill runs close gap, area scaling (shrink),
 tolerance, refer multiple, anti-aliasing and opacity; the bucket and the auto select run
 tolerance, connected pixels, refer multiple, anti-aliasing and opacity. Still open:
@@ -145,43 +162,71 @@ tolerance, connected pixels, refer multiple, anti-aliasing and opacity. Still op
 
 ### Selection
 
-`SelectCreateType` (new/add/subtract, 12 tools), fixed shape (`FixedShapeWidth`, `…Height`,
-`…AspectType`), `RotateShape`, the lasso groups 3700–3702 and the selection pen/shrink tools are
-not read; Prism's marquee and lasso options are used instead.
+Shown and editable since 2026-10-20. Run: `SelectCreateType` (new, add, subtract, select from
+selection set the marquee mode), anti-aliasing, and on the rectangle and ellipse the fixed shape
+(`FixedShapeAspectType` free / ratio / length, `FixedShapeWidth`, `…Height` set the marquee
+style). Kept, not run: `RotateShape`, the lasso groups (3600 stabilization, 3700 lasso selection
+mode `SelectOperationMethod`, 3701 magnetic lasso `SelectUseSnap` + `SelectSnapSize`, 3702
+magnet settings `SelectSnapOffCondition` + `SelectSnapToVectorCenter`: mapped from the columns
+the lasso tools store, an inference), and the selection pen's brush items.
 
 ### Gradient
 
-The gradient itself (`GradationData`, items 5401/5402: its colours and stops) is **not
-imported**: a CLIP STUDIO gradient sub-tool paints Prism's current gradient. Also not read:
-`GradationRepeatType` (반복 방법), `GradationMakeLayer` (그라데이션 레이어로 작성), `CompositeMode`,
-`LineLockAngleStep`. Shape is read as linear or radial only.
+Since 2026-10-21 the gradient itself (`GradationData`, item 5400 with its bar parts 5401/5402)
+is imported (`prism_paint::csp_gradient`, layout in sut-analysis.md › Gradient data): picking a
+CLIP STUDIO gradient sub-tool makes its stops Prism's current gradient (`gradient.presets.select`),
+so it paints its own colours; main and sub colour stops follow Prism's foreground and background
+live. Tool Property shows the bar (with the current colours), Reverse, and each stop's kind (main,
+sub, specified), colour and opacity; edits are saved with the sub-tool. Each segment's curve is
+sampled into stops, exactly for opacity and fixed colours and for steps (Stripe); a curve between
+a main or sub colour stop and another colour runs straight (Photosphere; marked approximated). The
+curve interpolation itself (monotone cubic through the stored points) is inferred. All 12 default
+gradients decode. `GradationReverseSaved` (labelled Flip) is kept and editable but **not** run as a
+flip any more: every default stores 1 with its first stop at the drag's start, so it is not the
+flip state (meaning not traced). Shape runs (straight line, circle; an ellipse is drawn as a
+circle), Normal blending runs (other codes are not traced), dithering runs. Shown and editable,
+not run: Edge process (`GradationRepeatType`, 끝부분 처리, so Stripe paints one stripe), Where to
+create (`GradationMakeLayer`, 그리기 대상), Snap angle (`LineLock*`), Opacity, Anti-aliasing.
 
 ### Figure
 
-None of the 20 items is read: line/fill type (`ShapeStrokeAndFillType`), the figure's brush
-(1900: size, opacity, anti-aliasing), fixed size and aspect, rotation, polyline closing and curve
-kind, vertex count, rounded corners, corner sharpening. Figures run on Prism's shape tools with
-their own options.
+Run: brush size (stroke width, or the line weight of straight lines), Line/Fill
+(`ShapeStrokeAndFillType`: fill, line, both), the polygon's number of corners and the
+rectangle's roundness of corner. Shown and editable, not run: fixed size and aspect, rotation,
+polyline closing and curve kind, starting and ending, corner sharpening, vector magnet, opacity,
+anti-aliasing. Not imported: 1900 (the brush shape picker) and the start/end target curve.
 
 ### Text
 
-Two of 46 items run (size, vertical). Font, colour, alignment, line and letter spacing, ratio,
-skew, outline, background, ruby, circular layout, anti-aliasing and the rest are not read.
+Size, alignment and direction run. Every other item (colour, line and letter spacing, ratio,
+skew, outline, edge and background with their colours, reading/ruby, circular layout,
+anti-aliasing, how to add, drag, apply to, selection mode, transform) is shown and editable but
+not run. Since 2026-10-21 the font (`TextFontName`, else `TextFontUniqueName`, item 7000) is
+imported and picks the Type tool's font: the installed family of the same name (case, spaces and
+punctuation ignored), else the longest family the name starts with (a unique name such as
+`…JP-Bold`); a font Prism does not have keeps the Type tool's font and says so. Tool Property
+edits it with Prism's font picker. The reading font (`TextRubyFontName`, 7014) is imported and
+editable, not run (Prism has no ruby). No default sub-tool stores a font name (all are null), so
+the text type CLIP STUDIO uses is inferred from the writer (UTF-8 text or blob are read). 7056
+has no known key.
 
 ### Eyedropper, operation and the rest
 
-Eyedropper (`SpuitReferType`, `SpuitNotReferText`, `SpuitShowColorCursorByPen`), object and
-move-layer operation settings (14), and all 108 items of frames, balloons, speed lines, rulers,
-correction, view and other tools are not read; those sub-tools don't run.
+Eyedropper: Reference (`SpuitReferType`) runs as Image (Prism picks the displayed colour; other
+choices are approximated); its exclusions and the colour circle are shown, not run. Move layer:
+*Move the object at the clicked position* sets Auto-Select; the other move, select-layer and
+object settings are shown, not run (object codes such as `ObjectSelectable` flags are shown as
+numbers). All 108 items of frames, balloons, speed lines, rulers, correction, view and other
+tools are not shown, since those sub-tools don't run (their catalogued keys are kept on import).
 
 ## Plan
 
 In order of what CLIP STUDIO users meet first:
 
-1. Tool Property from data for every family: one catalogue of CLIP STUDIO items (ID, keys,
-   control kind, range, unit, CLIP STUDIO labels) rendering the imported item list, with every
-   setting editable and saved, and Sub Tool Detail for the rest. Fill and auto select are the
-   first users of this pattern (`csp_fill_property.rs`).
+1. Tool Property from data for every family: done on 2026-10-20 (`prism_paint::sut_catalog`,
+   `csp_tool_property.rs`); fonts and gradient stops on 2026-10-21. Still open: the traced
+   meanings of the codes shown as numbers (blending modes, object flags, text justify/outline),
+   CLIP STUDIO's help text as tooltips, and Sub Tool Detail for settings outside Tool Property.
 2. Brush gaps: blending mode codes, colour jitter, dual brush, continuous spray, post
    correction, view-scale sync, blend blur and reference, units with the canvas resolution.
 3. Fill behaviour: close gap and area scaling on the bucket and auto select, reference-layer
@@ -204,7 +249,7 @@ Generated by `gen.py`. *Tools* is how many default sub-tools show the item.
 | 42 | `FlickerReductionBySpeedType` | 10 | number | runs, editable |
 | 20 | `AntiAlias` | 9 | number | runs, editable |
 | 1241 | `BrushVectorMagnetPower` | 6 | number | approximated |
-| 30 | `CompositeMode` | 2 | number | approximated |
+| 30 | `CompositeMode` | 2 | number | runs, editable |
 | 1020 | `BrushFlow` | 2 | number | runs, set at import |
 | 1050 | `BrushThickness` | 2 | number | runs, editable |
 | 1060 | `BrushRotation` | 2 | number | runs, set at import |
@@ -222,7 +267,7 @@ Generated by `gen.py`. *Tools* is how many default sub-tools show the item.
 |---|---|---|---|---|
 | 1000 | `BrushSize/BrushSizeUnit` | 81 | length + unit | approximated |
 | 10 | `Opacity` | 45 | number | runs, editable |
-| 30 | `CompositeMode` | 39 | number | approximated |
+| 30 | `CompositeMode` | 39 | number | runs, editable |
 | 1020 | `BrushFlow` | 30 | number | runs, set at import |
 | 20 | `AntiAlias` | 24 | number | runs, editable |
 | 1042 | `BrushAutoIntervalType` | 21 | number | runs, set at import |
@@ -232,23 +277,23 @@ Generated by `gen.py`. *Tools* is how many default sub-tools show the item.
 | 1133 | `BrushSprayDensity` | 18 | number | runs, set at import |
 | 1050 | `BrushThickness` | 17 | number | runs, editable |
 | 1102 | `BrushChangePatternColor` | 17 | on/off | runs, set at import |
-| 1107 | `BrushValueChange` | 16 | number | not read |
+| 1107 | `BrushValueChange` | 16 | number | runs, set at import |
 | 100 | `TextureImage` | 15 | data | runs, editable |
 | 110 | `TextureDensity` | 15 | number | runs, editable |
 | 120 | `TextureScale2` | 15 | number | runs, editable |
 | 1085 | `BrushMixColorExtension` | 15 | number | runs, editable |
-| 1103 | `BrushHueChange` | 15 | number | not read |
-| 1105 | `BrushSaturationChange` | 15 | number | not read |
+| 1103 | `BrushHueChange` | 15 | number | runs, set at import |
+| 1105 | `BrushSaturationChange` | 15 | number | runs, set at import |
 | 1151 | `BrushRevision` | 12 | number | not read |
 | 1052 | `BrushVerticalThicknes` | 11 | number | runs, set at import |
 | 1060 | `BrushRotation` | 11 | number | runs, set at import |
 | 1081 | `BrushMixColor` | 9 | number | runs, editable |
-| 1280 | `BrushChangeColorTarget` | 8 | number | not read |
+| 1280 | `BrushChangeColorTarget` | 8 | number | approximated |
 | 1030 | `BrushHardness` | 7 | number | runs, set at import |
 | 1083 | `BrushMixAlpha` | 7 | number | runs, editable |
 | 1136 | `BrushSpraySizeSyncBrushSize` | 7 | on/off | runs, set at import |
 | 1910 | `UseDualBrush` | 7 | on/off | approximated |
-| 1043 | `BrushContinuousPlot` | 6 | on/off | not read |
+| 1043 | `BrushContinuousPlot` | 6 | on/off | runs, set at import |
 | 1135 | `BrushSprayBias` | 6 | number | runs, set at import |
 | 1130 | `BrushUseSpray` | 5 | on/off | runs, set at import |
 | 1201 | `BrushWaterEdgeRadius/BrushWaterEdgeRadiusUnit` | 5 | length + unit | approximated |
@@ -257,14 +302,14 @@ Generated by `gen.py`. *Tools* is how many default sub-tools show the item.
 | 1204 | `BrushWaterEdgeAfterDrag` | 4 | on/off | runs, set at import |
 | 1061 | `BrushRotationInSpray` | 3 | number | runs, set at import |
 | 1071 | `BrushPatternOrderType/BrushPatternOrderType2` | 3 | number | runs, set at import |
-| 51133 | `DualSprayDensity` | 3 | number | not read |
+| 51133 | `DualSprayDensity` | 3 | number | runs, set at import |
 | 51135 | `DualSprayBias` | 3 | number | not read |
 | 50 | `Stickness` | 2 | number | runs, set at import |
-| 1002 | `BrushSizeSyncViewScale` | 2 | on/off | not read |
+| 1002 | `BrushSizeSyncViewScale` | 2 | on/off | runs, set at import |
 | 1080 | `BrushWaterColor` | 2 | number | approximated |
 | 1091 | `BrushBlurLinkSize` | 2 | number | not read |
 | 1092 | `BrushBlur/BrushBlurUnit` | 2 | length + unit | not read |
-| 1270 | `BrushChangeStrokeColor` | 2 | on/off | not read |
+| 1270 | `BrushChangeStrokeColor` | 2 | on/off | runs, set at import |
 | 50100 | `DualTextureImage` | 2 | data | not read |
 | 51020 | `DualFlow` | 2 | number | not read |
 | 41 | `FlickerReductionBySpeed` | 1 | on/off | runs, editable |
@@ -274,8 +319,8 @@ Generated by `gen.py`. *Tools* is how many default sub-tools show the item.
 | 5112 | `FillExpandType` | 1 | number | runs, set at import |
 | 50110 | `DualTextureDensity` | 1 | number | not read |
 | 50120 | `DualTextureScale` | 1 | number | not read |
-| 51130 | `DualUseSpray` | 1 | on/off | not read |
-| 51131 | `DualSpraySize/DualSpraySizeUnit` | 1 | length + unit | not read |
+| 51130 | `DualUseSpray` | 1 | on/off | runs, set at import |
+| 51131 | `DualSpraySize/DualSpraySizeUnit` | 1 | length + unit | runs, set at import |
 | 51136 | `DualSpraySizeSyncBrushSize` | 1 | on/off | not read |
 
 ### Eraser (8 default sub-tools)
@@ -287,7 +332,7 @@ Generated by `gen.py`. *Tools* is how many default sub-tools show the item.
 | 40 | `FlickerReduction` | 7 | number | runs, editable |
 | 1210 | `BrushVectorEraserType` | 6 | number | not read |
 | 10 | `Opacity` | 4 | number | runs, editable |
-| 1002 | `BrushSizeSyncViewScale` | 4 | on/off | not read |
+| 1002 | `BrushSizeSyncViewScale` | 4 | on/off | runs, set at import |
 | 1020 | `BrushFlow` | 3 | number | runs, set at import |
 | 1030 | `BrushHardness` | 3 | number | runs, set at import |
 | 100 | `TextureImage` | 1 | data | runs, editable |
@@ -295,7 +340,7 @@ Generated by `gen.py`. *Tools* is how many default sub-tools show the item.
 | 120 | `TextureScale2` | 1 | number | runs, editable |
 | 1211 | `BrushVectorEraserReferAllLayer` | 1 | on/off | not read |
 | 1220 | `BrushEraseAllLayer` | 1 | on/off | not read |
-| 51000 | `DualSize/DualSizeUnit` | 1 | length + unit | not read |
+| 51000 | `DualSize/DualSizeUnit` | 1 | length + unit | runs, set at import |
 
 ### Copy stamp (1 default sub-tools)
 
@@ -328,28 +373,28 @@ Generated by `gen.py`. *Tools* is how many default sub-tools show the item.
 | 5012 | `FillNotReferDraft` | 3 | on/off | shown, not run |
 | 5130 | `FillAntiAlias` | 3 | on/off | runs, editable |
 | 5200 | `FillContinuousPixel` | 3 | on/off | runs, editable |
-| 5600 | `ContourFillUseBlack` | 3 | number | not read |
-| 5601 | `ContourFillUseTrans` | 3 | number | not read |
+| 5600 | `ContourFillUseBlack` | 3 | number | shown, not run |
+| 5601 | `ContourFillUseTrans` | 3 | number | shown, not run |
 | 5602 | `ContourFillBlendGraph` | 3 | data | not read |
-| 1000 | `BrushSize/BrushSizeUnit` | 2 | length + unit | not read |
-| 1002 | `BrushSizeSyncViewScale` | 2 | on/off | not read |
-| 3600 | `(UI group 3600)` | 2 | UI only | not read |
+| 1000 | `BrushSize/BrushSizeUnit` | 2 | length + unit | shown, not run |
+| 1002 | `BrushSizeSyncViewScale` | 2 | on/off | shown, not run |
+| 3600 | `(UI group 3600)` | 2 | UI only | shown, not run |
 | 5020 | `FillReferVectorCenter` | 2 | on/off | shown, not run |
 | 5300 | `CloseFillReferColorType` | 2 | number | approximated |
-| 5500 | `DustSize/DustSizeUnit` | 2 | length + unit | not read |
-| 5510 | `DustMode` | 2 | number | not read |
-| 20 | `AntiAlias` | 1 | number | not read |
-| 30 | `CompositeMode` | 1 | number | not read |
+| 5500 | `DustSize/DustSizeUnit` | 2 | length + unit | shown, not run |
+| 5510 | `DustMode` | 2 | number | shown, not run |
+| 20 | `AntiAlias` | 1 | number | shown, not run |
+| 30 | `CompositeMode` | 1 | number | shown, not run |
 | 40 | `FlickerReduction` | 1 | number | shown, not run |
-| 3700 | `(UI group 3700)` | 1 | UI only | not read |
-| 3701 | `(UI group 3701)` | 1 | UI only | not read |
+| 3700 | `(UI group 3700)` | 1 | UI only | shown, not run |
+| 3701 | `(UI group 3701)` | 1 | UI only | shown, not run |
 
 ### Selection / auto select (12 default sub-tools)
 
 | ID | Key | Tools showing it | Value | Prism |
 |---|---|---|---|---|
-| 3000 | `SelectCreateType` | 12 | number | not read |
-| 20 | `AntiAlias` | 7 | number | not read |
+| 3000 | `SelectCreateType` | 12 | number | runs, editable |
+| 20 | `AntiAlias` | 7 | number | runs, editable |
 | 5001 | `FillReferLayerType` | 5 | number | approximated |
 | 5101 | `FillCloseGap/FillCloseGapUnit` | 4 | length + unit | runs, editable |
 | 5111 | `FillExpandLength/FillExpandLengthUnit` | 4 | length + unit | runs, editable |
@@ -359,140 +404,140 @@ Generated by `gen.py`. *Tools* is how many default sub-tools show the item.
 | 5012 | `FillNotReferDraft` | 3 | on/off | shown, not run |
 | 5200 | `FillContinuousPixel` | 3 | on/off | runs, editable |
 | 40 | `FlickerReduction` | 2 | number | shown, not run |
-| 1000 | `BrushSize/BrushSizeUnit` | 2 | length + unit | not read |
-| 1002 | `BrushSizeSyncViewScale` | 2 | on/off | not read |
-| 1020 | `BrushFlow` | 2 | number | not read |
-| 1030 | `BrushHardness` | 2 | number | not read |
-| 3212 | `RotateShape` | 2 | on/off | not read |
-| 3310 | `FixedShapeAspectType` | 2 | number | not read |
-| 3311 | `FixedShapeWidth/FixedShapeWidthUnit` | 2 | length + unit | not read |
-| 3312 | `FixedShapeHeight/FixedShapeHeightUnit` | 2 | length + unit | not read |
-| 3600 | `(UI group 3600)` | 2 | UI only | not read |
-| 3700 | `(UI group 3700)` | 2 | UI only | not read |
-| 3701 | `(UI group 3701)` | 2 | UI only | not read |
+| 1000 | `BrushSize/BrushSizeUnit` | 2 | length + unit | shown, not run |
+| 1002 | `BrushSizeSyncViewScale` | 2 | on/off | shown, not run |
+| 1020 | `BrushFlow` | 2 | number | shown, not run |
+| 1030 | `BrushHardness` | 2 | number | shown, not run |
+| 3212 | `RotateShape` | 2 | on/off | shown, not run |
+| 3310 | `FixedShapeAspectType` | 2 | number | runs, editable |
+| 3311 | `FixedShapeWidth/FixedShapeWidthUnit` | 2 | length + unit | runs, editable |
+| 3312 | `FixedShapeHeight/FixedShapeHeightUnit` | 2 | length + unit | runs, editable |
+| 3600 | `(UI group 3600)` | 2 | UI only | shown, not run |
+| 3700 | `(UI group 3700)` | 2 | UI only | shown, not run |
+| 3701 | `(UI group 3701)` | 2 | UI only | shown, not run |
 | 5020 | `FillReferVectorCenter` | 2 | on/off | shown, not run |
-| 3702 | `(UI group 3702)` | 1 | UI only | not read |
+| 3702 | `(UI group 3702)` | 1 | UI only | shown, not run |
 | 5300 | `CloseFillReferColorType` | 1 | number | approximated |
-| 5500 | `DustSize/DustSizeUnit` | 1 | length + unit | not read |
-| 5511 | `DustModeForSelect` | 1 | number | not read |
+| 5500 | `DustSize/DustSizeUnit` | 1 | length + unit | shown, not run |
+| 5511 | `DustModeForSelect` | 1 | number | shown, not run |
 
 ### Gradient (12 default sub-tools)
 
 | ID | Key | Tools showing it | Value | Prism |
 |---|---|---|---|---|
-| 10 | `Opacity` | 12 | number | not read |
-| 30 | `CompositeMode` | 11 | number | not read |
-| 3231 | `LineLockAngleStep` | 11 | number | not read |
+| 10 | `Opacity` | 12 | number | shown, not run |
+| 30 | `CompositeMode` | 11 | number | approximated |
+| 3231 | `LineLockAngleStep` | 11 | number | shown, not run |
 | 5400 | `GradationData/GradationReverseSaved` | 11 | data | runs, editable |
-| 5401 | `(UI group 5401)` | 11 | UI only | not read |
-| 5402 | `(UI group 5402)` | 11 | UI only | not read |
-| 5430 | `GradationMakeLayer` | 10 | number | not read |
-| 5410 | `GradationShapeKind` | 8 | number | runs, set at import |
-| 5420 | `GradationRepeatType` | 5 | number | not read |
-| 5130 | `FillAntiAlias` | 2 | on/off | not read |
+| 5401 | `(UI group 5401)` | 11 | UI only | runs, editable |
+| 5402 | `(UI group 5402)` | 11 | UI only | runs, editable |
+| 5430 | `GradationMakeLayer` | 10 | number | shown, not run |
+| 5410 | `GradationShapeKind` | 8 | number | runs, editable |
+| 5420 | `GradationRepeatType` | 5 | number | shown, not run |
+| 5130 | `FillAntiAlias` | 2 | on/off | shown, not run |
 
 ### Figure (8 default sub-tools)
 
 | ID | Key | Tools showing it | Value | Prism |
 |---|---|---|---|---|
-| 10 | `Opacity` | 8 | number | not read |
-| 20 | `AntiAlias` | 8 | number | not read |
-| 1000 | `BrushSize/BrushSizeUnit` | 8 | length + unit | not read |
+| 10 | `Opacity` | 8 | number | shown, not run |
+| 20 | `AntiAlias` | 8 | number | shown, not run |
+| 1000 | `BrushSize/BrushSizeUnit` | 8 | length + unit | runs, editable |
 | 1900 | `(UI group 1900)` | 7 | UI only | not read |
-| 3200 | `ShapeStrokeAndFillType` | 6 | number | not read |
-| 3212 | `RotateShape` | 3 | on/off | not read |
-| 3310 | `FixedShapeAspectType` | 3 | number | not read |
-| 3311 | `FixedShapeWidth/FixedShapeWidthUnit` | 3 | length + unit | not read |
-| 3312 | `FixedShapeHeight/FixedShapeHeightUnit` | 3 | length + unit | not read |
-| 3510 | `PolylineClose` | 3 | on/off | not read |
-| 1160 | `BrushInOutType` | 2 | number | not read |
+| 3200 | `ShapeStrokeAndFillType` | 6 | number | runs, editable |
+| 3212 | `RotateShape` | 3 | on/off | shown, not run |
+| 3310 | `FixedShapeAspectType` | 3 | number | shown, not run |
+| 3311 | `FixedShapeWidth/FixedShapeWidthUnit` | 3 | length + unit | shown, not run |
+| 3312 | `FixedShapeHeight/FixedShapeHeightUnit` | 3 | length + unit | shown, not run |
+| 3510 | `PolylineClose` | 3 | on/off | shown, not run |
+| 1160 | `BrushInOutType` | 2 | number | shown, not run |
 | 1162 | `BrushInOutTarget` | 2 | data | not read |
-| 1171 | `BrushInLength/BrushInLengthUnit` | 2 | length + unit | not read |
-| 1181 | `BrushOutLength/BrushOutLengthUnit` | 2 | length + unit | not read |
-| 1241 | `BrushVectorMagnetPower` | 2 | number | not read |
-| 3322 | `FixedShapeRoundSize/FixedShapeRoundSizeUnit` | 2 | length + unit | not read |
-| 3500 | `PolylineCurveKind` | 2 | number | not read |
-| 1190 | `BrushSharpenCorner` | 1 | on/off | not read |
-| 3300 | `FixedShapeKind` | 1 | number | not read |
-| 3301 | `FixedShapeVertexNumber` | 1 | number | not read |
+| 1171 | `BrushInLength/BrushInLengthUnit` | 2 | length + unit | shown, not run |
+| 1181 | `BrushOutLength/BrushOutLengthUnit` | 2 | length + unit | shown, not run |
+| 1241 | `BrushVectorMagnetPower` | 2 | number | shown, not run |
+| 3322 | `FixedShapeRoundSize/FixedShapeRoundSizeUnit` | 2 | length + unit | runs, editable |
+| 3500 | `PolylineCurveKind` | 2 | number | shown, not run |
+| 1190 | `BrushSharpenCorner` | 1 | on/off | shown, not run |
+| 3300 | `FixedShapeKind` | 1 | number | shown, not run |
+| 3301 | `FixedShapeVertexNumber` | 1 | number | runs, editable |
 
 ### Text (2 default sub-tools)
 
 | ID | Key | Tools showing it | Value | Prism |
 |---|---|---|---|---|
-| 7000 | `TextFontUniqueName/TextFontName` | 2 | data | not read |
+| 7000 | `TextFontUniqueName/TextFontName` | 2 | data | runs, editable |
 | 7001 | `TextFontSize` | 2 | length + unit | runs, editable |
 | 7003 | `TextVertical` | 2 | number | runs, set at import |
-| 7004 | `TextAlignment/TextAlignmentJustify` | 2 | number | not read |
-| 7009 | `TextWordSpace` | 2 | length + unit | not read |
-| 7025 | `TextColorType/TextColorBlue/TextColorGreen/TextColorRed` | 2 | data | not read |
-| 7051 | `TextDragOperationType` | 2 | number | not read |
-| 7052 | `TextToolPropertyKind` | 2 | number | not read |
-| 7053 | `TextSelectType` | 2 | number | not read |
-| 7002 | `(UI group 7002)` | 1 | UI only | not read |
-| 7005 | `TextLineSpace` | 1 | length + unit | not read |
-| 7006 | `TextTateChuYoko` | 1 | number | not read |
-| 7007 | `TextRubySize` | 1 | number | not read |
-| 7012 | `TextInsertType` | 1 | number | not read |
-| 7013 | `TextOutline` | 1 | number | not read |
-| 7014 | `TextRubyFontName` | 1 | data | not read |
-| 7015 | `TextRubyAlignment` | 1 | number | not read |
-| 7016 | `TextRubyPosition` | 1 | length + unit | not read |
-| 7017 | `TextRubyDistance` | 1 | length + unit | not read |
-| 7018 | `TextRubyWordSpaceJustify` | 1 | number | not read |
-| 7019 | `TextRubyWordSpace` | 1 | length + unit | not read |
-| 7021 | `TextLineSpaceType` | 1 | number | not read |
-| 7024 | `TextAntiAlias` | 1 | number | not read |
-| 7027 | `TextHorizontalRatio` | 1 | number | not read |
-| 7028 | `TextVerticalRatio` | 1 | number | not read |
-| 7029 | `TextTsume` | 1 | number | not read |
-| 7031 | `TextAlternateHalfMetrics` | 1 | on/off | not read |
-| 7032 | `TextWrapping` | 1 | on/off | not read |
-| 7034 | `TextBackgroundColorRed/TextBackgroundColorGreen/TextBackgroundColorBlue` | 1 | data | not read |
-| 7035 | `TextBackgroundAlpha` | 1 | number | not read |
-| 7036 | `TextTextAlignment` | 1 | number | not read |
-| 7038 | `TextEdgeWidth/TextEdgeWidthUnit` | 1 | length + unit | not read |
-| 7039 | `TextEdgeColorRed/TextEdgeColorGreen/TextEdgeColorBlue` | 1 | data | not read |
-| 7040 | `TextRotation` | 1 | number | not read |
-| 7041 | `TextHorizontalSkewAngle` | 1 | number | not read |
-| 7042 | `TextVerticalSkewAngle` | 1 | number | not read |
-| 7043 | `TextTransformType/TextTransformType` | 1 | number | not read |
-| 7044 | `TextFixAspect/TextFixAspect` | 1 | on/off | not read |
-| 7045 | `TextHorizontalReverse` | 1 | on/off | not read |
-| 7054 | `TextVersion/TextLatestVersion` | 1 | number | not read |
-| 7055 | `TextStandardLigature` | 1 | on/off | not read |
+| 7004 | `TextAlignment/TextAlignmentJustify` | 2 | number | runs, editable |
+| 7009 | `TextWordSpace` | 2 | length + unit | shown, not run |
+| 7025 | `TextColorType/TextColorBlue/TextColorGreen/TextColorRed` | 2 | data | shown, not run |
+| 7051 | `TextDragOperationType` | 2 | number | shown, not run |
+| 7052 | `TextToolPropertyKind` | 2 | number | shown, not run |
+| 7053 | `TextSelectType` | 2 | number | shown, not run |
+| 7002 | `(UI group 7002)` | 1 | UI only | shown, not run |
+| 7005 | `TextLineSpace` | 1 | length + unit | shown, not run |
+| 7006 | `TextTateChuYoko` | 1 | number | shown, not run |
+| 7007 | `TextRubySize` | 1 | number | shown, not run |
+| 7012 | `TextInsertType` | 1 | number | shown, not run |
+| 7013 | `TextOutline` | 1 | number | shown, not run |
+| 7014 | `TextRubyFontName` | 1 | data | shown, not run |
+| 7015 | `TextRubyAlignment` | 1 | number | shown, not run |
+| 7016 | `TextRubyPosition` | 1 | length + unit | shown, not run |
+| 7017 | `TextRubyDistance` | 1 | length + unit | shown, not run |
+| 7018 | `TextRubyWordSpaceJustify` | 1 | number | shown, not run |
+| 7019 | `TextRubyWordSpace` | 1 | length + unit | shown, not run |
+| 7021 | `TextLineSpaceType` | 1 | number | shown, not run |
+| 7024 | `TextAntiAlias` | 1 | number | shown, not run |
+| 7027 | `TextHorizontalRatio` | 1 | number | shown, not run |
+| 7028 | `TextVerticalRatio` | 1 | number | shown, not run |
+| 7029 | `TextTsume` | 1 | number | shown, not run |
+| 7031 | `TextAlternateHalfMetrics` | 1 | on/off | shown, not run |
+| 7032 | `TextWrapping` | 1 | on/off | shown, not run |
+| 7034 | `TextBackgroundColorRed/TextBackgroundColorGreen/TextBackgroundColorBlue` | 1 | data | shown, not run |
+| 7035 | `TextBackgroundAlpha` | 1 | number | shown, not run |
+| 7036 | `TextTextAlignment` | 1 | number | shown, not run |
+| 7038 | `TextEdgeWidth/TextEdgeWidthUnit` | 1 | length + unit | shown, not run |
+| 7039 | `TextEdgeColorRed/TextEdgeColorGreen/TextEdgeColorBlue` | 1 | data | shown, not run |
+| 7040 | `TextRotation` | 1 | number | shown, not run |
+| 7041 | `TextHorizontalSkewAngle` | 1 | number | shown, not run |
+| 7042 | `TextVerticalSkewAngle` | 1 | number | shown, not run |
+| 7043 | `TextTransformType/TextTransformType` | 1 | number | shown, not run |
+| 7044 | `TextFixAspect/TextFixAspect` | 1 | on/off | shown, not run |
+| 7045 | `TextHorizontalReverse` | 1 | on/off | shown, not run |
+| 7054 | `TextVersion/TextLatestVersion` | 1 | number | shown, not run |
+| 7055 | `TextStandardLigature` | 1 | on/off | shown, not run |
 | 7056 | `(UI group 7056)` | 1 | UI only | not read |
-| 7060 | `TextLayoutCircularEnabled` | 1 | on/off | not read |
-| 7061 | `TextLayoutCircularRadius` | 1 | number | not read |
-| 7062 | `TextLayoutCircularDirection` | 1 | number | not read |
-| 7063 | `TextLayoutCircularJustify` | 1 | on/off | not read |
+| 7060 | `TextLayoutCircularEnabled` | 1 | on/off | shown, not run |
+| 7061 | `TextLayoutCircularRadius` | 1 | number | shown, not run |
+| 7062 | `TextLayoutCircularDirection` | 1 | number | shown, not run |
+| 7063 | `TextLayoutCircularJustify` | 1 | on/off | shown, not run |
 
 ### Eyedropper (2 default sub-tools)
 
 | ID | Key | Tools showing it | Value | Prism |
 |---|---|---|---|---|
-| 4100 | `SpuitReferType` | 2 | number | not read |
-| 4130 | `SpuitNotReferText` | 2 | on/off | not read |
-| 4140 | `SpuitShowColorCursorByPen` | 2 | on/off | not read |
+| 4100 | `SpuitReferType` | 2 | number | approximated |
+| 4130 | `SpuitNotReferText` | 2 | on/off | shown, not run |
+| 4140 | `SpuitShowColorCursorByPen` | 2 | on/off | shown, not run |
 
 ### Operation (5 default sub-tools)
 
 | ID | Key | Tools showing it | Value | Prism |
 |---|---|---|---|---|
-| 4010 | `LayerMoveClicked` | 2 | on/off | not read |
-| 4020 | `LayerMoveSelectLayer` | 2 | on/off | not read |
-| 4001 | `LayerMoveTarget` | 1 | number | not read |
-| 4011 | `LayerMoveInSelectArea` | 1 | on/off | not read |
-| 4200 | `SelectLayerNotSelectText` | 1 | on/off | not read |
-| 4501 | `ObjectSelectable` | 1 | on/off | not read |
-| 4521 | `(UI group 4521)` | 1 | UI only | not read |
-| 4600 | `ObjectComicFrameSnap` | 1 | on/off | not read |
-| 4601 | `ObjectComicFrameLink` | 1 | number | not read |
-| 4650 | `ObjectVectorChangeWidth` | 1 | on/off | not read |
-| 4651 | `ObjectVectorOperation` | 1 | number | not read |
-| 4652 | `ObjectResizableTransformOperation` | 1 | number | not read |
-| 7043 | `TextTransformType/TextTransformType` | 1 | number | not read |
-| 7044 | `TextFixAspect/TextFixAspect` | 1 | on/off | not read |
+| 4010 | `LayerMoveClicked` | 2 | on/off | runs, editable |
+| 4020 | `LayerMoveSelectLayer` | 2 | on/off | shown, not run |
+| 4001 | `LayerMoveTarget` | 1 | number | shown, not run |
+| 4011 | `LayerMoveInSelectArea` | 1 | on/off | shown, not run |
+| 4200 | `SelectLayerNotSelectText` | 1 | on/off | shown, not run |
+| 4501 | `ObjectSelectable` | 1 | on/off | shown, not run |
+| 4521 | `(UI group 4521)` | 1 | UI only | shown, not run |
+| 4600 | `ObjectComicFrameSnap` | 1 | on/off | shown, not run |
+| 4601 | `ObjectComicFrameLink` | 1 | number | shown, not run |
+| 4650 | `ObjectVectorChangeWidth` | 1 | on/off | shown, not run |
+| 4651 | `ObjectVectorOperation` | 1 | number | shown, not run |
+| 4652 | `ObjectResizableTransformOperation` | 1 | number | shown, not run |
+| 7043 | `TextTransformType/TextTransformType` | 1 | number | shown, not run |
+| 7044 | `TextFixAspect/TextFixAspect` | 1 | on/off | shown, not run |
 
 ### Frame, balloon, speed lines, ruler, correction, view, other (50 default sub-tools)
 

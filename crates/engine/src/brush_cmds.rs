@@ -245,7 +245,8 @@ pub fn resolve_brush(s: &Session, p: &Value, cmd: &str) -> Result<BrushSettings>
     }
     b.color = color(p.get("color"), s.tools.foreground);
     b.background = s.tools.background;
-    b.erase = flag(p, "erase", false);
+    // A CSP brush in Erase mode erases with any tool.
+    b.erase = flag(p, "erase", false) || b.csp_erase;
     b.seed = match p.get("seed").and_then(Value::as_u64) {
         Some(v) => v,
         None => prism_paint::rng::seed_from_bytes(p.get("points").map(|v| v.to_string()).unwrap_or_default().as_bytes()),

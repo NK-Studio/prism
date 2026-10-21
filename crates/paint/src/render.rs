@@ -731,13 +731,17 @@ impl BrushContext {
         Footprint { dab: *d, index, rect, cov }
     }
 
-    /// Stroke-level masks applied to accumulated coverage `c` at a pixel.
+    /// Stroke-level masks applied to accumulated coverage `c` at a pixel (a CSP adding dual
+    /// brush adds its coverage instead, also where `c` is 0).
     #[inline]
     pub fn stroke_mask(&self, c: f32, dual: Option<f32>, x: i32, y: i32) -> f32 {
         let b = &self.brush;
         let mut m = c;
         if let Some(dv) = dual {
-            m = mask_combine(b.dual_brush.mode, m, dv, 1.0);
+            m = match b.dual_brush.csp_add {
+                Some(add) => add.combine(m, dv),
+                None => mask_combine(b.dual_brush.mode, m, dv, 1.0),
+            };
         }
         if self.texture.is_some() && !b.texture.each_tip {
             m = self.texture_mask(m, x, y, b.texture.depth.clamp(0.0, 1.0), 1.0);
@@ -972,7 +976,15 @@ impl StrokeRenderer {
     }
     /// `fmt` = target pixel format (needed for per-dab colour); `zoom` for smoothing.
     pub fn new(brush: &BrushSettings, fmt: Option<PixelFormat>, zoom: f32) -> Self {
-        let mixing = brush.csp_mixing.as_ref().filter(|_| !brush.erase && fmt.is_some()).map(|m| {
+        let by_view;
+        let brush = match brush.csp_size_by_view_at(zoom) {
+            Some(b) => {
+                by_view = b;
+                &by_view
+            }
+            None => brush,
+        };
+        let mixing =brush.csp_mixing.as_ref().filter(|_| !brush.erase && fmt.is_some()).map(|m| {
             Box::new(MixState {
                 stretch: m.bounded().stretch,
                 perceptual: m.perceptual,
@@ -1027,9 +1039,18 @@ impl StrokeRenderer {
     pub fn dab_count(&self) -> usize {
         self.dabs_done
     }
-    /// Union of the dab rectangles so far.
+    /// Union of the dab rectangles so far (the dual brush's too when it adds paint).
     pub fn bounds(&self) -> Rect {
-        self.cov.bounds
+        match self.adding_dual() {
+            Some(d) => self.cov.bounds.union(&d.bounds),
+            None => self.cov.bounds,
+        }
+    }
+
+    /// The dual brush's coverage when it adds paint outside the stroke (a CSP adding mode): its
+    /// pixels composite even where the stroke has no coverage.
+    fn adding_dual(&self) -> Option<&CoverageMap> {
+        self.dual.as_ref().filter(|_| self.ctx.brush.dual_brush.csp_add.is_some())
     }
 
     fn raster_pending(&mut self) {
@@ -1173,6 +1194,10 @@ impl StrokeRenderer {
         // Tiles whose coverage the tail doesn't change still composite the same: redraw them all.
         let all: Vec<_> = t.cov.tiles.keys().copied().filter(|k| reach == 0 || redraw.contains(k)).collect();
         t.cov.dirty.extend(all);
+        if let Some(d) = t.dual.as_mut().filter(|_| t.ctx.brush.dual_brush.csp_add.is_some()) {
+            let all: Vec<_> = d.tiles.keys().copied().collect();
+            d.dirty.extend(all);
+        }
         Some(t)
     }
 
@@ -1186,6 +1211,11 @@ impl StrokeRenderer {
                 if self.cov.tiles.contains_key(&(tx, ty)) {
                     self.cov.dirty.insert((tx, ty));
                 }
+                if let Some(d) = self.dual.as_mut().filter(|d| d.tiles.contains_key(&(tx, ty)))
+                    && self.ctx.brush.dual_brush.csp_add.is_some()
+                {
+                    d.dirty.insert((tx, ty));
+                }
             }
         }
     }
@@ -1194,14 +1224,15 @@ impl StrokeRenderer {
     /// the stroke bounds, and forget them: what a live preview that composites its own paint has
     /// to redraw.
     pub fn take_dirty_rect(&mut self) -> Rect {
-        let r = self
-            .cov
-            .take_dirty()
-            .into_iter()
-            .fold(Rect::EMPTY, |acc, (tx, ty)| acc.union(&Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE)));
+        let adds = self.ctx.brush.dual_brush.csp_add.is_some();
+        let mut keys = self.cov.take_dirty();
         if let Some(d) = self.dual.as_mut() {
+            if adds {
+                keys.extend(d.take_dirty());
+            }
             d.dirty.clear();
         }
+        let r = keys.into_iter().fold(Rect::EMPTY, |acc, (tx, ty)| acc.union(&tile_rect(tx, ty)));
         r.intersect(&self.bounds())
     }
 
@@ -1214,10 +1245,11 @@ impl StrokeRenderer {
     /// Final stroke coverage at a pixel (stroke-level masks applied, before opacity/selection).
     pub fn coverage_at(&self, x: i32, y: i32) -> f32 {
         let c = self.cov.get(x, y);
-        if c <= 0.0 {
+        let dual = self.dual.as_ref().map(|d| d.get(x, y));
+        if c <= 0.0 && (self.adding_dual().is_none() || dual.is_none_or(|t| t <= 0.0)) {
             return 0.0;
         }
-        self.ctx.stroke_mask(c, self.dual.as_ref().map(|d| d.get(x, y)), x, y)
+        self.ctx.stroke_mask(c, dual, x, y)
     }
 
     /// Dense final coverage over the stroke bounds.
@@ -1232,6 +1264,19 @@ impl StrokeRenderer {
                     let c = t.cov[((y - ty * COV_TILE) * COV_TILE + (x - tx * COV_TILE)) as usize];
                     if c > 0.0 {
                         out[(y - b.y0) as usize * w + (x - b.x0) as usize] = self.ctx.stroke_mask(c, self.dual.as_ref().map(|d| d.get(x, y)), x, y);
+                    }
+                }
+            }
+        }
+        // An adding dual brush also paints the tiles the stroke itself doesn't reach.
+        if let Some(d) = self.adding_dual() {
+            for &(tx, ty) in d.tiles.keys().filter(|k| !self.cov.tiles.contains_key(k)) {
+                let tr = tile_rect(tx, ty).intersect(&b);
+                for y in tr.y0..tr.y1 {
+                    for x in tr.x0..tr.x1 {
+                        if let Some(o) = out.get_mut((y - b.y0) as usize * w + (x - b.x0) as usize) {
+                            *o = self.coverage_at(x, y);
+                        }
                     }
                 }
             }
@@ -1300,13 +1345,24 @@ impl StrokeRenderer {
     /// Returns the damaged rectangle.
     pub fn composite(&mut self, pre: &Surface, target: &mut Surface, selection: Option<&Surface>, lock_transparency: bool, all: bool) -> Rect {
         let water = self.water_pass(all);
-        let dirty: Vec<(i32, i32)> = if all {
+        let adds = self.ctx.brush.dual_brush.csp_add.is_some();
+        let mut dirty: Vec<(i32, i32)> = if all {
             self.cov.dirty.clear();
             self.cov.tiles.keys().copied().collect()
         } else {
             self.cov.take_dirty()
         };
         if let Some(d) = self.dual.as_mut() {
+            // An adding dual brush's own tiles composite too.
+            if adds {
+                if all {
+                    dirty.extend(d.tiles.keys().copied());
+                } else {
+                    dirty.extend(d.take_dirty());
+                }
+                dirty.sort_unstable();
+                dirty.dedup();
+            }
             d.dirty.clear();
         }
         let bounds = self.bounds();
@@ -1350,6 +1406,10 @@ impl StrokeRenderer {
         let nc = fmt.mode.color_channels();
         let b = &self.ctx.brush;
         let opacity = b.opacity.clamp(0.0, 1.0);
+        let adding = self.adding_dual();
+        let erase_compare = b.csp_stroke == Some(crate::CspStrokeMode::EraseCompare);
+        // Colour mixing lays paint its own way (CLIP STUDIO paints it in Normal).
+        let csp_stroke = b.csp_stroke.filter(|_| self.mixing.is_none());
         let mut base_src = [0.0f32; 8];
         from_rgba_into(&fmt, b.color, &mut base_src);
         if let Some(a) = a_idx {
@@ -1385,7 +1445,8 @@ impl StrokeRenderer {
                 }
                 _ => Vec::new(),
             };
-            if tile.is_none() && amounts.is_empty() {
+            let dual_tile = adding.is_some_and(|d| d.tiles.contains_key(&(tx, ty)));
+            if tile.is_none() && amounts.is_empty() && !dual_tile {
                 continue;
             }
             pre.read_region_into(tr, &mut region);
@@ -1396,10 +1457,12 @@ impl StrokeRenderer {
                     let c = tile.map_or(0.0, |t| t.cov[ti]);
                     let i = (y - tr.y0) as usize * w + (x - tr.x0) as usize;
                     let add = amounts.get(i).copied().unwrap_or(0.0);
-                    if c <= 0.0 && add <= 0.0 {
+                    let dual = if c > 0.0 || dual_tile { self.dual.as_ref().map(|d| d.get(x, y)) } else { None };
+                    let dual_adds = dual_tile && dual.is_some_and(|t| t > 0.0);
+                    if c <= 0.0 && add <= 0.0 && !dual_adds {
                         continue;
                     }
-                    let m = if c > 0.0 { self.ctx.stroke_mask(c, self.dual.as_ref().map(|d| d.get(x, y)), x, y) } else { 0.0 };
+                    let m = if c > 0.0 || dual_adds { self.ctx.stroke_mask(c, dual, x, y) } else { 0.0 };
                     let alpha = m * opacity + add;
                     let s = sel.as_ref().map_or(1.0, |(sc, v)| v[i * sc]);
                     let mut k = alpha.min(1.0) * s;
@@ -1413,9 +1476,10 @@ impl StrokeRenderer {
                         }
                     }
                     let px = &mut region[i * n..(i + 1) * n];
-                    if b.erase {
+                    if b.erase || erase_compare {
                         if let (Some(a), false) = (a_idx, lock_transparency) {
-                            px[a] *= 1.0 - k;
+                            // Erase (compare) keeps whichever is more transparent.
+                            px[a] = if erase_compare { px[a].min(1.0 - k) } else { px[a] * (1.0 - k) };
                         }
                         continue;
                     }
@@ -1460,7 +1524,9 @@ impl StrokeRenderer {
                             src[a] = v;
                         }
                     }
-                    if matches!(b.mode, BlendMode::Normal | BlendMode::Dissolve) {
+                    if let Some(mode) = csp_stroke {
+                        crate::csp_blend::stroke_native(mode, &fmt, px, &src[..n], k, opacity, lock_transparency);
+                    } else if matches!(b.mode, BlendMode::Normal | BlendMode::Dissolve) {
                         over_native(&fmt, px, &src[..n], k, lock_transparency);
                     } else {
                         let d = to_rgba(&fmt, px);

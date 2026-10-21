@@ -218,7 +218,8 @@ pub struct UiSetParams {
     /// and lineRoundTips (Line tool options), actions (panel view: selected,
     /// selected_step, expanded, collapsed_sets), cspLibraryOpen (bool: shows
     /// the Window › Extensions › CLIP STUDIO Materials panel with a fresh listing, false hides it),
-    /// cspLibraryView (list or grid: one column or two) and cspLibraryTags (array of CLIP STUDIO
+    /// cspLibraryView (list or grid: one column or two), cspLibraryFilter (all, brushes, subTools
+    /// or layers: images and special rulers) and cspLibraryTags (array of CLIP STUDIO
     /// user tags every listed material must carry; [] clears). Other fields are an error.
     pub fields: Value,
 }

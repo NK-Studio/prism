@@ -181,38 +181,7 @@ pub fn imported_tool(m: &prism_engine::paint::sut::SutBrushMetadata) -> Option<T
 
 /// Options an imported non-brush sub-tool sets on its Prism tool.
 pub(crate) fn apply_imported(app: &mut PrismApp, preset: &str) {
-    let Some(params) = app.session.tools.presets.iter().find(|p| p.name == preset).and_then(|p| p.sut.as_ref()).map(|m| m.parameters.clone()) else { return };
-    let get = |k: &str| params.get(k).copied().filter(|v| v.is_finite());
-    let o = &mut app.ui.tool_options;
-    if let Some(v) = get("FillReferMultiLayer") {
-        o.sample_all_layers = v != 0.0;
-    }
-    // CSP's colour margin is a percentage of the channel range.
-    if let Some(v) = get("FillColorMargin") {
-        o.tolerance = (v.clamp(0.0, 100.0) * 2.55) as f32;
-    }
-    if let Some(v) = get("FillContinuousPixel") {
-        o.contiguous = v != 0.0;
-    }
-    if let Some(v) = get("FillAntiAlias") {
-        o.anti_alias = v != 0.0;
-    }
-    // A fill sub-tool's opacity is the fill opacity (percent, as in CLIP STUDIO).
-    if let Some(v) = get("Opacity").filter(|_| params.contains_key("FillColorMargin")) {
-        o.fill_opacity = v.clamp(0.0, 100.0) as f32;
-    }
-    if let Some(v) = get("GradationShapeKind") {
-        o.gradient_style = if v == 0.0 { "linear" } else { "radial" }.into();
-    }
-    if let Some(v) = get("GradationDither") {
-        o.gradient_dither = v != 0.0;
-    }
-    if let Some(v) = get("GradationReverseSaved") {
-        o.gradient_reverse = v != 0.0;
-    }
-    if let Some(v) = get("TextFontSize") {
-        o.type_size = v.clamp(1.0, 1296.0) as f32;
-    }
+    crate::csp_tool_property::apply(app, preset);
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -339,11 +308,11 @@ pub fn property_body(app: &mut PrismApp, ui: &mut egui::Ui) {
     let tool = app.ui.tool;
     let name = current(app).map(|s| if matches!(s.source, Source::Builtin(_)) { tl!(&s.name).to_string() } else { s.name });
     ui.label(egui::RichText::new(name.unwrap_or_else(|| tl!(tool.label()).to_string())).strong());
-    // Imported fill and auto select sub-tools show CLIP STUDIO's own Tool Property.
+    // Imported sub-tools show CLIP STUDIO's own Tool Property.
     if let Some(SubTool { source: Source::Imported { preset, .. }, .. }) = current(app) {
-        let fill = app.session.tools.presets.iter().find(|p| p.name == preset).and_then(|p| p.sut.as_ref()).and_then(crate::csp_fill_property::runs).is_some();
-        if fill {
-            crate::csp_fill_property::show(app, ui, &preset);
+        let csp = app.session.tools.presets.iter().find(|p| p.name == preset).and_then(|p| p.sut.as_ref()).is_some_and(crate::csp_tool_property::handles);
+        if csp {
+            crate::csp_tool_property::show(app, ui, &preset);
             if crate::enclose_fill_ui::active(app) {
                 ui.small(tl!("Draw a lasso around the areas to fill"));
             }

@@ -17,6 +17,7 @@ pub mod effects;
 pub mod mode;
 pub mod pattern;
 pub mod slices;
+pub mod special_ruler;
 pub mod text;
 pub mod text_styles;
 pub mod variables;
@@ -37,6 +38,7 @@ pub use effects::{
 };
 pub use mode::{ColorTable, Duotone, DuotoneInk, StackMode};
 pub use pattern::Pattern;
+pub use special_ruler::{PerspectiveRuler, RulerKind, RulerRange, SpecialRuler, SpecialRulers, VanishTarget, VanishingPoint};
 pub use prism_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use prism_geom::{Affine, Rect, Size};
 pub use prism_raster::Surface;
@@ -601,6 +603,8 @@ pub struct Layer {
     pub advanced: AdvancedBlending,
     /// Layer › Video Layers frame stack (None for a normal layer).
     pub video: Option<VideoData>,
+    /// CLIP STUDIO special rulers attached to this layer (None = no rulers).
+    pub special_rulers: Option<SpecialRulers>,
 }
 
 impl Layer {
@@ -627,6 +631,7 @@ impl Layer {
             blend_if: BlendIf::default(),
             advanced: AdvancedBlending::default(),
             video: None,
+            special_rulers: None,
         }
     }
     pub fn raster(name: impl Into<String>, format: PixelFormat) -> Self {

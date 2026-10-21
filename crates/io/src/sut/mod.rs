@@ -1,8 +1,11 @@
 //! Bounded, Rust-only Clip Studio Paint `.sut` import.
 //! Layout observations: CSP2PC (https://github.com/Leon-Schoenbrunn/CSP2PC),
 //! plus locally inspected files. No converter code or brush assets are bundled.
+mod blend;
 mod display;
+mod dual;
 mod effector;
+pub mod layer_material;
 pub mod library;
 mod material;
 mod sqlite;
@@ -312,6 +315,9 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
         b.transfer.flow = dynamic;
     }
     rotation(r, &mut b, &mut warnings);
+    blend::blend_mode(r, &mut b, &mut warnings);
+    blend::color_jitter(r, &mut b, &mut warnings);
+    blend::options(r, &mut b, &mut warnings);
     if enabled(r, "BrushUseSpray") {
         let count = num(r, "BrushSprayDensity", 8.0).round().max(1.0) as u32;
         let mut spray = CspSpray {
@@ -390,9 +396,7 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
         }
         b.tip = if tips.len() == 1 { TipShape::Sampled(tips.remove(0)) } else { TipShape::Sequence(tips) };
     }
-    if enabled(r, "UseDualBrush") {
-        warnings.push("SUT UseDualBrush is not supported".into());
-    }
+    dual::dual_brush(r, materials, ctl, &mut b, &mut warnings)?;
     if enabled(r, "BrushUseWaterEdge") {
         b.csp_water_edge = Some(water_edge(r, &mut warnings));
     }
@@ -471,9 +475,40 @@ fn rotation(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<String>) {
 /// `BrushInterval`; the automatic types scale a per-type base by hardness and thickness.
 /// Evidence in docs/sut-analysis.md.
 fn spacing(r: &Row, warnings: &mut Vec<String>) -> f32 {
-    let kind = num(r, "BrushAutoIntervalType", 0.0) as i64;
+    spacing_of(r, TipKeys::MAIN, warnings)
+}
+/// The keys of one tip's spacing settings: the main tip's or the dual brush's.
+struct TipKeys {
+    auto_interval: &'static str,
+    interval: &'static str,
+    use_image: &'static str,
+    hardness: &'static str,
+    thickness: &'static str,
+}
+impl TipKeys {
+    const MAIN: Self = Self {
+        auto_interval: "BrushAutoIntervalType",
+        interval: "BrushInterval",
+        use_image: "BrushUsePatternImage",
+        hardness: "BrushHardness",
+        thickness: "BrushThickness",
+    };
+    const DUAL: Self = Self {
+        auto_interval: "DualAutoIntervalType",
+        interval: "DualInterval",
+        use_image: "DualUsePatternImage",
+        hardness: "DualHardness",
+        thickness: "DualThickness",
+    };
+}
+fn spacing_of(r: &Row, k: TipKeys, warnings: &mut Vec<String>) -> f32 {
+    let spacing = spacing_unchecked(r, k, warnings);
+    if spacing.is_finite() { spacing } else { 0.1 }
+}
+fn spacing_unchecked(r: &Row, k: TipKeys, warnings: &mut Vec<String>) -> f32 {
+    let kind = num(r, k.auto_interval, 0.0) as i64;
     let base = match kind {
-        0 => return (num(r, "BrushInterval", 10.0) / 100.0).clamp(0.01, 10.0),
+        0 => return (num(r, k.interval, 10.0) / 100.0).clamp(0.01, 10.0),
         1 => 0.12,
         3 => 0.04,
         2 => 0.08,
@@ -483,9 +518,9 @@ fn spacing(r: &Row, warnings: &mut Vec<String>) -> f32 {
         }
     };
     // Image tips space as fully hard ones.
-    let hardness = if enabled(r, "BrushUsePatternImage") { 1.0 } else { num(r, "BrushHardness", 100.0) / 100.0 };
+    let hardness = if enabled(r, k.use_image) { 1.0 } else { num(r, k.hardness, 100.0) / 100.0 };
     let hardness = if hardness >= 0.999_999_99 { 1.0 } else { hardness.max(0.2) };
-    let thickness = num(r, "BrushThickness", 100.0) / 100.0;
+    let thickness = num(r, k.thickness, 100.0) / 100.0;
     let thickness = if thickness < 1.0 { thickness.max(0.01) } else { 1.0 };
     (base * (3.5 - 2.5 * hardness) * thickness).clamp(0.01, 10.0)
 }
@@ -494,11 +529,7 @@ fn spacing(r: &Row, warnings: &mut Vec<String>) -> f32 {
 /// their effectors). Evidence in docs/sut-analysis.md.
 fn color_mixing(r: &Row, ribbon: bool, warnings: &mut Vec<String>) -> Option<CspColorMixing> {
     // CSP writes the one enable flag under both names; either is enough when the other is absent.
-    let on = match r.get("BrushUseWaterColor").and_then(Value::number) {
-        Some(v) => v != 0.0,
-        None => enabled(r, "BrushUseWaterColor2"),
-    };
-    if !on {
+    if !blend::mixing_on(r) {
         return None;
     }
     let kind = num(r, "BrushWaterColor", 0.0) as i64;

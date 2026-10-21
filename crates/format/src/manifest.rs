@@ -227,6 +227,9 @@ pub struct LayerM {
     pub advanced: prism_doc::AdvancedBlending,
     #[serde(default)]
     pub video: Option<VideoDataM>,
+    /// CLIP STUDIO special rulers (missing in older files = none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub special_rulers: Option<prism_doc::SpecialRulers>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

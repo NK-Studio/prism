@@ -797,7 +797,7 @@ pub fn style_label(style: &str) -> String {
 }
 
 /// Searchable font-family combo box.
-fn font_picker(app: &mut PrismApp, ui: &mut egui::Ui, current: &mut String, width: f32) -> bool {
+pub(crate) fn font_picker(app: &mut PrismApp, ui: &mut egui::Ui, current: &mut String, width: f32) -> bool {
     let favorites = app.session.prefs().type_.favorite_fonts.clone();
     let catalog = font_catalog();
     let action = font_picker_catalog(ui, current, width, &families(), &favorites, &catalog.names, &catalog.korean, &mut app.ui.tool_options.type_font_filter);

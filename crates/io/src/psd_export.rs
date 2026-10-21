@@ -404,6 +404,9 @@ impl Ex {
     /// adjustment or fill block is reused verbatim while it still decodes to
     /// the layer's current parameters; otherwise it is regenerated.
     fn content_blocks(&mut self, l: &Layer) -> Vec<TaggedBlock> {
+        if l.special_rulers.as_ref().is_some_and(|r| !r.is_empty()) {
+            self.warnings.push(format!("layer \"{}\": special rulers are kept only in .prism files", l.name));
+        }
         let mut raw: Vec<([u8; 4], Vec<u8>)> = l.psd_blocks.iter().filter(|(k, _)| !REGENERATED.contains(&k)).map(|(k, d)| (*k, d.to_vec())).collect();
         // A stale multi-effects block would override the regenerated lfx2.
         if effects_unchanged(l) == Some(false) {

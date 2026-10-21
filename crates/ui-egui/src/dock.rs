@@ -485,6 +485,16 @@ pub fn show_stack(app: &mut PrismApp, ui: &mut egui::Ui, area: Rect, groups: &[G
     let strip = if t.pro { 28.0 } else { 40.0 };
     let pro = t.pro;
     let locked = app.session.prefs().workspace_locked;
+    let mins: Vec<(Group, f32)> = groups.iter().map(|g| (*g, content_min(app, *g, pro))).collect();
+    if !opts.horizontal {
+        // A panel whose content needs more room (the Color Wheel) grows its group to fit, as
+        // Photoshop does; a column too short for everything still squeezes it and it scrolls.
+        for (g, min) in &mins {
+            if !app.ui.dock.is_collapsed(*g) && app.ui.dock.height(*g) < *min {
+                app.ui.dock.heights.insert(*g, *min);
+            }
+        }
+    }
     let rects: Vec<(Group, Rect)> = if opts.horizontal {
         let n = groups.len().max(1) as f32;
         let w = ((area.width() - GAP * (n - 1.0)) / n).max(0.0);
@@ -597,7 +607,8 @@ pub fn show_stack(app: &mut PrismApp, ui: &mut egui::Ui, area: Rect, groups: &[G
                 ui.painter().line_segment([gap.left_center(), gap.right_center()], Stroke::new(2.0, t.accent.gamma_multiply(0.7)));
             }
             if sresp.dragged() {
-                resize(&mut app.ui.dock, &heights, i, sresp.drag_delta().y);
+                let min = |g: Group| mins.iter().find(|(m, _)| *m == g).map_or(g.min_height(), |(_, h)| *h);
+                resize(&mut app.ui.dock, &heights, i, sresp.drag_delta().y, min);
             }
         }
     }
@@ -654,8 +665,8 @@ fn rects_after_layout(heights: &[(Group, f32)], area: Rect) -> Vec<(Group, Rect)
 }
 
 /// Splitter `i` (below group `i`) dragged by `dy`: group `i` grows or shrinks against the next
-/// expanded group (or the filler, which absorbs the difference).
-fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32) {
+/// expanded group (or the filler, which absorbs the difference), each stopping at `min`.
+fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32, min: impl Fn(Group) -> f32) {
     if !dy.is_finite() || dy == 0.0 {
         return;
     }
@@ -670,11 +681,29 @@ fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32) 
             layout.heights.entry(*o).or_insert(*oh);
         }
     }
-    let new_h = (h + dy).clamp(g.min_height(), (h + nh - n.min_height()).max(g.min_height()));
+    let (gmin, nmin) = (min(g), min(n));
+    // Never past a minimum, but a group already below it (a squeezed column) can still shrink
+    // back as far as it is.
+    let gmin = gmin.min(h.max(g.min_height()));
+    let nmin = nmin.min(nh.max(n.min_height()));
+    let new_h = (h + dy).clamp(gmin, (h + nh - nmin).max(gmin));
     layout.heights.insert(g, new_h);
     if Some(j) != filler {
-        layout.heights.insert(n, (nh - (new_h - h)).max(n.min_height()));
+        layout.heights.insert(n, (nh - (new_h - h)).max(nmin));
     }
+}
+
+/// The least height `g` keeps for its active tab's content: a group's own minimum, or more
+/// for a panel that stops being usable below it (see [`color_panel_ui::group_min_height`]).
+///
+/// [`color_panel_ui::group_min_height`]: crate::panels::color_panel_ui::group_min_height
+fn content_min(app: &PrismApp, g: Group, pro: bool) -> f32 {
+    let tabs = app.ui.dock.tabs_of(g, pro);
+    let need = match app.ui.dock.active_panel(g, &tabs, &app.ui.dock_tabs, pro) {
+        Some(PanelId::Color) => crate::panels::color_panel_ui::group_min_height(app),
+        _ => None,
+    };
+    need.map_or(g.min_height(), |h| h.clamp(g.min_height(), MAX_HEIGHT))
 }
 
 /// What `prefs.panelLayout` holds: the live layout and open panels.

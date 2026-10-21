@@ -90,10 +90,10 @@ fn clip_studio_tools_window_and_panels_replace_photoshop_tools() {
     );
     PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
     h.run_steps(4);
-    // The workspace docks Sub Tool above Tool Property in a left column.
+    // The workspace docks Sub Tool, Tool Property and Color Slider in a left column.
     let column = h.state().ui.dock.columns.first().cloned().expect("a column");
     let tabs: Vec<_> = column.groups.iter().flat_map(|g| h.state().ui.dock.tabs_of(*g, true)).collect();
-    assert_eq!(tabs, [crate::dock_model::PanelId::SubTool, crate::dock_model::PanelId::ToolProperty]);
+    assert_eq!(tabs, [crate::dock_model::PanelId::SubTool, crate::dock_model::PanelId::ToolProperty, crate::dock_model::PanelId::ColorSlider]);
     // CSP's tools, not Photoshop's.
     h.get_by_label("Decoration").click();
     h.run_steps(3);

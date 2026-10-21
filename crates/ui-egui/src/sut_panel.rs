@@ -76,13 +76,23 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
             }
         }
         30 => {
-            // Numeric CSP blend codes beyond Normal have not been verified here.
-            if source(m, key) == 0.0 {
-                ui.label(tl!(label));
-                let opts: Vec<_> = prism_color::BlendMode::LAYER_MODES.iter().copied().map(|mode| (mode, mode.label())).collect();
-                crate::widgets::dropdown(ui, "sut-blend-mode", &mut b.mode, &opts, ui.available_width().min(250.0));
-            } else {
-                unsupported(ui, label, format!("CSP {}", source(m, key)), false);
+            // The imported CSP code decides (prism_paint::csp_blend): an erasing or CSP-only mode
+            // is shown by its CSP name; a mapped one edits the brush's blend mode.
+            use prism_engine::paint::csp_blend::{CspBlend, csp_blend};
+            match csp_blend(f64::from(source(m, key))) {
+                Some((_, CspBlend::Mode { .. })) => {
+                    ui.label(tl!(label));
+                    let opts: Vec<_> = prism_color::BlendMode::LAYER_MODES.iter().copied().map(|mode| (mode, mode.label())).collect();
+                    crate::widgets::dropdown(ui, "sut-blend-mode", &mut b.mode, &opts, ui.available_width().min(250.0));
+                }
+                Some((name, CspBlend::Erase { .. } | CspBlend::Stroke(_))) => {
+                    ui.horizontal(|ui| {
+                        ui.label(tl!(label));
+                        ui.label(tl!(name));
+                    });
+                }
+                Some((name, CspBlend::Unsupported)) => unsupported(ui, label, tl!(name).to_string(), false),
+                None => unsupported(ui, label, format!("CSP {}", source(m, key)), false),
             }
         }
         20 => {
