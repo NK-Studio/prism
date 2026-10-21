@@ -72,6 +72,23 @@ pub(crate) fn sync_window_level(app: &PrismApp, ctx: &Context) {
     }
 }
 
+/// Where and how big a floating document window opens: its last recorded frame (or the default
+/// size). Only while its viewport doesn't exist yet: every pass records where the OS has the
+/// window, and fed back into the builder, egui moves the window there whenever the recording
+/// changes. Windows applies that move after the next pass has read the position, so each move
+/// put the window back where the one before had left it: after a drag the window shook between
+/// two spots forever, repainting every frame.
+pub(crate) fn placement(ctx: &Context, window: &DocWindow, builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
+    if ctx.input(|i| i.raw.viewports.contains_key(&viewport(Some(window.id)))) {
+        return builder;
+    }
+    let builder = builder.with_inner_size(window.size.unwrap_or([800.0, 600.0]));
+    match window.position {
+        Some([x, y]) => builder.with_position(egui::pos2(x, y)),
+        None => builder,
+    }
+}
+
 pub(crate) fn docked(app: &PrismApp) -> Vec<usize> {
     (0..app.session.documents().len()).filter(|i| !app.ui.windows.iter().any(|w| w.open && w.document == *i && w.kind == DocWindowKind::Detached)).collect()
 }

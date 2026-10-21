@@ -3866,18 +3866,15 @@ pub fn extra_windows(app: &mut PrismApp, ctx: &egui::Context) {
         let Some(st) = app.session.documents().get(w.document) else { continue };
         let title = document_title(app, w.document, w.view.zoom);
         let vid = crate::doc_windows::viewport(Some(w.id));
-        let mut builder = egui::ViewportBuilder::default()
+        let builder = egui::ViewportBuilder::default()
             .with_title(title)
-            .with_inner_size(w.size.unwrap_or([800.0, 600.0]))
             .with_min_inner_size([320.0, 240.0])
             .with_decorations(cfg!(target_os = "macos"))
             .with_fullsize_content_view(cfg!(target_os = "macos"))
             .with_titlebar_shown(false)
             .with_title_shown(false)
             .with_window_level(crate::doc_windows::window_level(app, ctx));
-        if let Some([x, y]) = w.position {
-            builder = builder.with_position(egui::pos2(x, y));
-        }
+        let builder = crate::doc_windows::placement(ctx, &w, builder);
         let _ = st;
         ctx.show_viewport_immediate(vid, builder, |ui, _class| {
             let child = ui.ctx().clone();

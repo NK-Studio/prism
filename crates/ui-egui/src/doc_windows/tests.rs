@@ -573,6 +573,33 @@ fn a_dragged_window_follows_the_os_pointer() {
     assert_eq!(moved_to(false, Some(egui::pos2(f32::NAN, 0.0))), Some(egui::pos2(170.0, 145.0)));
 }
 
+/// A floating window's recorded frame places it when it opens, and never again: fed back every
+/// frame, Windows' late moves bounced it between two spots forever.
+#[test]
+fn an_open_window_is_not_moved_to_its_recorded_frame() {
+    let mut window = DocWindow { size: Some([800.0, 600.0]), id: 3, document: 0, view: View::default(), open: true, kind: DocWindowKind::Detached, position: Some([585.0, 534.0]) };
+    let built = |window: &DocWindow, open: bool| {
+        let ctx = Context::default();
+        let mut raw = egui::RawInput::default();
+        if open {
+            raw.viewports.insert(viewport(Some(window.id)), Default::default());
+        }
+        let mut builder = None;
+        let mut out = ctx.run_ui(raw, |ui| builder = Some(placement(ui.ctx(), window, egui::ViewportBuilder::default())));
+        out.textures_delta.clear();
+        builder.unwrap()
+    };
+    let mut opened = built(&window, false);
+    assert_eq!((opened.position, opened.inner_size), (Some(egui::pos2(585.0, 534.0)), Some(egui::vec2(800.0, 600.0))));
+    // The OS has it a few pixels away (a drag, or a move still on its way): nothing is sent back.
+    window.position = Some([587.0, 531.0]);
+    window.size = Some([800.0, 599.99994]);
+    let (commands, recreate) = opened.patch(built(&window, true));
+    assert!(commands.is_empty() && !recreate, "{commands:?}");
+    // Reopened after its viewport was dropped, it comes back where it was last seen.
+    assert_eq!(built(&window, false).position, Some(egui::pos2(587.0, 531.0)));
+}
+
 /// A system file panel (the Save window's Other Location…) must not open under Prism's
 /// always-on-top windows: they drop to ordinary stacking while it is up, and it opens on the
 /// window that asked for it.
