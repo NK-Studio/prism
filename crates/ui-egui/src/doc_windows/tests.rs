@@ -364,6 +364,103 @@ fn floating_window_level_tracks_application_activation_instead_of_panel_focus() 
     }
 }
 
+/// Windows: focus moving between Prism's own windows (a layer dropped on another floating
+/// document) leaves none focused for a turn. The floating windows keep their level through that
+/// gap: dropping it and raising it again put the source window back above the destination.
+#[test]
+fn focus_passing_between_prism_windows_keeps_the_floating_level() {
+    let a = app(1);
+    let ctx = Context::default();
+    let mut level_commands = Vec::new();
+    for (time, focused, want) in [
+        (0.0, true, egui::viewport::WindowLevel::AlwaysOnTop),
+        // Between the source losing focus and the destination taking it.
+        (0.05, false, egui::viewport::WindowLevel::AlwaysOnTop),
+        (0.1, true, egui::viewport::WindowLevel::AlwaysOnTop),
+        // Another application took the focus.
+        (0.2, false, egui::viewport::WindowLevel::AlwaysOnTop),
+        (0.8, false, egui::viewport::WindowLevel::Normal),
+    ] {
+        let mut raw = egui::RawInput { time: Some(time), ..Default::default() };
+        raw.viewports.insert(ViewportId::ROOT, egui::ViewportInfo { focused: Some(focused), ..Default::default() });
+        let mut output = ctx.run_ui(raw, |ui| {
+            assert_eq!(window_level(&a, ui.ctx()), want, "at {time}s");
+            sync_window_level(&a, ui.ctx());
+        });
+        level_commands.extend(output.viewport_output[&ViewportId::ROOT].commands.iter().filter(|c| matches!(c, egui::ViewportCommand::WindowLevel(_))).cloned());
+        output.textures_delta.clear();
+    }
+    assert_eq!(
+        level_commands,
+        [egui::ViewportCommand::WindowLevel(egui::viewport::WindowLevel::AlwaysOnTop), egui::ViewportCommand::WindowLevel(egui::viewport::WindowLevel::Normal)],
+        "set once, lowered only after leaving Prism"
+    );
+}
+
+/// The main window's File menu dropped over a floating document window: the main window goes on
+/// top while the menu is open (its menus are drawn inside it), and back once it closes. A menu
+/// that misses every floating window changes nothing.
+#[test]
+fn a_main_menu_over_a_floating_window_raises_the_main_window_while_open() {
+    let ctx = Context::default();
+    // Floating windows are OS windows, as in the desktop app.
+    ctx.set_embed_viewports(false);
+    let mut a = app(1);
+    let window = detach(&mut a, &ctx, 0, None).unwrap()["window"].as_u64().unwrap();
+    let levels = |output: &egui::FullOutput| -> Vec<egui::viewport::WindowLevel> {
+        output.viewport_output[&ViewportId::ROOT]
+            .commands
+            .iter()
+            .filter_map(|c| if let egui::ViewportCommand::WindowLevel(l) = c { Some(*l) } else { None })
+            .collect()
+    };
+    let pass = |open: bool, floating: Rect| {
+        ctx.data_mut(|d| d.insert_temp(frames_key(), Frames(vec![(window, floating)])));
+        let mut raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+        raw.viewports.insert(
+            ViewportId::ROOT,
+            egui::ViewportInfo {
+                native_pixels_per_point: Some(1.0),
+                inner_rect: Some(Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            },
+        );
+        let mut output = ctx.run_ui(raw, |ui| {
+            let file = ui.button("File");
+            let id = egui::Popup::default_response_id(&file);
+            if open && !egui::Popup::is_id_open(ui.ctx(), id) {
+                egui::Popup::open_id(ui.ctx(), id);
+            } else if !open {
+                egui::Popup::close_all(ui.ctx());
+            }
+            egui::Popup::menu(&file).show(|ui| {
+                for item in ["New…", "Open…", "Close", "Save", "Export", "Print…", "Exit"] {
+                    let _ = ui.button(item);
+                }
+            });
+            raise_main_over_popups(&a, ui.ctx());
+        });
+        output.textures_delta.clear();
+        levels(&output)
+    };
+    // The menu opens at the main window's top left (100, 100 on the desktop).
+    let under_menu = Rect::from_min_size(egui::pos2(120.0, 150.0), egui::vec2(400.0, 300.0));
+    let elsewhere = Rect::from_min_size(egui::pos2(700.0, 500.0), egui::vec2(150.0, 100.0));
+    let mut sent = Vec::new();
+    for _ in 0..3 {
+        sent.extend(pass(true, elsewhere));
+    }
+    assert!(sent.is_empty(), "a menu clear of the floating window raises nothing: {sent:?}");
+    for _ in 0..3 {
+        sent.extend(pass(true, under_menu));
+    }
+    assert_eq!(sent, [egui::viewport::WindowLevel::AlwaysOnTop]);
+    for _ in 0..2 {
+        sent.extend(pass(false, under_menu));
+    }
+    assert_eq!(sent, [egui::viewport::WindowLevel::AlwaysOnTop, egui::viewport::WindowLevel::Normal], "back below once the menu closes");
+}
+
 #[test]
 fn quit_prompt_floats_above_detached_canvases_and_cancel_keeps_them() {
     let mut a = app(1);

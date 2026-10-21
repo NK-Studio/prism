@@ -104,6 +104,7 @@ pub mod move_mods;
 pub mod move_ui;
 mod native_dialogs;
 pub mod native_menu;
+pub mod native_popup;
 pub mod new_doc_ui;
 pub mod notices;
 mod opacity_keys;
@@ -344,6 +345,9 @@ pub struct Services {
     pub read_displays: Option<monitor_status::ReadDisplaysFn>,
     /// The macOS menu bar, when the desktop app installed one; the in-window menus are hidden then.
     pub native_menu: Option<native_menu::NativeMenu>,
+    /// Shows a menu bar menu as a native popup menu (desktop Windows; see `native_popup`).
+    /// Without one, the menus are drawn in the window.
+    pub popup_menu: Option<native_popup::PopupMenuFn>,
     /// Ends the app once leaving is settled (nothing unsaved, or the prompt answered), instead of
     /// letting eframe close the window. macOS: `-[NSApplication terminate:]`. Closing the window
     /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
@@ -1176,6 +1180,8 @@ impl eframe::App for PrismApp {
         self.drain_control(ctx);
         doc_windows::queue_input(self, ctx);
         native_menu::run(self, ctx);
+        // A menu title pressed two frames ago opens its native popup (it blocks until closed).
+        native_popup::perform(self, ctx);
         if self.ui.text_edit.is_some() && !self.ui.tool.is_type() {
             type_tool::commit(self);
         }
@@ -1346,6 +1352,8 @@ impl eframe::App for PrismApp {
             wide_angle_ui::show(self, &ctx);
         }
         canvas::extra_windows(self, &ctx);
+        // The main window's menus open above the floating document windows.
+        doc_windows::raise_main_over_popups(self, &ctx);
         notices::show(self, &ctx);
         // The toast shows where the work is: here unless a floating document window is active.
         if self.ui.active_window.is_none() {

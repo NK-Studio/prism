@@ -660,7 +660,7 @@ fn checked(app: &PrismApp, id: &str) -> Option<bool> {
 
 /// Translate the fixed command label and substitute the currently configured export format.
 /// Reuse the existing translated PNG sentence, so dynamic formats work in every UI language.
-fn translated_menu_label(lang: crate::i18n::Lang, item: &MenuItem) -> String {
+pub(crate) fn translated_menu_label(lang: crate::i18n::Lang, item: &MenuItem) -> String {
     if item.id == "file.export.quickExportAsPng"
         && let Some(fmt) = item.label.strip_prefix("Quick Export as ")
     {
@@ -869,10 +869,18 @@ pub fn menu_bar(app: &mut PrismApp, ui: &mut egui::Ui) -> f32 {
             ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
             nav.bar_bottom = Some(ui.max_rect().bottom());
             let mut buttons = Vec::with_capacity(TOP_MENUS.len());
-            for top in TOP_MENUS {
+            // Windows: the menus open as native popups (`native_popup`); the title of the one
+            // about to open is drawn pressed.
+            let native_pending = crate::native_popup::pending(ui.ctx());
+            for (index, top) in TOP_MENUS.into_iter().enumerate() {
                 // egui's menu_button toggles on release; these titles open on the press (one
                 // gesture can press, drag to an item and release), so each drives its popup.
-                let title = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr(lang, top)).color(t.text_dim)));
+                let title = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr(lang, top)).color(t.text_dim)).selected(native_pending == Some(index)));
+                if crate::native_popup::native(app_ref, ui.ctx(), top) {
+                    crate::native_popup::title(ui.ctx(), index, &title, title_press(ui.ctx(), &title), app_ref.frame);
+                    buttons.push(title);
+                    continue;
+                }
                 // The bar's close behaviour and style, as a menu (not bar) config so submenus inside
                 // render as submenus.
                 let bar = egui::containers::menu::MenuConfig::find(ui);
@@ -915,6 +923,7 @@ pub fn menu_bar(app: &mut PrismApp, ui: &mut egui::Ui) -> f32 {
                 buttons.push(title);
             }
             right = buttons.iter().map(|b| b.rect.right()).fold(right, f32::max);
+            crate::native_popup::record_titles(ui.ctx(), &buttons);
             switch_on_hover(ui.ctx(), &buttons);
             let tops: Vec<egui::Id> = buttons.iter().map(egui::Popup::default_response_id).collect();
             nav.keys(ui.ctx(), &tops, &mut clicked);

@@ -89,6 +89,22 @@ fn places_the_copies_centred_on_the_canvas_on_a_point_or_offset() {
 }
 
 #[test]
+fn a_group_comes_along_with_its_children_and_moves_as_one() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    let group = s.execute("layer.groupLayers", json!({"layer": paint.0, "name": "Group 1"})).unwrap()["layer"].as_u64().unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [group], "offset": [20, 10]})).unwrap();
+    let d = doc(&s, 1);
+    let copy = d.layer(copied(&r)).unwrap();
+    assert_ne!(copy.id.0, group);
+    assert_eq!(copy.name, "Group 1");
+    let children = copy.children().unwrap();
+    assert_eq!(children.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["paint"]);
+    assert_ne!(children[0].id, paint, "the children have their own ids");
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(24, 16, 34, 26));
+    assert_eq!(doc(&s, 0).layer(paint).map(|l| l.name.as_str()), Some("paint"), "the source keeps its group");
+}
+
+#[test]
 fn a_copied_background_is_an_ordinary_layer_and_several_layers_keep_their_order() {
     let (mut s, paint) = two_docs(40, 30, 8);
     let bg = doc(&s, 0).layers[0].id;

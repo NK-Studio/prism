@@ -1990,6 +1990,8 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
     }
     let flip = app.ui.view.flip_horizontal;
     let xf = ViewXform { rect, zoom: view.zoom, center: view.center, flip, rotation: view.rotation };
+    // Layers dragged from another view or window can be dropped here.
+    crate::layer_transfer::register(app, &ctx, doc.id, &xf);
     let pixel_grid = app.ui.view.shows(app.ui.view.show.pixel_grid);
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
@@ -2445,6 +2447,11 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
             && let Some(p) = response.interact_pointer_pos()
         {
             crate::canvas_tool_menu::open(app, tool, [p.x, p.y]);
+        }
+        // A Move drag over another document's canvas (here or in another window) copies the
+        // layers there on release instead of moving them (`layer_transfer`).
+        if tool == Tool::Move && (buttons.dragged || buttons.stopped) && crate::layer_transfer::leave_canvas(app, &ctx) {
+            (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
         }
         // The (temporary) Hand pans above; its gestures never reach the tool underneath.
         if tool == Tool::Hand {
@@ -3883,7 +3890,7 @@ pub fn extra_windows(app: &mut PrismApp, ctx: &egui::Context) {
             app.automation_input = crate::doc_windows::automated(&child);
             app.collect_screenshots(&child);
             let focused = child.input(|i| i.focused);
-            let accepts_focus = crate::doc_windows::requested_focus(&child).is_none_or(|id| id == w.id);
+            let accepts_focus = crate::doc_windows::requested_focus(&child).is_none_or(|id| id == Some(w.id));
             if (app.automation_input || (focused && accepts_focus)) && app.ui.dialogs.is_empty() && app.discard.is_none() {
                 crate::doc_windows::activate(app, w.document, Some(w.id));
             }
@@ -3973,9 +3980,12 @@ pub fn extra_windows(app: &mut PrismApp, ctx: &egui::Context) {
                 }
                 view = canvas_view(app, ui, w.document, rect, view.clone(), interactive);
             });
+            // Layers dragged from this window drop on release; dragged from another, they show here.
+            crate::layer_transfer::finish(app, &child);
             let screen = if crate::doc_windows::moving(&child, w.id) { app.services.screen_cursor.as_mut().and_then(|f| f(&child)) } else { None };
             crate::doc_windows::move_window(&child, w.id, screen);
             crate::doc_windows::fade_window(app, &child, w.id);
+            crate::doc_windows::record_frame(&child, w.id);
             if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
                 win.view = view;
                 if let Some(rect) = child.input(|i| i.viewport().inner_rect) {

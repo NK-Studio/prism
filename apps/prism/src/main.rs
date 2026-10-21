@@ -8,8 +8,9 @@
 //! where the platform has one) for this launch, e.g. after a graphics driver crash. A start that
 //! crashes inside the driver also falls back by itself next time (see `gpu_startup`).
 //!
-//! `--in-window-menus` (or `PRISM_IN_WINDOW_MENUS=1`) keeps the menus inside the window on
-//! macOS instead of the macOS menu bar (`mac_menu`).
+//! `--in-window-menus` (or `PRISM_IN_WINDOW_MENUS=1`) keeps the menus inside the window: on
+//! macOS instead of the macOS menu bar (`mac_menu`), on Windows instead of native popup menus
+//! (`win_menu`).
 //!
 //! `--control <port>` (or `PRISM_CONTROL_PORT`) starts a localhost JSON-lines control server.
 //! The first line must authenticate; subsequent request lines get reply lines.
@@ -42,6 +43,8 @@ mod monitor_profile;
 mod screen_color;
 mod services;
 mod settings_migration;
+#[cfg(target_os = "windows")]
+mod win_menu;
 #[cfg(target_os = "windows")]
 mod window_opacity;
 // Native tablet adapters preserve data omitted by winit's mouse/touch translation.
@@ -418,7 +421,7 @@ fn main() -> eframe::Result {
                     app.services.native_menu = mac_menu::install(&cc.egui_ctx, &app);
                 }
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             let _ = in_window_menus;
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
@@ -426,6 +429,10 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "windows")]
             {
                 app.services.window_opacity = Some(window_opacity::service());
+                // The menu bar's menus open as native popups, above the floating document windows.
+                if !in_window_menus {
+                    app.services.popup_menu = Some(win_menu::service());
+                }
                 tablet::connect_windows(&cc.egui_ctx, pen_queue.clone());
             }
             app.services.screen_pick = screen_color::service(cc);

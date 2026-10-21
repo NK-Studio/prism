@@ -38,9 +38,31 @@ impl PrismApp {
     }
 }
 
+/// Focus passing from one of Prism's windows to another (a click, or a layer dropped on another
+/// floating document) leaves none of them focused for an event-loop turn. Within this many
+/// seconds of the last focused one Prism still counts as active: the floating windows' level then
+/// doesn't drop and come back, which re-raised a window above the one just brought forward.
+const FOCUS_GAP: f64 = 0.5;
+
 /// Whether Prism is foreground, including focus in any detached window.
 pub(crate) fn application_active(app: &PrismApp, ctx: &Context) -> bool {
-    app.services.application_active.as_ref().map_or_else(|| ctx.input(|i| i.raw.viewports.values().any(|v| v.focused == Some(true))), |active| active())
+    if let Some(active) = app.services.application_active.as_ref() {
+        return active();
+    }
+    let (focused, now) = ctx.input(|i| (i.raw.viewports.values().any(|v| v.focused == Some(true)), i.time));
+    let key = Id::new("application-last-active");
+    if focused {
+        ctx.data_mut(|d| d.insert_temp(key, now));
+        return true;
+    }
+    let Some(last) = ctx.data(|d| d.get_temp::<f64>(key)) else { return false };
+    let left = FOCUS_GAP - (now - last);
+    if left > 0.0 {
+        // Look again once the gap is over, so leaving Prism still lowers the windows.
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(left.min(FOCUS_GAP)));
+        return true;
+    }
+    false
 }
 
 /// Floating documents stay above the editor while Prism is active. Two exceptions use ordinary
@@ -86,6 +108,64 @@ pub(crate) fn placement(ctx: &Context, window: &DocWindow, builder: egui::Viewpo
     match window.position {
         Some([x, y]) => builder.with_position(egui::pos2(x, y)),
         None => builder,
+    }
+}
+
+/// Floating document windows on the desktop (pixels), as last drawn.
+#[derive(Clone, Default)]
+struct Frames(Vec<(u64, Rect)>);
+fn frames_key() -> Id {
+    Id::new("document-window-frames")
+}
+
+/// A floating document window's pass (`ctx` is its window): remember where it is.
+pub(crate) fn record_frame(ctx: &Context, window: u64) {
+    let Some(r) = ctx.input(|i| i.viewport().outer_rect) else { return };
+    let r = r * ctx.pixels_per_point();
+    ctx.data_mut(|d| {
+        let frames = &mut d.get_temp_mut_or_default::<Frames>(frames_key()).0;
+        frames.retain(|(w, _)| *w != window);
+        frames.push((window, r));
+    });
+}
+
+/// The main window's open menus, drop-down lists and context menus on the desktop (pixels).
+fn main_popups(ctx: &Context) -> Vec<Rect> {
+    if !egui::Popup::is_any_open(ctx) {
+        return Vec::new();
+    }
+    let Some(origin) = ctx.input(|i| i.viewport().inner_rect).map(|r| r.min.to_vec2()) else { return Vec::new() };
+    let scale = ctx.pixels_per_point();
+    ctx.memory(|m| {
+        m.areas()
+            .visible_layer_ids()
+            .into_iter()
+            .filter(|l| l.order == egui::Order::Foreground)
+            .filter_map(|l| m.area_rect(l.id))
+            .map(|r| r.translate(origin) * scale)
+            .collect()
+    })
+}
+
+/// Photoshop's menus open above floating document windows. Prism's are drawn inside the main
+/// window, which the floating windows (always on top while Prism is active) cover. So while a menu,
+/// drop-down list or context menu of the main window overlaps a floating window, the main window
+/// goes on top of them, and back below once it closes. Call in the main window's pass, after the
+/// floating windows are drawn.
+pub(crate) fn raise_main_over_popups(app: &PrismApp, ctx: &Context) {
+    if ctx.viewport_id() != ViewportId::ROOT || ctx.embed_viewports() {
+        return;
+    }
+    let open: Vec<u64> = app.ui.windows.iter().filter(|w| w.open).map(|w| w.id).collect();
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Frames>(frames_key()).0.retain(|(w, _)| open.contains(w)));
+    let frames = ctx.data(|d| d.get_temp::<Frames>(frames_key())).unwrap_or_default().0;
+    let raise = !frames.is_empty() && main_popups(ctx).iter().any(|p| frames.iter().any(|(_, f)| f.intersects(*p)));
+    let key = Id::new("main-window-over-floating");
+    if ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false) != raise {
+        ctx.data_mut(|d| d.insert_temp(key, raise));
+        let level = if raise { egui::viewport::WindowLevel::AlwaysOnTop } else { egui::viewport::WindowLevel::Normal };
+        ctx.send_viewport_cmd_to(ViewportId::ROOT, egui::ViewportCommand::WindowLevel(level));
+        ctx.request_repaint();
     }
 }
 
@@ -163,14 +243,24 @@ pub(crate) fn activate_main(app: &mut PrismApp, document: usize) {
 
 #[derive(Clone)]
 struct RequestedFocus {
-    window: u64,
+    /// `None`: the main window.
+    window: Option<u64>,
     until: std::time::Instant,
 }
 fn focus_key() -> Id {
     Id::new("document-requested-focus")
 }
-pub(crate) fn requested_focus(ctx: &Context) -> Option<u64> {
+/// The window asked to take focus (`Some(None)`: the main window), until the OS has moved it.
+pub(crate) fn requested_focus(ctx: &Context) -> Option<Option<u64>> {
     ctx.data(|d| d.get_temp::<RequestedFocus>(focus_key())).filter(|f| f.until > std::time::Instant::now()).map(|f| f.window)
+}
+fn request_focus(ctx: &Context, window: Option<u64>) {
+    ctx.data_mut(|d| d.insert_temp(focus_key(), RequestedFocus { window, until: std::time::Instant::now() + std::time::Duration::from_secs(2) }));
+    let id = viewport(window);
+    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(true));
+    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Minimized(false));
+    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Focus);
+    ctx.request_repaint();
 }
 
 pub fn focus(app: &mut PrismApp, ctx: &Context, window: u64) -> Result<Value, String> {
@@ -179,12 +269,18 @@ pub fn focus(app: &mut PrismApp, ctx: &Context, window: u64) -> Result<Value, St
         return Err("window's document is closed".into());
     }
     activate(app, document, Some(window));
-    ctx.data_mut(|d| d.insert_temp(focus_key(), RequestedFocus { window, until: std::time::Instant::now() + std::time::Duration::from_secs(2) }));
-    ctx.send_viewport_cmd_to(viewport(Some(window)), egui::ViewportCommand::Visible(true));
-    ctx.send_viewport_cmd_to(viewport(Some(window)), egui::ViewportCommand::Minimized(false));
-    ctx.send_viewport_cmd_to(viewport(Some(window)), egui::ViewportCommand::Focus);
-    ctx.request_repaint();
+    request_focus(ctx, Some(window));
     Ok(json!({"window": window, "document": document}))
+}
+
+/// Show `document` in the main window and bring that window to the front, as a drop from a
+/// floating document window onto it does: the floating window, still focused for an OS turn,
+/// doesn't take the document back.
+pub(crate) fn focus_main(app: &mut PrismApp, ctx: &Context, document: usize) {
+    activate_main(app, document);
+    if app.ui.active_window.is_none() && app.session.active_index() == Some(document) {
+        request_focus(ctx, None);
+    }
 }
 
 pub(crate) fn focus_native(app: &mut PrismApp, ctx: &Context) {
@@ -193,11 +289,15 @@ pub(crate) fn focus_native(app: &mut PrismApp, ctx: &Context) {
     if crate::native_dialogs::is_open(app) {
         return;
     }
-    if let Some(id) = requested_focus(ctx)
-        && let Some(document) = app.ui.windows.iter().find(|w| w.id == id && w.open).map(|w| w.document)
-    {
-        activate(app, document, Some(id));
-        return;
+    match requested_focus(ctx) {
+        Some(None) => return,
+        Some(Some(id)) => {
+            if let Some(document) = app.ui.windows.iter().find(|w| w.id == id && w.open).map(|w| w.document) {
+                activate(app, document, Some(id));
+                return;
+            }
+        }
+        None => {}
     }
     let target = ctx.input(|i| {
         app.ui.windows.iter().find(|w| i.raw.viewports.get(&viewport(Some(w.id))).is_some_and(|v| v.focused == Some(true))).map(|w| (w.id, w.document))
