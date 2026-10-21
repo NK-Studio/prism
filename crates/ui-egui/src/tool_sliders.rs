@@ -12,6 +12,8 @@
 //! a highlight shows the column or row it would dock as; letting go there docks it. Dragging a
 //! docked panel's strip tears it off as a floating window.
 
+use std::sync::Arc;
+
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use prism_engine::paint::{BrushSettings, MAX_BRUSH_SIZE};
 use serde::{Deserialize, Serialize};
@@ -75,12 +77,12 @@ pub struct ToolSlidersLayout {
 
 impl Default for ToolSlidersLayout {
     fn default() -> Self {
-        Self { dock: SlidersDock::Floating, column: 128.0, row: 96.0, floating: [128.0, 460.0], pos: None }
+        Self { dock: SlidersDock::Floating, column: MIN_COLUMN, row: 96.0, floating: [MIN_COLUMN, 460.0], pos: None }
     }
 }
 
-/// Bounds on stored sizes (guards against absurd values from `ui.set` or a saved workspace).
-const MIN_THICK: f32 = 72.0;
+/// Bounds on stored sizes (guards against absurd values from `ui.set` or a saved workspace); the
+/// lower bounds are `MIN_COLUMN` and `MIN_ROW`.
 const MAX_THICK: f32 = 600.0;
 const MAX_LONG: f32 = 4000.0;
 
@@ -91,10 +93,20 @@ fn sane(v: f32, lo: f32, hi: f32, fallback: f32) -> f32 {
 /// Height of the tab strip at the top.
 const HEADER: f32 = 24.0;
 /// Size of the space a value badge gets: a one-line pill, value then unit, with room around the
-/// text (a two-line circle crowded its digits).
-const BADGE: egui::Vec2 = egui::vec2(56.0, 22.0);
+/// text (a two-line circle crowded its digits). As wide as the widest badge, Size at "999.9 px".
+const BADGE: egui::Vec2 = egui::vec2(62.0, 22.0);
+/// Width of the widest Opacity badge ("100 %").
+const OPACITY_BADGE_W: f32 = 48.0;
 /// Diameter of a slider's knob.
 const KNOB: f32 = 16.0;
+/// Margin around the sliders, and the space between a badge and its neighbour.
+const PAD: f32 = 6.0;
+const GAP: f32 = 4.0;
+/// The narrowest column (vertical sliders) that keeps the two badges side by side apart: each
+/// slider gets half the width, so half of it must hold half of each badge and the gap.
+const MIN_COLUMN: f32 = 2.0 * PAD + BADGE.x + OPACITY_BADGE_W + 2.0 * GAP;
+/// The shortest row (horizontal sliders, tab strip included) that keeps the stacked badges apart.
+const MIN_ROW: f32 = HEADER + 2.0 * PAD + 2.0 * (BADGE.y + GAP);
 
 /// How close (points) the pointer must bring a dragged panel to a canvas edge to dock it there.
 pub const SNAP_ZONE: f32 = 40.0;
@@ -119,8 +131,8 @@ pub fn snap_target(p: Pos2, work: Rect) -> Option<SlidersDock> {
 
 /// The area the panel takes docked at `dock` in `work`, with its stored column or row size.
 pub fn docked_rect(layout: &ToolSlidersLayout, work: Rect, dock: SlidersDock) -> Rect {
-    let col = sane(layout.column, MIN_THICK, MAX_THICK, 128.0).min(work.width());
-    let row = sane(layout.row, MIN_THICK, MAX_THICK, 96.0).min(work.height());
+    let col = sane(layout.column, MIN_COLUMN, MAX_THICK, MIN_COLUMN).min(work.width());
+    let row = sane(layout.row, MIN_ROW, MAX_THICK, 96.0).min(work.height());
     match dock {
         SlidersDock::Left => Rect::from_min_max(work.min, pos2(work.left() + col, work.bottom())),
         SlidersDock::Right => Rect::from_min_max(pos2(work.right() - col, work.top()), work.max),
@@ -180,7 +192,7 @@ fn begin_drag(app: &mut PrismApp, ctx: &egui::Context, grab: egui::Vec2) {
     if app.session.prefs().workspace_locked {
         return;
     }
-    let w = sane(app.ui.tool_sliders.floating[0], MIN_THICK, MAX_LONG, 128.0);
+    let w = sane(app.ui.tool_sliders.floating[0], MIN_COLUMN, MAX_LONG, MIN_COLUMN);
     // A grab further right than the floating window is wide would leave the pointer off it.
     let grab = if grab.is_finite() { vec2(grab.x.clamp(0.0, (w - 30.0).max(0.0)), grab.y.clamp(0.0, HEADER)) } else { vec2(20.0, HEADER / 2.0) };
     ctx.data_mut(|d| d.insert_temp(drag_id(), Drag { grab, snap: None }));
@@ -305,8 +317,7 @@ pub fn vertical(size: egui::Vec2) -> bool {
 
 /// Track rects (minimum end first) and badge centres of both sliders laid out in `body`.
 pub fn layout(body: Rect) -> [(Slider, Pos2, Rect); 2] {
-    let pad = 6.0;
-    let gap = 4.0;
+    let (pad, gap) = (PAD, GAP);
     let sliders = [Slider::Size, Slider::Opacity];
     if vertical(body.size()) {
         let w = (body.width() - 2.0 * pad) / 2.0;
@@ -403,11 +414,9 @@ fn slider(ui: &mut egui::Ui, b: &mut BrushSettings, s: Slider, badge: Pos2, trac
         Slider::Size => (t.field, t.text),
         Slider::Opacity => (t.text, t.field),
     };
-    let (value, unit) = s.badge(b);
-    let vg = p.layout_no_wrap(value, theme::semibold(11.5), ink);
-    let ug = p.layout_no_wrap(unit.to_string(), theme::medium(9.5), ink.gamma_multiply(0.7));
+    let (vg, ug, pill_w) = badge_text(ui.ctx(), s.badge(b), ink);
     let text_w = vg.size().x + 2.5 + ug.size().x;
-    let pill = Rect::from_center_size(badge, vec2((text_w + 14.0).max(BADGE.y + 8.0), BADGE.y));
+    let pill = Rect::from_center_size(badge, vec2(pill_w, BADGE.y));
     p.rect(pill, CornerRadius::same((BADGE.y / 2.0) as u8), fill.gamma_multiply(dim.max(0.7)), Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
     let x0 = pill.center().x - text_w / 2.0;
     let base = pill.center().y + vg.size().y / 2.0;
@@ -416,6 +425,14 @@ fn slider(ui: &mut egui::Ui, b: &mut BrushSettings, s: Slider, badge: Pos2, trac
     p.galley(pos2(x0, base - vg.size().y), vg, ink);
     // The unit sits on the value's baseline.
     p.galley(pos2(x0 + vg_w + 2.5, base - ug_h - 1.0), ug, ink);
+}
+
+/// A badge's value and unit laid out in `ink`, and the width of the pill around them.
+fn badge_text(ctx: &egui::Context, (value, unit): (String, &'static str), ink: Color32) -> (Arc<egui::Galley>, Arc<egui::Galley>, f32) {
+    let vg = ctx.fonts_mut(|f| f.layout_no_wrap(value, theme::semibold(11.5), ink));
+    let ug = ctx.fonts_mut(|f| f.layout_no_wrap(unit.to_owned(), theme::medium(9.5), ink.gamma_multiply(0.7)));
+    let w = (vg.size().x + 2.5 + ug.size().x + 14.0).max(BADGE.y + 8.0);
+    (vg, ug, w)
 }
 
 /// What the panel menu asked for.
@@ -531,9 +548,9 @@ fn show_docked(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let layout = &app.ui.tool_sliders;
     let (size, range) = if dock.side() {
-        (sane(layout.column, MIN_THICK, MAX_THICK, 128.0), MIN_THICK..=MAX_THICK)
+        (sane(layout.column, MIN_COLUMN, MAX_THICK, MIN_COLUMN), MIN_COLUMN..=MAX_THICK)
     } else {
-        (sane(layout.row, MIN_THICK, MAX_THICK, 128.0), MIN_THICK..=MAX_THICK)
+        (sane(layout.row, MIN_ROW, MAX_THICK, 96.0), MIN_ROW..=MAX_THICK)
     };
     let id = egui::Id::new(("tool-sliders", dock));
     let panel = match dock {
@@ -550,9 +567,9 @@ fn show_docked(app: &mut PrismApp, ui: &mut egui::Ui) {
     });
     let r = resp.response.rect;
     if dock.side() {
-        app.ui.tool_sliders.column = sane(r.width(), MIN_THICK, MAX_THICK, 128.0);
+        app.ui.tool_sliders.column = sane(r.width(), MIN_COLUMN, MAX_THICK, MIN_COLUMN);
     } else {
-        app.ui.tool_sliders.row = sane(r.height(), MIN_THICK, MAX_THICK, 128.0);
+        app.ui.tool_sliders.row = sane(r.height(), MIN_ROW, MAX_THICK, 96.0);
     }
     apply(app, pick);
 }
@@ -564,7 +581,7 @@ pub fn window(app: &mut PrismApp, ctx: &egui::Context) {
     }
     let t = Tokens::get(ctx);
     let [w, h] = app.ui.tool_sliders.floating;
-    let size = vec2(sane(w, MIN_THICK, MAX_LONG, 128.0), sane(h, MIN_THICK, MAX_LONG, 460.0));
+    let size = vec2(sane(w, MIN_COLUMN, MAX_LONG, MIN_COLUMN), sane(h, MIN_ROW, MAX_LONG, 460.0));
     track_drag(app, ctx);
     let pos = floating_pos(app, size, ctx.content_rect());
     let frame = egui::Frame::NONE
@@ -579,7 +596,7 @@ pub fn window(app: &mut PrismApp, ctx: &egui::Context) {
         // Moved by its tab strip only (see `begin_drag`), which docks it on a drop near an edge.
         .movable(false)
         .constrain(false)
-        .min_size(egui::Vec2::splat(MIN_THICK))
+        .min_size(vec2(MIN_COLUMN, MIN_ROW))
         .default_size(size)
         .frame(frame)
         .current_pos(pos)
@@ -591,7 +608,7 @@ pub fn window(app: &mut PrismApp, ctx: &egui::Context) {
     if let Some(r) = resp.map(|r| r.response.rect)
         && r.is_finite()
     {
-        app.ui.tool_sliders.floating = [r.width().clamp(MIN_THICK, MAX_LONG), r.height().clamp(MIN_THICK, MAX_LONG)];
+        app.ui.tool_sliders.floating = [r.width().clamp(MIN_COLUMN, MAX_LONG), r.height().clamp(MIN_ROW, MAX_LONG)];
         // Resizing from the left or top edge moves the corner.
         if dragging(ctx).is_none() && app.ui.tool_sliders.dock == SlidersDock::Floating {
             app.ui.tool_sliders.pos = Some([r.left(), r.top()]);

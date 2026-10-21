@@ -111,7 +111,7 @@ fn docked_column_is_vertical_and_a_drag_is_one_set_brush() {
     assert_eq!(id, "tools.setBrush");
     assert_eq!(p["brush"]["size"].as_f64().map(|v| v as f32), Some(b.size));
     // The column remembers its width.
-    assert!(h.state().ui.tool_sliders.column >= MIN_THICK);
+    assert!(h.state().ui.tool_sliders.column >= MIN_COLUMN);
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn placement_is_saved_with_the_workspace_and_hostile_values_are_tamed() {
     h.state_mut().ui.tool_sliders.dock = SlidersDock::Floating;
     h.run_steps(4);
     let [w, hh] = h.state().ui.tool_sliders.floating;
-    assert!((MIN_THICK..=MAX_LONG).contains(&w) && (MIN_THICK..=MAX_LONG).contains(&hh), "{w} {hh}");
+    assert!((MIN_COLUMN..=MAX_LONG).contains(&w) && (MIN_ROW..=MAX_LONG).contains(&hh), "{w} {hh}");
 }
 
 #[test]
@@ -221,7 +221,7 @@ fn dock_target_is_the_nearest_edge_within_the_zone() {
     // The highlight is the docked column or row.
     let layout = ToolSlidersLayout::default();
     assert_eq!(docked_rect(&layout, work, SlidersDock::Bottom), Rect::from_min_max(pos2(100.0, 554.0), pos2(900.0, 650.0)));
-    assert_eq!(docked_rect(&layout, work, SlidersDock::Left).width(), 128.0);
+    assert_eq!(docked_rect(&layout, work, SlidersDock::Left).width(), MIN_COLUMN);
 }
 
 /// The floating panel's tab strip (left part, clear of the ⋯ button).
@@ -324,4 +324,45 @@ fn the_dock_preview_is_a_thin_line_along_the_edge() {
     assert_eq!(snap_line(work, SlidersDock::Right, None).right(), 1000.0);
     assert_eq!(snap_line(work, SlidersDock::Panels, Some(1140.0)).center().x, 1140.0);
     assert_eq!(snap_line(work, SlidersDock::Panels, Some(f32::NAN)).center().x, 1000.0);
+}
+
+#[test]
+fn the_smallest_panel_keeps_the_badges_apart() {
+    let h = harness(SlidersDock::Floating, vec2(400.0, 600.0));
+    let pill = |s: Slider, b: &BrushSettings| badge_text(&h.ctx, s.badge(b), Color32::WHITE).2;
+    // The widest badges fit their slots.
+    for size in [999.9, 5000.0, 1.0] {
+        let w = pill(Slider::Size, &BrushSettings { size, ..Default::default() });
+        assert!(w <= BADGE.x, "Size {size}: {w} > {}", BADGE.x);
+    }
+    let w = pill(Slider::Opacity, &BrushSettings { opacity: 1.0, ..Default::default() });
+    assert!(w <= OPACITY_BADGE_W, "Opacity: {w} > {OPACITY_BADGE_W}");
+    // At the minimum column and row the two slots neither overlap nor leave the body.
+    let column = Rect::from_min_size(pos2(0.0, 0.0), vec2(MIN_COLUMN, 400.0));
+    let [(_, a, _), (_, b, _)] = layout(column);
+    let (a, b) = (Rect::from_center_size(a, vec2(BADGE.x, BADGE.y)), Rect::from_center_size(b, vec2(OPACITY_BADGE_W, BADGE.y)));
+    assert!(a.right() + GAP <= b.left() + 0.01 && a.left() >= 0.0 && b.right() <= MIN_COLUMN, "{a:?} {b:?}");
+    let row = Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, MIN_ROW - HEADER));
+    let [(_, a, ta), (_, b, tb)] = layout(row);
+    let (a, b) = (Rect::from_center_size(a, BADGE), Rect::from_center_size(b, BADGE));
+    assert!(a.bottom() + GAP <= b.top() + 0.01 && a.top() >= 0.0 && b.bottom() <= row.bottom() + 0.01, "{a:?} {b:?}");
+    assert!(a.right() < ta.left() && b.right() < tb.left());
+}
+
+#[test]
+fn the_panel_cannot_shrink_past_its_badges() {
+    // A column dragged (or saved) narrower than the badges is held at the minimum.
+    let mut a = app(SlidersDock::Left);
+    a.ui.tool_sliders.column = 40.0;
+    let h = harness_with(a, vec2(400.0, 600.0));
+    assert!(h.state().ui.tool_sliders.column >= MIN_COLUMN, "{}", h.state().ui.tool_sliders.column);
+    let mut a = app(SlidersDock::Bottom);
+    a.ui.tool_sliders.row = 40.0;
+    let h = harness_with(a, vec2(900.0, 400.0));
+    assert!(h.state().ui.tool_sliders.row >= MIN_ROW, "{}", h.state().ui.tool_sliders.row);
+    let mut a = app(SlidersDock::Floating);
+    a.ui.tool_sliders.floating = [40.0, 40.0];
+    let h = harness_with(a, vec2(800.0, 600.0));
+    let [w, hh] = h.state().ui.tool_sliders.floating;
+    assert!(w >= MIN_COLUMN && hh >= MIN_ROW, "{w} {hh}");
 }
