@@ -327,6 +327,10 @@ fn right_click_with_painting_tools_pref() {
     assert_eq!(s.prefs().tools.right_click_with_painting_tools, RightClickPaint::BrushPicker, "Photoshop: the Brush Preset picker");
     assert_eq!(s.execute("prefs.get", json!({"path": "tools.rightClickWithPaintingTools"})).unwrap(), json!("brushPicker"));
     assert_eq!(choices("tools.rightClickWithPaintingTools"), Some(RightClickPaint::NAMES));
+    assert_eq!(s.execute("prefs.get", json!({"path": "tools.layerDragLook"})).unwrap(), json!("card"));
+    assert_eq!(choices("tools.layerDragLook"), Some(super::LayerDragLook::NAMES));
+    s.execute("prefs.set", json!({"path": "tools.layerDragLook", "value": "ghost"})).unwrap();
+    assert!(s.execute("prefs.set", json!({"path": "tools.layerDragLook", "value": "sparkles"})).is_err());
     s.execute("prefs.set", json!({"path": "tools.rightClickWithPaintingTools", "value": "erase"})).unwrap();
     assert_eq!(s.prefs().tools.right_click_with_painting_tools, RightClickPaint::Erase);
     for bad in [json!("smudge"), json!(1), json!(null), json!(["erase"])] {

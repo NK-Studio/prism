@@ -1977,6 +1977,9 @@
 	Metal	Metal
 	OpenGL	OpenGL
 	Use tablet pressure	태블릿 필압 사용
+	Layer drag look	레이어 드래그 연출
+	Card	카드
+	Ghost	고스트
 	Vulkan	Vulkan
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	선택 영역으로 만들 패스가 없습니다: 펜 도구로 그리거나 패스 패널에서 선택하세요.
 	Cancel opening	열기 취소

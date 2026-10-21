@@ -1,19 +1,29 @@
-//! How a layer drag looks: the layers are picked up and carried.
+//! How a layer drag looks: the layers are picked up and carried, in one of two styles
+//! (Preferences › Tools › Layer drag look, [`Style`]).
 //!
-//! - **Carried**: a card with a picture of the dragged layers (a group shows its contents) rises
-//!   from the pointer, tilted, with a shadow, and follows it; several layers make a stack with
-//!   their count.
-//! - **Over another document**: the card gives way to the layers themselves, translucent, where
-//!   they will land and at the size they will have in that view (its zoom, rotation and flip),
-//!   inside that document's window.
-//! - **Dropped**: they settle there, the picture fading into the copies while their outline
-//!   glows and fades.
+//! **Card**
+//! - Carried: a card with a picture of the dragged layers (a group shows its contents) rises
+//!   from the pointer, tilted, with a shadow, and follows it; several layers make a stack.
+//! - Over another document: the card gives way to the layers themselves, translucent, where they
+//!   will land and at the size they will have in that view (its zoom, rotation and flip), inside
+//!   that document's window.
+//! - Dropped: they settle there, the picture fading into the copies while their outline glows
+//!   and fades.
+//!
+//! **Ghost** (Photoshop)
+//! - Carried: the layers' own pixels, translucent and at the size they had in their view, hang
+//!   from the pointer by the point that was grabbed, outlined with marching ants; a badge counts
+//!   several layers.
+//! - Over another document: the same ghost where they will land, at that view's size.
+//! - Dropped: the outline flashes and the ghost pops into place as it fades.
 
 use egui::epaint::{Mesh, Vertex};
 use egui::{Color32, Context, Id, Pos2, Rect, Shape, Stroke, TextureHandle, ViewportId, vec2};
 use prism_doc::{Document, Layer, LayerId};
 
 use crate::canvas::ViewXform;
+
+pub(super) use prism_engine::prefs::LayerDragLook as Style;
 
 /// Longest side of the picture, in texels.
 const SIDE: f32 = 320.0;
@@ -27,6 +37,11 @@ const SETTLE: f64 = 0.45;
 /// The card's tilt (radians) and largest side (points).
 const TILT: f32 = -0.06;
 const CARD: f32 = 112.0;
+/// A ghost dragged from the Layers panel is at most this big (points).
+const GHOST: f32 = 240.0;
+/// Marching ants: dash and gap lengths (points), and their speed (points per second).
+const ANT: f32 = 4.0;
+const MARCH: f64 = 16.0;
 
 /// A picture of the dragged layers and where they are in their document.
 #[derive(Clone)]
@@ -143,8 +158,19 @@ fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
 }
 
+/// The carried layers at `pointer`, `since` seconds after the drag began. `anchor`: the picture's
+/// top left from the grabbed point (document pixels) and the zoom of the view it came from (a
+/// Move-tool drag; `None`: from the Layers panel).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn carry(ctx: &Context, style: Style, pointer: Pos2, preview: Option<&Preview>, label: &str, count: usize, since: f64, anchor: Option<(egui::Vec2, f32)>) {
+    match style {
+        Style::Card => card(ctx, pointer, preview, label, count, since),
+        Style::Ghost => ghost(ctx, pointer, preview, label, count, since, anchor),
+    }
+}
+
 /// The carried card at `pointer`, `since` seconds after the drag began.
-pub(super) fn card(ctx: &Context, pointer: Pos2, preview: Option<&Preview>, label: &str, count: usize, since: f64) {
+fn card(ctx: &Context, pointer: Pos2, preview: Option<&Preview>, label: &str, count: usize, since: f64) {
     let t = crate::theme::Tokens::get(ctx);
     let lift = ease_out((since / LIFT) as f32);
     if lift < 1.0 {
@@ -177,18 +203,71 @@ pub(super) fn card(ctx: &Context, pointer: Pos2, preview: Option<&Preview>, labe
     p.galley(chip.min + vec2(8.0, 4.0), g, t.text);
 }
 
+/// The marching ants around quad `q`, `phase` points along.
+fn ants(p: &egui::Painter, q: [Pos2; 4], phase: f32) {
+    let mut path = q.to_vec();
+    path.push(q[0]);
+    p.add(Shape::line(path.clone(), Stroke::new(1.0, Color32::BLACK)));
+    p.extend(Shape::dashed_line_with_offset(&path, Stroke::new(1.0, Color32::WHITE), &[ANT], &[ANT], phase));
+}
+
+fn phase(ctx: &Context) -> f32 {
+    ((ctx.input(|i| i.time) * MARCH) % f64::from(2.0 * ANT)) as f32
+}
+
+/// The carried ghost: the layers hanging from the pointer, at their view's size.
+fn ghost(ctx: &Context, pointer: Pos2, preview: Option<&Preview>, label: &str, count: usize, since: f64, anchor: Option<(egui::Vec2, f32)>) {
+    let t = crate::theme::Tokens::get(ctx);
+    ctx.request_repaint();
+    let p = painter(ctx, "ghost");
+    let rise = ease_out((since / LIFT) as f32);
+    let badge_at = match preview {
+        Some(pv) => {
+            let size = pv.bounds.size();
+            let r = match anchor {
+                Some((offset, zoom)) => Rect::from_min_size(pointer + offset * zoom, size * zoom),
+                None => {
+                    let fit = (GHOST / size.x.max(size.y).max(1.0)).min(1.0);
+                    Rect::from_center_size(pointer, size * fit)
+                }
+            };
+            p.add(picture(&pv.tex, [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], Color32::from_white_alpha((150.0 * rise) as u8)));
+            ants(&p, [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], phase(ctx));
+            pointer
+        }
+        None => pointer,
+    };
+    // The count (or the name, with nothing to picture) by the pointer.
+    let text = if count > 1 || preview.is_none() { label.to_string() } else { return };
+    let g = p.layout_no_wrap(text, egui::FontId::proportional(11.5), Color32::WHITE);
+    let pill = Rect::from_min_size(badge_at + vec2(14.0, 14.0), g.size() + vec2(14.0, 6.0));
+    p.rect_filled(pill, pill.height() / 2.0, t.accent);
+    p.galley(pill.min + vec2(7.0, 3.0), g, Color32::WHITE);
+}
+
 /// The layers where they will land (`q`, in this view), and that document's canvas outlined.
-pub(super) fn landing(ctx: &Context, canvas: Rect, q: [Pos2; 4], preview: &Preview) {
+pub(super) fn landing(ctx: &Context, style: Style, canvas: Rect, q: [Pos2; 4], preview: &Preview) {
     let t = crate::theme::Tokens::get(ctx);
     let p = painter(ctx, "landing").with_clip_rect(canvas);
-    p.rect_stroke(canvas, 0.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
-    p.add(picture(&preview.tex, q, Color32::from_white_alpha(190)));
-    p.add(Shape::closed_line(q.to_vec(), Stroke::new(1.5, t.accent)));
+    match style {
+        Style::Card => {
+            p.rect_stroke(canvas, 0.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+            p.add(picture(&preview.tex, q, Color32::from_white_alpha(190)));
+            p.add(Shape::closed_line(q.to_vec(), Stroke::new(1.5, t.accent)));
+        }
+        Style::Ghost => {
+            ctx.request_repaint();
+            p.rect_stroke(canvas, 0.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+            p.add(picture(&preview.tex, q, Color32::from_white_alpha(150)));
+            ants(&p, q, phase(ctx));
+        }
+    }
 }
 
 /// Copies settling after a drop: drawn in `viewport` for a moment.
 #[derive(Clone)]
 struct Settle {
+    style: Style,
     viewport: ViewportId,
     quad: [Pos2; 4],
     tex: TextureHandle,
@@ -200,9 +279,9 @@ fn settle_key() -> Id {
 }
 
 /// The dragged layers were copied to where `q` is in `viewport`.
-pub(super) fn settle(ctx: &Context, viewport: ViewportId, q: [Pos2; 4], preview: &Preview) {
+pub(super) fn settle(ctx: &Context, style: Style, viewport: ViewportId, q: [Pos2; 4], preview: &Preview) {
     let start = ctx.input_for(viewport, |i| i.time);
-    ctx.data_mut(|d| d.insert_temp(settle_key(), Settle { viewport, quad: q, tex: preview.tex.clone(), start }));
+    ctx.data_mut(|d| d.insert_temp(settle_key(), Settle { style, viewport, quad: q, tex: preview.tex.clone(), start }));
     ctx.request_repaint();
 }
 
@@ -227,12 +306,22 @@ pub(super) fn paint_settle(ctx: &Context) {
     let t = crate::theme::Tokens::get(ctx);
     let fade = 1.0 - ease_out(k);
     let p = painter(ctx, "settle");
-    p.add(picture(&s.tex, s.quad, Color32::from_white_alpha((190.0 * fade) as u8)));
-    // The outline glows outwards as it fades.
     let c = s.quad.iter().fold(egui::Vec2::ZERO, |a, p| a + p.to_vec2()) / 4.0;
-    let grow = 1.0 + 0.04 * ease_out(k);
-    let ring: Vec<Pos2> = s.quad.iter().map(|p| (c + (p.to_vec2() - c) * grow).to_pos2()).collect();
-    p.add(Shape::closed_line(ring, Stroke::new(1.5 + 2.0 * fade, t.accent.gamma_multiply(fade))));
+    let scaled = |by: f32| s.quad.map(|p| (c + (p.to_vec2() - c) * by).to_pos2());
+    match s.style {
+        Style::Card => {
+            p.add(picture(&s.tex, s.quad, Color32::from_white_alpha((190.0 * fade) as u8)));
+            // The outline glows outwards as it fades.
+            p.add(Shape::closed_line(scaled(1.0 + 0.04 * ease_out(k)).to_vec(), Stroke::new(1.5 + 2.0 * fade, t.accent.gamma_multiply(fade))));
+        }
+        Style::Ghost => {
+            // A pop: the ghost shrinks into place while the outline flashes.
+            let q = scaled(1.0 + 0.05 * fade);
+            p.add(Shape::convex_polygon(q.to_vec(), t.accent.gamma_multiply(0.35 * fade), Stroke::NONE));
+            p.add(picture(&s.tex, q, Color32::from_white_alpha((150.0 * fade) as u8)));
+            p.add(Shape::closed_line(q.to_vec(), Stroke::new(1.0 + 2.0 * fade, Color32::WHITE.gamma_multiply(fade))));
+        }
+    }
 }
 
 #[cfg(test)]

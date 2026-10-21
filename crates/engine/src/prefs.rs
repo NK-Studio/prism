@@ -93,6 +93,11 @@ choice!(
     /// pointer (Photoshop), or erase with the current brush while dragging (Krita, Paint).
     RightClickPaint { BrushPicker = "brushPicker", Erase = "erase" } default BrushPicker
 );
+choice!(
+    /// How layers dragged to another document look: a card with their picture, tilted and
+    /// shadowed, or their own pixels outlined with marching ants (Photoshop).
+    LayerDragLook { Card = "card", Ghost = "ghost" } default Card
+);
 choice!(OtherCursor { Standard = "standard", Precise = "precise" } default Standard);
 choice!(CheckerSize { None = "none", Small = "small", Medium = "medium", Large = "large" } default Medium);
 choice!(CheckerColors { Light = "light", Medium = "medium", Dark = "dark", Red = "red", Orange = "orange", Green = "green", Blue = "blue", Purple = "purple", Custom = "custom" } default Light);
@@ -306,6 +311,8 @@ pub struct Tools {
     pub right_click_with_painting_tools: RightClickPaint,
     /// Pen tablets: pressure, tilt and rotation reach the brush (off: a pen paints like a mouse).
     pub use_tablet_pressure: bool,
+    /// How layers dragged to another document look while carried.
+    pub layer_drag_look: LayerDragLook,
 }
 
 impl Default for Tools {
@@ -322,6 +329,7 @@ impl Default for Tools {
             double_click_layer_mask_launches_select_and_mask: true,
             right_click_with_painting_tools: RightClickPaint::BrushPicker,
             use_tablet_pressure: true,
+            layer_drag_look: LayerDragLook::Card,
         }
     }
 }
@@ -945,6 +953,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "cursors.painting" => PaintingCursor::NAMES,
         "cursors.other" => OtherCursor::NAMES,
         "tools.rightClickWithPaintingTools" => RightClickPaint::NAMES,
+        "tools.layerDragLook" => LayerDragLook::NAMES,
         "transparencyAndGamut.gridSize" => CheckerSize::NAMES,
         "transparencyAndGamut.gridColors" => CheckerColors::NAMES,
         "unitsAndRulers.rulers" | "guidesGridAndSlices.gridUnit" => Unit::NAMES,

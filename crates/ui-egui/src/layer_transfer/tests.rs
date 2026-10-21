@@ -295,6 +295,90 @@ fn a_move_drag_that_stays_in_its_floating_window_still_moves() {
     assert_eq!(h.state().session.documents()[1].doc.layers.len(), 1, "nothing copied");
 }
 
+/// Pictures of both looks (carried, over the destination, just dropped) for a visual check:
+/// `PRISM_LOOK_OUT=<dir> cargo test -p prism-ui-egui --lib render_the_drag_looks -- --ignored`.
+#[test]
+#[ignore = "writes PNGs for a visual check"]
+fn render_the_drag_looks() {
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").expect("PRISM_LOOK_OUT"));
+    std::fs::create_dir_all(&out).unwrap();
+    for look in ["card", "ghost"] {
+        let mut s = prism_engine::Session::new();
+        s.execute("prefs.set", json!({"path": "tools.layerDragLook", "value": look})).unwrap();
+        s.execute("file.new", json!({"width": 400, "height": 300, "name": "source-doc"})).unwrap();
+        for (name, color, [x, y, w, hh]) in [("red", "#e02020", [40, 40, 160, 120]), ("blue", "#2050e0", [120, 100, 140, 140])] {
+            s.execute("layer.new.layer", json!({"name": name})).unwrap();
+            s.execute("select.rect", json!({"x": x, "y": y, "width": w, "height": hh})).unwrap();
+            s.execute("edit.fill", json!({"color": color})).unwrap();
+        }
+        s.execute("select.deselect", json!({})).unwrap();
+        let blue = s.active().unwrap().active_layer.unwrap();
+        let group = s.execute("layer.groupLayers", json!({"layer": blue.0, "name": "Group 1"})).unwrap();
+        let _ = group;
+        s.execute("file.new", json!({"width": 500, "height": 400, "name": "dest-doc"})).unwrap();
+        s.set_active(0);
+        let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).wgpu().build_eframe(move |cc| {
+            PrismApp::setup_context(&cc.egui_ctx, Default::default());
+            PrismApp::new(s, crate::Services::default())
+        });
+        h.run_steps(8);
+        let row = h.get_by_role_and_label(Role::Button, "Group 1").rect().center();
+        let canvas = h.state().last_canvas_rect;
+        let shot = |h: &mut Harness<'_, PrismApp>, name: &str| h.render().unwrap().save(out.join(format!("{look}-{name}.png"))).unwrap();
+        h.event(egui::Event::PointerMoved(row));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: row, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for p in [row - vec2(40.0, 0.0), canvas.center() + vec2(-150.0, 60.0)] {
+            h.event(egui::Event::PointerMoved(p));
+            h.run_steps(4);
+        }
+        shot(&mut h, "1-carried");
+        let over_tab = tab(&h, "dest-doc");
+        h.event(egui::Event::PointerMoved(over_tab));
+        h.run_steps(4);
+        let drop = h.state().last_canvas_rect.center() + vec2(60.0, 40.0);
+        h.event(egui::Event::PointerMoved(drop));
+        h.run_steps(4);
+        shot(&mut h, "2-landing");
+        h.event(egui::Event::PointerButton { pos: drop, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        shot(&mut h, "3-dropped");
+        h.run_steps(10);
+        shot(&mut h, "4-settling");
+    }
+}
+
+/// Preferences › Tools › Layer drag look = Ghost: the layers hang from the pointer by the pixel
+/// that was grabbed, at the size they had in their view.
+#[test]
+fn a_ghost_hangs_from_the_grabbed_point_at_its_views_zoom() {
+    let (mut s, _) = session();
+    s.execute("prefs.set", json!({"path": "tools.layerDragLook", "value": "ghost"})).unwrap();
+    let (mut h, _) = native(s, 1);
+    let source = view_of(&h, "source-doc");
+    let dest = view_of(&h, "dest-doc");
+    let grab = source.xf.to_screen(9.0, 11.0);
+    let drop = desktop(&dest, dest.xf.to_screen(30.0, 25.0)) - MAIN;
+    h.event(egui::Event::PointerMoved(grab));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: grab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for p in [grab + vec2(30.0, 0.0), drop] {
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(2);
+    }
+    let t = super::get(&h.ctx).expect("carried");
+    assert_eq!(t.style, super::look::Style::Ghost);
+    let (offset, zoom) = t.anchor.expect("a Move-tool drag");
+    let g = source.xf.to_doc(grab);
+    assert!((offset - vec2(4.0 - g[0] as f32, 6.0 - g[1] as f32)).length() < 0.01, "{offset:?}");
+    assert_eq!(zoom, source.xf.zoom);
+    h.event(egui::Event::PointerButton { pos: drop, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert_eq!(h.state().session.active().unwrap().doc.name, "dest-doc", "dropped as with the card");
+}
+
 /// Carried over another document, the layers show exactly where the release puts them, in that
 /// document's window; released, they settle there.
 #[test]

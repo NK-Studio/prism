@@ -44,6 +44,11 @@ struct Transfer {
     count: usize,
     /// When the drag began (the card rises then).
     started: f64,
+    /// How the carried layers look (Preferences › Tools › Layer drag look).
+    style: look::Style,
+    /// A Move-tool drag: the picture's top left from the grabbed point (document pixels) and the
+    /// zoom of the view it came from, so a ghost hangs from the pointer where it was grabbed.
+    anchor: Option<(egui::Vec2, f32)>,
 }
 
 fn key() -> egui::Id {
@@ -69,15 +74,22 @@ fn begin(app: &PrismApp, ctx: &egui::Context, id: LayerId, grab: Option<[f64; 2]
         [one] => st.doc.layer(*one).map_or_else(String::new, |l| l.name.clone()),
         many => crate::i18n::trn(crate::i18n::current(), many.len() as u64, "{n} layer", "{n} layers"),
     };
+    let preview = look::preview(ctx, &st.doc, &layers);
+    let anchor = grab.zip(preview.as_ref()).map(|(g, pv)| {
+        let zoom = view_zoom(ctx, st.doc.id).unwrap_or(1.0);
+        (pv.bounds.min - egui::pos2(g[0] as f32, g[1] as f32), zoom)
+    });
     let t = Transfer {
         source: st.doc.id,
         layers: layers.iter().map(|l| l.0).collect(),
         grab,
         label,
         viewport: ctx.viewport_id(),
-        preview: look::preview(ctx, &st.doc, &layers),
+        preview,
         count: layers.len(),
         started: ctx.input(|i| i.time),
+        style: app.session.prefs().tools.layer_drag_look,
+        anchor,
     };
     ctx.data_mut(|d| d.insert_temp(key(), t));
     true
@@ -195,7 +207,7 @@ pub fn finish(app: &mut PrismApp, ctx: &egui::Context) {
         match (&target, pos) {
             (Some(_), _) => paint_hover(ctx, &t),
             // Carried: the layers follow the pointer.
-            (None, Some(p)) => look::card(ctx, p, t.preview.as_ref(), &t.label, t.count, now - t.started),
+            (None, Some(p)) => look::carry(ctx, t.style, p, t.preview.as_ref(), &t.label, t.count, now - t.started, t.anchor),
             (None, None) => {}
         }
         // The other windows show where the layers would land.
@@ -273,6 +285,13 @@ pub fn register(app: &PrismApp, ctx: &egui::Context, document: DocId, xf: &ViewX
     });
 }
 
+/// The zoom of document `document`'s view in `ctx`'s window.
+fn view_zoom(ctx: &egui::Context, document: DocId) -> Option<f32> {
+    let here = ctx.viewport_id();
+    let list = ctx.data(|d| d.get_temp::<Targets>(targets_key())).unwrap_or_default().0;
+    list.iter().rev().find(|t| t.viewport == here && t.document == document).map(|t| t.xf.zoom)
+}
+
 /// The view under the pointer of `ctx`'s window, and the pointer in that view's points.
 struct Hit {
     viewport: ViewportId,
@@ -327,13 +346,13 @@ fn hover_key() -> egui::Id {
 fn paint_hover(ctx: &egui::Context, t: &Transfer) {
     let Some(h) = ctx.data(|d| d.get_temp::<Hover>(hover_key())).filter(|h| h.viewport == ctx.viewport_id()) else { return };
     if let (Some(q), Some(pv)) = (h.landing, t.preview.as_ref()) {
-        look::landing(ctx, h.canvas, q, pv);
+        look::landing(ctx, t.style, h.canvas, q, pv);
         return;
     }
     let tokens = crate::theme::Tokens::get(ctx);
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("layer-transfer-target")));
     painter.rect_stroke(h.canvas, 0.0, egui::Stroke::new(2.0, tokens.accent), egui::StrokeKind::Inside);
-    look::card(ctx, h.pointer, t.preview.as_ref(), &t.label, t.count, ctx.input(|i| i.time) - t.started);
+    look::carry(ctx, t.style, h.pointer, t.preview.as_ref(), &t.label, t.count, ctx.input(|i| i.time) - t.started, t.anchor);
 }
 
 /// Are layers being carried (the Layers panel's reorder drag then shows them, not its label)?
@@ -365,7 +384,7 @@ fn drop(app: &mut PrismApp, ctx: &egui::Context, dest: usize, at: Option<[f64; 2
         return;
     }
     if let (Some((viewport, q)), Some(pv)) = (settle, t.preview.as_ref()) {
-        look::settle(ctx, viewport, q, pv);
+        look::settle(ctx, t.style, viewport, q, pv);
     }
     match window {
         Some(Some(id)) => {
