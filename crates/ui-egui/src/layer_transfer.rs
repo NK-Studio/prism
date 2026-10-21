@@ -328,6 +328,55 @@ fn target(app: &PrismApp, ctx: &egui::Context, source: DocId) -> Option<(Hit, [f
     Some((hit, point))
 }
 
+/// A document canvas under the pointer, for drops from panels (CLIP STUDIO materials).
+#[derive(Clone, Copy, Debug)]
+pub struct CanvasDrop {
+    /// The document's index in the session.
+    pub index: usize,
+    /// The pointer as a document point.
+    pub at: [f64; 2],
+    /// The floating window holding the canvas (`None`: the main window).
+    pub window: Option<u64>,
+    viewport: ViewportId,
+    canvas: Rect,
+}
+
+/// The topmost document canvas under the pointer, in any window.
+pub fn canvas_under_pointer(app: &PrismApp, ctx: &egui::Context) -> Option<CanvasDrop> {
+    let hit = under_pointer(app, ctx)?;
+    let index = app.session.documents().iter().position(|d| d.doc.id == hit.document)?;
+    Some(CanvasDrop { index, at: hit.xf.to_doc(hit.local), window: hit.window, viewport: hit.viewport, canvas: hit.xf.rect })
+}
+
+/// Make the dropped-on document the active one and bring its window forward.
+pub fn activate(app: &mut PrismApp, ctx: &egui::Context, drop: &CanvasDrop) {
+    let r = match drop.window {
+        Some(id) => crate::doc_windows::focus(app, ctx, id).map(|_| ()),
+        None if ctx.viewport_id() != ViewportId::ROOT => {
+            crate::doc_windows::focus_main(app, ctx, drop.index);
+            Ok(())
+        }
+        None => {
+            crate::doc_windows::activate_main(app, drop.index);
+            Ok(())
+        }
+    };
+    if let Err(e) = r {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+/// Outline the canvas a drop would land on (when it is in `ctx`'s window).
+pub fn outline(ctx: &egui::Context, drop: &CanvasDrop) {
+    if drop.viewport != ctx.viewport_id() {
+        return;
+    }
+    let tokens = crate::theme::Tokens::get(ctx);
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("panel-drop-target")));
+    painter.rect_stroke(drop.canvas, 0.0, egui::Stroke::new(2.0, tokens.accent), egui::StrokeKind::Inside);
+}
+
 /// The other document's canvas under the pointer, drawn in its own window.
 #[derive(Clone, Debug)]
 struct Hover {

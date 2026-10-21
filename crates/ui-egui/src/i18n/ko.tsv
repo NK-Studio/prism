@@ -3489,3 +3489,20 @@ cspTool	Space evenly	균등 배치
 	Added {n} CLIP STUDIO materials with {rulers} special rulers; strokes snap to them	클립 스튜디오 소재 {n}개와 특수 자 {rulers}개를 추가했습니다. 획이 특수 자에 스냅됩니다
 	Added {n} CLIP STUDIO materials to the document	클립 스튜디오 소재 {n}개를 문서에 추가했습니다
 	The material's file is missing; download it again in CLIP STUDIO, then refresh	소재 파일이 없습니다. 클립 스튜디오에서 다시 다운로드한 뒤 새로 고치세요
+	All materials	모든 소재
+	Check every ready material in this folder	이 폴더의 준비된 소재를 모두 체크
+	Added {name} with its special ruler; strokes snap to it	{name}을(를) 특수 자와 함께 추가했습니다. 획이 특수 자에 스냅됩니다
+	Added {name}	{name}을(를) 추가했습니다
+	Color pattern	컬러 패턴
+	Monochromatic pattern	단색 패턴
+	Manga material	만화 소재
+	Image material	이미지 소재
+	Download	다운로드
+	Illustration	일러스트
+	Picture	사진
+	Framing template	컷 분할 템플릿
+	Head	머리
+	Body type	체형
+	Primitive	프리미티브
+	Hand model	손 모델
+	New folder	새 폴더

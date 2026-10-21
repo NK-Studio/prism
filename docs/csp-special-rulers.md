@@ -266,7 +266,12 @@ As built (phase 2):
   document at its own pixel size (no resolution scaling: `scaling` is still unknown).
 - UI: the CLIP STUDIO Materials panel lists layer materials in All and in a new Layers filter
   (`ui.set {cspLibraryFilter}`); Import adds the checked ones to the open document (it says so
-  when no document is open).
+  when no document is open). Since 2026-10-22 it works like PAINT's Material palette: the folder
+  tree comes from the catalog's `FolderTag` / `TableFolderTagElementMap` (colon paths, Japanese
+  system roots translated, a download pack's `-<content id>` hidden), favourites from
+  `CatalogMetaData.Favorite`, the user's own materials (`Downloaded = 0`, not `.:Install:`) are
+  listed, and a material dragged onto a canvas is used there (`layer.cspMaterial.import` takes
+  `at`). Installed defaults keep only metadata and previews locally and are not listed.
 
 The original design follows.
 

@@ -338,3 +338,31 @@ fn both_cubes_fill_resized_docks_without_numeric_readouts() {
         }
     }
 }
+
+#[test]
+fn clip_studio_wheel_is_centred_and_shrinks_with_a_narrow_panel() {
+    for (w, hgt) in [(300.0, 640.0), (220.0, 640.0), (600.0, 360.0)] {
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+        crate::workspace_ui::set_style(&mut app, prism_engine::prefs::WorkspaceStyle::ClipStudio);
+        app.ui.color_panel.mode = ColorPanelMode::ColorWheel;
+        let mut h = Harness::builder().with_size(vec2(w, hgt)).build_ui_state(|ui, app: &mut PrismApp| show_mode(app, ui, ColorPanelMode::ColorWheel), app);
+        PrismApp::setup_context(&h.ctx, ThemeKind::ProMedium);
+        h.run_steps(4);
+        let outer = h.get_by_label("Color wheel").rect();
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(w, hgt));
+        assert!(screen.contains_rect(outer), "{w}x{hgt}: {outer:?}");
+        // Whatever is narrower sets the size; the wheel sits in the middle of the room above the
+        // chips, so the margins above and below match (and at the sides on a wide panel).
+        // The harness lays the panel out inside an 8 pt margin.
+        let panel = screen.shrink(8.0);
+        let room = Rect::from_min_max(panel.min + vec2(0.0, 4.0), pos2(panel.right(), panel.bottom() - CSP_CHIPS));
+        let size = room.width().min(room.height());
+        assert!((outer.height() - size).abs() < 1.0, "{w}x{hgt}: {outer:?} vs {size}");
+        assert!((outer.center().y - room.center().y).abs() < 1.0, "{w}x{hgt}: vertically centred");
+        assert!((outer.center().x - room.center().x).abs() < 1.0, "{w}x{hgt}: horizontally centred");
+        // Clicking the ring's right edge (red) still picks the hue there.
+        let ring = pos2(outer.center().x + (size - 14.0) * 0.45, outer.center().y);
+        click(&mut h, ring);
+        assert!(hsv(&h, false)[0] < 0.02 || hsv(&h, false)[0] > 0.98, "{w}x{hgt}: {:?}", hsv(&h, false));
+    }
+}

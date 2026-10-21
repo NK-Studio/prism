@@ -45,6 +45,9 @@ fn bad_params_fail_and_change_nothing() {
         json!({"path": "/nonexistent/prism/material_0.layer"}),
         json!({"uuid": "id", "root": ""}),
         json!({"uuid": "id", "root": "/nonexistent/prism-csp-root"}),
+        json!({"path": "x.layer", "at": [1]}),
+        json!({"path": "x.layer", "at": [1, "y"]}),
+        json!({"path": "x.layer", "at": [1e9, 0]}),
     ] {
         assert!(s.execute(IMPORT, p.clone()).is_err(), "{p}");
     }
@@ -55,7 +58,7 @@ fn bad_params_fail_and_change_nothing() {
 fn a_ruler_material_adds_one_ruler_layer_in_one_step_and_snaps_strokes() {
     let mut s = session();
     let past = s.active().unwrap().history.past_len();
-    let r = place(&mut s, "Isometric ruler", iso(), &MaterialInfo { tags: vec!["SpecialRuler".into()], tiling: false }).unwrap();
+    let r = place(&mut s, "Isometric ruler", iso(), &MaterialInfo { tags: vec!["SpecialRuler".into()], tiling: false }, None).unwrap();
     assert_eq!(r["rulers"], 1);
     let id = LayerId(r["layers"][0].as_u64().unwrap());
     let st = s.active().unwrap();
@@ -83,7 +86,7 @@ fn a_ruler_material_adds_one_ruler_layer_in_one_step_and_snaps_strokes() {
 fn images_become_pixels_or_a_tiling_pattern_fill() {
     let mut s = session();
     let mut m = LayerMaterial { width: 100, height: 50, layers: vec![MaterialLayer { image: Some(image(4, 2)), offset: [10, 5], opacity: 0.5, ..layer("Ink") }], warnings: vec![] };
-    let r = place(&mut s, "Ink", m.clone(), &MaterialInfo::default()).unwrap();
+    let r = place(&mut s, "Ink", m.clone(), &MaterialInfo::default(), None).unwrap();
     let id = LayerId(r["layers"][0].as_u64().unwrap());
     let l = s.active().unwrap().doc.layer(id).unwrap();
     assert_eq!(l.opacity, 0.5);
@@ -96,7 +99,7 @@ fn images_become_pixels_or_a_tiling_pattern_fill() {
     assert_eq!(px[0][3], 0.0);
 
     m.layers[0].name = "Grid".into();
-    let r = place(&mut s, "Grid", m, &MaterialInfo { tags: vec![], tiling: true }).unwrap();
+    let r = place(&mut s, "Grid", m, &MaterialInfo { tags: vec![], tiling: true }, None).unwrap();
     let id = LayerId(r["layers"][0].as_u64().unwrap());
     let doc = &s.active().unwrap().doc;
     let LayerContent::Fill(Fill::Pattern { id: pid, phase, .. }) = &doc.layer(id).unwrap().content else { panic!("pattern fill") };
@@ -109,7 +112,7 @@ fn images_become_pixels_or_a_tiling_pattern_fill() {
 fn several_layers_keep_their_order_with_the_first_on_top() {
     let mut s = session();
     let m = LayerMaterial { width: 10, height: 10, layers: vec![layer("Top"), layer("Bottom")], warnings: vec!["note".into()] };
-    let r = place(&mut s, "Two", m, &MaterialInfo::default()).unwrap();
+    let r = place(&mut s, "Two", m, &MaterialInfo::default(), None).unwrap();
     assert_eq!(r["warnings"], json!(["note"]));
     let ids: Vec<LayerId> = r["layers"].as_array().unwrap().iter().map(|v| LayerId(v.as_u64().unwrap())).collect();
     let doc = &s.active().unwrap().doc;
@@ -118,7 +121,7 @@ fn several_layers_keep_their_order_with_the_first_on_top() {
     let bad = MaterialImage { width: 4, height: 4, rgba: vec![0; 3] };
     let m = LayerMaterial { width: 10, height: 10, layers: vec![MaterialLayer { image: Some(bad), ..layer("Bad") }], warnings: vec![] };
     let past = s.active().unwrap().history.past_len();
-    assert!(place(&mut s, "Bad", m, &MaterialInfo::default()).is_err());
+    assert!(place(&mut s, "Bad", m, &MaterialInfo::default(), None).is_err());
     assert_eq!(s.active().unwrap().history.past_len(), past);
 }
 
@@ -142,4 +145,24 @@ fn local_isometric_ruler_and_grid_import() {
     assert_eq!(r["tiling"], true);
     let id = LayerId(r["layers"][0].as_u64().unwrap());
     assert!(matches!(s.active().unwrap().doc.layer(id).unwrap().content, LayerContent::Fill(Fill::Pattern { .. })));
+}
+
+#[test]
+fn a_drop_point_centres_the_material_there() {
+    let mut s = session();
+    let m = LayerMaterial { width: 10, height: 6, layers: vec![MaterialLayer { image: Some(image(10, 6)), ..layer("Ink") }], warnings: vec![] };
+    let r = place(&mut s, "Ink", m, &MaterialInfo::default(), Some([30.0, 20.0])).unwrap();
+    let id = LayerId(r["layers"][0].as_u64().unwrap());
+    let LayerContent::Raster(surface) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("pixels") };
+    let mut px = [[0.0f32; 4]; 1];
+    surface.read_rgba_into(Rect::new(25, 17, 26, 18), &mut px);
+    assert_eq!(px[0][3], 1.0, "top-left at (30 - 5, 20 - 3)");
+    surface.read_rgba_into(Rect::new(24, 17, 25, 18), &mut px);
+    assert_eq!(px[0][3], 0.0);
+    // The ruler moves with it: its guide shifts by the drop point minus the material centre.
+    let r = place(&mut s, "Isometric ruler", iso(), &MaterialInfo::default(), Some([0.0, 0.0])).unwrap();
+    let id = LayerId(r["layers"][0].as_u64().unwrap());
+    let l = s.active().unwrap().doc.layer(id).unwrap();
+    let RulerKind::Perspective(p) = &l.special_rulers.as_ref().unwrap().rulers[0].kind else { panic!("perspective") };
+    assert_eq!(p.points[0].guides, [[631.0 - 640.0, 566.0 - 360.0]]);
 }

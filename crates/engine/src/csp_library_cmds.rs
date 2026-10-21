@@ -35,7 +35,7 @@ fn list(_s: &mut Session, p: &Value) -> Result<Value> {
                 _ => Value::Null,
             };
             let thumbnail = b.thumbnail.as_ref().map(|p| p.display().to_string());
-            json!({ "uuid": b.uuid, "name": b.name, "kind": b.kind, "catalog": b.catalog, "status": b.status.id(), "source": source, "guidance": b.status.guidance(), "thumbnail": thumbnail, "tags": b.tags })
+            json!({ "uuid": b.uuid, "name": b.name, "kind": b.kind, "catalog": b.catalog, "status": b.status.id(), "source": source, "guidance": b.status.guidance(), "thumbnail": thumbnail, "tags": b.tags, "folders": b.folders, "favorite": b.favorite })
         })
         .collect();
     let ready = lib.brushes.iter().filter(|b| matches!(b.status, Status::Ready(_))).count();
@@ -45,7 +45,7 @@ fn list(_s: &mut Session, p: &Value) -> Result<Value> {
         .iter()
         .map(|l| {
             let thumbnail = l.thumbnail.as_ref().map(|p| p.display().to_string());
-            json!({ "uuid": l.uuid, "name": l.name, "kind": "image", "catalog": l.catalog, "status": l.status.id(), "guidance": l.status.guidance(), "thumbnail": thumbnail, "tags": l.tags, "ruler": l.info.ruler(), "tiling": l.info.tiling })
+            json!({ "uuid": l.uuid, "name": l.name, "kind": "image", "catalog": l.catalog, "status": l.status.id(), "guidance": l.status.guidance(), "thumbnail": thumbnail, "tags": l.tags, "folders": l.folders, "favorite": l.favorite, "ruler": l.info.ruler(), "tiling": l.info.tiling })
         })
         .collect();
     let catalogs: Vec<Value> =
@@ -141,7 +141,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "List CLIP STUDIO Downloaded Brushes",
             menu: &[],
             shortcut: None,
-            params: r#"{"root":"CLIP STUDIO user data folder"?=platform default} → {root, brushes:[{uuid,name,kind,catalog,status,source,guidance,thumbnail:path?,tags:[user tag]}], layers:[{uuid,name,kind:"image",catalog,status,guidance,thumbnail:path?,tags,ruler:bool,tiling:bool}] (add with layer.cspMaterial.import), catalogs:[{name,thumbnail:path?,tags:[user tag]}], count, ready, notices}"#,
+            params: r#"{"root":"CLIP STUDIO user data folder"?=platform default} → {root, brushes:[{uuid,name,kind,catalog,status,source,guidance,thumbnail:path?,tags:[user tag],folders:[CLIP STUDIO folder path "root:sub:…"],favorite}], layers:[{uuid,name,kind:"image",catalog,status,guidance,thumbnail:path?,tags,folders,favorite,ruler:bool,tiling:bool}] (add with layer.cspMaterial.import), catalogs:[{name,thumbnail:path?,tags:[user tag]}], count, ready, notices}"#,
             enabled: |_| Ok(()),
             run: list,
             journal: false,

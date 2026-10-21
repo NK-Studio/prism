@@ -34,13 +34,18 @@ fn surface(image: &MaterialImage, at: (i32, i32), format: prism_color::PixelForm
     Ok(if format == s.format() { s } else { s.convert(format) })
 }
 
+/// Largest drop point coordinate accepted (document pixels).
+const MAX_AT: f64 = 1e7;
+
 /// Add `material`'s layers above the active layer as one history step; the first layer ends on
-/// top. The material canvas is centred on the document, at its own pixel size.
-fn place(s: &mut Session, name: &str, material: LayerMaterial, info: &MaterialInfo) -> Result<Value> {
+/// top. The material canvas's centre lands on `at` (default: the document centre), at its own
+/// pixel size.
+fn place(s: &mut Session, name: &str, material: LayerMaterial, info: &MaterialInfo, at: Option<[f64; 2]>) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let size = st.doc.size;
-    let dx = (i64::from(size.width) - i64::from(material.width)) / 2;
-    let dy = (i64::from(size.height) - i64::from(material.height)) / 2;
+    let [cx, cy] = at.unwrap_or([f64::from(size.width) / 2.0, f64::from(size.height) / 2.0]);
+    let dx = (cx - f64::from(material.width) / 2.0).round() as i64;
+    let dy = (cy - f64::from(material.height) / 2.0).round() as i64;
     let format = st.doc.pixel_format();
     let mut layers: Vec<Layer> = Vec::new();
     let mut patterns: Vec<Pattern> = Vec::new();
@@ -97,6 +102,14 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let (uuid, path) = (text("uuid")?, text("path")?);
+    let at = match p.get("at") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let a = v.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad("`at` must be [x, y]"))?;
+            let c = |i: usize| a.get(i).and_then(Value::as_f64).filter(|f| f.is_finite() && f.abs() <= MAX_AT).ok_or_else(|| bad(format!("`at` must hold finite numbers within ±{MAX_AT}")));
+            Some([c(0)?, c(1)?])
+        }
+    };
     let ctl = &prism_raster::Interrupt::NONE;
     let (name, material, info) = match (uuid, path) {
         (Some(uuid), None) => {
@@ -111,7 +124,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         }
         _ => return Err(bad("pass either `uuid` (from brush.cspLibrary.list layers) or `path` (a .layer file or material folder)")),
     };
-    place(s, &name, material, &info)
+    place(s, &name, material, &info, at)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -120,7 +133,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Add CLIP STUDIO Material",
         menu: &[],
         shortcut: None,
-        params: r#"{"uuid":layer material id from brush.cspLibrary.list "layers","root":string? | "path":".layer file or material folder"} → {name, layers:[id] (top first), rulers, tiling, tags, warnings}. Adds the material's layers above the active layer, centred: special rulers stay on their layer, a tiling image becomes a pattern fill."#,
+        params: r#"{"uuid":layer material id from brush.cspLibrary.list "layers","root":string? | "path":".layer file or material folder","at":[x,y]?=document centre (where the material's centre lands)} → {name, layers:[id] (top first), rulers, tiling, tags, warnings}. Adds the material's layers above the active layer: special rulers stay on their layer, a tiling image becomes a pattern fill."#,
         enabled: has_doc,
         run: import,
         journal: true,

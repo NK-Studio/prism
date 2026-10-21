@@ -418,3 +418,45 @@ fn local_library_lists_and_imports_every_ready_brush() {
     let after: Vec<_> = watched.iter().map(|p| std::fs::read(p).ok()).collect();
     assert!(before == after, "a CLIP STUDIO database changed");
 }
+
+#[test]
+fn folders_favourites_and_own_materials_are_listed_but_installed_defaults_are_not() {
+    let root = folder("folders");
+    let modifiers = "CREATE TABLE MaterialModifier(_PW_ID INTEGER PRIMARY KEY AUTOINCREMENT, MaterialName TEXT DEFAULT NULL, MaterialUuid TEXT DEFAULT NULL, PathType INTEGER DEFAULT NULL, Path TEXT DEFAULT NULL)";
+    let meta = "CREATE TABLE CatalogMetaData(_PW_ID INTEGER PRIMARY KEY AUTOINCREMENT, ModifierID INTEGER DEFAULT 0, MaterialKind TEXT DEFAULT NULL, Downloaded INTEGER DEFAULT 0, DownloadNotYet INTEGER DEFAULT 0, NewDownloading INTEGER DEFAULT 0, Favorite INTEGER DEFAULT 0)";
+    let m = |name: &str, uuid: &str, path: &str| vec![Value::Null, text(name), text(uuid), int(0), text(path)];
+    let d = |id: i64, kind: &str, downloaded: i64, favorite: i64| vec![Value::Null, int(id), text(kind), int(downloaded), int(0), int(0), int(favorite)];
+    let long = "x".repeat(400);
+    write(
+        root.0.join(CATALOG),
+        &database(
+            &[
+                (
+                    "MaterialModifier",
+                    modifiers,
+                    vec![m("Ruler", "uuid-ruler", ".:05:06:ruler"), m("Mine", "uuid-own", ".:07:08:uuid-own"), m("Default", "uuid-default", ".:Install:Paint001:uuid-default")],
+                ),
+                ("CatalogMetaData", meta, vec![d(1, "image", 1, 0), d(2, "image", 0, 1), d(3, "image", 0, 0)]),
+                (
+                    "FolderTag",
+                    "CREATE TABLE FolderTag(_PW_ID INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT DEFAULT NULL)",
+                    vec![vec![Value::Null, text("ダウンロード:Isometric ruler and grid-1758445:Isometric ruler and grid")], vec![Value::Null, text("自作ブラシ:茂み")], vec![Value::Null, text(&long)]],
+                ),
+                (
+                    "TableFolderTagElementMap",
+                    "CREATE TABLE TableFolderTagElementMap(_PW_ID INTEGER PRIMARY KEY AUTOINCREMENT, TagId INTEGER DEFAULT NULL, ElementId INTEGER DEFAULT NULL)",
+                    vec![vec![Value::Null, int(1), int(1)], vec![Value::Null, int(2), int(2)], vec![Value::Null, int(3), int(2)], vec![Value::Null, int(2), int(3)]],
+                ),
+            ],
+            false,
+        ),
+    );
+    let lib = list(&root.0).unwrap();
+    let names: Vec<&str> = lib.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["Ruler", "Mine"], "installed defaults have no pixels locally");
+    assert_eq!(lib.layers[0].folders, ["ダウンロード:Isometric ruler and grid-1758445:Isometric ruler and grid"]);
+    assert!(!lib.layers[0].favorite && lib.layers[1].favorite);
+    assert_eq!(lib.layers[1].folders[0], "自作ブラシ:茂み");
+    assert_eq!(lib.layers[1].folders[1].chars().count(), MAX_FOLDER_CHARS);
+    assert!(lib.layers.iter().all(|l| l.status == Status::Missing), "no files were written");
+}

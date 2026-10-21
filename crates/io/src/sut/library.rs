@@ -20,6 +20,9 @@ const MAX_SEGMENTS: usize = 16;
 /// User tags kept per material, and the longest tag kept (characters).
 const MAX_TAGS: usize = 64;
 const MAX_TAG_CHARS: usize = 64;
+/// Folders kept per material, and the longest folder path kept (characters).
+const MAX_FOLDERS: usize = 16;
+const MAX_FOLDER_CHARS: usize = 256;
 
 const CATALOG: &str = "CLIPStudioCommon/MaterialDB/CatalogMaterial.cmdb";
 const MATERIALS: &str = "CLIPStudioCommon/Material";
@@ -110,6 +113,12 @@ pub struct LibraryBrush {
     /// The material's own user tags (CLIP STUDIO's "User tag"), in catalog order. Materials in a
     /// collection often have none; the collection's are on its [`Catalog`].
     pub tags: Vec<String>,
+    /// CLIP STUDIO's Material palette folders, as stored: colon paths whose first segment is a
+    /// system root in Japanese (`ダウンロード:Pack-1758445:Brushes`, `画像素材:ブラシ`) or a
+    /// folder the user made.
+    pub folders: Vec<String>,
+    /// Marked as a favourite in CLIP STUDIO.
+    pub favorite: bool,
 }
 
 /// One downloaded layer material: an image, or a layer carrying special rulers.
@@ -122,6 +131,9 @@ pub struct LibraryLayer {
     pub status: Status,
     pub thumbnail: Option<PathBuf>,
     pub tags: Vec<String>,
+    /// As [`LibraryBrush::folders`].
+    pub folders: Vec<String>,
+    pub favorite: bool,
     /// From the material's `icedata/layerData.xml`.
     pub info: MaterialInfo,
 }
@@ -174,6 +186,8 @@ pub fn list(root: &Path) -> Result<Library> {
             status: snap.status(e),
             thumbnail: image(format!("{}:thumbnail:thumbnail.png", e.folder())),
             tags: e.tags.clone(),
+            folders: e.folders.clone(),
+            favorite: e.favorite,
         })
         .collect();
     let layers = snap
@@ -194,6 +208,8 @@ pub fn list(root: &Path) -> Result<Library> {
                 status: snap.layer_status(e),
                 thumbnail: image(reference("thumbnail:thumbnail.png")),
                 tags: e.tags.clone(),
+                folders: e.folders.clone(),
+                favorite: e.favorite,
                 info,
             }
         })
@@ -299,6 +315,8 @@ struct Entry {
     pending: bool,
     tags: Vec<String>,
     catalog_tags: Vec<String>,
+    folders: Vec<String>,
+    favorite: bool,
 }
 
 impl Entry {
@@ -363,12 +381,17 @@ impl Snapshot {
         let meta = db.table("CatalogMetaData").map_err(|e| format!("CLIP STUDIO material catalog: {e}"))?;
         // Tags are optional: a catalog without (or with unreadable) tag tables lists untagged.
         let tags = match (db.table("Tag"), db.table("TableTagElementMap")) {
-            (Ok(tags), Ok(map)) => Tags::new(&tags, &map),
+            (Ok(tags), Ok(map)) => Tags::new(&tags, &map, MAX_TAGS, MAX_TAG_CHARS),
+            _ => Tags::default(),
+        };
+        // The Material palette's folders use the same layout; optional too.
+        let folders = match (db.table("FolderTag"), db.table("TableFolderTagElementMap")) {
+            (Ok(tags), Ok(map)) => Tags::new(&tags, &map, MAX_FOLDERS, MAX_FOLDER_CHARS),
             _ => Tags::default(),
         };
         drop(bytes);
-        let entries = catalog_entries(&modifiers, &meta, &tags, &TOOL_KINDS);
-        let layer_entries = catalog_entries(&modifiers, &meta, &tags, &LAYER_KINDS);
+        let entries = catalog_entries(&modifiers, &meta, &tags, &folders, &TOOL_KINDS);
+        let layer_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &LAYER_KINDS);
 
         let mut caches = Vec::new();
         match paint_folder(root) {
@@ -475,7 +498,8 @@ impl Snapshot {
 struct Tags(std::collections::HashMap<i64, Vec<String>>);
 
 impl Tags {
-    fn new(tags: &[Row], map: &[Row]) -> Self {
+    /// `max` titles of at most `chars` characters per element.
+    fn new(tags: &[Row], map: &[Row], max: usize, chars: usize) -> Self {
         let titles: std::collections::HashMap<i64, &str> =
             tags.iter().map(|t| (int(t, "_PW_ID"), text(t, "Title").trim())).filter(|(_, title)| !title.is_empty()).collect();
         let mut ordered: Vec<&Row> = map.iter().collect();
@@ -484,8 +508,8 @@ impl Tags {
         for m in ordered {
             let Some(title) = titles.get(&int(m, "TagId")) else { continue };
             let list = out.entry(int(m, "ElementId")).or_default();
-            let title: String = title.chars().take(MAX_TAG_CHARS).collect();
-            if list.len() < MAX_TAGS && !list.contains(&title) {
+            let title: String = title.chars().take(chars).collect();
+            if list.len() < max && !list.contains(&title) {
                 list.push(title);
             }
         }
@@ -496,8 +520,9 @@ impl Tags {
     }
 }
 
-/// Downloaded sub-tools, joined to their collection names, in catalog order.
-fn catalog_entries(modifiers: &[Row], meta: &[Row], tags: &Tags, kinds: &[&str]) -> Vec<Entry> {
+/// Downloaded materials and the user's own, joined to their collection names, in catalog order.
+/// CLIP STUDIO's installed defaults (`.:Install:…`) keep only previews locally and are left out.
+fn catalog_entries(modifiers: &[Row], meta: &[Row], tags: &Tags, folders: &Tags, kinds: &[&str]) -> Vec<Entry> {
     let meta_of = |id: i64| meta.iter().find(|m| int(m, "ModifierID") == id);
     let collection = |path: &str| {
         modifiers
@@ -515,10 +540,12 @@ fn catalog_entries(modifiers: &[Row], meta: &[Row], tags: &Tags, kinds: &[&str])
         let Some(d) = meta_of(int(m, "_PW_ID")) else { continue };
         let uuid = text(m, "MaterialUuid");
         let kind = text(d, "MaterialKind");
-        if !kinds.contains(&kind) || int(d, "Downloaded") == 0 || uuid.is_empty() || out.iter().any(|e| e.uuid == uuid) {
+        let path = text(m, "Path");
+        let local = int(m, "PathType") == 0 && path.starts_with(".:");
+        let own = local && !path.starts_with(".:Install:");
+        if !kinds.contains(&kind) || (int(d, "Downloaded") == 0 && !own) || uuid.is_empty() || out.iter().any(|e| e.uuid == uuid) {
             continue;
         }
-        let path = text(m, "Path");
         let (catalog, catalog_tags) = collection(path);
         out.push(Entry {
             uuid: uuid.to_string(),
@@ -527,8 +554,10 @@ fn catalog_entries(modifiers: &[Row], meta: &[Row], tags: &Tags, kinds: &[&str])
             catalog,
             catalog_tags,
             tags: tags.of(int(m, "_PW_ID")),
+            folders: folders.of(int(m, "_PW_ID")),
+            favorite: int(d, "Favorite") != 0,
             path: path.to_string(),
-            local: int(m, "PathType") == 0 && path.starts_with(".:"),
+            local,
             pending: int(d, "DownloadNotYet") != 0 || int(d, "NewDownloading") != 0,
         });
     }

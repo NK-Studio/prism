@@ -4,6 +4,10 @@
 //! previews, and imports the checked ones (`brush.cspLibrary.import`) without a SUT export.
 //! Layer materials (images, special rulers) are listed too and go into the open document as
 //! layers (`layer.cspMaterial.import`).
+//! Laid out like PAINT's Material palette: a folder tree (CLIP STUDIO's own folders, [`tree`])
+//! beside the materials when the panel is wide, a folder menu above them when it is narrow.
+//! A ready material can be dragged onto any document's canvas: a layer material lands centred
+//! on the drop point, a brush or sub-tool is imported and selected. Double-click does the same.
 //! Materials narrow by kind, search text and CLIP STUDIO's user tags, and show as a one-column
 //! list or a two-column grid of larger previews.
 //! Exported files (`.sut`, `.tool`, `.laf`) come in through Open Files…. Materials that are not
@@ -59,8 +63,12 @@ pub struct CspLibraryState {
     pub view: View,
     /// A CLIP STUDIO user data folder chosen by the user; the platform default otherwise.
     pub root: Option<String>,
-    /// Collections folded shut.
-    pub collapsed: Vec<String>,
+    /// The folder shown: a CLIP STUDIO folder path, [`tree::FAVORITE`], or `None` for all.
+    pub folder: Option<String>,
+    /// Folders opened in the tree.
+    pub expanded: Vec<String>,
+    /// Width of the folder tree column (points; 0 = default).
+    pub tree_width: f32,
     /// The licence notice is expanded.
     pub license_open: bool,
 }
@@ -125,6 +133,16 @@ fn report(app: &mut PrismApp, r: Result<Value, String>) {
     }
 }
 
+pub(crate) mod tree;
+
+/// A material being dragged out of the panel.
+#[derive(Clone, Debug)]
+struct MaterialDrag {
+    uuid: String,
+    name: String,
+    layer: bool,
+}
+
 fn materials(listing: &Value) -> impl Iterator<Item = &Value> {
     listing["brushes"].as_array().into_iter().flatten().chain(listing["layers"].as_array().into_iter().flatten())
 }
@@ -181,7 +199,7 @@ fn passes(state: &CspLibraryState, filter: KindFilter, listing: &Value, b: &Valu
         KindFilter::SubTools => is_sub_tool(b),
         KindFilter::Layers => is_layer(b),
     };
-    if !kind_ok {
+    if !kind_ok || !tree::contains(state.folder.as_deref(), b) {
         return false;
     }
     let tags = tags_of(listing, b);
@@ -272,10 +290,76 @@ fn import_selected(app: &mut PrismApp) {
     if uuids.is_empty() {
         return;
     }
-    match app.run("brush.cspLibrary.import", json!({ "uuids": uuids, "select": true })) {
+    let mut p = json!({ "uuids": uuids, "select": true });
+    if let Some(root) = &app.ui.csp_library.root {
+        p["root"] = json!(root);
+    }
+    match app.run("brush.cspLibrary.import", p) {
         Ok(v) if v.get("pending").is_none() => imported(app, &v),
         Ok(_) => {}
         Err(e) => notices::error(app, format!("{}: {e}", tl!("Import from CLIP STUDIO"))),
+    }
+}
+
+/// Use one material where it was dropped (`target`), or on the active document: a layer
+/// material is added centred on the drop point, a brush or sub-tool is imported and selected.
+fn use_material(app: &mut PrismApp, ctx: &egui::Context, drag: &MaterialDrag, target: Option<crate::layer_transfer::CanvasDrop>) {
+    if let Some(d) = &target {
+        crate::layer_transfer::activate(app, ctx, d);
+    }
+    let root = app.ui.csp_library.root.clone();
+    let mut p = if drag.layer { json!({ "uuid": drag.uuid }) } else { json!({ "uuids": [drag.uuid], "select": true }) };
+    if let Some(root) = root {
+        p["root"] = json!(root);
+    }
+    if !drag.layer {
+        match app.run("brush.cspLibrary.import", p) {
+            Ok(v) if v.get("pending").is_none() => imported(app, &v),
+            Ok(_) => {}
+            Err(e) => notices::error(app, format!("{}: {e}", tl!("Import from CLIP STUDIO"))),
+        }
+        return;
+    }
+    if app.session.active().is_none() {
+        notices::error(app, tl!("Open or create a document first: layer materials are added to it as layers").to_string());
+        return;
+    }
+    if let Some(d) = target {
+        p["at"] = json!([d.at[0].round(), d.at[1].round()]);
+    }
+    match app.run("layer.cspMaterial.import", p) {
+        Ok(v) => {
+            let n = v["rulers"].as_u64().unwrap_or(0);
+            app.ui.status = if n > 0 {
+                crate::i18n::fmt(tl!("Added {name} with its special ruler; strokes snap to it"), &[("name", &drag.name)])
+            } else {
+                crate::i18n::fmt(tl!("Added {name}"), &[("name", &drag.name)])
+            };
+            app.ui.status_error = false;
+            let warnings: Vec<String> = v["warnings"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(str::to_string)).collect();
+            notices::io_warnings(app, tl!("Added from CLIP STUDIO"), &warnings);
+        }
+        Err(e) => notices::error(app, format!("{}: {e}", tl!("Not added"))),
+    }
+}
+
+/// While a material is dragged: its name follows the pointer and the canvas under it is
+/// outlined; released over a canvas, it is used there.
+fn drag_and_drop(app: &mut PrismApp, ctx: &egui::Context) {
+    let Some(drag) = egui::DragAndDrop::payload::<MaterialDrag>(ctx) else { return };
+    let target = crate::layer_transfer::canvas_under_pointer(app, ctx);
+    if let Some(p) = ctx.pointer_latest_pos() {
+        crate::layer_transfer::ghost(ctx, p, &drag.name);
+    }
+    if let Some(d) = &target {
+        crate::layer_transfer::outline(ctx, d);
+        ctx.set_cursor_icon(egui::CursorIcon::Copy);
+    }
+    if ctx.input(|i| i.pointer.any_released()) {
+        egui::DragAndDrop::clear_payload(ctx);
+        if target.is_some() {
+            use_material(app, ctx, &drag, target);
+        }
     }
 }
 
@@ -408,7 +492,7 @@ pub fn body(app: &mut PrismApp, ui: &mut egui::Ui) {
     let list_rect = Rect::from_min_size(full.min, vec2(full.width(), list_h));
     let mut list_ui = ui.new_child(egui::UiBuilder::new().max_rect(list_rect).layout(egui::Layout::top_down(egui::Align::Min)));
     match (app.ui.csp_library.listing.clone(), app.ui.csp_library.error.clone()) {
-        (Some(listing), _) if materials(&listing).next().is_some() => list(app, &mut list_ui, &listing, &t),
+        (Some(listing), _) if materials(&listing).next().is_some() => browse(app, &mut list_ui, &listing, &t),
         (Some(_), _) => empty(
             &mut list_ui,
             &t,
@@ -423,6 +507,8 @@ pub fn body(app: &mut PrismApp, ui: &mut egui::Ui) {
     ui.allocate_rect(full, Sense::hover());
     let mut footer_ui = ui.new_child(egui::UiBuilder::new().max_rect(footer_rect).layout(egui::Layout::top_down(egui::Align::Min)));
     footer(app, &mut footer_ui, &t, &mut action);
+
+    drag_and_drop(app, &ui.ctx().clone());
 
     match action {
         Action::None => {}
@@ -593,20 +679,31 @@ fn tag_bar(state: &mut CspLibraryState, ui: &mut egui::Ui, t: &Tokens) {
     }
 }
 
-fn list(app: &mut PrismApp, ui: &mut egui::Ui, listing: &Value, t: &Tokens) {
-    let covers: HashMap<&str, &str> =
-        listing["catalogs"].as_array().into_iter().flatten().filter_map(|c| Some((c["name"].as_str()?, c["thumbnail"].as_str()?))).collect();
-    // Collections in catalog order, loose materials last.
-    let mut groups: Vec<(&str, Vec<&Value>)> = Vec::new();
-    for b in materials(listing).filter(|b| shown(&app.ui.csp_library, listing, b)) {
-        let name = b["catalog"].as_str().unwrap_or_default();
-        match groups.iter_mut().find(|(g, _)| *g == name) {
-            Some((_, items)) => items.push(b),
-            None => groups.push((name, vec![b])),
+/// Narrowest grid tile (points); the grid fits as many columns as it can.
+const TILE_MIN: f32 = 104.0;
+/// Panels at least this wide show the folder tree beside the materials.
+const WIDE: f32 = 520.0;
+const TREE_DEFAULT: f32 = 180.0;
+const TREE_ROW: f32 = 22.0;
+
+/// What a folder is called in the panel: system folders translated, the rest as stored.
+fn folder_label(listing: &Value, folder: Option<&str>) -> String {
+    match folder {
+        None => tl!("All materials").to_string(),
+        Some(tree::FAVORITE) => tl!("Favorite").to_string(),
+        Some(f) => {
+            let segs: Vec<&str> = f.split(':').collect();
+            let label = tree::find(&tree::build(materials(listing)), f).map_or_else(|| tree::label(&segs), |n| n.label.clone());
+            if tree::is_system(&segs) { tl_dyn(&label) } else { label }
         }
     }
-    groups.sort_by_key(|(g, _)| g.is_empty());
-    if groups.is_empty() {
+}
+
+/// The materials the filters leave, under a line naming the folder with "Select all".
+fn list(app: &mut PrismApp, ui: &mut egui::Ui, listing: &Value, t: &Tokens) {
+    let items: Vec<&Value> = materials(listing).filter(|b| shown(&app.ui.csp_library, listing, b)).collect();
+    folder_header(app, ui, listing, &items, t);
+    if items.is_empty() {
         ui.add_space(12.0);
         ui.vertical_centered(|ui| ui.label(egui::RichText::new(tl!("No materials match the filter")).color(t.text_faint)));
         return;
@@ -615,68 +712,167 @@ fn list(app: &mut PrismApp, ui: &mut egui::Ui, listing: &Value, t: &Tokens) {
     let grid = app.ui.csp_library.view == View::Grid;
     egui::ScrollArea::vertical().id_salt("csp-library-list").auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = if grid { GRID_GAP } else { 2.0 };
-        for (group, items) in groups {
-            collection_header(app, ui, group, &items, covers.get(group).copied(), t, &mut budget);
-            if app.ui.csp_library.collapsed.iter().any(|c| c == group) {
-                continue;
-            }
-            if grid {
-                let cell_w = ((ui.available_width() - GRID_GAP) / 2.0).max(40.0);
-                let card_h = ((cell_w - 12.0) * CARD_ASPECT).clamp(28.0, CARD_THUMB_MAX) + 12.0 + CARD_TEXT_H;
-                for pair in items.chunks(2) {
-                    let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), card_h), Sense::hover());
-                    for (i, b) in pair.iter().enumerate() {
-                        let left = line.left() + i as f32 * (cell_w + GRID_GAP);
-                        let cell = Rect::from_min_size(egui::pos2(left, line.top()), vec2(cell_w, card_h));
-                        material(app, ui, cell, b, listing, t, &mut budget, true);
-                    }
-                }
-            } else {
-                for b in items {
-                    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
-                    material(app, ui, rect, b, listing, t, &mut budget, false);
+        if grid {
+            let width = ui.available_width();
+            let cols = (((width + GRID_GAP) / (TILE_MIN + GRID_GAP)).floor() as usize).max(2);
+            let cell_w = ((width - GRID_GAP * (cols - 1) as f32) / cols as f32).max(40.0);
+            let card_h = ((cell_w - 12.0) * CARD_ASPECT).clamp(28.0, CARD_THUMB_MAX) + 12.0 + CARD_TEXT_H;
+            for row in items.chunks(cols) {
+                let (line, _) = ui.allocate_exact_size(vec2(width, card_h), Sense::hover());
+                for (i, b) in row.iter().enumerate() {
+                    let left = line.left() + i as f32 * (cell_w + GRID_GAP);
+                    let cell = Rect::from_min_size(egui::pos2(left, line.top()), vec2(cell_w, card_h));
+                    material(app, ui, cell, b, listing, t, &mut budget, true);
                 }
             }
-            ui.add_space(4.0);
+        } else {
+            for b in items {
+                let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
+                material(app, ui, rect, b, listing, t, &mut budget, false);
+            }
         }
     });
 }
 
-fn collection_header(app: &mut PrismApp, ui: &mut egui::Ui, group: &str, items: &[&Value], cover: Option<&str>, t: &Tokens, budget: &mut usize) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let state = &mut app.ui.csp_library;
-    let folded = state.collapsed.iter().any(|c| c == group);
-    if resp.hovered() {
-        ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
-    }
-    let chevron = if folded { "chevron-right" } else { "chevron-down" };
-    icons::paint(ui, Rect::from_center_size(rect.left_center() + vec2(9.0, 0.0), vec2(12.0, 12.0)), chevron, 12.0, t.text_dim);
-    let cover_rect = Rect::from_min_size(rect.left_top() + vec2(20.0, 3.0), vec2(24.0, 24.0));
-    paint_thumb(ui, cover_rect, thumbnail(ui, cover, budget).as_ref(), "folder", t);
+fn folder_header(app: &mut PrismApp, ui: &mut egui::Ui, listing: &Value, items: &[&Value], t: &Tokens) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
     let ready: Vec<String> = items.iter().filter(|b| is_ready(b)).filter_map(|b| b["uuid"].as_str().map(str::to_string)).collect();
+    let title = folder_label(listing, app.ui.csp_library.folder.as_deref());
+    let state = &mut app.ui.csp_library;
     let all_on = !ready.is_empty() && ready.iter().all(|id| state.selected.contains(id));
-    // "Select all" on the right; the rest of the row folds the collection.
-    let pick_rect = Rect::from_min_size(egui::pos2(rect.right() - 74.0, rect.top() + 5.0), vec2(70.0, 20.0));
+    let pick_rect = Rect::from_min_size(egui::pos2(rect.right() - 74.0, rect.top() + 3.0), vec2(70.0, 20.0));
     let pick = ui.put(pick_rect, egui::Button::new(egui::RichText::new(if all_on { tl!("Clear selection") } else { tl!("Select all") }).small()).frame(false));
-    let pick = pick.on_hover_text(tl!("Check every ready material in this collection"));
-    let title = if group.is_empty() { tl!("Other materials") } else { group };
-    let font = crate::theme::medium(12.5);
-    let name_w = (pick_rect.left() - cover_rect.right() - 12.0).max(10.0);
-    let galley = ui.painter().layout(format!("{title}  ·  {}", items.len()), font, t.text, name_w);
-    ui.painter().galley(egui::pos2(cover_rect.right() + 8.0, rect.center().y - galley.size().y / 2.0), galley, t.text);
+    let pick = pick.on_hover_text(tl!("Check every ready material in this folder"));
+    paint_line(ui.painter(), format!("{title}  ·  {}", items.len()), crate::theme::medium(12.5), t.text, rect.left() + 4.0, rect.center().y, pick_rect.left() - rect.left() - 8.0);
     if pick.clicked() {
         state.selected.retain(|id| !ready.contains(id));
         if !all_on {
             state.selected.extend(ready);
         }
-    } else if resp.clicked() {
-        if folded {
-            state.collapsed.retain(|c| c != group);
-        } else {
-            state.collapsed.push(group.to_string());
+    }
+}
+
+/// One folder row of the tree; returns its response and whether its chevron was clicked.
+#[allow(clippy::too_many_arguments)]
+fn tree_row(ui: &mut egui::Ui, depth: usize, label: &str, count: usize, icon: &str, selected: bool, open: Option<bool>, t: &Tokens) -> (egui::Response, bool) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), TREE_ROW), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let p = ui.painter();
+    if selected {
+        p.rect_filled(rect, t.radius_sm, t.accent_soft);
+    } else if resp.hovered() {
+        p.rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.6));
+    }
+    let x = rect.left() + 4.0 + depth as f32 * 14.0;
+    let chevron = Rect::from_center_size(egui::pos2(x + 6.0, rect.center().y), vec2(12.0, 12.0));
+    if let Some(open) = open {
+        icons::paint(ui, chevron, if open { "chevron-down" } else { "chevron-right" }, 11.0, t.text_dim);
+    }
+    icons::paint(ui, Rect::from_center_size(egui::pos2(x + 21.0, rect.center().y), vec2(14.0, 14.0)), icon, 13.0, if selected { t.text } else { t.text_dim });
+    let color = if selected { t.text } else { t.text_dim };
+    paint_line(ui.painter(), format!("{label}  {count}"), egui::FontId::proportional(12.0), color, x + 32.0, rect.center().y, rect.right() - x - 36.0);
+    let toggled = open.is_some() && resp.clicked() && resp.interact_pointer_pos().is_some_and(|q| chevron.expand(4.0).contains(q));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label));
+    (resp, toggled)
+}
+
+fn tree_nodes(app: &mut PrismApp, ui: &mut egui::Ui, nodes: &[tree::Node], depth: usize, t: &Tokens) {
+    for n in nodes {
+        let state = &app.ui.csp_library;
+        let open = state.expanded.contains(&n.path);
+        let selected = state.folder.as_deref() == Some(n.path.as_str());
+        let segs: Vec<&str> = n.path.split(':').collect();
+        let label = if tree::is_system(&segs) { tl_dyn(&n.label) } else { n.label.clone() };
+        let (resp, toggled) = tree_row(ui, depth, &label, n.count, if open { "folder-open" } else { "folder" }, selected, (!n.children.is_empty()).then_some(open), t);
+        let state = &mut app.ui.csp_library;
+        if toggled {
+            if open {
+                state.expanded.retain(|e| *e != n.path);
+            } else {
+                state.expanded.push(n.path.clone());
+            }
+        } else if resp.clicked() {
+            state.folder = Some(n.path.clone());
+            if !open && !n.children.is_empty() {
+                state.expanded.push(n.path.clone());
+            }
+        }
+        if open {
+            tree_nodes(app, ui, &n.children, depth + 1, t);
         }
     }
+}
+
+/// The folder tree: All materials, CLIP STUDIO's folders, Favorite.
+fn folder_tree(app: &mut PrismApp, ui: &mut egui::Ui, listing: &Value, t: &Tokens) {
+    let nodes = tree::build(materials(listing));
+    let total = materials(listing).count();
+    let favorites = materials(listing).filter(|b| tree::contains(Some(tree::FAVORITE), b)).count();
+    egui::ScrollArea::vertical().id_salt("csp-library-tree").auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 1.0;
+        let all = app.ui.csp_library.folder.is_none();
+        if tree_row(ui, 0, tl!("All materials"), total, "layers", all, None, t).0.clicked() {
+            app.ui.csp_library.folder = None;
+        }
+        tree_nodes(app, ui, &nodes, 0, t);
+        if favorites > 0 {
+            let on = app.ui.csp_library.folder.as_deref() == Some(tree::FAVORITE);
+            if tree_row(ui, 0, tl!("Favorite"), favorites, "heart", on, None, t).0.clicked() {
+                app.ui.csp_library.folder = Some(tree::FAVORITE.to_string());
+            }
+        }
+    });
+}
+
+/// The tree flattened and indented, for the narrow panel's folder menu.
+fn flat_folders(nodes: &[tree::Node], depth: usize, out: &mut Vec<(String, String)>) {
+    for n in nodes {
+        let segs: Vec<&str> = n.path.split(':').collect();
+        let label = if tree::is_system(&segs) { tl_dyn(&n.label) } else { n.label.clone() };
+        out.push((n.path.clone(), format!("{}{label}  {}", "    ".repeat(depth), n.count)));
+        flat_folders(&n.children, depth + 1, out);
+    }
+}
+
+/// A narrow panel's folder menu.
+fn folder_menu(app: &mut PrismApp, ui: &mut egui::Ui, listing: &Value) {
+    let mut entries = Vec::new();
+    flat_folders(&tree::build(materials(listing)), 0, &mut entries);
+    let current = folder_label(listing, app.ui.csp_library.folder.as_deref());
+    let favorites = materials(listing).any(|b| tree::contains(Some(tree::FAVORITE), b));
+    let state = &mut app.ui.csp_library;
+    egui::ComboBox::from_id_salt("csp-library-folder").width((ui.available_width() - 8.0).max(80.0)).selected_text(current).show_ui(ui, |ui| {
+        ui.selectable_value(&mut state.folder, None, tl!("All materials"));
+        for (path, label) in entries {
+            ui.selectable_value(&mut state.folder, Some(path), label);
+        }
+        if favorites {
+            ui.selectable_value(&mut state.folder, Some(tree::FAVORITE.to_string()), tl!("Favorite"));
+        }
+    });
+}
+
+/// The materials area: the tree beside the list when wide, the folder menu above it when not.
+fn browse(app: &mut PrismApp, ui: &mut egui::Ui, listing: &Value, t: &Tokens) {
+    let full = ui.available_rect_before_wrap();
+    if full.width() < WIDE {
+        folder_menu(app, ui, listing);
+        list(app, ui, listing, t);
+        return;
+    }
+    let tree_w = if app.ui.csp_library.tree_width > 0.0 { app.ui.csp_library.tree_width } else { TREE_DEFAULT }.clamp(120.0, full.width() * 0.5);
+    let tree_rect = Rect::from_min_size(full.min, vec2(tree_w, full.height()));
+    let split = Rect::from_min_size(egui::pos2(tree_rect.right(), full.top()), vec2(6.0, full.height()));
+    let list_rect = Rect::from_min_max(egui::pos2(split.right(), full.top()), full.max);
+    let mut tree_ui = ui.new_child(egui::UiBuilder::new().max_rect(tree_rect).layout(egui::Layout::top_down(egui::Align::Min)));
+    folder_tree(app, &mut tree_ui, listing, t);
+    let resp = ui.interact(split, ui.id().with("csp-library-split"), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    if resp.dragged() {
+        app.ui.csp_library.tree_width = (tree_w + resp.drag_delta().x).clamp(120.0, full.width() * 0.5);
+    }
+    ui.painter().vline(split.center().x, full.y_range(), egui::Stroke::new(1.0, t.separator));
+    let mut list_ui = ui.new_child(egui::UiBuilder::new().max_rect(list_rect).layout(egui::Layout::top_down(egui::Align::Min)));
+    list(app, &mut list_ui, listing, t);
 }
 
 /// A check box in `check`; dimmed when the material cannot be checked.
@@ -720,7 +916,7 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
     let ready = is_ready(b);
     let owned = in_library(app, b);
     let tags = tags_of(listing, b);
-    let resp = ui.interact(rect, ui.id().with(("csp-material", uuid)), if ready { Sense::click() } else { Sense::hover() });
+    let resp = ui.interact(rect, ui.id().with(("csp-material", uuid)), if ready { Sense::click_and_drag() } else { Sense::hover() });
     let state = &mut app.ui.csp_library;
     let on = state.selected.iter().any(|s| s == uuid);
     let p = ui.painter();
@@ -811,6 +1007,16 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
         if !on {
             state.selected.push(uuid.to_string());
         }
+    }
+    // Drag onto a canvas, or double-click: use it (see `use_material`).
+    let drag = MaterialDrag { uuid: uuid.to_string(), name: name.to_string(), layer: is_layer(b) };
+    if ready && resp.dragged() {
+        resp.dnd_set_drag_payload(drag.clone());
+    }
+    if ready && resp.double_clicked() {
+        // The double-click's two clicks left the check as it was.
+        let ctx = ui.ctx().clone();
+        use_material(app, &ctx, &drag, None);
     }
 }
 

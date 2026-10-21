@@ -19,10 +19,10 @@ fn listing() -> Value {
         "notices": [prism_io::sut::library::LICENSE_NOTICE, "CLIP STUDIO appears to be running or has unsaved database changes; the newest downloads may be missing until it is closed"],
         "catalogs": [{"name": "Pack", "thumbnail": null, "tags": ["packed"]}],
         "brushes": [
-            {"uuid": "a", "name": "Ink pen", "kind": "brush", "catalog": "Pack", "status": "ready", "source": "downloadCache", "guidance": null, "thumbnail": null, "tags": ["ink", "lace"]},
-            {"uuid": "b", "name": "Owned", "kind": "brush", "catalog": "Pack", "status": "ready", "source": "toolLibrary", "guidance": null, "thumbnail": null},
-            {"uuid": "c", "name": "Cold", "kind": "brush", "catalog": "Pack", "status": "noCache", "source": null, "guidance": "CLIP STUDIO PAINT has not prepared this material yet", "thumbnail": null},
-            {"uuid": "d", "name": "Bucket", "kind": "other_tool", "catalog": "", "status": "ready", "source": "materialFile", "guidance": null, "thumbnail": null, "tags": ["fill", "packed"]},
+            {"uuid": "a", "name": "Ink pen", "kind": "brush", "catalog": "Pack", "folders": ["ダウンロード:Pack-1:Brushes"], "status": "ready", "source": "downloadCache", "guidance": null, "thumbnail": null, "tags": ["ink", "lace"]},
+            {"uuid": "b", "name": "Owned", "kind": "brush", "catalog": "Pack", "favorite": true, "folders": ["ダウンロード:Pack-1:Brushes"], "status": "ready", "source": "toolLibrary", "guidance": null, "thumbnail": null},
+            {"uuid": "c", "name": "Cold", "kind": "brush", "catalog": "Pack", "folders": ["ダウンロード:Pack-1:Brushes"], "status": "noCache", "source": null, "guidance": "CLIP STUDIO PAINT has not prepared this material yet", "thumbnail": null},
+            {"uuid": "d", "name": "Bucket", "kind": "other_tool", "catalog": "", "folders": ["自作ブラシ"], "status": "ready", "source": "materialFile", "guidance": null, "thumbnail": null, "tags": ["fill", "packed"]},
             {"uuid": "e", "name": "Later", "kind": "brush", "catalog": "", "status": "downloading", "source": null, "guidance": "wait", "thumbnail": null}
         ]
     })
@@ -92,7 +92,9 @@ fn materials_are_listed_by_collection_and_checked_by_row_or_collection() {
     h.run_steps(2);
     assert_eq!(h.state().ui.csp_library.selected, ["a"]);
     assert!(h.query_by_label("Import 1").is_some());
-    // The collection's Select all checks its ready materials (not the cold one).
+    // The folder's Select all checks its ready materials (not the cold one).
+    h.state_mut().ui.csp_library.folder = Some("ダウンロード:Pack-1".into());
+    h.run_steps(2);
     h.get_all_by_label("Select all").next().unwrap().click();
     h.run_steps(2);
     let mut picked = h.state().ui.csp_library.selected.clone();
@@ -101,7 +103,8 @@ fn materials_are_listed_by_collection_and_checked_by_row_or_collection() {
     h.get_all_by_label("Clear selection").next().unwrap().click();
     h.run_steps(2);
     assert!(h.state().ui.csp_library.selected.is_empty());
-    // Kind filter and search.
+    // Kind filter and search (across all folders).
+    h.state_mut().ui.csp_library.folder = None;
     h.state_mut().ui.csp_library.filter = KindFilter::SubTools;
     h.run_steps(2);
     assert!(h.query_by_label("Ink pen").is_none() && h.query_by_label("Bucket").is_some());
@@ -109,11 +112,96 @@ fn materials_are_listed_by_collection_and_checked_by_row_or_collection() {
     h.state_mut().ui.csp_library.search = "zzz".into();
     h.run_steps(2);
     assert!(h.query_by_label("No materials match the filter").is_some());
-    // Folding a collection hides its rows.
+    // Another folder shows only its own.
     h.state_mut().ui.csp_library.search.clear();
-    h.state_mut().ui.csp_library.collapsed.push("Pack".into());
+    h.state_mut().ui.csp_library.folder = Some("自作ブラシ".into());
     h.run_steps(2);
     assert!(h.query_by_label("Ink pen").is_none() && h.query_by_label("Bucket").is_some());
+}
+
+/// A wide panel: the folder tree beside the materials.
+fn wide(app: PrismApp) -> Harness<'static, PrismApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(760.0, 560.0)).build_ui_state(
+        |ui, app: &mut PrismApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            body(app, ui);
+        },
+        app,
+    );
+    PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+    h.run_steps(3);
+    h
+}
+
+#[test]
+fn a_wide_panel_browses_clip_studio_folders_in_a_tree() {
+    let mut app = app();
+    app.ui.csp_library.listing = Some(with_layers());
+    let mut h = wide(app);
+    // System roots are translated; a pack loses its content id once opened.
+    assert!(h.query_by_label("All materials").is_some());
+    h.get_by_label("Download").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.csp_library.folder.as_deref(), Some("ダウンロード"));
+    assert!(h.query_by_label("Isometric ruler and grid").is_some());
+    h.get_by_label("Isometric ruler and grid").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.csp_library.folder.as_deref(), Some("ダウンロード:Isometric ruler and grid-1758445"));
+    assert!(h.query_by_label("Isometric ruler").is_some() && h.query_by_label("Ink pen").is_none());
+    // Favourites are their own folder.
+    h.get_by_label("Favorite").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Owned").is_some() && h.query_by_label("Isometric ruler").is_none());
+    h.get_by_label("All materials").click();
+    h.run_steps(2);
+    assert!(h.state().ui.csp_library.folder.is_none() && h.query_by_label("Ink pen").is_some());
+    // Narrow: no tree, the folder menu instead.
+    let mut narrow = super::tests::app();
+    narrow.ui.csp_library.listing = Some(with_layers());
+    let h = harness(narrow);
+    assert!(h.query_by_label("Download").is_none(), "the tree is folded into the menu");
+}
+
+#[test]
+fn dropping_a_material_uses_it_where_it_lands() {
+    // A layer material needs a document; nothing happens without one.
+    let ctx = egui::Context::default();
+    let mut a = app();
+    let ruler = MaterialDrag { uuid: "r".into(), name: "Isometric ruler".into(), layer: true };
+    use_material(&mut a, &ctx, &ruler, None);
+    assert!(a.session.active().is_none());
+    // With one, the import runs (the test folder has no CLIP STUDIO data, so it reports why).
+    a.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let layers = a.session.active().unwrap().doc.layers.len();
+    use_material(&mut a, &ctx, &ruler, None);
+    assert_eq!(a.session.active().unwrap().doc.layers.len(), layers);
+    // A brush goes to the brush import with this panel's folder.
+    let brush = MaterialDrag { uuid: "a".into(), name: "Ink pen".into(), layer: false };
+    let presets = a.session.tools.presets.len();
+    use_material(&mut a, &ctx, &brush, None);
+    assert_eq!(a.session.tools.presets.len(), presets, "nothing to import from the test folder");
+}
+
+#[test]
+fn agents_pick_the_folder() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let set = |app: &mut PrismApp, v: Value| {
+        let (req, _rx) = crate::control::ControlRequest::new("ui.set", v);
+        crate::control::handle(app, &ctx, &req)
+    };
+    set(&mut app, json!({"cspLibraryFolder": "ダウンロード:Pack-1"}));
+    assert_eq!(app.ui.csp_library.folder.as_deref(), Some("ダウンロード:Pack-1"));
+    set(&mut app, json!({"cspLibraryFolder": "favorite"}));
+    assert_eq!(app.ui.csp_library.folder.as_deref(), Some(tree::FAVORITE));
+    for bad in [json!({"cspLibraryFolder": 3}), json!({"cspLibraryFolder": ""})] {
+        set(&mut app, bad);
+    }
+    assert_eq!(app.ui.csp_library.folder.as_deref(), Some(tree::FAVORITE));
+    set(&mut app, json!({"cspLibraryFolder": null}));
+    assert!(app.ui.csp_library.folder.is_none());
 }
 
 #[test]
@@ -261,8 +349,8 @@ fn panel_state_is_driven_through_the_control_channel() {
 fn with_layers() -> Value {
     let mut l = listing();
     l["layers"] = json!([
-        {"uuid": "r", "name": "Isometric ruler", "kind": "image", "catalog": "Iso", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "ruler": true, "tiling": false},
-        {"uuid": "g", "name": "Isometric grid", "kind": "image", "catalog": "Iso", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "ruler": false, "tiling": true}
+        {"uuid": "r", "name": "Isometric ruler", "kind": "image", "catalog": "Iso", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "ruler": true, "tiling": false, "folders": ["ダウンロード:Isometric ruler and grid-1758445:Isometric ruler and grid"]},
+        {"uuid": "g", "name": "Isometric grid", "kind": "image", "catalog": "Iso", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "ruler": false, "tiling": true, "folders": ["ダウンロード:Isometric ruler and grid-1758445:Isometric ruler and grid"]}
     ]);
     l
 }
@@ -311,4 +399,23 @@ fn local_isometric_ruler_is_added_from_the_panel() {
     let doc = &app.session.active().unwrap().doc;
     assert!(doc.layers.iter().any(|l| l.name == "Isometric ruler" && l.special_rulers.is_some()));
     assert!(doc.layers.iter().any(|l| l.name == "Isometric grid"));
+}
+
+/// The wide palette over the local CLIP STUDIO folder, for a visual check:
+/// `PRISM_LOOK_OUT=<dir> cargo test -p prism-ui-egui --lib render_the_material_palette -- --ignored`.
+#[test]
+#[ignore = "reads the local CLIP STUDIO folder and writes a PNG"]
+fn render_the_material_palette() {
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/csp-ruler".into()));
+    std::fs::create_dir_all(&out).unwrap();
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+    app.ui.csp_library.root = std::env::var_os("PRISM_TEST_CSP_ROOT").map(|r| r.to_string_lossy().into_owned());
+    refresh(&mut app);
+    app.ui.csp_library.view = View::Grid;
+    app.ui.csp_library.folder = Some("ダウンロード:Isometric ruler and grid-1758445".into());
+    app.ui.csp_library.expanded = vec!["ダウンロード".into()];
+    let mut h = wide(app);
+    h.set_size(egui::vec2(760.0, 620.0));
+    h.run_steps(30);
+    h.render().unwrap().save(out.join("palette-wide.png")).unwrap();
 }

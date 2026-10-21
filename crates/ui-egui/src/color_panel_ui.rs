@@ -97,13 +97,7 @@ pub(crate) fn show_mode(app: &mut PrismApp, ui: &mut egui::Ui, mode: ColorPanelM
         // Clip Studio's Color Wheel panel: the wheel and the chips; the sliders are the separate
         // Color Slider panel (`color_slider_ui`).
         ColorPanelMode::ColorWheel | ColorPanelMode::HsbSliders if crate::csp_tools::active(app) => {
-            ui.add_space(4.0);
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                let (chips, _) = ui.allocate_exact_size(vec2(38.0, 38.0), Sense::hover());
-                field_chips(app, ui, chips);
-                wheel(app, ui);
-            });
+            csp_wheel(app, ui);
             return;
         }
         ColorPanelMode::ColorWheel => {
@@ -347,11 +341,37 @@ pub(crate) fn group_min_height(app: &PrismApp) -> Option<f32> {
     (app.ui.color_panel.mode == ColorPanelMode::ColorWheel && !crate::csp_tools::active(app)).then_some(WHEEL_GROUP_MIN)
 }
 
+/// Space kept under a Clip Studio wheel for the colour chips (points).
+const CSP_CHIPS: f32 = 44.0;
+/// The smallest Clip Studio wheel (points).
+const CSP_MIN_WHEEL: f32 = 80.0;
+
+/// Clip Studio's Color Wheel: the wheel as large as the panel allows and centred in it both ways
+/// (a narrow panel leaves equal room above and below, a wide one at the sides), the foreground
+/// and background chips at the bottom left.
+fn csp_wheel(app: &mut PrismApp, ui: &mut egui::Ui) {
+    let top = ui.cursor().top();
+    let bottom = ui.clip_rect().bottom().min(ui.max_rect().bottom()).max(top + CSP_MIN_WHEEL + CSP_CHIPS);
+    let area = Rect::from_min_max(pos2(ui.max_rect().left(), top), pos2(ui.max_rect().right(), bottom));
+    ui.allocate_rect(area, Sense::hover());
+    let room = Rect::from_min_max(area.min + vec2(0.0, 4.0), pos2(area.right(), area.bottom() - CSP_CHIPS));
+    let size = room.width().min(room.height()).max(CSP_MIN_WHEEL);
+    wheel_in(app, ui, Rect::from_center_size(room.center(), vec2(room.width(), size)), size);
+    let chips = Rect::from_min_size(pos2(area.left() + 4.0, area.bottom() - CSP_CHIPS + 2.0), vec2(38.0, 38.0));
+    field_chips(app, ui, chips);
+}
+
 fn wheel(app: &mut PrismApp, ui: &mut egui::Ui) {
     // Use the space below the HSB header, but never less than the minimum wheel.
     let room = (ui.clip_rect().bottom() - ui.cursor().top() - 6.0).max(MIN_WHEEL);
     let size = ui.available_width().min(room).clamp(80.0, 420.0);
-    let (outer, response) = ui.allocate_exact_size(vec2(ui.available_width(), size), Sense::click_and_drag());
+    let (outer, _) = ui.allocate_exact_size(vec2(ui.available_width(), size), Sense::hover());
+    wheel_in(app, ui, outer, size);
+}
+
+/// The wheel, `size` across, centred in `outer` (which takes its pointer input).
+fn wheel_in(app: &mut PrismApp, ui: &mut egui::Ui, outer: Rect, size: f32) {
+    let response = ui.interact(outer, ui.id().with("color-wheel"), Sense::click_and_drag());
     let rect = Rect::from_center_size(outer.center(), vec2(size - 14.0, size - 14.0));
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Color wheel"));
     let mut hsv = current(app, ui);

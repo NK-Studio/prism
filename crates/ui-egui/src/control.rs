@@ -84,7 +84,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 34] = [
+pub const UI_SET_FIELDS: [&str; 35] = [
     "tool",
     "actions",
     "panels",
@@ -108,6 +108,7 @@ pub const UI_SET_FIELDS: [&str; 34] = [
     "cspLibraryOpen",
     "cspLibraryView",
     "cspLibraryFilter",
+    "cspLibraryFolder",
     "cspLibraryTags",
     "sutTextureScaleExpanded",
     "brushesView",
@@ -491,6 +492,14 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                     Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("cspLibraryFilter: {e} (all, brushes, subTools, layers)"))?,
                     None => None,
                 };
+                // A CLIP STUDIO folder path ("ダウンロード:Pack-1758445"), "favorite", or null for all.
+                let csp_library_folder: Option<Option<String>> = match p.get("cspLibraryFolder") {
+                    Some(Value::Null) => Some(None),
+                    Some(Value::String(f)) if f == "favorite" => Some(Some(crate::csp_library_ui::tree::FAVORITE.to_string())),
+                    Some(Value::String(f)) if !f.trim().is_empty() && f.chars().count() <= 1024 => Some(Some(f.clone())),
+                    Some(_) => return Err("cspLibraryFolder: a CLIP STUDIO folder path, \"favorite\" or null".into()),
+                    None => None,
+                };
                 let csp_library_tags: Option<Vec<String>> = match p.get("cspLibraryTags") {
                     Some(v) => Some(
                         serde_json::from_value::<Vec<String>>(v.clone())
@@ -644,6 +653,9 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 }
                 if let Some(f) = csp_library_filter {
                     app.ui.csp_library.filter = f;
+                }
+                if let Some(f) = csp_library_folder {
+                    app.ui.csp_library.folder = f;
                 }
                 if let Some(value) = sut_texture_scale_expanded {
                     app.ui.sut_panel.texture_scale_expanded = value;

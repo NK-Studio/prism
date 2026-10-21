@@ -272,8 +272,9 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
         // With a `path` the file is written there; without one the bytes come back as `data`.
         "swatches.export" => params.get("path").is_some(),
         "plugin.reload" => true,
-        // Always read the installed CLIP STUDIO's user data folder (default or `root`).
-        "brush.cspLibrary.list" | "brush.cspLibrary.import" => true,
+        // Always read the installed CLIP STUDIO's user data folder (default or `root`), or a
+        // material file at `path`.
+        "brush.cspLibrary.list" | "brush.cspLibrary.import" | "layer.cspMaterial.import" => true,
         _ => false,
     }
 }
@@ -600,6 +601,8 @@ mod tests {
             ("actions.importAtn", serde_json::json!({"path": "/outside/set.atn"})),
             ("brush.cspLibrary.list", serde_json::json!({})),
             ("brush.cspLibrary.import", serde_json::json!({"uuids": ["id"]})),
+            ("layer.cspMaterial.import", serde_json::json!({"uuid": "id"})),
+            ("layer.cspMaterial.import", serde_json::json!({"path": "/outside/material_0.layer"})),
             ("gradient.presets.importGrd", serde_json::json!({"path": "/outside/set.grd"})),
             ("plugin.install", serde_json::json!({"path": "/outside/plugin.wasm"})),
             ("plugin.reload", serde_json::json!({"path": "/outside/plugins"})),
