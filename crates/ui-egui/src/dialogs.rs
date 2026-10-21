@@ -227,6 +227,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 DialogKind::About => crate::about_ui::body(ui),
                 DialogKind::Command if crate::fill_ui::owns(&fields) => crate::fill_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::rasterize_prompt::owns(&fields) => crate::rasterize_prompt::body(ui, &fields),
+                DialogKind::Command if crate::overwrite_prompt::owns(&fields) => crate::overwrite_prompt::body(ui, &mut fields),
                 DialogKind::Command if crate::variables_ui::owns(&fields) => crate::variables_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::file_ui::owns(&fields) => crate::file_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::save_ui::owns(&fields) => crate::save_ui::body(app, ui, &mut fields),
@@ -296,6 +297,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                             crate::file_ui::ok_label(&d.fields)
                                 .or_else(|| (fields.get("__allowContinue").and_then(Value::as_bool) == Some(true)).then(|| tl!("Continue")))
                                 .or_else(|| crate::save_ui::owns(&d.fields).then(|| tl!("Save")))
+                                .or_else(|| crate::overwrite_prompt::owns(&d.fields).then(|| tl!("Replace")))
                                 .or_else(|| crate::first_run_ui::owns(&fields).then(|| crate::first_run_ui::ok_label(&fields)))
                                 .unwrap_or(tl!("OK"))
                         };
@@ -402,6 +404,9 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 if crate::update_ui::owns(&d.fields) {
                     crate::update_ui::cancel(app);
                 }
+                if crate::overwrite_prompt::owns(&d.fields) {
+                    crate::overwrite_prompt::cancel(app, &d.fields);
+                }
             }
             None => {}
         }
@@ -494,6 +499,7 @@ fn confirm_inner(app: &mut PrismApp, id: u64) -> Result<Value, String> {
         DialogKind::Command if d.fields.contains_key("__actions") => crate::actions::confirm(app, &d.fields),
         DialogKind::Command if crate::fill_ui::owns(&d.fields) => crate::fill_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
+        DialogKind::Command if crate::overwrite_prompt::owns(&d.fields) => crate::overwrite_prompt::confirm(app, &d.fields),
         DialogKind::Command if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::save_ui::owns(&d.fields) => crate::save_ui::confirm(app, &d.fields),

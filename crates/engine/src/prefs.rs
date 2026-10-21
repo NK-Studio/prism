@@ -364,6 +364,8 @@ pub struct FileHandling {
     pub recover_on_launch: bool,
     pub ignore_exif_profile_tag: bool,
     pub ask_before_saving_layered_tiff: bool,
+    /// Ask before a save writes over a file that already exists (⌘S included).
+    pub ask_before_overwriting: bool,
     pub maximize_psd_compatibility: Ask,
     pub recent_file_count: u32,
     /// Most recently opened files, newest first (File › Open Recent).
@@ -381,6 +383,7 @@ impl Default for FileHandling {
             recover_on_launch: true,
             ignore_exif_profile_tag: false,
             ask_before_saving_layered_tiff: true,
+            ask_before_overwriting: true,
             maximize_psd_compatibility: Ask::Always,
             recent_file_count: 20,
             recent_files: Vec::new(),

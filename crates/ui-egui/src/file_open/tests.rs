@@ -115,8 +115,10 @@ fn file_open_dialog_sets_path_so_save_writes_in_place() {
     assert_eq!(st.doc.name, "cat.psd");
     assert_eq!(st.path.as_ref(), paths.first());
     assert_eq!(app.ui.recent_files.first(), paths.first());
-    // File › Save goes straight back to the file, without a dialog.
+    // File › Save goes back to the file, without a file dialog, once Replace is answered.
     let r = menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    let prompt = r["dialog"].as_u64().expect("the Replace prompt");
+    let r = crate::dialogs::confirm(&mut app, prompt).unwrap();
     assert_eq!(r["path"], paths[0]);
     assert!(!app.file_dialog_open());
     assert_eq!(written.borrow().last().map(|(p, _)| p), paths.first());
@@ -162,17 +164,24 @@ fn the_web_hands_over_contents_rather_than_paths() {
 }
 
 #[test]
-fn prism_documents_save_in_place_but_flat_files_ask() {
+fn originals_and_one_layer_images_save_in_place_but_layered_images_ask() {
     let (mut app, written) = app_with(vec![None]);
     let ctx = egui::Context::default();
     app.open_file("/pics/work.prism", b"x").unwrap();
     let r = menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
     assert_eq!(r["path"], "/pics/work.prism");
     assert_eq!(written.borrow().len(), 1);
-    // A PNG goes through the Save window, not silently flattened over the original.
+    // A one-layer PNG (dragged in or opened, then edited) is written back to its file.
     app.open_file("/pics/flat.png", b"x").unwrap();
+    let r = menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    assert_eq!(r["path"], "/pics/flat.png");
+    assert_eq!(written.borrow().len(), 2);
+    // With a layer added it goes through the Save window, not silently flattened over the original.
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
     assert!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap()["dialog"].is_u64());
-    assert_eq!(written.borrow().len(), 1);
+    assert_eq!(written.borrow().len(), 2);
+    assert!(app.session.active().unwrap().is_dirty());
     assert!(!app.ui.status_error);
 }
 

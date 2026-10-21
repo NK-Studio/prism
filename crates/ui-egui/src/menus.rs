@@ -254,17 +254,24 @@ pub(crate) fn invoke_unguarded(app: &mut PrismApp, ctx: &egui::Context, id: &str
             }
         }
         "file.save" => {
-            // Writes back only to a layered file; a flat one goes through Save As.
+            let explicit = params.get("path").is_some();
+            // Writes back to the document's own file when that loses nothing (see
+            // `save_ui::writes_back`); otherwise Save As.
             let path = params
                 .get("path")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .or_else(|| app.session.active().and_then(|d| d.path.clone()).filter(|p| prism_engine::file_cmds::saves_in_place(p)));
+                .or_else(|| app.session.active().and_then(|d| d.path.clone()).filter(|p| crate::save_ui::writes_back(app, p)));
             // Nowhere to write back: the Save window, except while the unsaved-changes prompt
             // saves (it waits on the system save panel).
             match path {
                 None if app.discard.is_none() && app.services.export.is_some() && !app.session.is_enabled("layer.smartObjects.saveContents") => {
                     crate::save_ui::open(app, false)
+                }
+                // Writing over the file on disk asks first (not for scripts naming the path, nor
+                // while the unsaved-changes prompt, already answered with Save, is saving).
+                Some(path) if !explicit && app.discard.is_none() && crate::overwrite_prompt::wanted(app, &path) => {
+                    crate::overwrite_prompt::open(app, &path, None)
                 }
                 path => app.save_as(path),
             }

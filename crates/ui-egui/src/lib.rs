@@ -126,6 +126,7 @@ pub mod props_layout;
 pub mod proxy;
 pub mod puppet_ui;
 pub mod quick_pick;
+pub mod overwrite_prompt;
 pub mod rasterize_prompt;
 pub mod retouch_ui;
 mod rgb_histogram;

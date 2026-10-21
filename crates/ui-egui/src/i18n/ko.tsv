@@ -3506,3 +3506,7 @@ cspTool	Space evenly	균등 배치
 	Primitive	프리미티브
 	Hand model	손 모델
 	New folder	새 폴더
+	Ask before overwriting	덮어쓰기 전에 묻기
+	Replace	덮어쓰기
+	“{name}” already exists. Do you want to replace it?	“{name}” 파일이 이미 있습니다. 덮어쓰시겠습니까?
+	Its contents will be overwritten by this save.	저장하면 기존 내용이 덮어써집니다.

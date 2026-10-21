@@ -134,9 +134,13 @@ fn file_stem(path: &str) -> String {
     }
 }
 
-/// Whether two paths name the same file (the same path, or the same file on disk).
-fn same_file(a: &str, b: &str) -> bool {
-    a == b || std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b)
+/// Whether two paths name the same file (the same path, or the same file on disk). On Windows
+/// `\` and `/` are one separator and case doesn't matter, so `C:\Temp/a.png` is `c:/temp\A.png`
+/// even before the file exists.
+pub(crate) fn same_file(a: &str, b: &str) -> bool {
+    let alike = |x: char, y: char| x == y || (cfg!(windows) && (matches!((x, y), ('/' | '\\', '/' | '\\')) || x.to_lowercase().eq(y.to_lowercase())));
+    (a.chars().count() == b.chars().count() && a.chars().zip(b.chars()).all(|(x, y)| alike(x, y)))
+        || std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b)
 }
 
 fn join(dir: &str, name: &str) -> String {
@@ -215,6 +219,18 @@ fn layers_to_save(doc: &prism_doc::Document, selected: &[prism_doc::LayerId], f:
 }
 
 /// How many layers a flat save merges (one lone layer merges nothing).
+/// Whether File › Save writes the active document straight back to `path` (its own file): a
+/// layered original always; an image (PNG, JPEG, TIFF, …) while the document is still one layer,
+/// so writing it loses nothing. Once layers are added it goes through the Save window, so ⌘S
+/// never merges layers over the file.
+pub fn writes_back(app: &PrismApp, path: &str) -> bool {
+    if prism_engine::file_cmds::saves_in_place(path) {
+        return true;
+    }
+    path.rsplit_once('.').and_then(|(_, e)| key_for_extension(e)).is_some()
+        && app.session.active().is_some_and(|st| !st.source_read_only && layer_count(&st.doc) <= 1)
+}
+
 fn layer_count(doc: &prism_doc::Document) -> usize {
     fn count(layers: &[prism_doc::Layer], depth: usize) -> usize {
         layers
@@ -1048,6 +1064,9 @@ pub fn confirm(app: &mut PrismApp, f: &Map<String, Value>) -> Result<Value, Stri
         })
     } else {
         let path = target(f);
+        if !b(f, crate::overwrite_prompt::AGREED, false) && crate::overwrite_prompt::wanted(app, &path) {
+            return crate::overwrite_prompt::open(app, &path, Some(f));
+        }
         let rebind = original(&format) && !copy_mode(f);
         app.write_document(path, &settings(f), !rebind).map(|(path, warnings)| json!({"path": path, "warnings": warnings}))
     };

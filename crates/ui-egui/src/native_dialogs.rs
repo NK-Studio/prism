@@ -69,6 +69,9 @@ pub fn cancel(app: &mut PrismApp, ctx: &Context, id: u64) -> Result<Value, Strin
     }
     app.filter_preview = None;
     app.color_range = None;
+    if crate::overwrite_prompt::owns(&d.fields) {
+        crate::overwrite_prompt::cancel(app, &d.fields);
+    }
     Ok(Value::Null)
 }
 fn size(d: &Dialog) -> egui::Vec2 {
