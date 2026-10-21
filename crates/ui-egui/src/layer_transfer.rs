@@ -16,6 +16,9 @@
 //!
 //! A Move-tool drag starting inside a selection or moving a floating piece stays a move: Photoshop
 //! would copy just the selected pixels, which is not supported yet.
+//!
+//! The layers are carried visibly ([`look`]): a picture of them follows the pointer, shows where
+//! they will land over another document, and settles there on release.
 
 use egui::{Pos2, Rect, ViewportId};
 use prism_doc::{DocId, LayerId};
@@ -36,6 +39,11 @@ struct Transfer {
     label: String,
     /// The window holding the pointer (the button went down there): it gets the pointer events.
     viewport: ViewportId,
+    /// A picture of the layers (`None`: they show no pixels).
+    preview: Option<look::Preview>,
+    count: usize,
+    /// When the drag began (the card rises then).
+    started: f64,
 }
 
 fn key() -> egui::Id {
@@ -61,7 +69,16 @@ fn begin(app: &PrismApp, ctx: &egui::Context, id: LayerId, grab: Option<[f64; 2]
         [one] => st.doc.layer(*one).map_or_else(String::new, |l| l.name.clone()),
         many => crate::i18n::trn(crate::i18n::current(), many.len() as u64, "{n} layer", "{n} layers"),
     };
-    let t = Transfer { source: st.doc.id, layers: layers.iter().map(|l| l.0).collect(), grab, label, viewport: ctx.viewport_id() };
+    let t = Transfer {
+        source: st.doc.id,
+        layers: layers.iter().map(|l| l.0).collect(),
+        grab,
+        label,
+        viewport: ctx.viewport_id(),
+        preview: look::preview(ctx, &st.doc, &layers),
+        count: layers.len(),
+        started: ctx.input(|i| i.time),
+    };
     ctx.data_mut(|d| d.insert_temp(key(), t));
     true
 }
@@ -121,7 +138,7 @@ pub fn over_tab(app: &mut PrismApp, ctx: &egui::Context, index: usize) {
         ctx.data_mut(|d| d.remove::<u64>(egui::Id::new("layer-drag")));
     }
     if ctx.input(|i| i.pointer.any_released()) {
-        drop(app, ctx, index, None, None);
+        drop(app, ctx, index, None, None, None);
     }
 }
 
@@ -141,36 +158,30 @@ pub fn leave_canvas(app: &mut PrismApp, ctx: &egui::Context) -> bool {
 }
 
 /// Every frame in every window, after its documents: in the window holding the pointer, a release
-/// over another document's canvas drops the layers there; while the button is held the canvas
-/// under the pointer is outlined and a ghost follows the pointer.
+/// over another document's canvas drops the layers there; while the button is held the layers
+/// follow the pointer, or show where they would land over another document.
 pub fn finish(app: &mut PrismApp, ctx: &egui::Context) {
+    look::paint_settle(ctx);
     let Some(t) = get(ctx) else { return };
     if ctx.viewport_id() != t.viewport {
         let source_open = t.viewport == ViewportId::ROOT || app.ui.windows.iter().any(|w| w.open && crate::doc_windows::viewport(Some(w.id)) == t.viewport);
         if source_open {
-            paint_hover(ctx);
+            paint_hover(ctx, &t);
         } else {
             clear(ctx);
         }
         return;
     }
-    let (pos, released, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.any_released(), i.pointer.primary_down()));
+    let (pos, released, down, shift, now) =
+        ctx.input(|i| (i.pointer.latest_pos(), i.pointer.any_released(), i.pointer.primary_down(), i.modifiers.shift, i.time));
     let target = target(app, ctx, t.source);
+    let landing = target.as_ref().and_then(|(hit, at)| landing(app, &t, hit.document, *at, shift).map(|r| look::quad(&hit.xf, r)));
     if !released {
         if !down {
             clear(ctx);
             return;
         }
-        let hover = match &target {
-            Some((at, _)) => Some(Hover { viewport: at.viewport, canvas: at.xf.rect, pointer: at.local, label: t.label.clone() }),
-            // Spring-loaded onto another document's tab: the ghost follows the pointer here.
-            None => pos.filter(|_| app.session.active().is_some_and(|st| st.doc.id != t.source)).map(|p| Hover {
-                viewport: t.viewport,
-                canvas: Rect::NOTHING,
-                pointer: p,
-                label: t.label.clone(),
-            }),
-        };
+        let hover = target.as_ref().map(|(at, _)| Hover { viewport: at.viewport, canvas: at.xf.rect, pointer: at.local, landing });
         if target.is_some() {
             ctx.set_cursor_icon(egui::CursorIcon::Copy);
         }
@@ -181,17 +192,40 @@ pub fn finish(app: &mut PrismApp, ctx: &egui::Context) {
                 d.remove::<Hover>(hover_key());
             }
         });
-        paint_hover(ctx);
-        // The other windows outline the target and follow the ghost.
+        match (&target, pos) {
+            (Some(_), _) => paint_hover(ctx, &t),
+            // Carried: the layers follow the pointer.
+            (None, Some(p)) => look::card(ctx, p, t.preview.as_ref(), &t.label, t.count, now - t.started),
+            (None, None) => {}
+        }
+        // The other windows show where the layers would land.
         ctx.request_repaint();
         return;
     }
     if let Some((at, point)) = target
         && let Some(dest) = app.session.documents().iter().position(|d| d.doc.id == at.document)
     {
-        drop(app, ctx, dest, Some(point), Some(at.window));
+        drop(app, ctx, dest, Some(point), Some(at.window), landing.map(|q| (at.viewport, q)));
     }
     clear(ctx);
+}
+
+/// Where the dragged layers land in document `dest` (its pixels) when released at `at`, as
+/// [`drop`] places them: the grabbed pixel under the pointer (Move tool) or centred on it (Layers
+/// panel); with Shift in place, or centred when the documents differ in size.
+fn landing(app: &PrismApp, t: &Transfer, dest: DocId, at: [f64; 2], shift: bool) -> Option<Rect> {
+    let b = t.preview.as_ref()?.bounds;
+    let docs = app.session.documents();
+    let size = |id: DocId| docs.iter().find(|d| d.doc.id == id).map(|d| d.doc.size);
+    let (from, to) = (size(t.source)?, size(dest)?);
+    let c = b.center();
+    let (dx, dy) = match (shift, t.grab) {
+        (true, _) if from == to => (0.0, 0.0),
+        (true, _) => (to.width as f32 / 2.0 - c.x, to.height as f32 / 2.0 - c.y),
+        (false, Some(g)) => ((at[0] - g[0]).round() as f32, (at[1] - g[1]).round() as f32),
+        (false, None) => (at[0] as f32 - c.x, at[1] as f32 - c.y),
+    };
+    Some(b.translate(egui::vec2(dx.round(), dy.round())))
 }
 
 /// A document canvas laid out this frame (see [`register`]), so a drag from another view or
@@ -275,34 +309,42 @@ fn target(app: &PrismApp, ctx: &egui::Context, source: DocId) -> Option<(Hit, [f
     Some((hit, point))
 }
 
-/// Where the ghost is drawn: in the window showing the canvas under the pointer.
+/// The other document's canvas under the pointer, drawn in its own window.
 #[derive(Clone, Debug)]
 struct Hover {
     viewport: ViewportId,
-    /// The canvas to outline (`Rect::NOTHING`: none).
+    /// The canvas, outlined.
     canvas: Rect,
     pointer: Pos2,
-    label: String,
+    /// Where the layers would land there (`None`: they show no pixels).
+    landing: Option<[Pos2; 4]>,
 }
 
 fn hover_key() -> egui::Id {
     egui::Id::new("pc-layer-transfer-hover")
 }
 
-fn paint_hover(ctx: &egui::Context) {
+fn paint_hover(ctx: &egui::Context, t: &Transfer) {
     let Some(h) = ctx.data(|d| d.get_temp::<Hover>(hover_key())).filter(|h| h.viewport == ctx.viewport_id()) else { return };
-    if h.canvas.is_positive() {
-        let t = crate::theme::Tokens::get(ctx);
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("layer-transfer-target")));
-        painter.rect_stroke(h.canvas, 0.0, egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+    if let (Some(q), Some(pv)) = (h.landing, t.preview.as_ref()) {
+        look::landing(ctx, h.canvas, q, pv);
+        return;
     }
-    ghost(ctx, h.pointer, &h.label);
+    let tokens = crate::theme::Tokens::get(ctx);
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("layer-transfer-target")));
+    painter.rect_stroke(h.canvas, 0.0, egui::Stroke::new(2.0, tokens.accent), egui::StrokeKind::Inside);
+    look::card(ctx, h.pointer, t.preview.as_ref(), &t.label, t.count, ctx.input(|i| i.time) - t.started);
+}
+
+/// Are layers being carried (the Layers panel's reorder drag then shows them, not its label)?
+pub fn carrying(ctx: &egui::Context) -> bool {
+    get(ctx).is_some()
 }
 
 /// Copy the dragged layers into document `dest`, at document point `at` (see the module docs),
 /// then bring forward the window it was dropped in (`window`: `Some(None)` is the main window,
-/// `None` leaves the windows as they are).
-fn drop(app: &mut PrismApp, ctx: &egui::Context, dest: usize, at: Option<[f64; 2]>, window: Option<Option<u64>>) {
+/// `None` leaves the windows as they are). `settle`: where they land, in which window.
+fn drop(app: &mut PrismApp, ctx: &egui::Context, dest: usize, at: Option<[f64; 2]>, window: Option<Option<u64>>, settle: Option<(ViewportId, [Pos2; 4])>) {
     let Some(t) = get(ctx) else { return };
     clear(ctx);
     let docs = app.session.documents();
@@ -321,6 +363,9 @@ fn drop(app: &mut PrismApp, ctx: &egui::Context, dest: usize, at: Option<[f64; 2
         app.ui.status = e;
         app.ui.status_error = true;
         return;
+    }
+    if let (Some((viewport, q)), Some(pv)) = (settle, t.preview.as_ref()) {
+        look::settle(ctx, viewport, q, pv);
     }
     match window {
         Some(Some(id)) => {
@@ -346,6 +391,8 @@ pub fn ghost(ctx: &egui::Context, p: egui::Pos2, label: &str) {
     painter.rect_stroke(r, t.radius_sm, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
     painter.galley(r.min + egui::vec2(8.0, 4.0), g, t.text);
 }
+
+mod look;
 
 #[cfg(test)]
 mod tests;

@@ -294,3 +294,38 @@ fn a_move_drag_that_stays_in_its_floating_window_still_moves() {
     assert!(source_square(&h, paint).x0 > 4, "moved right: {:?}", source_square(&h, paint));
     assert_eq!(h.state().session.documents()[1].doc.layers.len(), 1, "nothing copied");
 }
+
+/// Carried over another document, the layers show exactly where the release puts them, in that
+/// document's window; released, they settle there.
+#[test]
+fn carried_layers_show_where_they_land_and_settle_there() {
+    let (s, _) = session();
+    let (mut h, _) = native(s, 1);
+    let source = view_of(&h, "source-doc");
+    let dest = view_of(&h, "dest-doc");
+    let grab = source.xf.to_screen(9.0, 11.0);
+    let over = dest.xf.to_screen(30.0, 25.0);
+    let drop = desktop(&dest, over) - MAIN;
+    h.event(egui::Event::PointerMoved(grab));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: grab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for p in [grab + vec2(30.0, 0.0), drop - vec2(10.0, 0.0), drop] {
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(2);
+    }
+    let hover = h.ctx.data(|d| d.get_temp::<super::Hover>(super::hover_key())).expect("over the destination");
+    assert_eq!(hover.viewport, dest.viewport, "drawn in the destination's window");
+    let (g, at) = (source.xf.to_doc(grab), dest.xf.to_doc(over));
+    let (dx, dy) = ((at[0] - g[0]).round() as f32, (at[1] - g[1]).round() as f32);
+    let lands = Rect::from_min_max(egui::pos2(4.0 + dx, 6.0 + dy), egui::pos2(14.0 + dx, 16.0 + dy));
+    let want = super::look::quad(&dest.xf, lands);
+    for (got, want) in hover.landing.expect("a picture of the layers").iter().zip(want) {
+        assert!((*got - want).length() < 0.5, "{got:?} vs {want:?}");
+    }
+    h.event(egui::Event::PointerButton { pos: drop, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert_eq!(super::look::settling(&h.ctx), Some(dest.viewport), "they settle in the destination's window");
+    h.run_steps(2);
+    assert_eq!(active_copy(&h).1, lands, "the copy is where its picture was");
+}

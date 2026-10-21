@@ -2768,8 +2768,11 @@ fn layer_drag_and_drop(app: &PrismApp, ctx: &egui::Context, ui: &egui::Ui, l: &L
     let released = ctx.input(|i| i.pointer.any_released());
     let copy = ctx.input(|i| i.modifiers.alt);
     if dragged == l.id.0 {
-        // Ghost label following the pointer, and the copy cursor while ⌥ is held.
-        if let Some(p) = pointer {
+        // Ghost label following the pointer (unless the layers are carried, `layer_transfer`),
+        // and the copy cursor while ⌥ is held.
+        if let Some(p) = pointer
+            && !crate::layer_transfer::carrying(ctx)
+        {
             crate::layer_transfer::ghost(ctx, p, &l.name);
         }
         if copy {
