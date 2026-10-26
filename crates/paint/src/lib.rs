@@ -25,6 +25,7 @@ pub mod csp_gradient;
 pub mod csp_in_out;
 pub mod csp_mixing;
 pub mod csp_ribbon;
+pub mod csp_spacing;
 pub mod csp_spray;
 pub mod csp_stabilizer;
 pub mod csp_texture;

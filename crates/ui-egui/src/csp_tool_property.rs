@@ -49,6 +49,7 @@ const GRADIENT_DATA: &str = "No gradient is stored; Prism paints its current gra
 const GRADIENT_CURVE: &str = "Curves next to the main or sub color run straight in Prism";
 const FONT_MISSING: &str = "This font is not installed; the Type tool keeps its font";
 const NORMAL_ONLY: &str = "Prism uses the Normal blending mode";
+const BRUSH_NOT_RUN: &str = "Prism does not use this setting yet; it is kept for CLIP STUDIO";
 const DISPLAYED: &str = "Prism picks the displayed color";
 
 /// Settings read and edited this frame.
@@ -186,6 +187,11 @@ fn tc(item: &Item, s: &'static str) -> &'static str {
         }
     }
     crate::i18n::tr_ctx(lang, "cspTool", s)
+}
+
+/// The translated label of `item`.
+pub(crate) fn label(item: &Item) -> &'static str {
+    tc(item, item.label)
 }
 
 /// A short wrapped note under a setting.
@@ -583,6 +589,43 @@ pub fn show(app: &mut PrismApp, ui: &mut egui::Ui, preset: &str) {
             Err(err) => app.ui.status = err,
         }
     }
+}
+
+/// Catalogued items `ids` of the imported brush `preset` that the brush panel has no control of
+/// its own for, drawn as CLIP STUDIO draws them. Returns the edited settings, for
+/// `brush.sutSettings.set` (which also applies the ones the brush runs).
+pub(crate) fn brush_rows(app: &mut PrismApp, ui: &mut egui::Ui, preset: &str, m: &SutBrushMetadata, ids: &[u32]) -> Option<Map<String, Value>> {
+    let mut e = Edits::new(m);
+    let spray = app.session.tools.brush.csp_spray.is_some();
+    // Spray settings run only on a brush that sprays.
+    let runs = |item: &Item| {
+        item.fields.iter().any(|fl| prism_engine::paint::sut::runs_brush_setting(fl.key) && (spray || !fl.key.starts_with("BrushSpray")))
+    };
+    let status = |item: &Item| if runs(item) { Status::Runs } else { Status::NotRun };
+    let shown = |id: u32| ids.contains(&id);
+    for &id in ids {
+        let Some(item) = cat::item(id) else { continue };
+        if cat::owner(id).is_some_and(|o| shown(o.id)) {
+            continue;
+        }
+        let salt = format!("{preset}-{id}");
+        ui.push_id(("csp-brush-prop", id), |ui| {
+            with_status(ui, status(item), |ui| draw_item(app, ui, item, &mut e, &salt));
+            if status(item) == Status::NotRun {
+                note(ui, tl!(BRUSH_NOT_RUN));
+            }
+            let children: Vec<&Item> = item.children.iter().filter(|c| shown(**c)).filter_map(|c| cat::item(*c)).collect();
+            if !children.is_empty() {
+                ui.indent(("csp-brush-children", id), |ui| {
+                    for child in children {
+                        with_status(ui, status(child), |ui| draw_item(app, ui, child, &mut e, &format!("{preset}-{}", child.id)));
+                    }
+                });
+            }
+        });
+        ui.separator();
+    }
+    (!e.changes.is_empty()).then_some(e.changes)
 }
 
 /// Set the options of the Prism tool behind the imported sub-tool `preset` from the sub-tool's

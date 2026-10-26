@@ -1,6 +1,9 @@
 //! CSP presentation metadata never participates in brush rendering.
 use egui::{Color32, Sense, vec2};
-use prism_engine::{BrushSettings, paint::sut::SutBrushMetadata};
+use prism_engine::{
+    BrushSettings,
+    paint::{sut::SutBrushMetadata, sut_catalog as cat},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -256,6 +259,7 @@ pub fn show(app: &mut PrismApp, ui: &mut egui::Ui) {
             brush_panel::run_or_status(app, "brush.sutDisplay.reset", json!({"name":name}));
         }
     }
+    let mut pending = None;
     let max_height = (ui.ctx().content_rect().height() - 260.0).clamp(100.0, 560.0);
     egui::ScrollArea::vertical().id_salt("sut-settings-scroll").max_height(max_height).auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().slider_width = (width - 110.0).max(70.0);
@@ -301,13 +305,22 @@ pub fn show(app: &mut PrismApp, ui: &mut egui::Ui) {
         unknown.extend(m.effective().visible.iter().copied());
         unknown.sort_unstable();
         unknown.dedup();
-        for id in unknown.iter().filter(|id| !ITEMS.iter().any(|item| item.0 == **id)) {
+        unknown.retain(|id| !ITEMS.iter().any(|item| item.0 == *id));
+        // Items without a control of their own here are drawn from the Tool Property catalogue,
+        // in CLIP STUDIO's order; the rest have no known setting to edit.
+        let catalogued = |id: u32| cat::item(id).is_some();
+        let rows: Vec<u32> = m.effective().visible.iter().copied().filter(|id| unknown.contains(id) && catalogued(*id)).collect();
+        pending = crate::csp_tool_property::brush_rows(app, ui, &name, &m, &rows);
+        for id in unknown.iter().filter(|id| !rows.contains(id)) {
             let visible = m.effective().visible.contains(id);
             if !details && !visible {
                 continue;
             }
             ui.push_id(("unknown", id), |ui| {
-                ui.label(format!("{} {id}", tl!("Unsupported CSP setting")));
+                match cat::item(*id) {
+                    Some(item) => ui.label(crate::csp_tool_property::label(item)),
+                    None => ui.label(format!("{} {id}", tl!("Unsupported CSP setting"))),
+                };
                 if details && ui.button(if visible { tl!("Hide") } else { tl!("Show") }).clicked() {
                     brush_panel::run_or_status(app, "brush.sutDisplay.set", json!({"name":name,"parameter":id,"visible":!visible}));
                 }
@@ -318,6 +331,10 @@ pub fn show(app: &mut PrismApp, ui: &mut egui::Ui) {
         }
     });
     brush_panel::commit_gesture(app, ui.ctx(), &before, &b);
+    // After the brush edits, so they cannot overwrite what these settings apply to the brush.
+    if let Some(values) = pending {
+        brush_panel::run_or_status(app, "brush.sutSettings.set", json!({"name":name,"values":values}));
+    }
 }
 
 #[cfg(test)]
@@ -326,7 +343,7 @@ mod tests {
     use egui_kittest::{Harness, kittest::Queryable};
     use prism_engine::paint::{BrushPreset, sut::SutDisplay};
 
-    fn harness() -> Harness<'static, PrismApp> {
+    fn research_app() -> PrismApp {
         let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let brush = BrushSettings { size: 15.0, opacity: 0.9, ..Default::default() };
         app.session.tools.presets.push(BrushPreset {
@@ -343,13 +360,17 @@ mod tests {
         });
         app.session.tools.brush = brush;
         app.session.tools.brush_preset = Some("Research".into());
+        app
+    }
+
+    fn harness() -> Harness<'static, PrismApp> {
         let mut h = Harness::builder().with_size(vec2(360.0, 650.0)).build_ui_state(
             |ui, app| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     show(app, ui);
                 }
             },
-            app,
+            research_app(),
         );
         PrismApp::setup_context(&h.ctx, Default::default());
         h.run_steps(4);
@@ -509,6 +530,57 @@ mod tests {
         h.run();
         for label in ["Amount of paint", "Density of paint", "Color stretch"] {
             h.get_by_role_and_label(egui::accesskit::Role::Slider, label);
+        }
+    }
+
+    #[test]
+    fn catalogued_brush_items_are_drawn_and_paint_with_their_settings() {
+        let mut h = harness();
+        let metadata = h.state_mut().session.tools.presets.last_mut().unwrap().sut.as_mut().unwrap();
+        // The autumn-leaves materials show Gap (1042 with 1040) and Particle size (1131).
+        metadata.original.visible.extend([1131, 1042, 1040, 0xffff]);
+        metadata.parameters.extend([("BrushSpraySize".into(), 30.0), ("BrushAutoIntervalType".into(), 0.0), ("BrushInterval".into(), 10.0)]);
+        h.state_mut().session.tools.brush.csp_spray = Some(prism_engine::paint::csp_spray::CspSpray { size: 30.0, ..Default::default() });
+        h.run();
+        for id in [1131, 1042, 1040] {
+            assert!(h.query_by_label_contains(&format!("Unsupported CSP setting {id}")).is_none(), "{id}");
+        }
+        h.get_by_label("Unsupported CSP setting 65535");
+        h.get_by_role_and_label(egui::accesskit::Role::Slider, "Particle size");
+        h.get_by_role_and_label(egui::accesskit::Role::Slider, "Gap");
+        // Particle size runs: editing it edits the brush through the sub-tool settings.
+        let mut values = serde_json::Map::new();
+        values.insert("BrushSpraySize".into(), json!(12.0));
+        h.state_mut().run("brush.sutSettings.set", json!({"name":"Research","values":values})).unwrap();
+        h.run();
+        assert_eq!(h.state().session.tools.brush.csp_spray.as_ref().unwrap().size, 12.0);
+        crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
+            for id in [1131, 1042, 1040, 1130, 1133, 1135, 1060, 1020, 1030] {
+                let item = cat::item(id).unwrap();
+                assert_ne!(crate::csp_tool_property::label(item), item.label, "{id}");
+            }
+        });
+    }
+
+    #[test]
+    #[ignore = "writes brush Tool Property visual evidence to target/sut-panel"]
+    fn catalogued_brush_items_visual_evidence() {
+        let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sut-panel");
+        std::fs::create_dir_all(&out).unwrap();
+        for lang in ["en", "ko"] {
+            let mut app = research_app();
+            let m = app.session.tools.presets.last_mut().unwrap().sut.as_mut().unwrap();
+            m.original.visible = vec![1000, 20, 1131, 1042, 1040, 1133];
+            m.parameters.extend([("BrushSpraySize".into(), 78.2), ("BrushAutoIntervalType".into(), 0.0), ("BrushInterval".into(), 25.0), ("BrushSprayDensity".into(), 8.0)]);
+            app.session.tools.brush.csp_spray = Some(prism_engine::paint::csp_spray::CspSpray { size: 78.2, ..Default::default() });
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(320.0, 640.0))
+                .with_pixels_per_point(1.5)
+                .wgpu()
+                .build_ui_state(move |ui, app: &mut PrismApp| crate::i18n::with_language(crate::i18n::Lang::from_pref(lang), || show(app, ui)), app);
+            PrismApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(5);
+            h.render().unwrap().save(out.join(format!("autumn-{lang}.png"))).unwrap();
         }
     }
 

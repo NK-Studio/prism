@@ -3510,3 +3510,15 @@ cspTool	Space evenly	균등 배치
 	Replace	덮어쓰기
 	“{name}” already exists. Do you want to replace it?	“{name}” 파일이 이미 있습니다. 덮어쓰시겠습니까?
 	Its contents will be overwritten by this save.	저장하면 기존 내용이 덮어써집니다.
+cspTool	Gap	간격
+cspTool	Spray	스프레이
+cspTool	Particle size	입자 크기
+cspTool	Particle density	입자 밀도
+cspTool	Spray deviation	스프레이 편차
+cspTool.gap	Gap	간격
+cspTool.gap	Fixed	고정
+cspTool.gap	Wide	넓게
+cspTool.gap	Normal	보통
+cspTool.gap	Narrow	좁게
+cspTool.tip	Direction	방향
+	Prism does not use this setting yet; it is kept for CLIP STUDIO	프리즘은 아직 이 설정을 쓰지 않으며 CLIP STUDIO용으로 보관합니다

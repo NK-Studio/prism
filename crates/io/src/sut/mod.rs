@@ -471,58 +471,13 @@ fn rotation(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<String>) {
     }
 }
 
-/// Dab spacing as a fraction of the diameter. Fixed spacing (`BrushAutoIntervalType` 0) is
-/// `BrushInterval`; the automatic types scale a per-type base by hardness and thickness.
-/// Evidence in docs/sut-analysis.md.
+/// Dab spacing as a fraction of the diameter ([`prism_paint::csp_spacing`]).
 fn spacing(r: &Row, warnings: &mut Vec<String>) -> f32 {
     spacing_of(r, TipKeys::MAIN, warnings)
 }
-/// The keys of one tip's spacing settings: the main tip's or the dual brush's.
-struct TipKeys {
-    auto_interval: &'static str,
-    interval: &'static str,
-    use_image: &'static str,
-    hardness: &'static str,
-    thickness: &'static str,
-}
-impl TipKeys {
-    const MAIN: Self = Self {
-        auto_interval: "BrushAutoIntervalType",
-        interval: "BrushInterval",
-        use_image: "BrushUsePatternImage",
-        hardness: "BrushHardness",
-        thickness: "BrushThickness",
-    };
-    const DUAL: Self = Self {
-        auto_interval: "DualAutoIntervalType",
-        interval: "DualInterval",
-        use_image: "DualUsePatternImage",
-        hardness: "DualHardness",
-        thickness: "DualThickness",
-    };
-}
+use prism_paint::csp_spacing::TipKeys;
 fn spacing_of(r: &Row, k: TipKeys, warnings: &mut Vec<String>) -> f32 {
-    let spacing = spacing_unchecked(r, k, warnings);
-    if spacing.is_finite() { spacing } else { 0.1 }
-}
-fn spacing_unchecked(r: &Row, k: TipKeys, warnings: &mut Vec<String>) -> f32 {
-    let kind = num(r, k.auto_interval, 0.0) as i64;
-    let base = match kind {
-        0 => return (num(r, k.interval, 10.0) / 100.0).clamp(0.01, 10.0),
-        1 => 0.12,
-        3 => 0.04,
-        2 => 0.08,
-        _ => {
-            warnings.push(format!("SUT automatic spacing type {kind} is approximated by the normal spacing"));
-            0.08
-        }
-    };
-    // Image tips space as fully hard ones.
-    let hardness = if enabled(r, k.use_image) { 1.0 } else { num(r, k.hardness, 100.0) / 100.0 };
-    let hardness = if hardness >= 0.999_999_99 { 1.0 } else { hardness.max(0.2) };
-    let thickness = num(r, k.thickness, 100.0) / 100.0;
-    let thickness = if thickness < 1.0 { thickness.max(0.01) } else { 1.0 };
-    (base * (3.5 - 2.5 * hardness) * thickness).clamp(0.01, 10.0)
+    prism_paint::csp_spacing::spacing(|key| r.get(key).and_then(Value::number), k, warnings)
 }
 
 /// Map Color mixing (BrushUseWaterColor 0x43e; amount 0x439, density 0x43b, stretch 0x43d with

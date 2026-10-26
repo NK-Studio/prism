@@ -1,7 +1,7 @@
 //! Independently decoded SUT presentation framing; see docs/sut-analysis.md.
 use super::{Row, Value};
 use prism_paint::csp_gradient::CspGradient;
-use prism_paint::sut::{MAX_SETTING_VALUE, MAX_SUT_DISPLAY_ITEMS, SutBrushMetadata, SutDisplay, SutToolKind, clean_text, is_known_parameter, retained_keys};
+use prism_paint::sut::{MAX_SETTING_VALUE, MAX_SUT_DISPLAY_ITEMS, SutBrushMetadata, SutDisplay, clean_text, is_known_parameter, retained_keys};
 use prism_paint::sut_catalog;
 
 fn visible(bytes: &[u8]) -> Result<Vec<u32>, &'static str> {
@@ -38,9 +38,9 @@ pub(super) fn read(node: &Row, row: &Row, warnings: &mut Vec<String>, notes: &mu
         }
     };
     let (input_op, output_op) = (node.get("NodeInputOp").and_then(Value::integer).unwrap_or(0), node.get("NodeOutputOp").and_then(Value::integer).unwrap_or(0));
-    // Brush-type sub-tools edit the brush items; the others draw the Tool Property catalogue.
-    let brush = SutToolKind::classify(input_op, output_op).is_brush();
-    let catalogued = |id: u32| !brush && (sut_catalog::item(id).is_some() || sut_catalog::owner(id).is_some());
+    // Brush-type sub-tools edit the brush items, then the Tool Property catalogue's, as the
+    // other sub-tools do.
+    let catalogued = |id: u32| sut_catalog::item(id).is_some() || sut_catalog::owner(id).is_some();
     let unknown_count = visible.iter().filter(|id| !is_known_parameter(**id) && !catalogued(**id)).count();
     if unknown_count != 0 {
         notes.push(format!("SUT display metadata contains {unknown_count} unrecognized parameter IDs; they are preserved but have no editable controls"));
@@ -186,10 +186,13 @@ mod tests {
         assert_eq!(m.parameters.get("TextAlignment"), Some(&2.0));
         assert_eq!(m.parameters.get("FillCloseGap"), Some(&5.0));
         assert!(!m.parameters.contains_key("TextFontName"));
-        // The same IDs on a brush are not brush controls.
+        // A brush draws catalogued items too; only IDs outside the catalogue are unrecognized.
         let pen = Row::from([("NodeInputOp".into(), Value::Integer(11)), ("NodeOutputOp".into(), Value::Integer(11))]);
         read(&pen, &row, &mut warnings, &mut notes);
-        assert!(notes.iter().any(|n| n.contains("4 unrecognized")), "{notes:?}");
+        assert!(notes.is_empty(), "{notes:?}");
+        let odd = Row::from([("VariantShowParam".into(), blob(&[1131, 1042, 0xffff]))]);
+        read(&pen, &odd, &mut warnings, &mut notes);
+        assert!(notes.iter().any(|n| n.contains("1 unrecognized")), "{notes:?}");
     }
 
     #[test]

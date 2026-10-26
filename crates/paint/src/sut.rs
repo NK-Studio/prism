@@ -49,7 +49,44 @@ pub const RETAINED_KEYS: &[&str] = &[
     "TextureStressDensity",
     "TextureForPlot",
     "PrismTextureScaleFactor",
+    "BrushUsePatternImage",
+    "BrushSpraySizeSyncBrushSize",
 ];
+
+/// Whether an edited imported brush setting `key` changes how the brush paints (see
+/// [`apply_brush_setting`]); the others are kept for CLIP STUDIO only.
+pub fn runs_brush_setting(key: &str) -> bool {
+    matches!(key, "BrushFlow" | "BrushInterval" | "BrushAutoIntervalType" | "BrushHardness" | "BrushSpraySize" | "BrushSprayDensity" | "BrushSprayBias")
+}
+
+/// Apply the edited imported setting `key` of `m` to brush `b`, as the SUT import maps it.
+/// Settings that do not paint, and spray settings of a brush without spraying, change nothing.
+pub fn apply_brush_setting(m: &SutBrushMetadata, key: &str, b: &mut crate::BrushSettings) {
+    let get = |k: &str| m.parameters.get(k).copied().filter(|v| v.is_finite());
+    let num = |k: &str, default: f64| get(k).unwrap_or(default).clamp(-1e6, 1e6) as f32;
+    match key {
+        "BrushFlow" => b.flow = (num(key, 100.0) / 100.0).clamp(0.0, 1.0),
+        // Hardness only spaces automatic gaps here (an imported soft tip keeps its shape).
+        "BrushInterval" | "BrushAutoIntervalType" | "BrushHardness" => {
+            b.spacing = crate::csp_spacing::spacing(get, crate::csp_spacing::TipKeys::MAIN, &mut Vec::new());
+        }
+        "BrushSpraySize" | "BrushSprayDensity" | "BrushSprayBias" => {
+            let size = b.size;
+            let Some(spray) = &mut b.csp_spray else { return };
+            match key {
+                "BrushSpraySize" => {
+                    spray.size = num(key, 2.0).clamp(0.5, crate::MAX_BRUSH_SIZE);
+                    if spray.size_ratio.is_some() && size > 0.0 {
+                        spray.size_ratio = Some(spray.size / size);
+                    }
+                }
+                "BrushSprayDensity" => spray.count = (num(key, 8.0).round().max(1.0) as u32).min(crate::csp_spray::MAX_PARTICLES),
+                _ => spray.bias = (num(key, 0.0) / 100.0).clamp(-1.0, 1.0),
+            }
+        }
+        _ => {}
+    }
+}
 
 /// The largest imported setting value kept (see [`crate::sut_catalog::MAX_SETTING_VALUE`]).
 pub use crate::sut_catalog::MAX_SETTING_VALUE;

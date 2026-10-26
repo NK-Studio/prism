@@ -124,6 +124,8 @@ const LENGTH_OR_PERCENT: &[(i64, &str)] = &[(0, "Specify length"), (1, "By perce
 /// CLIP STUDIO's default Close gap indicator steps, in pixels.
 pub const CLOSE_GAP_STEPS: [f64; 5] = [1.0, 3.0, 5.0, 10.0, 20.0];
 
+/// CLIP STUDIO's Gap types (`BrushAutoIntervalType`), in its button order.
+const GAPS: &[(i64, &str)] = &[(0, "Fixed"), (1, "Wide"), (2, "Normal"), (3, "Narrow")];
 /// Every catalogued item, in no particular order (a sub-tool's own list gives the order).
 pub const ITEMS: &[Item] = &[
     // Common.
@@ -392,6 +394,19 @@ pub const ITEMS: &[Item] = &[
     one!(7053, "Selection mode", "TextSelectType", Kind::List(&[(0, "New selection"), (1, "Add to selection"), (2, "Toggle selection")])),
     one!(7054, "Version", "TextVersion", Kind::Code { max: 64 }),
     one!(7055, "Ligatures", "TextStandardLigature", Kind::Check),
+    // Brush Tool Property items without a dedicated brush panel control (the panel draws the
+    // ones it has its own control for). The values the brush runs are applied by
+    // `crate::sut::apply_brush_setting`.
+    one!(1020, "Brush density", "BrushFlow", whole(0.0, 100.0, Unit::Percent)),
+    one!(1030, "Hardness", "BrushHardness", whole(0.0, 100.0, Unit::Percent)),
+    one!(1040, "Gap", "BrushInterval", log(1.0, 1000.0, Unit::Percent)),
+    // The Gap type; its fixed size (1040) is drawn indented under it, as CLIP STUDIO expands it.
+    one!(1042, "Gap", "BrushAutoIntervalType", Kind::List(GAPS), ctx: "cspTool.gap", children: &[1040]),
+    one!(1060, "Direction", "BrushRotation", slider(-360.0, 360.0, Unit::Degree), ctx: "cspTool.tip"),
+    one!(1130, "Spray", "BrushUseSpray", Kind::Check),
+    one!(1131, "Particle size", "BrushSpraySize", log(0.5, 2000.0, Unit::Px), unit_key: Some("BrushSpraySizeUnit")),
+    one!(1133, "Particle density", "BrushSprayDensity", whole(1.0, 100.0, Unit::None)),
+    one!(1135, "Spray deviation", "BrushSprayBias", whole(0.0, 100.0, Unit::None)),
     one!(7057, "Kerning", "TextKerningMethod", Kind::List(&[(0, "None"), (1, "Manual"), (2, "Metrics")])),
     one!(7059, "Contextual alternates", "TextContextualAlternate", Kind::Check),
     one!(7060, "Circular text", "TextLayoutCircularEnabled", Kind::Check),

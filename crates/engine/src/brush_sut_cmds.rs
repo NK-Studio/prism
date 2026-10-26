@@ -93,8 +93,8 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     response(s, i, cmd)
 }
 
-/// Change imported sub-tool settings (the CSP Tool Property of non-brush sub-tools, see
-/// `prism_paint::sut_catalog`): `values` maps allowlisted keys to finite numbers up to
+/// Change imported sub-tool settings (the CSP Tool Property items of `prism_paint::sut_catalog`;
+/// an imported brush also paints with the ones it runs, `prism_paint::sut::runs_brush_setting`): `values` maps allowlisted keys to finite numbers up to
 /// `MAX_SETTING_VALUE` (32-bit colour channels), or the text keys (font names) to strings of at
 /// most `MAX_SETTING_CHARS` characters; `null` removes a value. `gradient` replaces the
 /// gradient's stops (`null` removes it).
@@ -165,6 +165,20 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(g) = gradient {
         metadata.gradient = g;
     }
+    // An imported brush paints with the settings it runs (Gap, particle size…), as imported.
+    if metadata.kind().is_brush() {
+        let m = metadata.clone();
+        let selected = s.tools.brush_preset.as_deref().is_some_and(|n| s.tools.presets.get(i).is_some_and(|p| p.name.eq_ignore_ascii_case(n)));
+        for key in values.keys().filter(|k| prism_paint::sut::runs_brush_setting(k)) {
+            if let Some(preset) = s.tools.presets.get_mut(i) {
+                prism_paint::sut::apply_brush_setting(&m, key, &mut preset.brush);
+            }
+            if selected {
+                prism_paint::sut::apply_brush_setting(&m, key, &mut s.tools.brush);
+            }
+        }
+    }
+    let Some(metadata) = s.tools.presets.get(i).and_then(|p| p.sut.as_ref()) else { return Err(bad(cmd, "no such brush preset")) };
     let mut out = json!({"values": metadata.parameters, "strings": metadata.strings, "gradient": metadata.gradient});
     s.brush_presets_changed();
     out["name"] = json!(s.tools.presets.get(i).map(|p| p.name.clone()).unwrap_or_default());
@@ -302,6 +316,37 @@ mod tests {
         // A preset without SUT settings is refused.
         s.tools.presets.push(BrushPreset { sut: None, name: "Plain".into(), ..sample() });
         assert!(s.execute("brush.sutSettings.set", json!({"name":"Plain","values":{"FillCloseGap":1}})).is_err());
+    }
+
+    #[test]
+    fn imported_brush_settings_paint_with_the_gap_and_particle_size() {
+        let mut s = Session::new();
+        let mut preset = sample();
+        if let Some(m) = &mut preset.sut {
+            (m.input_op, m.output_op) = (10, 10);
+            m.parameters.insert("BrushSpraySizeSyncBrushSize".into(), 1.0);
+        }
+        preset.brush.size = 40.0;
+        preset.brush.csp_spray = Some(prism_paint::csp_spray::CspSpray { size: 10.0, size_ratio: Some(0.25), ..Default::default() });
+        s.tools.presets.push(preset);
+        s.execute("tools.setBrush", json!({"preset":"SUT sample"})).unwrap();
+        s.tools.brush_preset = Some("SUT sample".into());
+        s.execute("brush.sutSettings.set", json!({"values":{"BrushAutoIntervalType":0,"BrushInterval":50,"BrushSpraySize":20,"BrushSprayDensity":5}})).unwrap();
+        for b in [&s.tools.brush, &s.tools.presets.last().unwrap().brush] {
+            assert!((b.spacing - 0.5).abs() < 1e-6);
+            let spray = b.csp_spray.as_ref().unwrap();
+            assert_eq!((spray.size, spray.count, spray.size_ratio), (20.0, 5, Some(0.5)));
+        }
+        // An automatic Gap follows the type; a setting Prism does not run changes no brush.
+        s.execute("brush.sutSettings.set", json!({"values":{"BrushAutoIntervalType":1,"BrushUsePatternImage":1}})).unwrap();
+        assert!((s.tools.brush.spacing - 0.12).abs() < 1e-6);
+        let brush = s.tools.brush.clone();
+        s.execute("brush.sutSettings.set", json!({"values":{"BrushRotation":45,"BrushUseSpray":0}})).unwrap();
+        assert_eq!(s.tools.brush, brush);
+        for bad in [json!({"values":{"BrushInterval":f64::MAX}}), json!({"values":{"BrushSpraySize":"big"}}), json!({"values":{"BrushNope":1}})] {
+            assert!(s.execute("brush.sutSettings.set", bad.clone()).is_err(), "{bad}");
+        }
+        assert_eq!(s.tools.brush, brush);
     }
 
     #[test]
