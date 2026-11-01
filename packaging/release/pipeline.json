@@ -25,7 +25,7 @@
       "title": "Build the macOS packages",
       "do": [
         "RustRover: run \"Prism Package (macOS)\" with ▶ (not the hammer, which only builds the binary). Terminal: `packaging/macos/package.sh --arch aarch64`. Prism ships for Apple silicon only.",
-        "With a Developer ID set (MACOS_SIGN_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID) the app is signed and notarized; without, it is ad-hoc signed (fine for in-app updates, blocked by Gatekeeper when downloaded from the web).",
+        "With a Developer ID set (MACOS_SIGN_IDENTITY plus APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER or APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID) the app is signed and notarized; without, it is ad-hoc signed (fine for in-app updates, blocked by Gatekeeper when downloaded from the web).",
         "Output: dist/release/prism-{version}-macos-aarch64.dmg and .app.zip."
       ],
       "verify": [

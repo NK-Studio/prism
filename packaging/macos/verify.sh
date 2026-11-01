@@ -9,7 +9,7 @@
 # Usage: packaging/macos/verify.sh [--arch universal|aarch64|x86_64]
 #
 # With a real signing identity and notarization credentials in the environment (the same
-# MACOS_SIGN_IDENTITY / APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID that package.sh uses), every
+# MACOS_SIGN_IDENTITY and API key or Apple ID set that package.sh uses, see notary.sh), every
 # check is strict and a failure exits non-zero. Without them (local ad-hoc builds, or a release run
 # whose secrets are missing) only the signature's integrity is checked and the rest is a warning,
 # matching package.sh. Nothing here reads or prints a secret's value; it only tests whether one is set.
@@ -21,6 +21,8 @@
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
+# shellcheck source=notary.sh
+. "$(dirname "${BASH_SOURCE[0]}")/notary.sh"
 
 ARCH=universal
 while [ $# -gt 0 ]; do
@@ -41,7 +43,7 @@ DMG="$DIST/prism-$VERSION-macos-$ARCH.dmg"
 CLI_ZIP="$DIST/prism-cli-$VERSION-macos-$ARCH.zip"
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 STRICT=0
-if [ "$IDENTITY" != "-" ] && [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+if [ "$IDENTITY" != "-" ] && [ -n "$NOTARY_KIND" ]; then
   STRICT=1
 fi
 

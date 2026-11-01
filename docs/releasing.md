@@ -275,9 +275,12 @@ the run shows a `::warning::`.
 | `APPLE_CERTIFICATE` | base64 `.p12` with "Developer ID Application: <your company> (<team id>)" |
 | `APPLE_CERTIFICATE_PASSWORD` | password for that `.p12` |
 | `KEYCHAIN_PASSWORD` | password for the temporary CI keychain (random if unset) |
-| `APPLE_ID` | Apple ID used by `notarytool` |
+| `APPLE_API_KEY` | App Store Connect API key (`AuthKey_<key id>.p8` contents) used by `notarytool`; preferred over `APPLE_ID` |
+| `APPLE_API_KEY_ID` | that key's ID |
+| `APPLE_API_ISSUER` | issuer ID (App Store Connect → Users and Access → Integrations) |
+| `APPLE_ID` | Apple ID used by `notarytool` when no API key is set |
 | `APPLE_PASSWORD` | app-specific password for that Apple ID |
-| `APPLE_TEAM_ID` | `DJ6XS33FX8` |
+| `APPLE_TEAM_ID` | `9PA2HRW995`, the team ID in the certificate's name; `verify.sh` checks the signature against it |
 | `WINDOWS_CERTIFICATE` | base64 `.pfx` code-signing certificate |
 | `WINDOWS_CERTIFICATE_PASSWORD` | password for that `.pfx` |
 | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` | service principal for Azure Trusted Signing (an alternative to the `.pfx`) |
