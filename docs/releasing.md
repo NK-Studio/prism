@@ -265,9 +265,10 @@ feed URL at run time in any build, which is harmless because the signature is st
 ## Secrets
 
 All secrets live in the repository's **`release` environment** (*Settings → Environments →
-release*). Restrict its deployment branches to `release`. Every job in `release.yml` that
+release*). Restrict its deployment branches to `release` and `main`. Every job in `release.yml` that
 signs or publishes declares `environment: release` (the FreeBSD job signs nothing
-and does not declare it), so only pushes to that branch, or manual runs on it, can read the secrets. Each secret is optional. If one is missing, that platform's artifacts are unsigned and
+and does not declare it), and so does the macOS job of `build.yml` (signed Apple Silicon builds of
+every `main` push), so only runs on those two branches can read the secrets. Each secret is optional. If one is missing, that platform's artifacts are unsigned and
 the run shows a `::warning::`.
 
 | Secret | Used for |
