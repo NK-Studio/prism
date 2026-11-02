@@ -55,9 +55,9 @@
           <Extension Id="prism" ContentType="application/x-prism">
             <Verb Id="open" Command="Open" TargetFile="PrismExe" Argument="&quot;%1&quot;" />
           </Extension>
-          <Extension Id="pcraft" ContentType="application/x-prism">
-            <Verb Id="open" Command="Open" TargetFile="PrismExe" Argument="&quot;%1&quot;" />
-          </Extension>
+          <!-- No Verb here: verbs are written under the ProgId, so .prism's open already serves
+               .pcraft, and a second one is a duplicate registry row (WIX0091). -->
+          <Extension Id="pcraft" ContentType="application/x-prism" />
         </ProgId>
         <!-- PSD/PSB and images: offered under "Open with", never forced as the default. -->
         <ProgId Id="Prism.PhotoshopDocument" Description="Photoshop Document" Icon="PrismExe" IconIndex="0" />

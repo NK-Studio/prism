@@ -1,6 +1,6 @@
 # Desktop builds on GitHub-hosted runners (free for public repos): Windows x64 and macOS
 # Apple Silicon (Intel Macs are not supported), packaged with the same scripts as release.yml.
-# The macOS build is signed and notarized with the `release` environment's secrets; Windows is
+# The macOS build is signed and notarized with the `macos-signing` environment's secrets; Windows is
 # unsigned. Download the installers from the run's Artifacts.
 name: Build
 
@@ -30,7 +30,7 @@ jobs:
   macos:
     name: macOS Apple Silicon
     runs-on: macos-15
-    environment: release
+    environment: macos-signing
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -47,8 +47,8 @@ jobs:
         with:
           key: build-macos-aarch64
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Signing and notarization secrets come from the `release` environment (allowed on `main`
-      # and `release`), the same ones release.yml uses: APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
+      # Signing and notarization secrets come from the `macos-signing` environment (allowed on
+      # `main` and `release`; it holds only the Apple secrets), the same ones release.yml uses: APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
       # KEYCHAIN_PASSWORD, and APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER (or the Apple ID
       # set). Missing ones give an ad-hoc signed, unnotarized build and a warning, not a failure.
       - name: Import signing certificate

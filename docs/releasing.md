@@ -264,11 +264,17 @@ feed URL at run time in any build, which is harmless because the signature is st
 
 ## Secrets
 
-All secrets live in the repository's **`release` environment** (*Settings → Environments →
-release*). Restrict its deployment branches to `release` and `main`. Every job in `release.yml` that
-signs or publishes declares `environment: release` (the FreeBSD job signs nothing
-and does not declare it), and so does the macOS job of `build.yml` (signed Apple Silicon builds of
-every `main` push), so only runs on those two branches can read the secrets. Each secret is optional. If one is missing, that platform's artifacts are unsigned and
+Secrets live in two repository environments (*Settings → Environments*):
+
+- **`macos-signing`**, deployment branches `main` and `release`: the `APPLE_*` and
+  `KEYCHAIN_PASSWORD` secrets below, and nothing else. The macOS jobs of `release.yml` and of
+  `build.yml` (signed Apple Silicon builds of every `main` push) declare it.
+- **`release`**, deployment branch `release` only: everything else (Windows signing, the update
+  feed's `PRISM_UPDATE_SECRET_KEY` and `UPDATE_SITE_TOKEN`). The other jobs in `release.yml`
+  that sign or publish declare it (the FreeBSD job signs nothing and does not), so nothing on
+  `main` can read the update key.
+
+Each secret is optional. If one is missing, that platform's artifacts are unsigned and
 the run shows a `::warning::`.
 
 | Secret | Used for |

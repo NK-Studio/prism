@@ -1,8 +1,8 @@
 # Release pipeline: every push to `release` builds signed installers for every platform and
 # creates or updates the draft GitHub Release "Prism v<version>". See docs/releasing.md.
 #
-# All jobs run in the `release` environment (restricted to the `release` branch), which holds
-# the signing secrets. Every secret is optional: missing ones produce unsigned artifacts and a
+# Jobs that sign run in the `release` environment (restricted to the `release` branch), except
+# macOS, which uses `macos-signing` (Apple secrets only, also open to main). Every secret is optional: missing ones produce unsigned artifacts and a
 # warning, never a failed build.
 name: Release
 
@@ -68,7 +68,8 @@ jobs:
     name: macOS universal
     needs: version
     runs-on: macos-15  # standard Apple Silicon runner (free for public repos)
-    environment: release
+    # Apple signing secrets only; also open to build.yml on main. See docs/releasing.md › Secrets.
+    environment: macos-signing
     env:
       PRISM_VERSION: ${{ needs.version.outputs.version }}
       PRISM_BUILD_DATE: ${{ needs.version.outputs.date }}
