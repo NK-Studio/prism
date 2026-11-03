@@ -3044,6 +3044,12 @@ fontWeight	Italic	기울임
 	Speed adjustment type	속도 조정 방식
 	Pointer speed	포인터 속도
 	Spacing type	간격 종류
+	Brush density	브러시 농도
+	Particle size	입자 크기
+	Particle density	입자 밀도
+	Spray	스프레이
+	Specify by size on screen	화면 크기로 지정
+	Shown in pixels; the CSP size unit is not converted yet	픽셀로 표시합니다. CSP 크기 단위는 아직 변환하지 않습니다
 	Wide (automatic)	넓게
 	Normal (automatic)	보통
 	Narrow (automatic)	좁게

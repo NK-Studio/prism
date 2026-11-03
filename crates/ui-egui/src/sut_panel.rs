@@ -17,15 +17,21 @@ pub struct SutPanelState {
 // Canonical order observed in CSP; ShowParam is membership, not a reorder instruction.
 const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1000, "Brush Size", "BrushSize", "Brush Size"),
+    (1002, "Specify by size on screen", "BrushSizeSyncViewScale", "Brush Size"),
     (10, "Opacity", "Opacity", "Ink"),
     (30, "Blending mode", "CompositeMode", "Ink"),
+    (1020, "Brush density", "BrushFlow", "Ink"),
     (1081, "Amount of paint", "BrushMixColor", "Ink"),
     (1083, "Density of paint", "BrushMixAlpha", "Ink"),
     (1085, "Color stretch", "BrushMixColorExtension", "Ink"),
     (20, "Anti-aliasing", "AntiAlias", "Anti-aliasing"),
+    (1030, "Hardness", "BrushHardness", "Brush tip"),
     (1050, "Thickness", "BrushThickness", "Brush tip"),
+    (1060, "Direction", "BrushRotation", "Brush tip"),
     (1040, "Spacing", "BrushInterval", "Brush tip"),
     (1042, "Spacing type", "BrushAutoIntervalType", "Brush tip"),
+    (1131, "Particle size", "BrushSpraySize", "Spray"),
+    (1133, "Particle density", "BrushSprayDensity", "Spray"),
     (100, "Texture", "TextureImage", "Texture"),
     (110, "Texture density", "TextureDensity", "Texture"),
     (120, "Scale ratio", "TextureScale2", "Texture"),
@@ -117,6 +123,65 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
             }
         }
         1040 | 1042 => spacing(ui, id, label, m, b),
+        1002 => {
+            ui.checkbox(&mut b.csp_size_by_view, tl!(label));
+        }
+        1020 => {
+            let mut percent = b.flow * 100.0;
+            if number(ui, label, &mut percent, 0.0..=100.0, " %") {
+                b.flow = (percent / 100.0).clamp(0.0, 1.0);
+            }
+        }
+        1030 => {
+            // Automatic spacing follows the hardness, as on import (`prism_paint::sut::auto_spacing`).
+            let (image_tip, thickness) = spacing_inputs(m, b);
+            let kind = prism_engine::paint::sut::auto_spacing_kind(b.spacing, b.hardness, image_tip, thickness);
+            let mut percent = b.hardness * 100.0;
+            if number(ui, label, &mut percent, 0.0..=100.0, " %") {
+                b.hardness = (percent / 100.0).clamp(0.0, 1.0);
+                if let Some(s) = prism_engine::paint::sut::auto_spacing(kind, b.hardness, image_tip, thickness) {
+                    b.spacing = s;
+                }
+            }
+        }
+        1060 => {
+            // CSP's direction is clockwise; Prism's angle counter-clockwise. A ribbon snaps its tip
+            // to quarter turns of the same direction, so it follows the edit.
+            let mut degrees = if b.angle.is_finite() { (-b.angle + 180.0).rem_euclid(360.0) - 180.0 } else { 0.0 };
+            if number(ui, label, &mut degrees, -180.0..=180.0, "°") {
+                let degrees = degrees.clamp(-180.0, 180.0);
+                b.angle = -degrees;
+                if b.csp_ribbon.is_some() {
+                    b.csp_ribbon = Some(prism_engine::paint::csp_ribbon::CspRibbon::from_rotation(f64::from(degrees)));
+                }
+            }
+        }
+        1131 | 1133 => {
+            let size = b.size;
+            match &mut b.csp_spray {
+                Some(spray) if id == 1131 => {
+                    let mut px = spray.size;
+                    if number(ui, label, &mut px, 0.5..=prism_engine::paint::MAX_BRUSH_SIZE, " px") {
+                        spray.size = px.clamp(0.5, prism_engine::paint::MAX_BRUSH_SIZE);
+                        // A particle size synchronized with the brush size keeps the new ratio.
+                        if spray.size_ratio.is_some() && size > 0.0 {
+                            spray.size_ratio = Some(spray.size / size);
+                        }
+                    }
+                    if source(m, "BrushSpraySizeUnit") != 0.0 {
+                        ui.small(tl!("Shown in pixels; the CSP size unit is not converted yet"));
+                    }
+                }
+                Some(spray) => {
+                    let max = prism_engine::paint::csp_spray::MAX_PARTICLES;
+                    let mut count = spray.count.clamp(1, max) as f32;
+                    if number(ui, label, &mut count, 1.0..=max as f32, "") {
+                        spray.count = (count.round() as u32).clamp(1, max);
+                    }
+                }
+                None => unsupported(ui, label, format!("{:.1}", source(m, key)), true),
+            }
+        }
         100 => {
             ui.label(tl!(label));
             ui.add_enabled(
@@ -232,12 +297,17 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
 /// Spacing (1040) and its type (1042, `BrushAutoIntervalType`): fixed spacing edits the
 /// fraction of the diameter; the automatic types set it from hardness and thickness as the import
 /// does (`prism_paint::sut::auto_spacing`). The shown type is the one the brush's spacing matches.
-fn spacing(ui: &mut egui::Ui, id: u32, label: &str, m: &SutBrushMetadata, b: &mut BrushSettings) {
-    use prism_engine::paint::sut::{auto_spacing, auto_spacing_kind};
+/// Whether the brush has an image tip, and its thickness: the inputs of automatic spacing.
+fn spacing_inputs(m: &SutBrushMetadata, b: &BrushSettings) -> (bool, f32) {
     let image_tip = matches!(b.tip, prism_engine::paint::TipShape::Sampled(_) | prism_engine::paint::TipShape::Sequence(_));
     let vertical = source(m, "BrushVerticalThicknes") != 0.0;
     let [x, y] = b.csp_tip_scale.unwrap_or([1.0, 1.0]);
-    let thickness = if vertical { y } else { x };
+    (image_tip, if vertical { y } else { x })
+}
+
+fn spacing(ui: &mut egui::Ui, id: u32, label: &str, m: &SutBrushMetadata, b: &mut BrushSettings) {
+    use prism_engine::paint::sut::{auto_spacing, auto_spacing_kind};
+    let (image_tip, thickness) = spacing_inputs(m, b);
     let kind = auto_spacing_kind(b.spacing, b.hardness, image_tip, thickness);
     if id == 1042 {
         let mut picked = kind;
@@ -417,6 +487,44 @@ mod tests {
         // The combo box's text is not an accessible label; its value comes from the spacing.
         let b = &h.state().session.tools.brush;
         assert_eq!(prism_engine::paint::sut::auto_spacing_kind(b.spacing, b.hardness, false, 1.0), 2);
+    }
+
+    #[test]
+    fn p1_rows_have_controls_and_survive_hostile_values() {
+        let ids = vec![1000, 1002, 1020, 1030, 1060, 1131, 1133];
+        for hostile in [false, true] {
+            let mut h = harness();
+            {
+                let app = h.state_mut();
+                let b = &mut app.session.tools.brush;
+                b.flow = if hostile { f32::NAN } else { 0.4 };
+                b.hardness = if hostile { -3.0 } else { 0.5 };
+                b.angle = if hostile { f32::INFINITY } else { -30.0 };
+                b.csp_ribbon = Some(prism_engine::paint::csp_ribbon::CspRibbon::from_rotation(30.0));
+                b.csp_spray = Some(prism_engine::paint::CspSpray {
+                    size: if hostile { f32::NAN } else { 6.0 },
+                    count: if hostile { u32::MAX } else { 12 },
+                    ..Default::default()
+                });
+                let brush = b.clone();
+                let preset = app.session.tools.presets.last_mut().unwrap();
+                preset.brush = brush;
+                preset.sut.as_mut().unwrap().original.visible = ids.clone();
+            }
+            h.run_steps(3);
+            assert!(h.query_by_label_contains("Unsupported CSP setting").is_none(), "hostile={hostile}");
+            for label in ["Specify by size on screen", "Brush density", "Hardness", "Direction", "Particle size", "Particle density"] {
+                assert!(h.query_by_label(label).is_some(), "{label} (hostile={hostile})");
+            }
+            if !hostile && let Ok(image) = h.render() {
+                let _ = image.save(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sut-p1-panel.png"));
+            }
+        }
+        // Without spray the particle rows explain why they are inactive instead of editing nothing.
+        let mut h = harness();
+        h.state_mut().session.tools.presets.last_mut().unwrap().sut.as_mut().unwrap().original.visible = vec![1131];
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("Disabled by the imported CSP settings").is_some());
     }
 
     #[test]

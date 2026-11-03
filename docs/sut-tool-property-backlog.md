@@ -38,12 +38,12 @@ below already renders; only the editable control is missing.
 
 | Pri | ID | Key | CSP label | Presets | Imported into | Control to build |
 |---|---|---|---|---|---|---|
-| P1 | 1020 | `BrushFlow` | Brush density | 83 | `flow` | slider 0–100 % |
-| P1 | 1060 | `BrushRotation` | Direction | 64 | `angle` (negated); also `csp_ribbon` quarter turns | slider −180–180° (keep ribbon in sync) |
-| P1 | 1030 | `BrushHardness` | Hardness | 22 | `hardness` | slider 0–100 %; re-derive auto spacing (1042) when it changes |
-| P1 | 1131 | `BrushSpraySize` (+`Unit`) | Particle size | 19 | `csp_spray.size` | length slider, px; unit conversion is open (see B) |
-| P1 | 1133 | `BrushSprayDensity` | Particle density | 16 | `csp_spray.count` | integer slider, capped at `csp_spray::MAX_PARTICLES` |
-| P1 | 1002 | `BrushSizeSyncViewScale` | Specify by size on screen | 15 | `csp_size_by_view` | checkbox |
+| ~~P1~~ done 2026-11-04 | 1020 | `BrushFlow` | Brush density | 83 | `flow` | slider 0–100 % |
+| ~~P1~~ done 2026-11-04 | 1060 | `BrushRotation` | Direction | 64 | `angle` (negated); also `csp_ribbon` quarter turns | slider −180–180° (keep ribbon in sync) |
+| ~~P1~~ done 2026-11-04 | 1030 | `BrushHardness` | Hardness | 22 | `hardness` | slider 0–100 %; re-derive auto spacing (1042) when it changes |
+| ~~P1~~ done 2026-11-04 | 1131 | `BrushSpraySize` (+`Unit`) | Particle size | 19 | `csp_spray.size` | length slider, px; unit conversion is open (see B) |
+| ~~P1~~ done 2026-11-04 | 1133 | `BrushSprayDensity` | Particle density | 16 | `csp_spray.count` | integer slider, capped at `csp_spray::MAX_PARTICLES` |
+| ~~P1~~ done 2026-11-04 | 1002 | `BrushSizeSyncViewScale` | Specify by size on screen | 15 | `csp_size_by_view` | checkbox |
 | P2 | 1102 | `BrushChangePatternColor` | Change brush tip color | 10 | `color_dynamics` (per tip) | checkbox enabling 1103/1105/1107 |
 | P2 | 1103 | `BrushHueChange` | Hue | 7 | `color_dynamics.hue_jitter` | slider 0–180° |
 | P2 | 1105 | `BrushSaturationChange` | Saturation | 7 | `color_dynamics.saturation_jitter` | slider 0–100 |
@@ -58,6 +58,11 @@ below already renders; only the editable control is missing.
 | P3 | 1202 | `BrushWaterEdgeAlphaPower` | Opacity influence | 1 | `csp_water_edge.opacity` | already in 1201's advanced block: map the ID to that block |
 | P3 | 1203 | `BrushWaterEdgeValuePower` | Darkness influence | 1 | `csp_water_edge.darkness` | same as 1202 |
 | P3 | 1270 | `BrushChangeStrokeColor` | Change color per stroke | 1 | `color_dynamics` (per stroke) | checkbox; warn that per-tip + per-stroke together uses per-tip |
+
+P1 status (2026-11-04): all six rows have Tool Property controls (`sut_panel::control`);
+hardness re-derives automatic spacing, direction keeps a ribbon's quarter turns in sync, particle
+size keeps a brush-synchronized ratio and is shown in pixels (unit conversion stays open, see B).
+Test: `p1_rows_have_controls_and_survive_hostile_values`.
 
 Acceptance for A: none of these IDs produces an "Unsupported CSP setting" row; every control
 changes the preview strip; save/reload of the preset keeps the edit.
