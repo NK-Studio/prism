@@ -66,16 +66,16 @@ pub struct CspTipColor {
     pub width: u32,
     pub height: u32,
     #[serde(serialize_with = "rgb_out", deserialize_with = "rgb_in")]
-    pub rgb: Vec<u8>,
+    pub rgb: crate::shared::Shared<u8>,
 }
 
 fn rgb_out<S: Serializer>(rgb: &[u8], s: S) -> Result<S::Ok, S::Error> {
     b64_encode(rgb).serialize(s)
 }
 
-fn rgb_in<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+fn rgb_in<'de, D: Deserializer<'de>>(d: D) -> Result<crate::shared::Shared<u8>, D::Error> {
     use serde::de::Error;
-    b64_decode(&String::deserialize(d)?).ok_or_else(|| D::Error::custom("invalid base64 in tip colours"))
+    b64_decode(&String::deserialize(d)?).map(Into::into).ok_or_else(|| D::Error::custom("invalid base64 in tip colours"))
 }
 
 impl CspTipColor {

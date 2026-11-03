@@ -138,3 +138,42 @@ One automation limitation remains: selecting this large color-tip preset can
 complete but exceed the control channel's 8 MiB response limit when returning
 all brush pixels. The native UI and in-memory benchmark work; compact brush
 responses require a separate follow-up. No transport limit was raised or bypassed.
+
+## Mouse lag and duplicate preset highlight (2026-11-04)
+
+Reported: drawing `茂み1 2` with a mouse trailed far behind the pointer, as if a separate
+smoother ran; picking it also highlighted its sibling bushes.
+
+- **Lag.** Windows delivers at most one mouse move per frame (about 60 Hz while Prism renders),
+  and mouse drag points carried no time. The CSP stabilizer counts its window in samples, so
+  level 10 averaged about 167 ms of mouse movement versus about 80 ms for a 125 Hz pen. Mouse
+  drag points are now timed by frame (`Stylus::frame_ms`), and the stabilizer averages the same
+  span of time as input at a 125 Hz reference (`REFERENCE_INTERVAL_MS`): sparse input uses
+  proportionally fewer samples; input at or above the reference, untimed automation input and
+  pen-up repeats are unchanged. Synthetic 600 px/s line at level 10: 36 ms trail at 125 Hz,
+  within 1.35× of that at 60 Hz (`sparse_input_averages_the_same_time_span_as_reference_rate_input`).
+  The reference rate is an estimate; CSP's own mouse sampling and device scaling remain untraced.
+- **Highlight.** The preset list highlighted every preset that `is_current` matched, which
+  ignores size and colour: the 茂み bushes share all other settings. The highlighted preset is
+  now the session's picked preset (`ToolState::brush_preset`), falling back to the first match
+  (`brush_panel::current_index`).
+
+## UI frame time with a large CSP brush (2026-11-04)
+
+Measured through the control channel on the dev build (`cargo build`), Clip Studio workspace
+restored, `茂み1 2` selected, a 60 Hz `ui.pointer` drag; `perf.uiMs` is the CPU time to build a
+frame, `perf.timings.spans.ui*` splits it by area (new):
+
+| Change | UI ms per frame | fps |
+|---|---:|---:|
+| Before | ~50 (idle and drawing; spikes to 900) | 14–19 |
+| Material list lays out only the rows in view (`show_rows`; all 444 rows were built every frame) | ~26 | 30 |
+| Tip pixels shared between brush clones (`paint::shared::Shared`, copy-on-write) | ~2 | 60 |
+
+The options bar, Brush Settings and Tool Property each cloned the brush twice and compared it
+every frame; with this brush that copied and scanned about 11 MB of colour tip plus its 16-bit
+shape per clone. Clones now share the buffers and equality short-cuts on shared storage, so
+those per-frame checks cost microseconds. The window also presents with one queued frame instead
+of two (`SurfaceConfig::LOW_LATENCY`), removing about 17 ms at 60 Hz. Physical pen-to-photon
+latency remains unmeasured; the first stroke after selecting a large brush still pays its
+one-time tip preparation (~100 ms cold, see above).

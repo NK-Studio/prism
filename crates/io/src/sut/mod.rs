@@ -99,7 +99,7 @@ fn tip(blob: &[u8], max_pixels: usize, warnings: &mut Vec<String>) -> Result<(Gr
     let density = |[g, a]: &[f32; 2]| if color { *a } else { (1.0 - g) * a };
     let data = px.iter().map(|p| (density(p) * 65535.0).round() as u16).collect();
     let tile = GrayTile { width, height, data };
-    let colors = rgb.map(|rgb| CspTipColor { width, height, rgb }).filter(|c| color && c.fits(&tile));
+    let colors = rgb.map(|rgb| CspTipColor { width, height, rgb: rgb.into() }).filter(|c| color && c.fits(&tile));
     if color && colors.is_none() {
         warnings.push("SUT colour brush tip colours could not be read; the tip paints in the brush colour".into());
     }
@@ -227,7 +227,12 @@ fn tool_patterns(rows: Vec<Row>) -> Vec<Row> {
 }
 /// Read the sub-tool database `bytes`. Its own `MaterialFile` table holds the referenced
 /// materials; without one, `fallback` (a container's material table) is used.
-fn read_database(bytes: &[u8], group: &str, ctl: &prism_raster::Interrupt, fallback: Option<&dyn Fn() -> Result<Vec<Row>, String>>) -> Result<AbrImport, String> {
+fn read_database(
+    bytes: &[u8],
+    group: &str,
+    ctl: &prism_raster::Interrupt,
+    fallback: Option<&dyn Fn() -> Result<Vec<Row>, String>>,
+) -> Result<AbrImport, String> {
     let db = Database::new(bytes)?;
     let nodes = db.table("Node")?;
     let node = nodes.iter().find(|r| r.get("NodeName").and_then(Value::text).is_some()).ok_or("SUT has no named sub-tool")?;
@@ -350,10 +355,7 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
                 warnings.push(format!("SUT {key} is not supported; spray uses a fixed particle size in pixels"));
             }
         }
-        let angle_controls = num(r, "BrushRotationEffectorInSpray", 0.0) as u32;
-        if angle_controls & !3 != 0 {
-            warnings.push("SUT particle angle input controls are not supported; using the base particle angle".into());
-        }
+        particle_angle(r, &mut spray, &mut warnings);
         b.csp_spray = Some(spray);
     }
     // Observed in shipped brushes: the tip flag set with a NULL reference column and no
@@ -472,6 +474,33 @@ fn rotation(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<String>) {
     }
 }
 
+/// Map the spray particle angle controls (`BrushRotationEffectorInSpray`): 0x01 enables them;
+/// one input angle is added, in CSP's choice order 0x10 pen direction, 0x20 pen axis rotation,
+/// 0x40 line direction, 0x100 direction of the whole spray, 0x200 towards the centre; 0x80 adds
+/// a random turn of `(r − 0.5) · BrushRotationRandomInSpray% · 360°`. 0x02 is stored by local
+/// presets without visible effect. Evidence in docs/sut-analysis.md › Spray particle angle input.
+fn particle_angle(r: &Row, spray: &mut CspSpray, warnings: &mut Vec<String>) {
+    use prism_paint::csp_spray::{CspParticleAngle, PARTICLE_ANGLE_FLAGS};
+    let flags = num(r, "BrushRotationEffectorInSpray", 0.0) as u32;
+    if flags & !PARTICLE_ANGLE_FLAGS != 0 {
+        warnings.push(format!("SUT particle angle input controls ({:#x}) are not supported; they are ignored", flags & !PARTICLE_ANGLE_FLAGS));
+    }
+    if flags & 1 == 0 {
+        return;
+    }
+    if let Some(input) = CspParticleAngle::from_flags(flags) {
+        if (flags & 0x370).count_ones() > 1 {
+            warnings.push(format!("SUT particle angle uses several inputs ({:#x}); only the first ({input:?}) is applied", flags & 0x370));
+        }
+        spray.angle_input = input;
+    }
+    if flags & 0x80 != 0 {
+        // CSP's random scale s spreads ±180°·s, as for the tip rotation.
+        let scale = num(r, "BrushRotationRandomInSpray", 0.0) / 100.0;
+        spray.angle_jitter = if scale.is_finite() { scale.clamp(0.0, 2.0) } else { 0.0 };
+    }
+}
+
 /// Dab spacing as a fraction of the diameter. Fixed spacing (`BrushAutoIntervalType` 0) is
 /// `BrushInterval`; the automatic types scale a per-type base by hardness and thickness.
 /// Evidence in docs/sut-analysis.md.
@@ -508,22 +537,18 @@ fn spacing_of(r: &Row, k: TipKeys, warnings: &mut Vec<String>) -> f32 {
 }
 fn spacing_unchecked(r: &Row, k: TipKeys, warnings: &mut Vec<String>) -> f32 {
     let kind = num(r, k.auto_interval, 0.0) as i64;
-    let base = match kind {
-        0 => return (num(r, k.interval, 10.0) / 100.0).clamp(0.01, 10.0),
-        1 => 0.12,
-        3 => 0.04,
-        2 => 0.08,
-        _ => {
-            warnings.push(format!("SUT automatic spacing type {kind} is approximated by the normal spacing"));
-            0.08
-        }
+    if kind == 0 {
+        return (num(r, k.interval, 10.0) / 100.0).clamp(0.01, 10.0);
+    }
+    let kind = if (1..=3).contains(&kind) {
+        kind
+    } else {
+        warnings.push(format!("SUT automatic spacing type {kind} is approximated by the normal spacing"));
+        2
     };
-    // Image tips space as fully hard ones.
-    let hardness = if enabled(r, k.use_image) { 1.0 } else { num(r, k.hardness, 100.0) / 100.0 };
-    let hardness = if hardness >= 0.999_999_99 { 1.0 } else { hardness.max(0.2) };
-    let thickness = num(r, k.thickness, 100.0) / 100.0;
-    let thickness = if thickness < 1.0 { thickness.max(0.01) } else { 1.0 };
-    (base * (3.5 - 2.5 * hardness) * thickness).clamp(0.01, 10.0)
+    // Image tips space as fully hard ones (inside `auto_spacing`).
+    let (hardness, thickness) = (num(r, k.hardness, 100.0) / 100.0, num(r, k.thickness, 100.0) / 100.0);
+    prism_paint::sut::auto_spacing(kind, hardness, enabled(r, k.use_image), thickness).unwrap_or(0.08)
 }
 
 /// Map Color mixing (BrushUseWaterColor 0x43e; amount 0x439, density 0x43b, stretch 0x43d with

@@ -569,6 +569,8 @@ impl DabBuilder {
                     fy = !fy;
                 }
             }
+            // A spray particle has its own angle; the area's angle is one of its inputs.
+            let area_angle = angle;
             if let Some(spray) = spray {
                 angle = spray.angle;
             }
@@ -600,9 +602,22 @@ impl DabBuilder {
             if let Some(spray) = spray {
                 let radial = crate::csp_spray::radial(spray.bias, r(stream::SPRAY_RADIUS_A), r(stream::SPRAY_RADIUS_B));
                 let distance = f64::from(area_diameter.max(0.0) * 0.5 * radial);
-                let angle = f64::from(r(stream::SPRAY_POSITION)) * std::f64::consts::TAU;
-                c.x += distance * angle.cos();
-                c.y += distance * angle.sin();
+                let position = f64::from(r(stream::SPRAY_POSITION)) * std::f64::consts::TAU;
+                c.x += distance * position.cos();
+                c.y += distance * position.sin();
+                use crate::csp_spray::CspParticleAngle as Input;
+                angle += match spray.angle_input {
+                    Input::Fixed => 0.0,
+                    Input::PenTilt => control_angle(Control::PenTilt, 0, s),
+                    Input::Rotation => control_angle(Control::Rotation, 0, s),
+                    Input::Direction => control_angle(Control::Direction, 0, s),
+                    Input::Spray => area_angle,
+                    // CCW degrees in y-down image space: the offset (cos p, sin p) points at −p.
+                    Input::TowardCenter => -(position.to_degrees() as f32),
+                };
+                if spray.angle_jitter > 0.0 {
+                    angle += rand_signed(seed, i, stream::SPRAY_ANGLE) * spray.angle_jitter.clamp(0.0, 2.0) * 180.0;
+                }
             } else if sc.enabled && sc.scatter.jitter > 0.0 {
                 let cv = dynamic_control(&sc.scatter, s);
                 let amt = f64::from(sc.scatter.jitter * cv * radius);

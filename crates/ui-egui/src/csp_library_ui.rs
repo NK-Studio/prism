@@ -387,7 +387,10 @@ fn add_layers(app: &mut PrismApp, uuids: &[String]) {
         }
     }
     app.ui.status = if rulers > 0 {
-        crate::i18n::fmt(tl!("Added {n} CLIP STUDIO materials with {rulers} special rulers; strokes snap to them"), &[("n", &added.to_string()), ("rulers", &rulers.to_string())])
+        crate::i18n::fmt(
+            tl!("Added {n} CLIP STUDIO materials with {rulers} special rulers; strokes snap to them"),
+            &[("n", &added.to_string()), ("rulers", &rulers.to_string())],
+        )
     } else {
         crate::i18n::fmt(tl!("Added {n} CLIP STUDIO materials to the document"), &[("n", &added.to_string())])
     };
@@ -547,7 +550,12 @@ fn header(app: &mut PrismApp, ui: &mut egui::Ui, t: &Tokens, action: &mut Action
         ui.spacing_mut().item_spacing.x = 2.0;
         let count = |f: KindFilter| state.listing.as_ref().map_or(0, |l| materials(l).filter(|b| passes(state, f, l, b)).count());
         let counts = [KindFilter::All, KindFilter::Brushes, KindFilter::SubTools, KindFilter::Layers].map(count);
-        let kinds = [(KindFilter::All, tl!("All")), (KindFilter::Brushes, tl!("Brushes")), (KindFilter::SubTools, tl!("Sub tools")), (KindFilter::Layers, tl!("Layers"))];
+        let kinds = [
+            (KindFilter::All, tl!("All")),
+            (KindFilter::Brushes, tl!("Brushes")),
+            (KindFilter::SubTools, tl!("Sub tools")),
+            (KindFilter::Layers, tl!("Layers")),
+        ];
         for ((f, label), n) in kinds.into_iter().zip(counts) {
             if widgets::pill_tab(ui, &format!("{label} {n}"), state.filter == f).clicked() {
                 state.filter = f;
@@ -710,26 +718,35 @@ fn list(app: &mut PrismApp, ui: &mut egui::Ui, listing: &Value, t: &Tokens) {
     }
     let mut budget = DECODES_PER_FRAME;
     let grid = app.ui.csp_library.view == View::Grid;
-    egui::ScrollArea::vertical().id_salt("csp-library-list").auto_shrink([false, false]).show(ui, |ui| {
+    // Only the rows in view are laid out: a library of hundreds of materials must not cost a
+    // frame (all 444 rows used to be built every frame, about half of a 50 ms debug frame).
+    ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = if grid { GRID_GAP } else { 2.0 };
+        let area = egui::ScrollArea::vertical().id_salt("csp-library-list").auto_shrink([false, false]);
         if grid {
-            let width = ui.available_width();
+            // The columns come from the width inside the scroll area (beside its bar).
+            let width = (ui.available_width() - ui.spacing().scroll.allocated_width()).max(TILE_MIN);
             let cols = (((width + GRID_GAP) / (TILE_MIN + GRID_GAP)).floor() as usize).max(2);
             let cell_w = ((width - GRID_GAP * (cols - 1) as f32) / cols as f32).max(40.0);
             let card_h = ((cell_w - 12.0) * CARD_ASPECT).clamp(28.0, CARD_THUMB_MAX) + 12.0 + CARD_TEXT_H;
-            for row in items.chunks(cols) {
-                let (line, _) = ui.allocate_exact_size(vec2(width, card_h), Sense::hover());
-                for (i, b) in row.iter().enumerate() {
-                    let left = line.left() + i as f32 * (cell_w + GRID_GAP);
-                    let cell = Rect::from_min_size(egui::pos2(left, line.top()), vec2(cell_w, card_h));
-                    material(app, ui, cell, b, listing, t, &mut budget, true);
+            let rows: Vec<&[&Value]> = items.chunks(cols).collect();
+            area.show_rows(ui, card_h, rows.len(), |ui, range| {
+                for row in rows.get(range).into_iter().flatten() {
+                    let (line, _) = ui.allocate_exact_size(vec2(width, card_h), Sense::hover());
+                    for (i, b) in row.iter().enumerate() {
+                        let left = line.left() + i as f32 * (cell_w + GRID_GAP);
+                        let cell = Rect::from_min_size(egui::pos2(left, line.top()), vec2(cell_w, card_h));
+                        material(app, ui, cell, b, listing, t, &mut budget, true);
+                    }
                 }
-            }
+            });
         } else {
-            for b in items {
-                let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
-                material(app, ui, rect, b, listing, t, &mut budget, false);
-            }
+            area.show_rows(ui, ROW_H, items.len(), |ui, range| {
+                for b in items.get(range).into_iter().flatten() {
+                    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
+                    material(app, ui, rect, b, listing, t, &mut budget, false);
+                }
+            });
         }
     });
 }
@@ -743,7 +760,15 @@ fn folder_header(app: &mut PrismApp, ui: &mut egui::Ui, listing: &Value, items: 
     let pick_rect = Rect::from_min_size(egui::pos2(rect.right() - 74.0, rect.top() + 3.0), vec2(70.0, 20.0));
     let pick = ui.put(pick_rect, egui::Button::new(egui::RichText::new(if all_on { tl!("Clear selection") } else { tl!("Select all") }).small()).frame(false));
     let pick = pick.on_hover_text(tl!("Check every ready material in this folder"));
-    paint_line(ui.painter(), format!("{title}  ·  {}", items.len()), crate::theme::medium(12.5), t.text, rect.left() + 4.0, rect.center().y, pick_rect.left() - rect.left() - 8.0);
+    paint_line(
+        ui.painter(),
+        format!("{title}  ·  {}", items.len()),
+        crate::theme::medium(12.5),
+        t.text,
+        rect.left() + 4.0,
+        rect.center().y,
+        pick_rect.left() - rect.left() - 8.0,
+    );
     if pick.clicked() {
         state.selected.retain(|id| !ready.contains(id));
         if !all_on {
@@ -783,7 +808,8 @@ fn tree_nodes(app: &mut PrismApp, ui: &mut egui::Ui, nodes: &[tree::Node], depth
         let selected = state.folder.as_deref() == Some(n.path.as_str());
         let segs: Vec<&str> = n.path.split(':').collect();
         let label = if tree::is_system(&segs) { tl_dyn(&n.label) } else { n.label.clone() };
-        let (resp, toggled) = tree_row(ui, depth, &label, n.count, if open { "folder-open" } else { "folder" }, selected, (!n.children.is_empty()).then_some(open), t);
+        let (resp, toggled) =
+            tree_row(ui, depth, &label, n.count, if open { "folder-open" } else { "folder" }, selected, (!n.children.is_empty()).then_some(open), t);
         let state = &mut app.ui.csp_library;
         if toggled {
             if open {

@@ -78,7 +78,7 @@ fn custom_titlebar(prefs_file: Option<&std::path::Path>) -> bool {
 /// `centered`, Windows cascades each new window from the top-left corner, so it opened at a
 /// different offset every launch (#419).
 fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
-    eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_icon(app_icon::window_icon())
             .with_app_id(APP_ID)
@@ -95,7 +95,12 @@ fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
         // Keep that state beside preferences, including config overrides and portable mode.
         persistence_path: services::config_dir().map(|dir| dir.join("ui.ron")),
         ..Default::default()
-    }
+    };
+    // A brush stroke must appear under the pen as soon as it is painted: queue one frame for
+    // presentation, not egui-wgpu's high-throughput two, which shows every dab (and the brush
+    // cursor) one more frame late — about 17 ms at 60 Hz.
+    options.wgpu_options.surface = eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY;
+    options
 }
 
 /// Parse a `--control` / `PRISM_CONTROL_PORT` value. An unparseable port is an error that
@@ -114,6 +119,14 @@ fn control_args_exit_code(errors: &[String]) -> Option<i32> {
 #[cfg(test)]
 mod control_port_tests {
     use super::{control_args_exit_code, parse_control_port};
+
+    #[test]
+    fn the_window_presents_with_one_queued_frame() {
+        let surface = super::native_options(false).wgpu_options.surface;
+        assert_eq!(surface, eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY);
+        #[cfg(not(target_os = "ios"))]
+        assert_eq!(surface.desired_maximum_frame_latency, Some(1));
+    }
 
     #[test]
     fn control_port_errors_exit_non_zero() {
@@ -166,6 +179,7 @@ fn main() -> eframe::Result {
     // reported in a notice once the app is up; a control token is a usage error like a bad port.
     let mut unreadable_paths: Vec<String> = Vec::new();
     let mut safe_gpu = false;
+    let mut exit_screenshot: Option<std::path::PathBuf> = None;
     let mut in_window_menus = prism_automation::security::environment("PRISM_IN_WINDOW_MENUS").is_some_and(|v| !v.is_empty() && v != "0");
     let mut args = std::env::args_os().skip(1);
     while let Some(a) = args.next() {
@@ -185,6 +199,10 @@ fn main() -> eframe::Result {
             Some("--control-token-file") => control_token_file = args.next().map(std::path::PathBuf::from),
             Some("--automation-read-root") => automation_read_root = args.next().map(std::path::PathBuf::from),
             Some("--automation-write-root") => automation_write_root = args.next().map(std::path::PathBuf::from),
+            Some("--screenshot") => match args.next() {
+                Some(path) => exit_screenshot = Some(std::path::PathBuf::from(path)),
+                None => control_arg_errors.push("--screenshot: missing file (expected `--screenshot <file.png>`)".to_string()),
+            },
             Some("--safe-gpu") => safe_gpu = true,
             Some("--in-window-menus") => in_window_menus = true,
             Some("--version") => {
@@ -445,6 +463,7 @@ fn main() -> eframe::Result {
             }
             // Paths on the command line (Windows/FreeBSD file associations, `prism a.psd`).
             app.open_paths(&files);
+            app.exit_screenshot = exit_screenshot.map(prism_ui_egui::exit_screenshot::ExitScreenshot::new);
             if !unreadable_paths.is_empty() {
                 use prism_ui_egui::i18n;
                 let line = i18n::t("{path}: the path is not valid Unicode; rename the file and open it again.");

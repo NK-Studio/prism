@@ -17,6 +17,8 @@ pub const PARAMETER_KEYS: &[(u32, &str)] = &[
     (1083, "BrushMixAlpha"),
     (1085, "BrushMixColorExtension"),
     (20, "AntiAlias"),
+    (1040, "BrushInterval"),
+    (1042, "BrushAutoIntervalType"),
     (1050, "BrushThickness"),
     (100, "TextureImage"),
     (110, "TextureDensity"),
@@ -27,6 +29,28 @@ pub const PARAMETER_KEYS: &[(u32, &str)] = &[
     (42, "FlickerReductionBySpeedType"),
     (1241, "BrushVectorMagnetPower"),
 ];
+
+/// CSP automatic spacing (`BrushAutoIntervalType` 1 wide, 2 normal, 3 narrow) as a fraction of
+/// the diameter: base 0.12 / 0.08 / 0.04 times `3.5 − 2.5·hardness` (hardness at least 0.2,
+/// counted as 1 for image tips and from 0.99999999) and, below 1, times the thickness. `None`
+/// for type 0 (the fixed `BrushInterval`) and other types. Evidence: docs/sut-analysis.md ›
+/// Automatic spacing; the wide/normal/narrow names follow the bases, they are not traced.
+pub fn auto_spacing(kind: i64, hardness: f32, image_tip: bool, thickness: f32) -> Option<f32> {
+    let base = match kind {
+        1 => 0.12,
+        2 => 0.08,
+        3 => 0.04,
+        _ => return None,
+    };
+    let hardness = if image_tip || hardness >= 0.999_999_99 { 1.0 } else { hardness.max(0.2) };
+    let thickness = if thickness < 1.0 { thickness.max(0.01) } else { 1.0 };
+    Some((base * (3.5 - 2.5 * hardness) * thickness).clamp(0.01, 10.0))
+}
+
+/// The automatic spacing type (1–3) whose spacing is `spacing`, else 0 (fixed).
+pub fn auto_spacing_kind(spacing: f32, hardness: f32, image_tip: bool, thickness: f32) -> i64 {
+    (1..=3).find(|k| auto_spacing(*k, hardness, image_tip, thickness).is_some_and(|s| (s - spacing).abs() < 1e-6)).unwrap_or(0)
+}
 
 pub fn is_known_parameter(id: u32) -> bool {
     PARAMETER_KEYS.iter().any(|(known, _)| *known == id)
@@ -246,6 +270,34 @@ mod tests {
         preset.sut.as_mut().unwrap().custom = None;
         assert_eq!(preset.sut.as_ref().unwrap().effective(), &original);
         assert_eq!(preset.brush, brush);
+    }
+}
+
+#[cfg(test)]
+mod spacing_tests {
+    use super::*;
+
+    #[test]
+    fn automatic_spacing_types_follow_hardness_and_thickness() {
+        // Type 2 (normal), hardness 0.5: 0.08 · (3.5 − 1.25) = 0.18; thickness 0.5 halves it.
+        assert!((auto_spacing(2, 0.5, false, 1.0).unwrap() - 0.18).abs() < 1e-6);
+        assert!((auto_spacing(2, 0.5, false, 0.5).unwrap() - 0.09).abs() < 1e-6);
+        // Image tips and full hardness space as hard tips; hardness is at least 0.2.
+        assert!((auto_spacing(1, 0.1, true, 1.0).unwrap() - 0.12).abs() < 1e-6);
+        assert_eq!(auto_spacing(3, 0.0, false, 1.0), auto_spacing(3, 0.2, false, 1.0));
+        assert_eq!((auto_spacing(0, 1.0, false, 1.0), auto_spacing(7, 1.0, false, 1.0)), (None, None));
+        // The shown type is the one the spacing matches; anything else is fixed.
+        for kind in 1..=3 {
+            let s = auto_spacing(kind, 0.7, false, 0.8).unwrap();
+            assert_eq!(auto_spacing_kind(s, 0.7, false, 0.8), kind);
+        }
+        assert_eq!(auto_spacing_kind(0.25, 0.7, false, 0.8), 0);
+        // Hostile values stay finite and bounded.
+        for v in [f32::NAN, f32::INFINITY, -1e30] {
+            let s = auto_spacing(2, v, false, v).unwrap();
+            assert!(s.is_finite() && (0.01..=10.0).contains(&s), "{v}: {s}");
+        }
+        assert!(is_known_parameter(1040) && is_known_parameter(1042));
     }
 }
 

@@ -133,6 +133,53 @@ fn csp_spray_separates_area_particle_size_count_and_orientation() {
 }
 
 #[test]
+fn csp_spray_particle_angle_inputs_turn_particles_not_the_area() {
+    use crate::csp_spray::CspParticleAngle as Input;
+    let deg = |a: f32| a.to_degrees().rem_euclid(360.0);
+    let near = |a: f32, b: f32| ((a - b).rem_euclid(360.0) + 1e-3).rem_euclid(360.0) < 2e-3;
+    let with = |input: Input, jitter: f32| BrushSettings {
+        size: 30.0,
+        angle: 70.0,
+        csp_spray: Some(crate::CspSpray { size: 2.0, count: 8, bias: -1.0, angle: 15.0, angle_input: input, angle_jitter: jitter, ..Default::default() }),
+        ..brush()
+    };
+    let dot = [StrokePoint::new(40.0, 50.0, 1.0)];
+    // Fixed keeps the base particle angle (the area's 70° doesn't leak in).
+    assert!(dabs_of(&with(Input::Fixed, 0.0), &dot).iter().all(|d| near(deg(d.angle), 15.0)));
+    // The whole spray's direction adds the area angle.
+    assert!(dabs_of(&with(Input::Spray, 0.0), &dot).iter().all(|d| near(deg(d.angle), 85.0)));
+    // Toward the centre: each particle points along its own offset (CCW degrees, y down).
+    let toward = dabs_of(&with(Input::TowardCenter, 0.0), &dot);
+    for d in &toward {
+        let radial = (-(d.center.y - 50.0)).atan2(d.center.x - 40.0).to_degrees() as f32;
+        assert!(near(deg(d.angle), (radial + 15.0).rem_euclid(360.0)), "{} vs {}", deg(d.angle), radial);
+    }
+    assert!(toward.iter().any(|d| !near(deg(d.angle), deg(toward[0].angle))), "particles around the circle face different ways");
+    // The line direction: a vertical stroke turns particles a quarter from a horizontal one.
+    let across = dabs_of(&with(Input::Direction, 0.0), &line(0.0, 40.0, 50.0));
+    let down = dabs_of(&with(Input::Direction, 0.0), &[StrokePoint::new(40.0, 0.0, 1.0), StrokePoint::new(40.0, 40.0, 1.0)]);
+    let (a, b) = (deg(across.last().unwrap().angle), deg(down.last().unwrap().angle));
+    assert!(near((a - b).abs(), 90.0) || near((a - b).abs(), 270.0), "{a} {b}");
+    // Random turn: spread within ±jitter·180°, replayable.
+    let random = dabs_of(&with(Input::Fixed, 0.5), &dot);
+    assert_eq!(random, dabs_of(&with(Input::Fixed, 0.5), &dot));
+    for d in &random {
+        let off = (deg(d.angle) - 15.0 + 180.0).rem_euclid(360.0) - 180.0;
+        assert!(off.abs() <= 90.0 + 1e-3, "{off}");
+    }
+    assert!(random.iter().any(|d| !near(deg(d.angle), 15.0)));
+    // Positions don't change with the angle input (the same random streams place particles).
+    for (a, b) in dabs_of(&with(Input::Fixed, 0.0), &dot).iter().zip(&toward) {
+        assert_eq!(a.center, b.center);
+    }
+    // Hostile jitter stays finite; JSON round-trips the input.
+    let mut hostile = with(Input::TowardCenter, f32::NAN);
+    assert!(dabs_of(&hostile, &dot).iter().all(|d| d.angle.is_finite()));
+    hostile.csp_spray.as_mut().unwrap().angle_jitter = 0.25;
+    assert_eq!(serde_json::from_value::<BrushSettings>(serde_json::to_value(&hostile).unwrap()).unwrap(), hostile);
+}
+
+#[test]
 fn csp_spray_chunking_pressure_and_work_limits() {
     let curve = PressureCurve::new(vec![[0.0, 0.0], [1.0, 0.5]]).unwrap();
     let dynamic = Dynamic { control: Control::PenPressure, pressure_curve: Some(curve), ..Default::default() };

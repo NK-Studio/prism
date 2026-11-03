@@ -3043,6 +3043,11 @@ fontWeight	Italic	기울임
 	Weak	약하게
 	Speed adjustment type	속도 조정 방식
 	Pointer speed	포인터 속도
+	Spacing type	간격 종류
+	Wide (automatic)	넓게
+	Normal (automatic)	보통
+	Narrow (automatic)	좁게
+	Set by the spacing type	간격 종류에 따라 자동으로 정해짐
 	Path speed and straightness	경로 속도와 직진성
 	Tool Sliders	도구 슬라이더
 	Tool Sliders menu	도구 슬라이더 메뉴

@@ -48,6 +48,7 @@ pub mod control;
 pub mod credits;
 pub mod crop_ui;
 pub mod csp_library_ui;
+pub mod csp_tool_property;
 pub mod csp_tools;
 pub mod cursor_pack;
 pub mod dialogs;
@@ -63,9 +64,9 @@ pub mod dock_model;
 mod document_menu;
 mod duplicate_ui;
 pub mod enable_rules;
-pub mod csp_tool_property;
 pub mod enclose_fill_ui;
 pub mod eraser_ui;
+pub mod exit_screenshot;
 pub mod export_dialog;
 pub mod file_dialog;
 pub mod file_open;
@@ -410,6 +411,8 @@ pub struct PrismApp {
     pub(crate) alt_sampling: bool,
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
     pub(crate) opacity_keys: opacity_keys::Pending,
+    /// `--screenshot <file.png>`: save the window after the first frames and quit.
+    pub exit_screenshot: Option<exit_screenshot::ExitScreenshot>,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<(u64, Option<String>, Sender<ControlResponse>)>,
     /// Screenshots not yet requested from the viewport: (token, earliest time in ms, frames seen).
@@ -592,6 +595,7 @@ impl PrismApp {
             brush_resize_armed: false,
             alt_sampling: false,
             opacity_keys: None,
+            exit_screenshot: None,
             control_rx: None,
             pending_screenshots: Vec::new(),
             queued_screenshots: Vec::new(),
@@ -1198,6 +1202,7 @@ impl eframe::App for PrismApp {
         transform_tool::end_if_left(self);
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
+        exit_screenshot::tick(self, ctx);
         prefs_ui::tick(self, ctx);
         update_ui::tick(self, ctx);
         monitor_status::poll(self, ctx);
@@ -1289,12 +1294,22 @@ impl eframe::App for PrismApp {
         if !chrome && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             let _ = menus::invoke(self, &ctx, "view.screenMode.standard", serde_json::json!({}));
         }
+        // Where the frame's time goes (`perf.timings.spans` in `ui.inspect`).
+        let mut mark = gpu_canvas::now_ms();
+        let mut lap = |perf: &mut gpu_canvas::Perf, name: &'static str| {
+            let now = gpu_canvas::now_ms();
+            perf.span(name, now - mark);
+            mark = now;
+        };
+        lap(&mut self.perf, "uiSetup");
         if chrome {
             panels::title_bar(self, ui);
         }
+        lap(&mut self.perf, "uiTitleBar");
         if chrome && self.ui.panels.options_bar {
             panels::options_bar(self, ui);
         }
+        lap(&mut self.perf, "uiOptionsBar");
         if chrome && self.ui.panels.status_bar {
             panels::status_bar(self, ui);
         }
@@ -1304,14 +1319,17 @@ impl eframe::App for PrismApp {
         if chrome && self.ui.panels.toolbar && tools_dock == tools_window::ToolsDock::Left {
             panels::toolbar(self, ui);
         }
+        lap(&mut self.perf, "uiBars");
         // Panel groups: the main dock, extra dock columns, floating windows (`dock_*`).
         dock_model::sync(&mut self.ui);
         if chrome {
             dock_float::columns(self, ui, dock_model::Side::Left);
         }
+        lap(&mut self.perf, "uiDockLeft");
         if chrome && self.ui.panels.dock {
             panels::right_dock(self, ui);
         }
+        lap(&mut self.perf, "uiDock");
         if chrome {
             dock_float::columns(self, ui, dock_model::Side::Right);
         }
@@ -1330,15 +1348,21 @@ impl eframe::App for PrismApp {
         }
         let t = theme::Tokens::get(&ctx);
         let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
+        lap(&mut self.perf, "uiDockRightBottom");
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
             canvas::document_area(self, ui);
         });
+        lap(&mut self.perf, "uiCanvas");
         panels::properties_window(self, &ctx);
+        lap(&mut self.perf, "uiPropertiesWindow");
         brush_panel::window(self, &ctx);
+        lap(&mut self.perf, "uiBrushWindow");
         if chrome {
             tool_sliders::window(self, &ctx);
             tools_window::floating(self, &ctx);
+            lap(&mut self.perf, "uiToolWindows");
             dock_float::floats(self, &ctx);
+            lap(&mut self.perf, "uiFloats");
             dock_float::flyout(self, &ctx);
             dock_drag::finish(self, &ctx);
         }
@@ -1379,6 +1403,7 @@ impl eframe::App for PrismApp {
             egui::Modal::new(egui::Id::new("screen-color-wait")).frame(egui::Frame::NONE).backdrop_color(egui::Color32::TRANSPARENT).show(&ctx, |_| {});
             ctx.set_cursor_icon(egui::CursorIcon::Wait);
         }
+        lap(&mut self.perf, "uiWindows");
         self.perf.frame(gpu_canvas::now_ms() - t0);
         // Synthetic input is injected one press/release step per frame: keep frames coming until
         // the queue is empty, then release control replies waiting on it.

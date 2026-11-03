@@ -454,7 +454,7 @@ fn colour_tips_and_tip_order_are_stored_as_tip_files() {
     preset.brush.csp_tip_order = Some(CspTipOrder::Reverse);
     // Colours that do not fit their size are dropped, not saved as a broken tip.
     let mut broken = sampled("Broken colours", "CSP", tip8(4, 4, 9));
-    broken.brush.csp_tip_colors = vec![Some(CspTipColor { width: 4, height: 4, rgb: vec![1, 2, 3] })];
+    broken.brush.csp_tip_colors = vec![Some(CspTipColor { width: 4, height: 4, rgb: vec![1, 2, 3].into() })];
     s.tools.presets.extend([preset.clone(), broken]);
     s.brush_presets_changed();
     s.sync_preset_store();

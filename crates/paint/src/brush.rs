@@ -732,6 +732,7 @@ impl BrushSettings {
             spray.count = spray.count.clamp(1, crate::csp_spray::MAX_PARTICLES);
             spray.bias = if spray.bias.is_finite() { spray.bias.clamp(-1.0, 1.0) } else { 0.0 };
             spray.angle = if spray.angle.is_finite() { spray.angle.rem_euclid(360.0) } else { 0.0 };
+            spray.angle_jitter = if spray.angle_jitter.is_finite() { spray.angle_jitter.clamp(0.0, 2.0) } else { 0.0 };
         }
         if let Some(edge) = &mut brush.csp_water_edge {
             *edge = edge.bounded();

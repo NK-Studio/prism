@@ -2305,6 +2305,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
     // Use Tablet Pressure is off; the pen's eraser end selects the Eraser.
     app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
     app.stylus.update(&ui.input(|i| i.events.clone()));
+    app.stylus.frame_ms = ui.input(|i| i.time) * 1000.0;
     crate::stylus::Stylus::sync_eraser_tool(app);
     let native_packets = if primary { crate::pen_input::take(&ctx) } else { Vec::new() };
     let mut pen_packets = if primary && native_packets.is_empty() { app.stylus.touch_packets.collect(&ui.input(|i| i.events.clone())) } else { native_packets };

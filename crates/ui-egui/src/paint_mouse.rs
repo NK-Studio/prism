@@ -166,7 +166,8 @@ pub fn show_picker(app: &mut PrismApp, ctx: &egui::Context) {
         let before = app.session.tools.brush.clone();
         let mut b = before.clone();
         let list = &mut app.ui.brush_picker_list;
-        let picks = egui::Frame::popup(ui.style()).show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, list)).inner;
+        let picked = app.session.tools.brush_preset.as_deref();
+        let picks = egui::Frame::popup(ui.style()).show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, picked, list)).inner;
         crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &b);
         let closes = picks.iter().any(crate::brush_picker::Pick::closes);
         crate::brush_picker::apply(app, ui.ctx(), picks);

@@ -39,19 +39,20 @@ pub mod render;
 pub mod replace;
 pub mod retouch;
 pub mod rng;
+pub mod shared;
 pub mod sut;
 pub mod sut_catalog;
 pub mod tile;
 
 pub use brush::{
-    BrushPreset, BrushSettings, CSP_ANTI_ALIAS_MAX, ColorDynamics, Control, CspDualAdd, CspStrokeMode, CspTextureMode, CspTilt, DualBrush, Dynamic, MAX_BRUSH_SIZE, MAX_SCATTER, MaskMode, Pattern,
-    PatternStyle, Pose, Scattering, SectionLocks, ShapeDynamics, Smoothing, Texture, TipShape, Transfer,
+    BrushPreset, BrushSettings, CSP_ANTI_ALIAS_MAX, ColorDynamics, Control, CspDualAdd, CspStrokeMode, CspTextureMode, CspTilt, DualBrush, Dynamic,
+    MAX_BRUSH_SIZE, MAX_SCATTER, MaskMode, Pattern, PatternStyle, Pose, Scattering, SectionLocks, ShapeDynamics, Smoothing, Texture, TipShape, Transfer,
 };
 pub use csp_in_out::{CspInOut, CspInOutMode, CspInOutParam, CspInOutTarget};
 pub use csp_mixing::CspColorMixing;
 pub use csp_spray::CspSpray;
-pub use csp_tip::{CspTipColor, CspTipOrder};
 pub use csp_stabilizer::CspStabilizer;
+pub use csp_tip::{CspTipColor, CspTipOrder};
 pub use csp_water_edge::CspWaterEdge;
 pub use mixer::MixerSettings;
 pub use pressure_curve::PressureCurve;

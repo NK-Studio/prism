@@ -50,7 +50,7 @@ fn solid(w: u32, h: u32) -> GrayTile {
 }
 
 fn red(w: u32, h: u32) -> CspTipColor {
-    CspTipColor { width: w, height: h, rgb: [255, 0, 0].repeat((w * h) as usize) }
+    CspTipColor { width: w, height: h, rgb: [255, 0, 0].repeat((w * h) as usize).into() }
 }
 
 #[test]
@@ -60,8 +60,8 @@ fn colour_tip_planes_premultiply_and_reject_mismatches() {
     assert_eq!(planes[0].data, [65535, 32768]);
     assert_eq!(planes[1].data, [0, 0]);
     assert!(red(3, 1).premultiplied(&tip).is_none());
-    assert!(CspTipColor { width: 2, height: 1, rgb: vec![1, 2] }.premultiplied(&tip).is_none());
-    assert!(red(0, 0).premultiplied(&GrayTile { width: 0, height: 0, data: Vec::new() }).is_none());
+    assert!(CspTipColor { width: 2, height: 1, rgb: vec![1, 2].into() }.premultiplied(&tip).is_none());
+    assert!(red(0, 0).premultiplied(&GrayTile { width: 0, height: 0, data: Vec::new().into() }).is_none());
     let colour = red(2, 1);
     let json = serde_json::to_string(&colour).unwrap();
     assert_eq!(serde_json::from_str::<CspTipColor>(&json).unwrap(), colour);
@@ -71,11 +71,11 @@ fn colour_tip_planes_premultiply_and_reject_mismatches() {
 #[test]
 fn colour_tip_mean_is_alpha_weighted_and_uniformity_ignores_clear_texels() {
     let tip = GrayTile::from_fn(3, 1, |x, _| [1.0, 0.5, 0.0][x as usize]);
-    let c = CspTipColor { width: 3, height: 1, rgb: vec![255, 0, 0, 0, 0, 255, 0, 255, 0] };
+    let c = CspTipColor { width: 3, height: 1, rgb: vec![255, 0, 0, 0, 0, 255, 0, 255, 0].into() };
     let m = c.mean(&tip).unwrap();
     assert!((m[0] - 2.0 / 3.0).abs() < 1e-3 && m[1].abs() < 1e-6 && (m[2] - 1.0 / 3.0).abs() < 1e-3, "{m:?}");
     assert!(!c.is_uniform(&tip, 2));
-    let one = CspTipColor { width: 3, height: 1, rgb: vec![250, 250, 250, 252, 251, 250, 0, 0, 0] };
+    let one = CspTipColor { width: 3, height: 1, rgb: vec![250, 250, 250, 252, 251, 250, 0, 0, 0].into() };
     assert!(one.is_uniform(&tip, 2), "the clear texel does not count");
     assert_eq!(c.mean(&GrayTile::from_fn(3, 1, |_, _| 0.0)), None);
     assert_eq!(c.mean(&GrayTile::from_fn(2, 1, |_, _| 1.0)), None);
@@ -141,7 +141,8 @@ fn a_sequence_mixes_colour_and_brush_colour_tips_in_tip_order() {
 #[test]
 fn ribbons_lay_colour_tips_pixel_by_pixel() {
     // Left half red, right half blue; at no turn the tip's column 0 runs on the right of travel.
-    let split = |w: u32, h: u32| CspTipColor { width: w, height: h, rgb: (0..w * h).flat_map(|i| if i % w < w / 2 { [255, 0, 0] } else { [0, 0, 255] }).collect() };
+    let split =
+        |w: u32, h: u32| CspTipColor { width: w, height: h, rgb: (0..w * h).flat_map(|i| if i % w < w / 2 { [255, 0, 0] } else { [0, 0, 255] }).collect() };
     let ribbon = |turns: f64, tip: GrayTile, colors: CspTipColor| BrushSettings {
         size: 10.0,
         pressure_size: false,

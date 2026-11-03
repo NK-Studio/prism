@@ -103,7 +103,7 @@ mod tests {
     fn exact_pixels_invalidate_edits_and_limits_bound_retention() {
         let mut b = BrushSettings {
             tip: TipShape::Sampled(GrayTile::from_fn(8, 8, |_, _| 1.0)),
-            csp_tip_colors: vec![Some(CspTipColor { width: 8, height: 8, rgb: vec![255; 192] })],
+            csp_tip_colors: vec![Some(CspTipColor { width: 8, height: 8, rgb: vec![255; 192].into() })],
             ..Default::default()
         };
         let c = BrushContext::prepare(b.clone());

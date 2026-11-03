@@ -186,3 +186,34 @@ fn release_drain_keeps_stationary_dot_pressure() {
     s.finish(&mut tail);
     assert!(tail.iter().all(|p| p.pressure == 1.0 && p.x == 4.0 && p.y == 5.0));
 }
+
+#[test]
+fn sparse_input_averages_the_same_time_span_as_reference_rate_input() {
+    // 茂み1: level 10, stickiness 4. A steady 600 px/s line at 125 Hz (reference) and at 60 Hz
+    // (a Windows mouse, one move per frame): the brush should trail the pointer by about the
+    // same time, not twice as long at the lower rate.
+    let cfg = CspStabilizer { level: 10, stickiness: 4, ..Default::default() };
+    let lag_ms = |interval: f64| {
+        let speed = 0.6; // px per ms
+        let pts: Vec<_> = (0..120).map(|i| pt(f64::from(i) * interval * speed, 0.0, 1.0, f64::from(i) * interval)).collect();
+        let out = run(&cfg, 1.0, &pts);
+        let (p, o) = (pts.last().unwrap(), out.last().unwrap());
+        (p.x - o.x) / speed
+    };
+    let (reference, mouse) = (lag_ms(8.0), lag_ms(1000.0 / 60.0));
+    assert!((reference - 36.0).abs() < 1.0, "reference-rate lag {reference}");
+    assert!(mouse < reference * 1.35, "60 Hz lag {mouse} vs {reference}");
+    // Untimed input (automation without times) keeps the sample-count window.
+    let untimed: Vec<_> = (0..40).map(|i| pt(f64::from(i) * 10.0, 0.0, 1.0, 0.0)).collect();
+    let out = run(&cfg, 1.0, &untimed);
+    assert!((untimed.last().unwrap().x - out.last().unwrap().x - 45.0).abs() < 1e-6, "{}", out.last().unwrap().x);
+    // Release still reaches the pointer at the sparse rate.
+    let pts: Vec<_> = (0..30).map(|i| pt(f64::from(i) * 10.0, 0.0, 1.0, f64::from(i) * 16.7)).collect();
+    let mut s = Stabilizer::new(&cfg, 1.0);
+    for p in &pts {
+        s.push(*p);
+    }
+    let mut tail = Vec::new();
+    s.finish(&mut tail);
+    assert!((tail.last().unwrap().x - 290.0).abs() < 2.0, "{:?}", tail.last());
+}

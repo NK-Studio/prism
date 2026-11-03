@@ -28,6 +28,12 @@ const PATH_SLOW_STEP: f64 = 2.5;
 const PATH_GAIN: f64 = 20.0;
 const PATH_WINDOW_STEP: f64 = 0.25;
 const PATH_MAX_LEVEL: u32 = 30;
+/// Input interval the sample window is counted at (125 Hz: a USB mouse's default report rate,
+/// within the 100–200 Hz of tablet pens). Sparser input, such as a Windows mouse whose moves
+/// arrive once per frame, averages the same span of time with fewer samples, so a level-10
+/// brush follows a 60 Hz mouse as closely as a 125 Hz pen instead of lagging twice as far.
+/// An estimate: CSP's own input rate and device scaling are not traced (docs/sut-analysis.md).
+const REFERENCE_INTERVAL_MS: f64 = 8.0;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -65,13 +71,17 @@ pub struct Stabilizer {
     history: VecDeque<StrokePoint>,
     window: f64,
     drawing: bool,
+    /// The window's scale for the input rate (1 for input at or above the reference rate).
+    rate_scale: f64,
+    /// Pen-up repeats are not input: they keep the scale measured while drawing.
+    releasing: bool,
 }
 
 impl Stabilizer {
     pub fn new(cfg: &CspStabilizer, zoom: f32) -> Self {
         let cfg = cfg.bounded();
         let zoom = if zoom.is_finite() && zoom > 0.0 { f64::from(zoom) } else { 1.0 };
-        Self { window: cfg.start_window(), cfg, zoom, history: VecDeque::new(), drawing: false }
+        Self { window: cfg.start_window(), cfg, zoom, history: VecDeque::new(), drawing: false, rate_scale: 1.0, releasing: false }
     }
 
     pub fn active(&self) -> bool {
@@ -87,6 +97,9 @@ impl Stabilizer {
             self.history.pop_front();
         }
         self.history.push_back(p);
+        if !self.releasing {
+            self.rate_scale = self.measure_rate_scale();
+        }
         let level = f64::from(self.cfg.level);
         let mut averaged = true;
         let previous = self.history.len().checked_sub(2).and_then(|i| self.history.get(i)).copied();
@@ -127,6 +140,7 @@ impl Stabilizer {
     /// leave a short flick halfway to the cursor when its window is smaller than stickiness.
     pub fn finish(&mut self, out: &mut Vec<StrokePoint>) {
         let Some(last) = self.history.back().copied().filter(|_| self.active() && self.drawing) else { return };
+        self.releasing = true;
         let moved = self.history.iter().any(|p| p.x != last.x || p.y != last.y);
         let repeats = (self.window.floor() as i64 - i64::from(self.cfg.stickiness)).clamp(0, i64::from(MAX_LEVEL));
         for _ in 0..repeats {
@@ -170,6 +184,25 @@ impl Stabilizer {
             }
         }
         self.drawing = false;
+        self.releasing = false;
+    }
+
+    /// `REFERENCE_INTERVAL_MS` over the mean interval of the samples the window spans, at most 1.
+    /// Untimed input (all times equal, as from automation) and pauses are left unscaled.
+    fn measure_rate_scale(&self) -> f64 {
+        let n = self.history.len();
+        if n < 2 {
+            return 1.0;
+        }
+        // `n - 1 >= 1` here, so the clamp bounds are ordered.
+        let span = (self.window.ceil() as usize).clamp(1, n - 1);
+        let (Some(newest), Some(oldest)) = (self.history.back(), n.checked_sub(1 + span).and_then(|i| self.history.get(i))) else { return 1.0 };
+        let elapsed = newest.time - oldest.time;
+        if !elapsed.is_finite() || elapsed <= 0.0 || elapsed > MAX_AGE_MS {
+            return 1.0;
+        }
+        let interval = elapsed / span as f64;
+        (REFERENCE_INTERVAL_MS / interval).clamp(0.0, 1.0)
     }
 
     /// Speed type 1: move the window towards a target from the newest samples' mean step length
@@ -222,7 +255,7 @@ impl Stabilizer {
 
     /// Fractional moving average over the newest `window` samples.
     fn average(&self, p: StrokePoint) -> StrokePoint {
-        let w = self.window.max(1.0);
+        let w = (self.window * self.rate_scale).max(1.0);
         let whole = w.floor() as usize;
         let n = self.history.len();
         let (mut x, mut y, mut pressure) = (0.0f64, 0.0f64, 0.0f64);

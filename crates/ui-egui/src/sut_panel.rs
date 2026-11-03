@@ -24,6 +24,8 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1085, "Color stretch", "BrushMixColorExtension", "Ink"),
     (20, "Anti-aliasing", "AntiAlias", "Anti-aliasing"),
     (1050, "Thickness", "BrushThickness", "Brush tip"),
+    (1040, "Spacing", "BrushInterval", "Brush tip"),
+    (1042, "Spacing type", "BrushAutoIntervalType", "Brush tip"),
     (100, "Texture", "TextureImage", "Texture"),
     (110, "Texture density", "TextureDensity", "Texture"),
     (120, "Scale ratio", "TextureScale2", "Texture"),
@@ -114,6 +116,7 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
                 b.csp_tip_scale = Some(if vertical { [x, percent / 100.0] } else { [percent / 100.0, y] });
             }
         }
+        1040 | 1042 => spacing(ui, id, label, m, b),
         100 => {
             ui.label(tl!(label));
             ui.add_enabled(
@@ -223,6 +226,42 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
             }
         }
         _ => unsupported(ui, label, format!("{:.0}", source(m, key)), false),
+    }
+}
+
+/// Spacing (1040) and its type (1042, `BrushAutoIntervalType`): fixed spacing edits the
+/// fraction of the diameter; the automatic types set it from hardness and thickness as the import
+/// does (`prism_paint::sut::auto_spacing`). The shown type is the one the brush's spacing matches.
+fn spacing(ui: &mut egui::Ui, id: u32, label: &str, m: &SutBrushMetadata, b: &mut BrushSettings) {
+    use prism_engine::paint::sut::{auto_spacing, auto_spacing_kind};
+    let image_tip = matches!(b.tip, prism_engine::paint::TipShape::Sampled(_) | prism_engine::paint::TipShape::Sequence(_));
+    let vertical = source(m, "BrushVerticalThicknes") != 0.0;
+    let [x, y] = b.csp_tip_scale.unwrap_or([1.0, 1.0]);
+    let thickness = if vertical { y } else { x };
+    let kind = auto_spacing_kind(b.spacing, b.hardness, image_tip, thickness);
+    if id == 1042 {
+        let mut picked = kind;
+        let opts = [(0i64, "Fixed"), (1, "Wide (automatic)"), (2, "Normal (automatic)"), (3, "Narrow (automatic)")];
+        ui.horizontal(|ui| {
+            ui.label(tl!(label));
+            crate::widgets::dropdown(ui, "sut-spacing-type", &mut picked, &opts, ui.available_width().min(200.0));
+        });
+        if picked != kind {
+            b.spacing = match auto_spacing(picked, b.hardness, image_tip, thickness) {
+                Some(s) => s,
+                // Back to fixed: the imported fixed spacing, else keep the current one.
+                None => Some(source(m, "BrushInterval") / 100.0).filter(|s| *s > 0.0).map_or(b.spacing, |s| s.clamp(0.01, 10.0)),
+            };
+        }
+        return;
+    }
+    let mut percent = b.spacing * 100.0;
+    let changed = ui.add_enabled_ui(kind == 0, |ui| number(ui, label, &mut percent, 1.0..=1000.0, " %")).inner;
+    if changed {
+        b.spacing = (percent / 100.0).clamp(0.01, 10.0);
+    }
+    if kind != 0 {
+        ui.small(tl!("Set by the spacing type"));
     }
 }
 
@@ -357,6 +396,30 @@ mod tests {
     }
 
     #[test]
+    fn spacing_and_its_type_have_controls_instead_of_an_unsupported_row() {
+        let mut h = harness();
+        let spacing = prism_engine::paint::sut::auto_spacing(2, 0.5, false, 1.0).unwrap();
+        {
+            let app = h.state_mut();
+            app.session.tools.brush.hardness = 0.5;
+            app.session.tools.brush.spacing = spacing;
+            let preset = app.session.tools.presets.last_mut().unwrap();
+            preset.brush = app.session.tools.brush.clone();
+            preset.sut.as_mut().unwrap().original.visible = vec![1000, 1040, 1042];
+        }
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("Unsupported CSP setting").is_none());
+        assert!(h.query_by_label("Spacing type").is_some());
+        if let Ok(image) = h.render() {
+            let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sut-spacing-panel.png");
+            let _ = image.save(out);
+        }
+        // The combo box's text is not an accessible label; its value comes from the spacing.
+        let b = &h.state().session.tools.brush;
+        assert_eq!(prism_engine::paint::sut::auto_spacing_kind(b.spacing, b.hardness, false, 1.0), 2);
+    }
+
+    #[test]
     fn eye_toggle_and_restore_only_change_display() {
         let mut h = harness();
         h.run();
@@ -409,7 +472,8 @@ mod tests {
         h.run();
         assert!(h.query_by_label("Additional settings for this sub-tool type are not mapped yet").is_none());
         // A fill sub-tool is not a brush: the brush library leaves it out.
-        let count = |h: &Harness<'static, PrismApp>| crate::brush_panel::grouped_presets(&h.state().session.tools.presets).iter().map(|(_, v)| v.len()).sum::<usize>();
+        let count =
+            |h: &Harness<'static, PrismApp>| crate::brush_panel::grouped_presets(&h.state().session.tools.presets).iter().map(|(_, v)| v.len()).sum::<usize>();
         let before = count(&h);
         let metadata = h.state_mut().session.tools.presets.last_mut().unwrap().sut.as_mut().unwrap();
         (metadata.input_op, metadata.output_op) = (50, 50);

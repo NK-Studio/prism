@@ -2,7 +2,7 @@
 //! Prism's Dual Brush. Evidence and inferences: docs/sut-analysis.md › Blending modes, colour
 //! jitter and dual brush.
 use super::sqlite::Value;
-use super::{Row, TipKeys, effector, enabled, material, referenced, spacing_of, tip};
+use super::{Row, TipKeys, effector, enabled, material, reference_paths, spacing_of, tip};
 use prism_paint::csp_blend::{CspDualMode, csp_dual_mode};
 use prism_paint::{BrushSettings, DualBrush, MAX_BRUSH_SIZE, MAX_SCATTER, TipShape};
 
@@ -46,7 +46,9 @@ pub(super) fn dual_brush(
     };
     match refs.filter(|_| enabled(r, "DualUsePatternImage")) {
         Some(refs) => match dual_tips(refs, materials, ctl, warnings) {
-            Ok(tip) => d.tip = tip,
+            Ok(Some(tip)) => d.tip = tip,
+            // Every referenced tip is missing: a round second tip keeps the brush's dual texture.
+            Ok(None) => d.hardness = (num(r, "DualHardness", 100.0) / 100.0).clamp(0.0, 1.0),
             Err(e) => {
                 ctl.check().map_err(|e| e.to_string())?;
                 warnings.push(format!("SUT dual brush tips could not be read ({e}); the dual brush is not applied"));
@@ -148,9 +150,12 @@ fn dual_tips(
     materials: &dyn Fn() -> Result<Vec<Row>, String>,
     ctl: &prism_raster::Interrupt,
     warnings: &mut Vec<String>,
-) -> Result<TipShape, String> {
+) -> Result<Option<TipShape>, String> {
     let materials = materials()?;
-    let ordered = referenced(refs, &materials, "dual brush tips")?;
+    let ordered = available(refs, &materials, warnings)?;
+    if ordered.is_empty() {
+        return Ok(None);
+    }
     let each = (DUAL_TIP_PIXEL_BUDGET / ordered.len().max(1)).min(material::DEFAULT_MAX_PIXELS);
     let mut tips = Vec::with_capacity(ordered.len());
     let mut pixels = 0usize;
@@ -161,13 +166,38 @@ fn dual_tips(
         tips.push(t);
     }
     match (tips.pop(), tips.is_empty()) {
-        (Some(only), true) => Ok(TipShape::Sampled(only)),
+        (Some(only), true) => Ok(Some(TipShape::Sampled(only))),
         (Some(last), false) => {
             tips.push(last);
-            Ok(TipShape::Sequence(tips))
+            Ok(Some(TipShape::Sequence(tips)))
         }
-        (None, _) => Err("SUT dual brush has no tips".into()),
+        (None, _) => Ok(None),
     }
+}
+
+/// The referenced dual tips that are present, in file order. A download cache can lack some
+/// tip materials; the dual brush then runs with the tips it has (a warning names how many are
+/// missing) instead of being switched off. Unreadable references and ambiguous paths still fail.
+fn available<'a>(refs: &[u8], materials: &'a [Row], warnings: &mut Vec<String>) -> Result<Vec<&'a Row>, String> {
+    let paths = reference_paths(refs, "dual brush tips")?;
+    let mut found = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let mut matches = materials.iter().filter(|m| m.get("OriginalPath").and_then(Value::text) == Some(path.as_str()));
+        match (matches.next(), matches.next()) {
+            (Some(_), Some(_)) => return Err("referenced SUT dual brush tips have ambiguous material paths".into()),
+            (Some(m), None) => found.push(m),
+            (None, _) => {}
+        }
+    }
+    let missing = paths.len() - found.len();
+    if missing > 0 {
+        warnings.push(format!(
+            "{missing} of {} referenced SUT dual brush tips are missing; {}",
+            paths.len(),
+            if found.is_empty() { "the dual brush uses a round tip" } else { "the dual brush uses the remaining tips" }
+        ));
+    }
+    Ok(found)
 }
 
 #[cfg(test)]

@@ -1987,3 +1987,46 @@ database, stores NULL for all three: CLIP STUDIO falls back to its default font.
 type when set is not observed; Prism reads SQLite text and UTF-8 blobs, keeps at most 256
 characters without control characters, and reports anything else as a warning.
 
+
+## Spray particle angle input and missing dual tips (2026-11-04)
+
+No new decompilation; this applies the evidence already recorded under *Tip rotation input*
+(the spray particle angle code tests 0x100, 0x40 and 0x200, and the resource choice list maps
+the inputs to 0x10, 0x20, 0x40, 0x100, 0x200 in order) and *Particle rotation is separate from
+the area rotation* (stored `BrushRotationEffectorInSpray=3` with Random 100 is inactive).
+
+### Spray particle angle input (`BrushRotationEffectorInSpray`)
+
+Prism (`CspSpray.angleInput`, `CspSpray.angleJitter`): with flag 0x01 set, one input angle is
+added to the base particle angle `BrushRotationInSpray`: 0x10 pen tilt direction, 0x20 barrel
+rotation, 0x40 line direction, 0x100 the whole spray's angle (the brush area's evaluated
+rotation), 0x200 the direction from the spray centre to the particle. 0x80 adds a random turn
+of `(r − 0.5) · BrushRotationRandomInSpray% · 360°` from Prism's own `stream::SPRAY_ANGLE`.
+Without 0x01 none of these apply (the stored-3 case above is unchanged). 0x02 is kept silent.
+Several input bits apply the first in choice order with a warning; other bits warn.
+
+Inferences, not traced: 0x10/0x20 for particles read the same pen fields as the tip rotation;
+0x01 gates the particle inputs as it does the tip rotation; 0x200 points outward (centre →
+particle) rather than inward; the random amount uses the tip rotation's scale. A matched CSP
+capture of a 0x200 and a 0x80 spray brush would settle them.
+
+### Missing dual brush tips
+
+A downloaded brush can reference dual tips its cache lacks (D/Kaminari, D/Raigeki in the
+2026-10-21 run). Before, any missing tip switched the whole dual brush off. Now the dual brush
+runs with the tips that are present, or with a round tip of `DualHardness` when none are, and a
+warning names how many are missing. Unreadable reference blobs and ambiguous material paths
+still leave it off (a broken file, not a missing asset). What CLIP STUDIO itself paints when a
+dual tip material is missing was not observed.
+
+### Input rate (2026-11-04)
+
+The stabilization window now spans the time of that many samples at 125 Hz when input is
+sparser (a frame-rate Windows mouse). This is Prism's substitute for the untraced device-type
+scaling, not CSP behaviour; see docs/brush-latency.md › Mouse lag.
+
+### Still open from the 2026-11-03 audit
+
+Post correction, spray size unit (`BrushSpraySizeUnit`, value semantics not traced), colour
+mixing type 2, dual input/random dynamics and rotation, size effector control 0x40, water
+edge units, emphasize texture density and start/end fade type 2 are unchanged.
