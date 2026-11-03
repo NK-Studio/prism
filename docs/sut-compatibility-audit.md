@@ -132,6 +132,9 @@ survive without an editable control. A shown or saved value is not necessarily
 used by the renderer. In particular, the October 24 dev log records direction
 1060 and spray enable 1130 as kept-only.
 
+The per-ID implementation list for the panel's "Unsupported CSP setting" rows (measured
+2026-11-04) is [sut-tool-property-backlog.md](sut-tool-property-backlog.md).
+
 For each option, track independently: decoded, retained, editable, applied to
 live/committed strokes, saved/restored, compared with CSP. A complete Sub Tool
 Detail equivalent needs the full option inventory, not only the rows a preset
