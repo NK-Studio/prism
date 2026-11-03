@@ -209,9 +209,12 @@ fn local_csp_experiment_materials() {
         "DualSpraySizeUnit",
         "BrushWaterColor",
         "BrushWaterColor2",
+        "BrushUseWaterColor",
         "BrushRibbon",
     ];
     let mut found = Vec::new();
+    // Colour mixing on with type 0 or 1: the controls for type 2.
+    let mut mixing_controls = Vec::new();
     for (i, m) in listed["brushes"].as_array().unwrap().iter().enumerate() {
         if m["status"] != "ready" {
             continue;
@@ -225,7 +228,12 @@ fn local_csp_experiment_materials() {
             let v = |k: &str| meta.parameters.get(k).copied().unwrap_or(0.0);
             let fade = v("BrushInOutType") == 2.0 && (v("BrushUseIn") != 0.0 || v("BrushUseOut") != 0.0);
             let units: Vec<String> = keys.iter().filter(|k| k.ends_with("Unit") && v(k) != 0.0).map(|k| format!("{k}={}", v(k))).collect();
-            let mix2 = v("BrushWaterColor") == 2.0;
+            // CSP writes the mixing flag under two names; either enables it.
+            let mixing_on = v("BrushUseWaterColor") != 0.0 || v("BrushUseWaterColor2") != 0.0;
+            let mix2 = mixing_on && v("BrushWaterColor") == 2.0;
+            if mixing_on && v("BrushWaterColor") != 2.0 {
+                mixing_controls.push(json!({"name": preset.name, "catalog": m["catalog"], "type": v("BrushWaterColor")}));
+            }
             if fade || !units.is_empty() || mix2 {
                 let values: serde_json::Map<String, Value> = keys.iter().filter(|k| meta.parameters.contains_key(**k)).map(|k| (k.to_string(), json!(v(k)))).collect();
                 println!("{:<28} {:<24} fade2={fade:<5} mix2={mix2:<5} units={units:?}", preset.name, m["catalog"].as_str().unwrap_or(""));
@@ -238,6 +246,6 @@ fn local_csp_experiment_materials() {
     }
     let out = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/csp-check"));
     std::fs::create_dir_all(&out).unwrap();
-    std::fs::write(out.join("experiment-materials.json"), serde_json::to_vec_pretty(&found).unwrap()).unwrap();
-    println!("{} candidates", found.len());
+    std::fs::write(out.join("experiment-materials.json"), serde_json::to_vec_pretty(&json!({"candidates": found, "mixingControls": mixing_controls})).unwrap()).unwrap();
+    println!("{} candidates, {} colour-mixing controls (type 0/1, mixing on)", found.len(), mixing_controls.len());
 }
