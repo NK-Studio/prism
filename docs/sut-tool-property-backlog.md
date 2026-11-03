@@ -44,15 +44,15 @@ below already renders; only the editable control is missing.
 | ~~P1~~ done 2026-11-04 | 1131 | `BrushSpraySize` (+`Unit`) | Particle size | 19 | `csp_spray.size` | length slider, px; unit conversion is open (see B) |
 | ~~P1~~ done 2026-11-04 | 1133 | `BrushSprayDensity` | Particle density | 16 | `csp_spray.count` | integer slider, capped at `csp_spray::MAX_PARTICLES` |
 | ~~P1~~ done 2026-11-04 | 1002 | `BrushSizeSyncViewScale` | Specify by size on screen | 15 | `csp_size_by_view` | checkbox |
-| P2 | 1102 | `BrushChangePatternColor` | Change brush tip color | 10 | `color_dynamics` (per tip) | checkbox enabling 1103/1105/1107 |
-| P2 | 1103 | `BrushHueChange` | Hue | 7 | `color_dynamics.hue_jitter` | slider 0–180° |
-| P2 | 1105 | `BrushSaturationChange` | Saturation | 7 | `color_dynamics.saturation_jitter` | slider 0–100 |
-| P2 | 1107 | `BrushValueChange` | Luminosity | 7 | `color_dynamics.brightness_jitter` | slider 0–100 |
-| P2 | 1135 | `BrushSprayBias` | Spray deviation | 9 | `csp_spray.bias` | slider 0–100 |
-| P2 | 1130 | `BrushUseSpray` | Spray effect | 8 | `csp_spray` on/off | checkbox; off → `None`, on → defaults from source |
-| P2 | 1061 | `BrushRotationInSpray` | Direction of particle | 8 | `csp_spray.angle` | slider −180–180° |
-| P2 | 1052 | `BrushVerticalThicknes` | Thickness direction | 8 | `csp_tip_scale` axis | horizontal/vertical toggle beside 1050 |
-| P2 | 1071 | `BrushPatternOrderType(2)` | Tip order | 6 | `csp_tip_order` | list: Repeat / Reverse / Do not repeat / Random |
+| ~~P2~~ done 2026-11-04 | 1102 | `BrushChangePatternColor` | Change brush tip color | 10 | `color_dynamics` (per tip) | checkbox enabling 1103/1105/1107 |
+| ~~P2~~ done 2026-11-04 | 1103 | `BrushHueChange` | Hue | 7 | `color_dynamics.hue_jitter` | slider 0–180° |
+| ~~P2~~ done 2026-11-04 | 1105 | `BrushSaturationChange` | Saturation | 7 | `color_dynamics.saturation_jitter` | slider 0–100 |
+| ~~P2~~ done 2026-11-04 | 1107 | `BrushValueChange` | Luminosity | 7 | `color_dynamics.brightness_jitter` | slider 0–100 |
+| ~~P2~~ done 2026-11-04 | 1135 | `BrushSprayBias` | Spray deviation | 9 | `csp_spray.bias` | slider 0–100 |
+| ~~P2~~ done 2026-11-04 | 1130 | `BrushUseSpray` | Spray effect | 8 | `csp_spray` on/off | checkbox; off → `None`, on → defaults from source |
+| ~~P2~~ done 2026-11-04 | 1061 | `BrushRotationInSpray` | Direction of particle | 8 | `csp_spray.angle` | slider −180–180° |
+| ~~P2~~ done 2026-11-04 | 1052 | `BrushVerticalThicknes` | Thickness direction | 8 | `csp_tip_scale` axis | horizontal/vertical toggle beside 1050 |
+| ~~P2~~ done 2026-11-04 | 1071 | `BrushPatternOrderType(2)` | Tip order | 6 | `csp_tip_order` | list: Repeat / Reverse / Do not repeat / Random |
 | P3 | 1043 | `BrushContinuousPlot` | Continuous spraying | 3 | `build_up` | checkbox (CSP rate not traced) |
 | P3 | 50 | `Stickness` | Stickiness | 3 | `csp_stabilizer.stickiness` | integer slider 0–100 |
 | P3 | 1202 | `BrushWaterEdgeAlphaPower` | Opacity influence | 1 | `csp_water_edge.opacity` | already in 1201's advanced block: map the ID to that block |
@@ -63,6 +63,13 @@ P1 status (2026-11-04): all six rows have Tool Property controls (`sut_panel::co
 hardness re-derives automatic spacing, direction keeps a ribbon's quarter turns in sync, particle
 size keeps a brush-synchronized ratio and is shown in pixels (unit conversion stays open, see B).
 Test: `p1_rows_have_controls_and_survive_hostile_values`.
+
+P2 status (2026-11-04): the nine group-A P2 rows have controls. Change brush tip color turns
+per-tip colour jitter on/off (colour tips keep their colours); hue/saturation/luminosity edit the
+jitter amounts; Spray effect off removes `csp_spray`, on restores the imported particle values;
+thickness direction swaps the squashed axis; tip order applies to multi-tip brushes only.
+Tests: `p2_rows_have_controls_and_survive_hostile_values`,
+`spray_switched_on_restores_the_imported_particles_and_thickness_axis_follows_the_brush`.
 
 Acceptance for A: none of these IDs produces an "Unsupported CSP setting" row; every control
 changes the preview strip; save/reload of the preset keeps the edit.

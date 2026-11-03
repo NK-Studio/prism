@@ -3049,6 +3049,17 @@ fontWeight	Italic	기울임
 	Particle density	입자 밀도
 	Spray	스프레이
 	Specify by size on screen	화면 크기로 지정
+	Change brush tip color	브러시 끝 색 변경
+	Color jitter	색 변화
+	Spray deviation	살포 편차
+	Spray effect	살포 효과
+	Direction of particle	입자 방향
+	Thickness direction	두께 방향
+	Tip order	브러시 끝 순서
+	Do not repeat	반복하지 않음
+	One tip	브러시 끝 1개
+	Colour tips keep their own colours	컬러 브러시 끝은 원래 색을 유지합니다
+	Turn on Change brush tip color to use it	브러시 끝 색 변경을 켜면 사용할 수 있습니다
 	Shown in pixels; the CSP size unit is not converted yet	픽셀로 표시합니다. CSP 크기 단위는 아직 변환하지 않습니다
 	Wide (automatic)	넓게
 	Normal (automatic)	보통

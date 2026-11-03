@@ -27,11 +27,20 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (20, "Anti-aliasing", "AntiAlias", "Anti-aliasing"),
     (1030, "Hardness", "BrushHardness", "Brush tip"),
     (1050, "Thickness", "BrushThickness", "Brush tip"),
+    (1052, "Thickness direction", "BrushVerticalThicknes", "Brush tip"),
     (1060, "Direction", "BrushRotation", "Brush tip"),
+    (1071, "Tip order", "BrushPatternOrderType", "Brush tip"),
     (1040, "Spacing", "BrushInterval", "Brush tip"),
     (1042, "Spacing type", "BrushAutoIntervalType", "Brush tip"),
+    (1130, "Spray effect", "BrushUseSpray", "Spray"),
     (1131, "Particle size", "BrushSpraySize", "Spray"),
     (1133, "Particle density", "BrushSprayDensity", "Spray"),
+    (1135, "Spray deviation", "BrushSprayBias", "Spray"),
+    (1061, "Direction of particle", "BrushRotationInSpray", "Spray"),
+    (1102, "Change brush tip color", "BrushChangePatternColor", "Color jitter"),
+    (1103, "Hue", "BrushHueChange", "Color jitter"),
+    (1105, "Saturation", "BrushSaturationChange", "Color jitter"),
+    (1107, "Luminosity", "BrushValueChange", "Color jitter"),
     (100, "Texture", "TextureImage", "Texture"),
     (110, "Texture density", "TextureDensity", "Texture"),
     (120, "Scale ratio", "TextureScale2", "Texture"),
@@ -115,7 +124,7 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
             }
         }
         1050 => {
-            let vertical = source(m, "BrushVerticalThicknes") != 0.0;
+            let vertical = thickness_vertical(m, b);
             let [x, y] = b.csp_tip_scale.unwrap_or([1.0, 1.0]);
             let mut percent = if vertical { y } else { x } * 100.0;
             if number(ui, label, &mut percent, 1.0..=1000.0, " %") {
@@ -125,6 +134,92 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
         1040 | 1042 => spacing(ui, id, label, m, b),
         1002 => {
             ui.checkbox(&mut b.csp_size_by_view, tl!(label));
+        }
+        1052 => {
+            // The thickness squashes the tip's width (horizontal) or its height (vertical).
+            let vertical = thickness_vertical(m, b);
+            let mut picked = vertical;
+            ui.horizontal(|ui| {
+                ui.label(tl!(label));
+                crate::widgets::dropdown(ui, "sut-thickness-axis", &mut picked, &[(false, "Horizontal"), (true, "Vertical")], ui.available_width().min(160.0));
+            });
+            if picked != vertical {
+                let [x, y] = b.csp_tip_scale.unwrap_or([1.0, 1.0]);
+                let thickness = if vertical { y } else { x };
+                b.csp_tip_scale = Some(if picked { [1.0, thickness] } else { [thickness, 1.0] });
+            }
+        }
+        1071 => {
+            use prism_engine::paint::csp_tip::CspTipOrder;
+            if matches!(&b.tip, prism_engine::paint::TipShape::Sequence(tips) if tips.len() > 1) {
+                let mut order = b.csp_tip_order.unwrap_or_default();
+                let opts =
+                    [(CspTipOrder::Repeat, "Repeat"), (CspTipOrder::Reverse, "Reverse"), (CspTipOrder::Once, "Do not repeat"), (CspTipOrder::Random, "Random")];
+                ui.horizontal(|ui| {
+                    ui.label(tl!(label));
+                    crate::widgets::dropdown(ui, "sut-tip-order", &mut order, &opts, ui.available_width().min(180.0));
+                });
+                // Repeat is the renderer's default: stored as `None`, as the importer does.
+                let next = (order != CspTipOrder::Repeat).then_some(order);
+                if b.csp_tip_order != next {
+                    b.csp_tip_order = next;
+                }
+            } else {
+                unsupported(ui, label, tl!("One tip").to_string(), true);
+            }
+        }
+        1130 => {
+            let mut on = b.csp_spray.is_some();
+            if ui.checkbox(&mut on, tl!(label)).changed() {
+                b.csp_spray = on.then(|| spray_from_source(m));
+            }
+        }
+        1135 | 1061 => match &mut b.csp_spray {
+            Some(spray) if id == 1135 => {
+                let mut percent = if spray.bias.is_finite() { spray.bias * 100.0 } else { 0.0 };
+                if number(ui, label, &mut percent, -100.0..=100.0, "") {
+                    spray.bias = (percent / 100.0).clamp(-1.0, 1.0);
+                }
+            }
+            Some(spray) => {
+                // CSP's particle direction is clockwise; the spray angle counter-clockwise.
+                let mut degrees = if spray.angle.is_finite() { (-spray.angle + 180.0).rem_euclid(360.0) - 180.0 } else { 0.0 };
+                if number(ui, label, &mut degrees, -180.0..=180.0, "°") {
+                    spray.angle = -degrees.clamp(-180.0, 180.0);
+                }
+            }
+            None => unsupported(ui, label, format!("{:.0}", source(m, key)), true),
+        },
+        1102 => {
+            // Per-tip colour jitter (CSP's per-stroke variation, 1270, is separate).
+            let cd = &mut b.color_dynamics;
+            let mut on = cd.enabled && cd.per_tip;
+            if ui.checkbox(&mut on, tl!(label)).changed() {
+                cd.enabled = on;
+                cd.per_tip = true;
+            }
+            if !b.csp_tip_colors.is_empty() {
+                ui.small(tl!("Colour tips keep their own colours"));
+            }
+        }
+        1103 | 1105 | 1107 => {
+            let cd = &mut b.color_dynamics;
+            let on = cd.enabled && cd.per_tip;
+            ui.add_enabled_ui(on, |ui| {
+                // Prism's hue jitter j spreads +-180 degrees times j: CSP's hue change is 180 j.
+                let (value, scale, unit) = match id {
+                    1103 => (&mut cd.hue_jitter, 180.0, "°"),
+                    1105 => (&mut cd.saturation_jitter, 100.0, ""),
+                    _ => (&mut cd.brightness_jitter, 100.0, ""),
+                };
+                let mut shown = if value.is_finite() { (*value * scale).clamp(0.0, scale) } else { 0.0 };
+                if number(ui, label, &mut shown, 0.0..=scale, unit) {
+                    *value = (shown / scale).clamp(0.0, 1.0);
+                }
+            });
+            if !on {
+                ui.small(tl!("Turn on Change brush tip color to use it"));
+            }
         }
         1020 => {
             let mut percent = b.flow * 100.0;
@@ -297,10 +392,31 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
 /// Spacing (1040) and its type (1042, `BrushAutoIntervalType`): fixed spacing edits the
 /// fraction of the diameter; the automatic types set it from hardness and thickness as the import
 /// does (`prism_paint::sut::auto_spacing`). The shown type is the one the brush's spacing matches.
+/// The thickness axis: the brush's own (only one axis below 1 is squashed), else the imported
+/// `BrushVerticalThicknes`.
+fn thickness_vertical(m: &SutBrushMetadata, b: &BrushSettings) -> bool {
+    match b.csp_tip_scale {
+        Some([x, y]) if x != y && (x == 1.0 || y == 1.0) => x == 1.0,
+        _ => source(m, "BrushVerticalThicknes") != 0.0,
+    }
+}
+
+/// A spray switched on in the panel: the imported particle settings (CSP's defaults when unset).
+fn spray_from_source(m: &SutBrushMetadata) -> prism_engine::paint::CspSpray {
+    let value = |key: &str, default: f32| m.parameters.get(key).copied().filter(|v| v.is_finite()).map_or(default, |v| v.clamp(-1e6, 1e6) as f32);
+    prism_engine::paint::CspSpray {
+        size: value("BrushSpraySize", 2.0).clamp(0.5, prism_engine::paint::MAX_BRUSH_SIZE),
+        count: (value("BrushSprayDensity", 8.0).round().max(1.0) as u32).min(prism_engine::paint::csp_spray::MAX_PARTICLES),
+        bias: (value("BrushSprayBias", 0.0) / 100.0).clamp(-1.0, 1.0),
+        angle: -value("BrushRotationInSpray", 0.0).clamp(-360.0, 360.0),
+        ..Default::default()
+    }
+}
+
 /// Whether the brush has an image tip, and its thickness: the inputs of automatic spacing.
 fn spacing_inputs(m: &SutBrushMetadata, b: &BrushSettings) -> (bool, f32) {
     let image_tip = matches!(b.tip, prism_engine::paint::TipShape::Sampled(_) | prism_engine::paint::TipShape::Sequence(_));
-    let vertical = source(m, "BrushVerticalThicknes") != 0.0;
+    let vertical = thickness_vertical(m, b);
     let [x, y] = b.csp_tip_scale.unwrap_or([1.0, 1.0]);
     (image_tip, if vertical { y } else { x })
 }
@@ -525,6 +641,72 @@ mod tests {
         h.state_mut().session.tools.presets.last_mut().unwrap().sut.as_mut().unwrap().original.visible = vec![1131];
         h.run_steps(3);
         assert!(h.query_by_label_contains("Disabled by the imported CSP settings").is_some());
+    }
+
+    #[test]
+    fn p2_rows_have_controls_and_survive_hostile_values() {
+        use prism_engine::paint::{GrayTile, TipShape, csp_tip::CspTipOrder};
+        let ids = vec![1052, 1071, 1130, 1135, 1061, 1102, 1103, 1105, 1107];
+        for hostile in [false, true] {
+            let mut h = harness();
+            {
+                let app = h.state_mut();
+                let b = &mut app.session.tools.brush;
+                let v = |ok: f32| if hostile { f32::NAN } else { ok };
+                b.tip = TipShape::Sequence(vec![GrayTile::from_fn(2, 2, |_, _| 1.0), GrayTile::from_fn(2, 2, |_, _| 0.5)]);
+                b.csp_tip_order = Some(CspTipOrder::Random);
+                b.csp_tip_scale = Some(if hostile { [f32::INFINITY, 1.0] } else { [1.0, 0.4] });
+                b.csp_spray = Some(prism_engine::paint::CspSpray { bias: v(-0.3), angle: v(-20.0), ..Default::default() });
+                b.color_dynamics.enabled = true;
+                b.color_dynamics.per_tip = true;
+                b.color_dynamics.hue_jitter = v(0.25);
+                b.color_dynamics.saturation_jitter = v(0.5);
+                b.color_dynamics.brightness_jitter = if hostile { -4.0 } else { 0.1 };
+                let brush = b.clone();
+                let preset = app.session.tools.presets.last_mut().unwrap();
+                preset.brush = brush;
+                let sut = preset.sut.as_mut().unwrap();
+                sut.original.visible = ids.clone();
+                sut.parameters.insert("BrushVerticalThicknes".into(), if hostile { f64::NAN } else { 1.0 });
+            }
+            h.run_steps(3);
+            assert!(h.query_by_label_contains("Unsupported CSP setting").is_none(), "hostile={hostile}");
+            for label in [
+                "Thickness direction",
+                "Tip order",
+                "Spray effect",
+                "Spray deviation",
+                "Direction of particle",
+                "Change brush tip color",
+                "Hue",
+                "Saturation",
+                "Luminosity",
+            ] {
+                assert!(h.query_by_label_contains(label).is_some(), "{label} (hostile={hostile})");
+            }
+            if !hostile && let Ok(image) = h.render() {
+                let _ = image.save(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sut-p2-panel.png"));
+            }
+        }
+    }
+
+    #[test]
+    fn spray_switched_on_restores_the_imported_particles_and_thickness_axis_follows_the_brush() {
+        let mut m = SutBrushMetadata::default();
+        for (k, v) in [("BrushSpraySize", 7.5), ("BrushSprayDensity", 1e9), ("BrushSprayBias", -40.0), ("BrushRotationInSpray", 30.0)] {
+            m.parameters.insert(k.into(), v);
+        }
+        let s = spray_from_source(&m);
+        assert_eq!((s.size, s.count, s.bias, s.angle), (7.5, prism_engine::paint::csp_spray::MAX_PARTICLES, -0.4, -30.0));
+        m.parameters.insert("BrushSpraySize".into(), f64::NAN);
+        assert_eq!(spray_from_source(&m).size, 2.0, "a broken source falls back to CSP's default");
+        let mut b = BrushSettings { csp_tip_scale: Some([1.0, 0.5]), ..Default::default() };
+        assert!(thickness_vertical(&m, &b));
+        b.csp_tip_scale = Some([0.5, 1.0]);
+        assert!(!thickness_vertical(&m, &b));
+        b.csp_tip_scale = None;
+        m.parameters.insert("BrushVerticalThicknes".into(), 1.0);
+        assert!(thickness_vertical(&m, &b), "no squash: the imported axis");
     }
 
     #[test]
