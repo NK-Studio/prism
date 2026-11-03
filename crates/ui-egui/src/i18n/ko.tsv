@@ -3049,6 +3049,29 @@ fontWeight	Italic	기울임
 	Particle density	입자 밀도
 	Spray	스프레이
 	Specify by size on screen	화면 크기로 지정
+	Ribbon	리본
+	Continuous spraying	연속 살포
+	Change color per stroke	획마다 색 변경
+	Color mixing	혼색
+	Starting and ending: effect	입·출 영향 대상
+	Starting	입
+	Ending	출
+	Starting and ending	입·출
+	Dual brush	2중 브러시
+	Dual brush size	2중 브러시 크기
+	Stickiness	끈기
+	Post correction	후보정
+	Refer to other layers	다른 레이어 참조
+	Adjust position	위치 조정
+	Copy stamp	복사 도장
+	Sprays while the pen holds still; CSP's rate is not traced	펜을 멈춰도 계속 살포합니다. CSP의 살포 간격은 추적되지 않았습니다
+	Change brush tip color is on: the colour varies per tip	브러시 끝 색 변경이 켜져 있어 브러시 끝마다 색이 바뀝니다
+	Perceptual color mixing	지각 기반 혼색
+	CSP mixing type 2 is approximated by blending	CSP 혼색 type 2는 일반 혼합으로 근사합니다
+	Turn on Starting or Ending to choose what they affect	입 또는 출을 켜면 영향 대상을 고를 수 있습니다
+	Percent of stroke	획 길이 비율
+	Ribbons need a tip image and no spray	리본은 브러시 끝 이미지가 있고 살포가 꺼져 있어야 합니다
+	The stroke is drawn without this CSP effect	이 CSP 효과 없이 획을 그립니다
 	Change brush tip color	브러시 끝 색 변경
 	Color jitter	색 변화
 	Spray deviation	살포 편차

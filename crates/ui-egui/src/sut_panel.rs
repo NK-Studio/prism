@@ -30,6 +30,7 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1052, "Thickness direction", "BrushVerticalThicknes", "Brush tip"),
     (1060, "Direction", "BrushRotation", "Brush tip"),
     (1071, "Tip order", "BrushPatternOrderType", "Brush tip"),
+    (1110, "Ribbon", "BrushRibbon", "Brush tip"),
     (1040, "Spacing", "BrushInterval", "Brush tip"),
     (1042, "Spacing type", "BrushAutoIntervalType", "Brush tip"),
     (1130, "Spray effect", "BrushUseSpray", "Spray"),
@@ -37,18 +38,32 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1133, "Particle density", "BrushSprayDensity", "Spray"),
     (1135, "Spray deviation", "BrushSprayBias", "Spray"),
     (1061, "Direction of particle", "BrushRotationInSpray", "Spray"),
+    (1043, "Continuous spraying", "BrushContinuousPlot", "Spray"),
     (1102, "Change brush tip color", "BrushChangePatternColor", "Color jitter"),
     (1103, "Hue", "BrushHueChange", "Color jitter"),
     (1105, "Saturation", "BrushSaturationChange", "Color jitter"),
     (1107, "Luminosity", "BrushValueChange", "Color jitter"),
+    (1270, "Change color per stroke", "BrushChangeStrokeColor", "Color jitter"),
+    (1080, "Color mixing", "BrushWaterColor", "Ink"),
+    (1162, "Starting and ending: effect", "BrushInOutTarget", "Starting and ending"),
+    (1171, "Starting", "BrushInLength", "Starting and ending"),
+    (1181, "Ending", "BrushOutLength", "Starting and ending"),
+    (1910, "Dual brush", "UseDualBrush", "Dual brush"),
+    (51000, "Dual brush size", "DualSize", "Dual brush"),
     (100, "Texture", "TextureImage", "Texture"),
     (110, "Texture density", "TextureDensity", "Texture"),
     (120, "Scale ratio", "TextureScale2", "Texture"),
     (1201, "Watercolor edge", "BrushWaterEdgeRadius", "Watercolor edge"),
+    (1202, "Opacity influence", "BrushWaterEdgeAlphaPower", "Watercolor edge"),
+    (1203, "Darkness influence", "BrushWaterEdgeValuePower", "Watercolor edge"),
     (40, "Stabilization", "FlickerReduction", "Correction"),
     (41, "Adjust by speed", "FlickerReductionBySpeed", "Correction"),
     (42, "Speed adjustment type", "FlickerReductionBySpeedType", "Correction"),
+    (50, "Stickiness", "Stickness", "Correction"),
+    (1151, "Post correction", "BrushRevision", "Correction"),
+    (1250, "Refer to other layers", "BrushUseReferLayer", "Correction"),
     (1241, "Vector magnet", "BrushVectorMagnetPower", "Correction"),
+    (1500, "Adjust position", "StampAdjustPosition", "Copy stamp"),
 ];
 
 pub fn active(app: &PrismApp) -> Option<(&str, &SutBrushMetadata)> {
@@ -166,6 +181,88 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
                 }
             } else {
                 unsupported(ui, label, tl!("One tip").to_string(), true);
+            }
+        }
+        1043 => {
+            ui.checkbox(&mut b.build_up, tl!(label));
+            ui.small(tl!("Sprays while the pen holds still; CSP's rate is not traced"));
+        }
+        50 => match &mut b.csp_stabilizer {
+            Some(st) => {
+                let mut v = st.stickiness.min(prism_engine::paint::csp_stabilizer::MAX_LEVEL) as f32;
+                if number(ui, label, &mut v, 0.0..=prism_engine::paint::csp_stabilizer::MAX_LEVEL as f32, "") {
+                    st.stickiness = (v.round().max(0.0) as u32).min(prism_engine::paint::csp_stabilizer::MAX_LEVEL);
+                }
+            }
+            None => unsupported(ui, label, format!("{:.0}", source(m, key)), true),
+        },
+        1202 | 1203 => match &mut b.csp_water_edge {
+            Some(e) => {
+                let value = if id == 1202 { &mut e.opacity } else { &mut e.darkness };
+                let mut percent = if value.is_finite() { (*value * 100.0).clamp(0.0, 100.0) } else { 0.0 };
+                if number(ui, label, &mut percent, 0.0..=100.0, " %") {
+                    *value = (percent / 100.0).clamp(0.0, 1.0);
+                }
+            }
+            None => unsupported(ui, label, format!("{:.0}", source(m, key)), true),
+        },
+        1270 => {
+            // Once per stroke (`per_tip: false`); per-tip variation (1102) and per-stroke together
+            // use the per-tip one, as on import.
+            let cd = &mut b.color_dynamics;
+            let mut on = cd.enabled && !cd.per_tip;
+            if ui.checkbox(&mut on, tl!(label)).changed() {
+                cd.enabled = on;
+                cd.per_tip = !on;
+            }
+            if cd.enabled && cd.per_tip {
+                ui.small(tl!("Change brush tip color is on: the colour varies per tip"));
+            }
+        }
+        1080 => {
+            let mut on = b.csp_mixing.is_some();
+            if ui.checkbox(&mut on, tl!(label)).changed() {
+                b.csp_mixing = on.then(prism_engine::paint::CspColorMixing::default);
+            }
+            if let Some(mixing) = &mut b.csp_mixing {
+                ui.checkbox(&mut mixing.perceptual, tl!("Perceptual color mixing"));
+                if source(m, key) >= 2.0 {
+                    ui.small(tl!("CSP mixing type 2 is approximated by blending"));
+                }
+            }
+        }
+        1162 => in_out_targets(ui, label, b),
+        1171 | 1181 => in_out_length(ui, id, label, m, b),
+        1910 => {
+            ui.checkbox(&mut b.dual_brush.enabled, tl!(label));
+        }
+        51000 => {
+            ui.add_enabled_ui(b.dual_brush.enabled, |ui| {
+                let mut px = if b.dual_brush.size.is_finite() { b.dual_brush.size } else { 1.0 };
+                if number(ui, label, &mut px, 0.5..=prism_engine::paint::MAX_BRUSH_SIZE, " px") {
+                    b.dual_brush.size = px.clamp(0.5, prism_engine::paint::MAX_BRUSH_SIZE);
+                }
+            });
+        }
+        1110 => {
+            // CSP draws ribbons only with tip images and without spraying.
+            let usable = matches!(b.tip, prism_engine::paint::TipShape::Sampled(_) | prism_engine::paint::TipShape::Sequence(_)) && b.csp_spray.is_none();
+            let mut on = b.csp_ribbon.is_some();
+            let changed = ui.add_enabled_ui(usable || on, |ui| ui.checkbox(&mut on, tl!(label)).changed()).inner;
+            if changed {
+                let direction = if b.angle.is_finite() { f64::from(-b.angle) } else { 0.0 };
+                b.csp_ribbon = on.then(|| prism_engine::paint::csp_ribbon::CspRibbon::from_rotation(direction));
+            }
+            if !usable {
+                ui.small(tl!("Ribbons need a tip image and no spray"));
+            }
+        }
+        1151 | 1250 | 1500 => {
+            let on = source(m, key) != 0.0 || (id == 1151 && source(m, "BrushUseRevision") != 0.0);
+            let value = if id == 1151 && source(m, "BrushUseRevision") == 0.0 { tl!("Off").to_string() } else { format!("{:.0}", source(m, key)) };
+            unsupported(ui, label, value, false);
+            if on {
+                ui.small(tl!("The stroke is drawn without this CSP effect"));
             }
         }
         1130 => {
@@ -392,6 +489,99 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
 /// Spacing (1040) and its type (1042, `BrushAutoIntervalType`): fixed spacing edits the
 /// fraction of the diameter; the automatic types set it from hardness and thickness as the import
 /// does (`prism_paint::sut::auto_spacing`). The shown type is the one the brush's spacing matches.
+/// Starting and ending: which parameters taper (`CspInOut::targets`), each with its minimum.
+fn in_out_targets(ui: &mut egui::Ui, label: &str, b: &mut BrushSettings) {
+    use prism_engine::paint::{CspInOutParam as P, CspInOutTarget};
+    ui.label(tl!(label));
+    let Some(io) = &mut b.csp_in_out else {
+        ui.small(tl!("Turn on Starting or Ending to choose what they affect"));
+        return;
+    };
+    let params = [
+        (P::Size, "Brush Size"),
+        (P::Flow, "Brush density"),
+        (P::TextureDensity, "Texture density"),
+        (P::SpraySize, "Particle size"),
+        (P::SprayDensity, "Particle density"),
+    ];
+    for (param, name) in params {
+        let at = io.targets.iter().position(|t| t.param == param);
+        let mut on = at.is_some();
+        ui.horizontal(|ui| {
+            if ui.checkbox(&mut on, tl!(name)).changed() {
+                match (on, at) {
+                    (true, None) => io.targets.push(CspInOutTarget { param, minimum: 0.0 }),
+                    (false, Some(i)) => {
+                        io.targets.remove(i);
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(t) = io.targets.iter_mut().find(|t| t.param == param) {
+                let mut percent = if t.minimum.is_finite() { (t.minimum * 100.0).clamp(0.0, 100.0) } else { 0.0 };
+                let r = ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).suffix(" %")).on_hover_text(tl!("Minimum"));
+                if r.changed() {
+                    t.minimum = (percent / 100.0).clamp(0.0, 1.0);
+                }
+            }
+        });
+    }
+}
+
+/// Starting (1171) or Ending (1181): on/off and the length, in pixels or percent of the stroke.
+fn in_out_length(ui: &mut egui::Ui, id: u32, label: &str, m: &SutBrushMetadata, b: &mut BrushSettings) {
+    use prism_engine::paint::{CspInOut, CspInOutMode, CspInOutParam, CspInOutTarget, csp_in_out::MAX_LENGTH};
+    let start = id == 1171;
+    let current = b.csp_in_out.as_ref().and_then(|io| if start { io.start } else { io.end });
+    let mut on = current.is_some();
+    if ui.checkbox(&mut on, tl!(label)).changed() {
+        let io =
+            b.csp_in_out.get_or_insert_with(|| CspInOut { targets: vec![CspInOutTarget { param: CspInOutParam::Size, minimum: 0.0 }], ..Default::default() });
+        let value = on.then(|| match io.mode {
+            CspInOutMode::Length => {
+                let v = f64::from(source(m, if start { "BrushInLength" } else { "BrushOutLength" }));
+                if v > 0.0 { v.min(MAX_LENGTH) } else { 20.0 }
+            }
+            CspInOutMode::Percent => 0.1,
+        });
+        if start {
+            io.start = value;
+        } else {
+            io.end = value;
+        }
+        if io.start.is_none() && io.end.is_none() {
+            b.csp_in_out = None;
+        }
+        return;
+    }
+    let Some(io) = &mut b.csp_in_out else { return };
+    let mut mode = io.mode;
+    ui.horizontal(|ui| {
+        crate::widgets::dropdown(
+            ui,
+            if start { "sut-in-mode" } else { "sut-out-mode" },
+            &mut mode,
+            &[(CspInOutMode::Length, "Length"), (CspInOutMode::Percent, "Percent of stroke")],
+            ui.available_width().min(180.0),
+        );
+    });
+    if mode != io.mode {
+        // Switching keeps a usable taper: 10 % of the stroke, or 20 px.
+        let reset = |v: Option<f64>| v.map(|_| if mode == CspInOutMode::Percent { 0.1 } else { 20.0 });
+        io.start = reset(io.start);
+        io.end = reset(io.end);
+        io.mode = mode;
+    }
+    let value = if start { &mut io.start } else { &mut io.end };
+    if let Some(v) = value {
+        let (scale, max, unit) = if io.mode == CspInOutMode::Percent { (100.0, 100.0, " %") } else { (1.0, 1000.0, " px") };
+        let mut shown = if v.is_finite() { (*v * scale).clamp(0.0, max) as f32 } else { 0.0 };
+        if ui.add(egui::Slider::new(&mut shown, 0.0..=max as f32).suffix(unit)).changed() {
+            *v = (f64::from(shown) / scale).max(1e-3);
+        }
+    }
+}
+
 /// The thickness axis: the brush's own (only one axis below 1 is squashed), else the imported
 /// `BrushVerticalThicknes`.
 fn thickness_vertical(m: &SutBrushMetadata, b: &BrushSettings) -> bool {
@@ -707,6 +897,79 @@ mod tests {
         b.csp_tip_scale = None;
         m.parameters.insert("BrushVerticalThicknes".into(), 1.0);
         assert!(thickness_vertical(&m, &b), "no squash: the imported axis");
+    }
+
+    #[test]
+    fn remaining_backlog_rows_are_named_and_survive_hostile_values() {
+        use prism_engine::paint::{CspInOut, CspInOutParam, CspInOutTarget, GrayTile, TipShape};
+        let ids = vec![1043, 50, 1202, 1203, 1270, 1080, 1162, 1171, 1181, 1910, 51000, 1110, 1151, 1250, 1500];
+        for hostile in [false, true] {
+            let mut h = harness();
+            {
+                let app = h.state_mut();
+                let b = &mut app.session.tools.brush;
+                let v = |ok: f32| if hostile { f32::NAN } else { ok };
+                b.tip = TipShape::Sampled(GrayTile::from_fn(4, 4, |_, _| 1.0));
+                b.csp_stabilizer = Some(prism_engine::paint::csp_stabilizer::CspStabilizer {
+                    level: 10,
+                    stickiness: if hostile { u32::MAX } else { 4 },
+                    ..Default::default()
+                });
+                b.csp_water_edge = Some(prism_engine::paint::csp_water_edge::CspWaterEdge { opacity: v(0.5), darkness: v(0.2), ..Default::default() });
+                b.csp_mixing = Some(prism_engine::paint::CspColorMixing::default());
+                b.csp_in_out = Some(CspInOut {
+                    start: Some(if hostile { f64::INFINITY } else { 30.0 }),
+                    end: Some(40.0),
+                    targets: vec![CspInOutTarget { param: CspInOutParam::Size, minimum: v(0.1) }],
+                    ..Default::default()
+                });
+                b.dual_brush.enabled = true;
+                b.dual_brush.size = v(12.0);
+                let brush = b.clone();
+                let preset = app.session.tools.presets.last_mut().unwrap();
+                preset.brush = brush;
+                let sut = preset.sut.as_mut().unwrap();
+                sut.original.visible = ids.clone();
+                sut.parameters.insert("BrushRevision".into(), if hostile { f64::NAN } else { 10.0 });
+                sut.parameters.insert("BrushUseRevision".into(), 1.0);
+            }
+            h.run_steps(3);
+            assert!(h.query_by_label_contains("Unsupported CSP setting").is_none(), "hostile={hostile}");
+            for label in [
+                "Continuous spraying",
+                "Stickiness",
+                "Change color per stroke",
+                "Color mixing",
+                "Starting",
+                "Ending",
+                "Dual brush",
+                "Ribbon",
+                "Post correction",
+                "Refer to other layers",
+                "Adjust position",
+            ] {
+                assert!(h.query_all_by_label_contains(label).next().is_some(), "{label} (hostile={hostile})");
+            }
+            if !hostile && let Ok(image) = h.render() {
+                let _ = image.save(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sut-p3-panel.png"));
+            }
+        }
+    }
+
+    #[test]
+    fn ending_switched_off_last_removes_the_taper_and_on_starts_with_a_size_target() {
+        let mut h = harness();
+        h.state_mut().session.tools.presets.last_mut().unwrap().sut.as_mut().unwrap().original.visible = vec![1171];
+        h.run_steps(2);
+        assert!(h.state().session.tools.brush.csp_in_out.is_none());
+        h.get_by_label("Starting").click();
+        h.run_steps(2);
+        let io = h.state().session.tools.brush.csp_in_out.clone().expect("starting turned on");
+        assert_eq!((io.start, io.end), (Some(20.0), None));
+        assert_eq!(io.targets.first().map(|t| t.param), Some(prism_engine::paint::CspInOutParam::Size));
+        h.get_by_label("Starting").click();
+        h.run_steps(2);
+        assert!(h.state().session.tools.brush.csp_in_out.is_none(), "no start and no end: no taper");
     }
 
     #[test]

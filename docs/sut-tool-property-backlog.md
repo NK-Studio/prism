@@ -53,11 +53,11 @@ below already renders; only the editable control is missing.
 | ~~P2~~ done 2026-11-04 | 1061 | `BrushRotationInSpray` | Direction of particle | 8 | `csp_spray.angle` | slider −180–180° |
 | ~~P2~~ done 2026-11-04 | 1052 | `BrushVerticalThicknes` | Thickness direction | 8 | `csp_tip_scale` axis | horizontal/vertical toggle beside 1050 |
 | ~~P2~~ done 2026-11-04 | 1071 | `BrushPatternOrderType(2)` | Tip order | 6 | `csp_tip_order` | list: Repeat / Reverse / Do not repeat / Random |
-| P3 | 1043 | `BrushContinuousPlot` | Continuous spraying | 3 | `build_up` | checkbox (CSP rate not traced) |
-| P3 | 50 | `Stickness` | Stickiness | 3 | `csp_stabilizer.stickiness` | integer slider 0–100 |
-| P3 | 1202 | `BrushWaterEdgeAlphaPower` | Opacity influence | 1 | `csp_water_edge.opacity` | already in 1201's advanced block: map the ID to that block |
-| P3 | 1203 | `BrushWaterEdgeValuePower` | Darkness influence | 1 | `csp_water_edge.darkness` | same as 1202 |
-| P3 | 1270 | `BrushChangeStrokeColor` | Change color per stroke | 1 | `color_dynamics` (per stroke) | checkbox; warn that per-tip + per-stroke together uses per-tip |
+| ~~P3~~ done 2026-11-04 | 1043 | `BrushContinuousPlot` | Continuous spraying | 3 | `build_up` | checkbox (CSP rate not traced) |
+| ~~P3~~ done 2026-11-04 | 50 | `Stickness` | Stickiness | 3 | `csp_stabilizer.stickiness` | integer slider 0–100 |
+| ~~P3~~ done 2026-11-04 | 1202 | `BrushWaterEdgeAlphaPower` | Opacity influence | 1 | `csp_water_edge.opacity` | already in 1201's advanced block: map the ID to that block |
+| ~~P3~~ done 2026-11-04 | 1203 | `BrushWaterEdgeValuePower` | Darkness influence | 1 | `csp_water_edge.darkness` | same as 1202 |
+| ~~P3~~ done 2026-11-04 | 1270 | `BrushChangeStrokeColor` | Change color per stroke | 1 | `color_dynamics` (per stroke) | checkbox; warn that per-tip + per-stroke together uses per-tip |
 
 P1 status (2026-11-04): all six rows have Tool Property controls (`sut_panel::control`);
 hardness re-derives automatic spacing, direction keeps a ribbon's quarter turns in sync, particle
@@ -78,12 +78,12 @@ changes the preview strip; save/reload of the preset keeps the edit.
 
 | Pri | ID | Key | CSP label | Presets | Today | To build |
 |---|---|---|---|---|---|---|
-| P2 | 1162 | `BrushInOutTarget` | Starting and ending: effect | 18 | targets decoded into `csp_in_out`; unknown targets warn | target checklist (size, opacity, density, …) |
-| P2 | 1171 | `BrushInLength` (+`Unit`/`Ratio`) | Starting | 6 | pixels only; fade type 2 unsupported | length/percent slider; units; fade |
-| P2 | 1181 | `BrushOutLength` (+`Unit`/`Ratio`) | Ending | 6 | as 1171 | as 1171 |
-| P2 | 1080 | `BrushWaterColor` | Color mixing (mode) | 7 | type 2 approximated by blending | mode list; faithful type 2 |
-| P3 | 1910 | `UseDualBrush` | Dual brush | 2 | `dual_brush`; several dual settings ignored with a warning | checkbox + dual sub-panel |
-| P3 | 51000 | `DualSize` (+`Unit`) | Dual brush size | 1 | applied | slider inside the dual sub-panel |
+| ~~P2~~ done 2026-11-04 | 1162 | `BrushInOutTarget` | Starting and ending: effect | 18 | targets decoded into `csp_in_out`; unknown targets warn | target checklist (size, opacity, density, …) |
+| ~~P2~~ done 2026-11-04 | 1171 | `BrushInLength` (+`Unit`/`Ratio`) | Starting | 6 | pixels only; fade type 2 unsupported | length/percent slider; units; fade |
+| ~~P2~~ done 2026-11-04 | 1181 | `BrushOutLength` (+`Unit`/`Ratio`) | Ending | 6 | as 1171 | as 1171 |
+| ~~P2~~ done 2026-11-04 | 1080 | `BrushWaterColor` | Color mixing (mode) | 7 | type 2 approximated by blending | mode list; faithful type 2 |
+| ~~P3~~ done 2026-11-04 | 1910 | `UseDualBrush` | Dual brush | 2 | `dual_brush`; several dual settings ignored with a warning | checkbox + dual sub-panel |
+| ~~P3~~ done 2026-11-04 | 51000 | `DualSize` (+`Unit`) | Dual brush size | 1 | applied | slider inside the dual sub-panel |
 
 Spray, start/end and water-edge lengths are read as pixels; CLIP STUDIO units (mm, pt, %
 of canvas resolution) need the document resolution. One shared length-with-unit control
@@ -93,10 +93,10 @@ should cover 1131, 1171, 1181, 1201 and 51000.
 
 | Pri | ID | Key | CSP label | Presets | Notes |
 |---|---|---|---|---|---|
-| P2 | 1250 | `BrushUseReferLayer` | Refer to other layers (draw beside reference lines) | 12 | needs a reference-layer concept; today warns only |
-| P2 | 1151 | `BrushRevision` (+`BrushUseRevision`) | Post correction | 6 | smoothing after the stroke; trace interaction with start/end |
-| P3 | 1110 | `BrushRibbon` | Ribbon | 1 | rendered (`csp_ribbon`) but no control; add a checkbox (valid only with tip images and no spray) |
-| P3 | 1500 | `StampAdjustPosition` | Adjust position (copy stamp) | 1 | copy-stamp sub-tool; also 1510 `StampSetReferPointMode` |
+| P2 (named row, behaviour open) | 1250 | `BrushUseReferLayer` | Refer to other layers (draw beside reference lines) | 12 | needs a reference-layer concept; today warns only |
+| P2 (named row, behaviour open) | 1151 | `BrushRevision` (+`BrushUseRevision`) | Post correction | 6 | smoothing after the stroke; trace interaction with start/end |
+| ~~P3~~ done 2026-11-04 | 1110 | `BrushRibbon` | Ribbon | 1 | rendered (`csp_ribbon`) but no control; add a checkbox (valid only with tip images and no spray) |
+| P3 (named row, behaviour open) | 1500 | `StampAdjustPosition` | Adjust position (copy stamp) | 1 | copy-stamp sub-tool; also 1510 `StampSetReferPointMode` |
 
 ## D. IDs with no traced key
 
@@ -117,6 +117,19 @@ Record evidence there, then move each row to A–C.
 | 113, 114 | 1 | Crystal base (texture group) |
 | 1101 | 1 | Crystal base (colour jitter group 1102–1107) |
 | 1022 | 1 | 물번짐구름 브러쉬 (density group 1020) |
+
+## Status 2026-11-04 (after P3)
+
+- Every ID in groups A, B and C now has a named Tool Property row; none is drawn as
+  "Unsupported CSP setting". Groups A and B and ribbon (1110) edit the brush; starting/ending
+  can be turned on, switched between length (px) and percent of the stroke, and target any of
+  size, density, texture density, particle size and density with a minimum.
+- Still behaviour work, shown as named read-only rows: refer to other layers (1250), post
+  correction (1151), copy-stamp adjust position (1500). Fade type 2, CSP length units and a
+  faithful colour mixing type 2 stay open (B).
+- Group D IDs still need their keys traced before rows can be built.
+- Tests: `remaining_backlog_rows_are_named_and_survive_hostile_values`,
+  `ending_switched_off_last_removes_the_taper_and_on_starts_with_a_size_target`.
 
 ## Re-measuring
 
