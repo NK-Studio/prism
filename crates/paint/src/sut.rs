@@ -103,6 +103,19 @@ pub const RETAINED_KEYS: &[&str] = &[
     "TextureStressDensity",
     "TextureForPlot",
     "PrismTextureScaleFactor",
+    "BrushInOutType",
+    "BrushUseIn",
+    "BrushUseOut",
+    "BrushInRatio",
+    "BrushOutRatio",
+    "BrushInLengthUnit",
+    "BrushOutLengthUnit",
+    "BrushInOutBySpeed",
+    "BrushSpraySizeUnit",
+    "BrushSpraySizeSyncBrushSize",
+    "DualSizeUnit",
+    "DualSpraySizeUnit",
+    "BrushWaterColor2",
 ];
 
 /// The largest imported setting value kept (see [`crate::sut_catalog::MAX_SETTING_VALUE`]).
@@ -328,6 +341,10 @@ mod spacing_tests {
             assert!(s.is_finite() && (0.01..=10.0).contains(&s), "{v}: {s}");
         }
         assert!(is_known_parameter(1040) && is_known_parameter(1042));
+        // Source values kept for the fade / unit / mixing experiments (docs/sut-experiment-materials.md).
+        for key in ["BrushInOutType", "BrushInLengthUnit", "BrushSpraySizeUnit", "BrushWaterColor2"] {
+            assert!(is_retained_key(key), "{key}");
+        }
     }
 }
 

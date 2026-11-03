@@ -179,3 +179,65 @@ fn one_local_csp_material() {
         println!("{label}: coverage {:.1} {:?}", painted(&s, 0, 0), res.err());
     }
 }
+
+/// Experiment candidates for the open SUT behaviours (docs/sut-experiment-materials.md):
+/// start/end fade (`BrushInOutType` 2), non-pixel lengths (`*Unit` ≠ 0) and colour mixing type 2
+/// (`BrushWaterColor` 2). Prints a table and writes `target/csp-check/experiment-materials.json`.
+#[test]
+#[ignore = "reads the local CLIP STUDIO user data folder"]
+fn local_csp_experiment_materials() {
+    let mut s = Session::new();
+    let mut root = json!({});
+    if let Some(r) = std::env::var_os("PRISM_TEST_CSP_ROOT") {
+        root["root"] = json!(r.to_string_lossy());
+    }
+    let listed = s.execute("brush.cspLibrary.list", root.clone()).unwrap();
+    let keys = [
+        "BrushInOutType",
+        "BrushUseIn",
+        "BrushUseOut",
+        "BrushInLength",
+        "BrushOutLength",
+        "BrushInRatio",
+        "BrushOutRatio",
+        "BrushInLengthUnit",
+        "BrushOutLengthUnit",
+        "BrushSizeUnit",
+        "BrushSpraySizeUnit",
+        "BrushWaterEdgeRadiusUnit",
+        "DualSizeUnit",
+        "DualSpraySizeUnit",
+        "BrushWaterColor",
+        "BrushWaterColor2",
+        "BrushRibbon",
+    ];
+    let mut found = Vec::new();
+    for (i, m) in listed["brushes"].as_array().unwrap().iter().enumerate() {
+        if m["status"] != "ready" {
+            continue;
+        }
+        let mut p = root.clone();
+        p["uuids"] = json!([m["uuid"]]);
+        p["group"] = json!(format!("csp-exp-{i}"));
+        let Ok(r) = s.execute("brush.cspLibrary.import", p) else { continue };
+        for preset in s.tools.presets.iter().filter(|p| p.group == format!("csp-exp-{i}")) {
+            let Some(meta) = &preset.sut else { continue };
+            let v = |k: &str| meta.parameters.get(k).copied().unwrap_or(0.0);
+            let fade = v("BrushInOutType") == 2.0 && (v("BrushUseIn") != 0.0 || v("BrushUseOut") != 0.0);
+            let units: Vec<String> = keys.iter().filter(|k| k.ends_with("Unit") && v(k) != 0.0).map(|k| format!("{k}={}", v(k))).collect();
+            let mix2 = v("BrushWaterColor") == 2.0;
+            if fade || !units.is_empty() || mix2 {
+                let values: serde_json::Map<String, Value> = keys.iter().filter(|k| meta.parameters.contains_key(**k)).map(|k| (k.to_string(), json!(v(k)))).collect();
+                println!("{:<28} {:<24} fade2={fade:<5} mix2={mix2:<5} units={units:?}", preset.name, m["catalog"].as_str().unwrap_or(""));
+                found.push(json!({
+                    "name": preset.name, "uuid": m["uuid"], "catalog": m["catalog"], "fadeType2": fade, "mixingType2": mix2,
+                    "units": units, "values": values, "warnings": r["warnings"],
+                }));
+            }
+        }
+    }
+    let out = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/csp-check"));
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("experiment-materials.json"), serde_json::to_vec_pretty(&found).unwrap()).unwrap();
+    println!("{} candidates", found.len());
+}
