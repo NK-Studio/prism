@@ -105,6 +105,24 @@ fn dabs_of(b: &BrushSettings, pts: &[StrokePoint]) -> Vec<Dab> {
 }
 
 #[test]
+fn csp_at_least_1px_lays_sub_pixel_dabs_as_full_1px_dabs() {
+    let tiny = BrushSettings { size: 0.5, ..brush() };
+    let faded = dabs_of(&tiny, &line(10.0, 20.0, 10.0));
+    assert!(!faded.is_empty() && faded.iter().all(|d| d.radius == 0.5 && (d.alpha - 0.25).abs() < 1e-6), "area-faded without the flag");
+    let floored = dabs_of(&BrushSettings { csp_at_least_1px: true, ..tiny.clone() }, &line(10.0, 20.0, 10.0));
+    assert!(floored.iter().all(|d| d.radius == 0.5 && (d.alpha - 1.0).abs() < 1e-6), "full ink with the flag");
+    // Dabs never step closer than MIN_DAB_STEP (1 px), so the count is unchanged.
+    assert_eq!(floored.len(), faded.len());
+    // Brushes of 1 px and more are unchanged; hostile sizes stay finite.
+    let big = BrushSettings { size: 8.0, ..brush() };
+    assert_eq!(dabs_of(&big, &line(10.0, 20.0, 10.0)), dabs_of(&BrushSettings { csp_at_least_1px: true, ..big.clone() }, &line(10.0, 20.0, 10.0)));
+    for size in [f32::NAN, f32::INFINITY, -3.0, 0.0] {
+        let d = dabs_of(&BrushSettings { size, csp_at_least_1px: true, ..brush() }, &line(10.0, 20.0, 10.0));
+        assert!(d.iter().all(|d| d.radius.is_finite() && d.alpha.is_finite()), "{size}");
+    }
+}
+
+#[test]
 fn csp_spray_separates_area_particle_size_count_and_orientation() {
     let b = BrushSettings {
         size: 30.0,

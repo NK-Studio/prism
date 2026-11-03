@@ -18,6 +18,7 @@ pub struct SutPanelState {
 const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1000, "Brush Size", "BrushSize", "Brush Size"),
     (1002, "Specify by size on screen", "BrushSizeSyncViewScale", "Brush Size"),
+    (1003, "At least 1 pixel", "BrushAtLeast1Pixel", "Brush Size"),
     (10, "Opacity", "Opacity", "Ink"),
     (30, "Blending mode", "CompositeMode", "Ink"),
     (1020, "Brush density", "BrushFlow", "Ink"),
@@ -30,6 +31,8 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1052, "Thickness direction", "BrushVerticalThicknes", "Brush tip"),
     (1060, "Direction", "BrushRotation", "Brush tip"),
     (1071, "Tip order", "BrushPatternOrderType", "Brush tip"),
+    (1074, "Flip horizontal", "BrushPatternReverseHorizontal", "Brush tip"),
+    (1075, "Flip vertical", "BrushPatternReverseVertical", "Brush tip"),
     (1110, "Ribbon", "BrushRibbon", "Brush tip"),
     (1040, "Spacing", "BrushInterval", "Brush tip"),
     (1042, "Spacing type", "BrushAutoIntervalType", "Brush tip"),
@@ -149,6 +152,15 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
         1040 | 1042 => spacing(ui, id, label, m, b),
         1002 => {
             ui.checkbox(&mut b.csp_size_by_view, tl!(label));
+        }
+        1003 => {
+            ui.checkbox(&mut b.csp_at_least_1px, tl!(label));
+        }
+        1074 => {
+            ui.checkbox(&mut b.flip_x, tl!(label));
+        }
+        1075 => {
+            ui.checkbox(&mut b.flip_y, tl!(label));
         }
         1052 => {
             // The thickness squashes the tip's width (horizontal) or its height (vertical).
@@ -954,6 +966,26 @@ mod tests {
                 let _ = image.save(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sut-p3-panel.png"));
             }
         }
+    }
+
+    #[test]
+    fn flip_and_at_least_1px_rows_toggle_the_brush() {
+        let mut h = harness();
+        h.state_mut().session.tools.presets.last_mut().unwrap().sut.as_mut().unwrap().original.visible = vec![1003, 1074, 1075];
+        h.run_steps(2);
+        assert!(h.query_by_label_contains("Unsupported CSP setting").is_none());
+        for label in ["At least 1 pixel", "Flip horizontal", "Flip vertical"] {
+            h.get_by_label(label).click();
+            h.run_steps(2);
+        }
+        let b = &h.state().session.tools.brush;
+        assert!(b.csp_at_least_1px && b.flip_x && b.flip_y);
+        assert_eq!(h.state().session.journal.last().unwrap().0, "tools.setBrush");
+        crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
+            for label in ["At least 1 pixel", "Flip horizontal", "Flip vertical"] {
+                assert_ne!(tl!(label), label, "{label}");
+            }
+        });
     }
 
     #[test]

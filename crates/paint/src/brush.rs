@@ -620,6 +620,10 @@ pub struct BrushSettings {
     /// stroke at zoom `z` paints `size / z` image pixels.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub csp_size_by_view: bool,
+    /// Imported CSP "at least 1 pixel" (`BrushAtLeast1Pixel`, property 1003): a dab smaller than
+    /// 1 px is laid as a full 1 px dab instead of fading with its area.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_at_least_1px: bool,
     /// Keep the current texture (pattern + scale) when switching to another textured preset.
     pub protect_texture: bool,
     /// Sections whose settings stay when another preset is picked (tool state, like Photoshop's locks).
@@ -678,6 +682,7 @@ impl Default for BrushSettings {
             csp_erase: false,
             csp_stroke: None,
             csp_size_by_view: false,
+            csp_at_least_1px: false,
             protect_texture: false,
             locks: SectionLocks::default(),
             mixer: MixerSettings::default(),

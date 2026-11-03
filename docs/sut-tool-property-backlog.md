@@ -58,6 +58,15 @@ below already renders; only the editable control is missing.
 | ~~P3~~ done 2026-11-04 | 1202 | `BrushWaterEdgeAlphaPower` | Opacity influence | 1 | `csp_water_edge.opacity` | already in 1201's advanced block: map the ID to that block |
 | ~~P3~~ done 2026-11-04 | 1203 | `BrushWaterEdgeValuePower` | Darkness influence | 1 | `csp_water_edge.darkness` | same as 1202 |
 | ~~P3~~ done 2026-11-04 | 1270 | `BrushChangeStrokeColor` | Change color per stroke | 1 | `color_dynamics` (per stroke) | checkbox; warn that per-tip + per-stroke together uses per-tip |
+| ~~P2~~ done 2026-11-04 (from D) | 1074 | `BrushPatternReverseHorizontal` | Flip horizontal (brush tip) | 6 | `flip_x` | checkbox |
+| ~~P2~~ done 2026-11-04 (from D) | 1075 | `BrushPatternReverseVertical` | Flip vertical (brush tip) | 2 | `flip_y` | checkbox |
+| P3 (from D) | 1087 | `BrushColorMixingMode` | Color mixing method | 3 | `csp_mixing.perceptual` | toggle inside the colour-mixing block (needs `csp_mixing`) |
+| P3 (from D) | 1911 | `DualBrushCompositeMode` | Dual brush blending mode | 2 | `dual_brush.mode` / additive modes (`csp_dual_mode`) | list in the dual sub-panel (1910) |
+| P3 (from D) | 101 | `TextureForPlot` | Apply to each brush tip (texture) | 1 | `texture.each_tip` | checkbox in the texture block |
+| P3 (from D) | 102 | `TextureCompositeMode` | Texture blending mode | 1 | `texture.csp_mode` | list of the CSP texture modes |
+| P3 (from D) | 113 | `TextureReverseDensity` | Reverse density | 1 | `texture.invert` | checkbox in the texture block |
+| P3 (from D) | 114 | `TextureStressDensity` | Emphasize density | 1 | `texture.contrast` +0.5 (approximation, warns) | checkbox; faithful effect stays open |
+| P3 (from D) | 1101 | `BrushSubColor` | Sub color (brush tip color change) | 1 | `csp_sub_color` (fixed) or `color_dynamics.fg_bg.jitter` (random) | slider 0–100 % beside 1103–1107 |
 
 P1 status (2026-11-04): all six rows have Tool Property controls (`sut_panel::control`);
 hardness re-derives automatic spacing, direction keeps a ribbon's quarter turns in sync, particle
@@ -97,26 +106,23 @@ should cover 1131, 1171, 1181, 1201 and 51000.
 | P2 (named row, behaviour open) | 1151 | `BrushRevision` (+`BrushUseRevision`) | Post correction | 6 | smoothing after the stroke; trace interaction with start/end |
 | ~~P3~~ done 2026-11-04 | 1110 | `BrushRibbon` | Ribbon | 1 | rendered (`csp_ribbon`) but no control; add a checkbox (valid only with tip images and no spray) |
 | P3 (named row, behaviour open) | 1500 | `StampAdjustPosition` | Adjust position (copy stamp) | 1 | copy-stamp sub-tool; also 1510 `StampSetReferPointMode` |
+| ~~P2~~ done 2026-11-04 (from D) | 1003 | `BrushAtLeast1Pixel` | At least 1 pixel (inferred) | 12 | Chainmail pens. Imported into `csp_at_least_1px`: a dab under 1 px is laid as a full-ink 1 px dab instead of fading with its area; checkbox row. Behaviour inferred from the key name, not yet compared with CSP |
+| P2 (from D) | 1230 | `BrushEnableSnap` | Enable snapping (inferred) | 6 | R4_FIRE, 木目ブラシ; whether the brush snaps to rulers/guides |
+| P3 (from D) | 1120 | `BrushBlendPatternByDarken` | Blend tip images by darken (inferred) | 2 | 法線ブラシ 円/四角; overlapping tip images combine with Darken instead of normal |
+| P3 (from D) | 1913 | `ChangeRGBByDual` | Dual brush affects colour (inferred) | 2 | D/Kaminari, D/Raigeki; dual brush changes RGB, not only alpha |
+| P3 (from D) | 1022 | `BrushAdjustFlowByInterval` | Adjust density by spacing (inferred) | 1 | 물번짐구름 브러쉬; density compensated for the dab spacing |
 
 ## D. IDs with no traced key
 
-These appear in local brushes but are absent from the default sub-tool tables, so the key and
-meaning must first be traced (within the scope set in [sut-analysis.md](sut-analysis.md)).
-Record evidence there, then move each row to A–C.
-
-| ID | Presets | Seen on |
-|---|---|---|
-| 1003 | 12 | Chainmail pens (next to 1002: likely a size-unit/view item) |
-| 1230 | 6 | R4_FIRE, 木目ブラシ |
-| 1074 | 6 | Deciduous Trees, Evergreens, Messy Branches (next to tip order 1071) |
-| 1087 | 3 | R4_SPARKS (colour-mixing range 1081–1085) |
-| 1075 | 2 | 法線ブラシ 円/四角 |
-| 1120 | 2 | 法線ブラシ 円/四角 |
-| 1911, 1913 | 2 | D/Kaminari, D/Raigeki (dual brush group 1910) |
-| 101, 102 | 1 | Crystal sparkles (texture group 100–120) |
-| 113, 114 | 1 | Crystal base (texture group) |
-| 1101 | 1 | Crystal base (colour jitter group 1102–1107) |
-| 1022 | 1 | 물번짐구름 브러쉬 (density group 1020) |
+None (2026-11-04). The former D rows were traced and moved to A (1074, 1075, 1087, 1911, 101,
+102, 113, 114, 1101: already imported, panel work only) and C (1003, 1230, 1120, 1913, 1022:
+not read). Their keys come from the local ID → key table `target/rea-tools/csp/display-properties.json`
+(ignored, local), which pairs each property ID with the key name in CLIP STUDIO's native settings
+reader/writer (method in [sut-analysis.md](sut-analysis.md) › property-name initialization and
+settings reader/writer). The table agrees with every ID already known from the default
+sub-tools (1020, 1030, 1102, 1110, 1131, 1133, 1151, 1171, 1250, 1910, 51000). The keys are
+traced; the CSP labels marked "inferred" are read from the key names, not from CSP's UI.
+New unknown IDs found by a re-scan go here until their key is traced.
 
 ## Status 2026-11-04 (after P3)
 
@@ -127,7 +133,9 @@ Record evidence there, then move each row to A–C.
 - Still behaviour work, shown as named read-only rows: refer to other layers (1250), post
   correction (1151), copy-stamp adjust position (1500). Fade type 2, CSP length units and a
   faithful colour mixing type 2 stay open (B).
-- Group D IDs still need their keys traced before rows can be built.
+- Group D IDs still need their keys traced before rows can be built. (Superseded the same day:
+  all D keys traced; the rows are now in A and C marked "from D" and still show as
+  "Unsupported CSP setting" until built.)
 - Tests: `remaining_backlog_rows_are_named_and_survive_hostile_values`,
   `ending_switched_off_last_removes_the_taper_and_on_starts_with_a_size_target`.
 

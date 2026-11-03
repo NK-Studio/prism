@@ -206,16 +206,17 @@ fn continuous_spraying_view_scale_and_unsupported_options() {
     let imported = import(&[
         ("BrushContinuousPlot", int(1)),
         ("BrushSizeSyncViewScale", int(1)),
+        ("BrushAtLeast1Pixel", int(1)),
         ("BrushUseRevision", int(1)),
         ("BrushRevision", int(10)),
         ("BrushUseReferLayer", int(1)),
     ]);
     let b = &imported.presets[0].brush;
-    assert!(b.build_up && b.csp_size_by_view);
+    assert!(b.build_up && b.csp_size_by_view && b.csp_at_least_1px);
     assert!(imported.warnings.iter().any(|w| w.contains("post correction")));
     assert!(imported.warnings.iter().any(|w| w.contains("reference-layer")));
     // Post correction's value alone (off) is silent; so is a plain brush.
     let plain = import(&[("BrushRevision", int(10))]);
-    assert!(!plain.presets[0].brush.build_up && !plain.presets[0].brush.csp_size_by_view);
+    assert!(!plain.presets[0].brush.build_up && !plain.presets[0].brush.csp_size_by_view && !plain.presets[0].brush.csp_at_least_1px);
     assert!(plain.warnings.is_empty(), "{:?}", plain.warnings);
 }

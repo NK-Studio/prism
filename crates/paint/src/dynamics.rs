@@ -545,6 +545,8 @@ impl DabBuilder {
             // Shape.
             let area_diameter = dab_diameter(b, s, r(stream::SIZE)) * taper(Taper::Size);
             let diameter = spray.map_or(area_diameter, |spray| spray.size * scalar(&spray.size_dynamic, s, r(stream::SPRAY_SIZE)) * taper(Taper::SpraySize));
+            // CSP "at least 1 pixel": a sub-pixel dab (pressure, taper) is laid and spaced as 1 px.
+            let diameter = if b.csp_at_least_1px && diameter.is_finite() { diameter.max(1.0) } else { diameter };
             // The step's first dab sets the spacing to the next step.
             if step.is_none() {
                 step = Some(self.step_after(diameter));
