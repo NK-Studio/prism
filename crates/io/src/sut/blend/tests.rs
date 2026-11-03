@@ -14,6 +14,25 @@ fn import(fields: &[(&str, Value)]) -> AbrImport {
 fn int(v: i64) -> Value {
     Value::Integer(v)
 }
+
+#[test]
+fn constant_sub_color_is_imported_without_requiring_random_input() {
+    for controls in [None, Some(effector(0, -100))] {
+        let mut fields = vec![("BrushChangePatternColor", int(1)), ("BrushSubColor", int(25))];
+        if let Some(controls) = controls {
+            fields.push(("BrushSubColorEffector", controls));
+        }
+        let imported = import(&fields);
+        let b = &imported.presets[0].brush;
+        assert!(b.csp_correction);
+        assert_eq!(b.csp_sub_color, Some(0.25));
+        assert!(!imported.warnings.iter().any(|w| w.contains("sub color blend")));
+    }
+    let off = import(&[("BrushSubColor", int(25))]);
+    assert_eq!(off.presets[0].brush.csp_sub_color, None);
+    let erase = import(&[("CompositeMode", int(27)), ("BrushChangePatternColor", int(1)), ("BrushSubColor", int(25))]);
+    assert_eq!(erase.presets[0].brush.csp_sub_color, None);
+}
 /// An effector blob with the `active` controls and the random minimum `random_min` %.
 fn effector(active: u32, random_min: i32) -> Value {
     let mut blob = vec![0; 48];
@@ -58,8 +77,7 @@ fn approximated_and_csp_only_modes_warn() {
 
 #[test]
 fn csp_only_stroke_modes_run_without_warnings() {
-    for (code, mode) in
-        [(29, CspStrokeMode::Behind), (31, CspStrokeMode::ReplaceAlpha), (34, CspStrokeMode::CompareDensity), (35, CspStrokeMode::EraseCompare)]
+    for (code, mode) in [(29, CspStrokeMode::Behind), (31, CspStrokeMode::ReplaceAlpha), (34, CspStrokeMode::CompareDensity), (35, CspStrokeMode::EraseCompare)]
     {
         let imported = import(&[("CompositeMode", int(code))]);
         let b = &imported.presets[0].brush;

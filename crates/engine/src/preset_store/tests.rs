@@ -1,6 +1,6 @@
 use super::*;
-use prism_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
 use prism_paint::csp_gradient::{CspGradient, CspGradientStop, CspStopColor};
+use prism_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -515,7 +515,9 @@ fn sut_display_metadata_survives_store_restart_and_restore() {
     s.tools.presets.push(preset);
     s.execute("brush.sutDisplay.set", json!({"name":"SUT sample","parameter":10,"visible":false,"showCategories":true})).unwrap();
     s.sync_preset_store();
-    let expected = prism_paint::presets::find(&s.tools.presets, "SUT sample").unwrap().clone();
+    let mut expected = prism_paint::presets::find(&s.tools.presets, "SUT sample").unwrap().clone();
+    // Legacy SUT metadata identifies CSP even when the new field was never saved.
+    expected.brush.csp_correction = true;
     let (mut restored, warnings) = session(&dir);
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(prism_paint::presets::find(&restored.tools.presets, "SUT sample"), Some(&expected));
@@ -571,6 +573,11 @@ fn malformed_sut_metadata_keeps_valid_brush_and_bounds_presentation() {
     assert_eq!(g.stops[0].curve, vec![[0.0, 0.0], [1.0, 0.0]]);
     assert!(!warnings.is_empty());
     // A gradient with fewer than two stops is dropped.
-    let metadata = read_sut_metadata(Some(json!({"original":{"visible":[],"show_categories":false},"input_op":52,"output_op":52,"parameters":{},"texture_name":"","gradient":{"stops":[]}})), "One", &mut warnings).unwrap();
+    let metadata = read_sut_metadata(
+        Some(json!({"original":{"visible":[],"show_categories":false},"input_op":52,"output_op":52,"parameters":{},"texture_name":"","gradient":{"stops":[]}})),
+        "One",
+        &mut warnings,
+    )
+    .unwrap();
     assert!(metadata.gradient.is_none());
 }

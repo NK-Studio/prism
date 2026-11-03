@@ -121,6 +121,7 @@ pub(crate) fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: pr
     {
         s.tools.brush = pr.brush.clone().picked_over(&s.tools.brush);
         s.tools.brush_preset = Some(pr.name.clone());
+        prism_paint::BrushContext::prewarm(&s.tools.brush);
     }
     Ok(
         json!({ "group": group, "imported": names, "count": names.len(), "brushes": brushes, "version": imp.version, "warnings": imp.warnings, "notes": imp.notes }),

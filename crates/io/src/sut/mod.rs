@@ -293,6 +293,7 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
     }
     b.spacing = spacing(r, &mut warnings);
     b.csp_stabilizer = stabilizer(r, &mut warnings);
+    b.csp_correction = true;
     b.csp_in_out = in_out(r, &mut warnings);
     // Ribbon (property 0x456) applies only to a brush with tip images and without spraying;
     // CSP snaps its tip to quarter turns of `BrushRotation`, whether rotation is on or not.

@@ -143,7 +143,7 @@ fn stabilized_strokes_are_chunk_invariant_and_lag_behind_the_pointer() {
 }
 
 #[test]
-fn pen_up_repeats_the_last_sample_minus_stickiness() {
+fn pen_up_repeats_then_drains_release_pressure() {
     let pts: Vec<_> = (0..30).map(|i| pt(f64::from(i) * 4.0, 0.0, 1.0, f64::from(i) * 8.0)).collect();
     for (stickiness, caught_up) in [(0, true), (8, false)] {
         let mut s = Stabilizer::new(&CspStabilizer { level: 10, stickiness, ..Default::default() }, 1.0);
@@ -152,7 +152,7 @@ fn pen_up_repeats_the_last_sample_minus_stickiness() {
         let mut tail = Vec::new();
         s.finish(&mut tail);
         let start = CspStabilizer { level: 10, stickiness, ..Default::default() }.start_window();
-        assert!(!tail.is_empty() && tail.len() <= 10, "{stickiness}: {} repeats from window {start}", tail.len());
+        assert!(!tail.is_empty() && tail.len() <= 212, "{stickiness}: {} repeats from window {start}", tail.len());
         assert_eq!(tail.last().unwrap().x == 116.0, caught_up, "{stickiness}: {:?}", tail.last());
     }
     let mut off = Stabilizer::new(&CspStabilizer::default(), 1.0);
@@ -160,4 +160,29 @@ fn pen_up_repeats_the_last_sample_minus_stickiness() {
     let mut tail = Vec::new();
     off.finish(&mut tail);
     assert!(tail.is_empty());
+}
+
+#[test]
+fn sparse_fast_flick_finishes_near_the_release_instead_of_halfway() {
+    let mut s = Stabilizer::new(&CspStabilizer { level: 10, stickiness: 4, ..Default::default() }, 1.0);
+    s.push(pt(0.0, 0.0, 1.0, 0.0));
+    assert!(s.push(pt(378.0, 0.0, 1.0, 8.0)).x < 200.0);
+    let mut tail = Vec::new();
+    s.finish(&mut tail);
+    let end = tail.last().unwrap();
+    assert!((end.x - 378.0).abs() < 2.0, "{end:?}");
+    assert!(tail.iter().all(|p| p.x >= 0.0 && p.x <= 378.0 && p.pressure >= 0.0));
+    assert!(tail.len() <= 202);
+    let n = tail.len();
+    s.finish(&mut tail);
+    assert_eq!(tail.len(), n, "finishing twice adds no second release");
+}
+
+#[test]
+fn release_drain_keeps_stationary_dot_pressure() {
+    let mut s = Stabilizer::new(&CspStabilizer { level: 10, stickiness: 4, ..Default::default() }, 1.0);
+    s.push(pt(4.0, 5.0, 1.0, 0.0));
+    let mut tail = Vec::new();
+    s.finish(&mut tail);
+    assert!(tail.iter().all(|p| p.pressure == 1.0 && p.x == 4.0 && p.y == 5.0));
 }

@@ -95,7 +95,17 @@ pub(super) fn color_jitter(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<St
         let hue = jitter(r, num(r, "BrushHueChange", 0.0) / 360.0, "BrushHueChangeEffector", "hue", warnings);
         let saturation = jitter(r, num(r, "BrushSaturationChange", 0.0) / 100.0, "BrushSaturationChangeEffector", "saturation", warnings);
         let value = jitter(r, num(r, "BrushValueChange", 0.0) / 100.0, "BrushValueChangeEffector", "luminosity", warnings);
-        let sub = jitter(r, num(r, "BrushSubColor", 0.0) / 100.0, "BrushSubColorEffector", "sub color blend", warnings);
+        let sub_amount = num(r, "BrushSubColor", 0.0) / 100.0;
+        let fixed_sub = match r.get("BrushSubColorEffector") {
+            None | Some(Value::Null) => true,
+            Some(value) => value.blob().is_some_and(|blob| matches!(effector::controls(blob), Ok((0, _)))),
+        };
+        let sub = if fixed_sub && sub_amount.is_finite() {
+            b.csp_sub_color = (sub_amount != 0.0).then_some(sub_amount.clamp(0.0, 1.0));
+            0.0
+        } else {
+            jitter(r, sub_amount, "BrushSubColorEffector", "sub color blend", warnings)
+        };
         // Prism's hue jitter j spreads ±180°·j.
         cd.hue_jitter = (hue * 2.0).clamp(0.0, 1.0);
         cd.saturation_jitter = saturation.clamp(0.0, 1.0);
@@ -115,7 +125,7 @@ pub(super) fn color_jitter(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<St
         ]
         .map(|v| if v.is_finite() { v.abs().clamp(0.0, 1.0) } else { 0.0 });
         if amounts.iter().any(|v| *v > 0.0) {
-            if any {
+            if any || b.csp_sub_color.is_some() {
                 warnings.push("SUT colour jitter per stroke and per brush tip together is not supported; the per-tip jitter is used".into());
             } else {
                 let [hue, saturation, value, sub] = amounts;
@@ -128,10 +138,10 @@ pub(super) fn color_jitter(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<St
             }
         }
     }
-    if !any {
+    if !any && b.csp_sub_color.is_none() {
         return;
     }
-    cd.enabled = true;
+    cd.enabled = any;
     if num(r, "BrushChangeColorTarget", 1.0) == 2.0 {
         warnings.push("SUT colour jitter of the sub color only is approximated by varying the drawing color".into());
     }

@@ -41,6 +41,22 @@ written files, so `.af` export stays unsupported.
 
 ## Honest parity assessment (2026-10-05)
 
+2026-11-03: the local CSP library contains 154 brushes, 2 other sub-tools and 288
+image/layer materials (444 total). After separating CSP correction from Photoshop
+smoothing and implementing fixed sub-color blending, all 154 brushes produce
+nonempty test strokes; 156 sub-tools import without reported errors. Warned materials
+drop from 47 to 39 (60 to 51 warning occurrences). This is a local smoke test, not a
+matched CSP pixel oracle; post correction and other gaps remain in
+[Spec.1.2.2](../doc/Spec.1.2.2.md).
+
+2026-11-03: the local `茂み1` 24 MP response probe (`fast` profile, same machine)
+reduces live-engine update p95 from 8.263 to 2.188 ms by sharing immutable brush
+pixels, including the added release drain; prepared-tip reuse also avoids rebuilding
+them for every stroke. Same-frame mouse paths are preserved, and the bush-brush
+flick now reaches near its release point in the native comparison. This is
+CPU processing cost, not physical-pen latency. See [measurement conditions and
+remaining input/display checks](brush-latency.md).
+
 This is the reference answer to "how close are we to Photoshop parity, really". Agents: read it
 before picking work. Update it (with dated measurements) when the numbers move; don't restate the
 menu-parity number in its place.

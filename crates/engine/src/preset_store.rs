@@ -348,11 +348,7 @@ fn read_sut_metadata(value: Option<serde_json::Value>, name: &str, warnings: &mu
         custom.visible.retain(|id| seen.insert(*id) && (metadata.original.visible.contains(id) || PARAMETER_KEYS.iter().any(|(known, _)| known == id)));
     }
     metadata.texture_name = metadata.texture_name.chars().take(1024).collect();
-    metadata.parameters.retain(|key, value| {
-        value.is_finite()
-            && value.abs() <= prism_paint::sut::MAX_SETTING_VALUE
-            && prism_paint::sut::is_retained_key(key)
-    });
+    metadata.parameters.retain(|key, value| value.is_finite() && value.abs() <= prism_paint::sut::MAX_SETTING_VALUE && prism_paint::sut::is_retained_key(key));
     metadata.strings.retain(|key, value| {
         *value = prism_paint::sut::clean_text(value);
         !value.is_empty() && prism_paint::sut::is_string_key(key)
@@ -581,9 +577,13 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         let mut missing = 0;
         for sp in g.presets {
             match join_tips(sp.brush, &sp.tips, &tips) {
-                Some(brush) => {
+                Some(mut brush) => {
                     hashes.extend(sp.tips.hashes().cloned());
                     let sut = read_sut_metadata(sp.sut, &sp.name, &mut warnings);
+                    // Older stores have SUT provenance but no explicit correction policy.
+                    if sut.is_some() {
+                        brush.csp_correction = true;
+                    }
                     items.push(BrushPreset { name: sp.name, brush, builtin: false, group: g.group.clone(), sut });
                 }
                 None => missing += 1,

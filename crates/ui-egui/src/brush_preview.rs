@@ -80,7 +80,20 @@ pub fn preview_sig(b: &BrushSettings) -> u64 {
     let mut h = DefaultHasher::new();
     js(&mut h, &(b.size, b.hardness, b.spacing, b.opacity, b.flow, b.pressure_size, b.pressure_opacity, b.erase, b.mode, b.angle, b.roundness));
     js(&mut h, &(b.flip_x, b.flip_y, b.aliased, b.noise, b.wet_edges, b.build_up, b.build_up_rate, b.protect_texture, b.seed));
-    js(&mut h, &(b.csp_anti_alias, b.csp_tip_scale, &b.csp_water_edge, &b.csp_stabilizer, &b.csp_in_out, &b.csp_mixing, b.csp_ribbon));
+    js(
+        &mut h,
+        &(
+            b.csp_anti_alias,
+            b.csp_tip_scale,
+            &b.csp_water_edge,
+            &b.csp_stabilizer,
+            &b.csp_in_out,
+            &b.csp_mixing,
+            b.csp_ribbon,
+            b.csp_correction,
+            b.csp_sub_color,
+        ),
+    );
     js(&mut h, &(&b.shape_dynamics, &b.scattering, &b.csp_spray, &b.color_dynamics, &b.transfer, &b.pose, &b.smoothing));
     tip_shape_sig(&mut h, &b.tip);
     let d = &b.dual_brush;
@@ -324,6 +337,17 @@ mod tests {
         let t0 = std::time::Instant::now();
         preview_pixels(&b, 488, 76, [1.0; 4]);
         eprintln!("strip render: {:.2} ms", t0.elapsed().as_secs_f64() * 1e3);
+    }
+
+    #[test]
+    fn preview_cache_tracks_csp_correction_and_fixed_sub_color() {
+        let mut b = BrushSettings::default();
+        let original = preview_sig(&b);
+        b.csp_correction = true;
+        let csp = preview_sig(&b);
+        assert_ne!(csp, original);
+        b.csp_sub_color = Some(0.25);
+        assert_ne!(preview_sig(&b), csp);
     }
 
     #[test]

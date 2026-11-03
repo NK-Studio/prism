@@ -738,6 +738,10 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
         s.tools.brush_preset = Some(find_preset(s, name, cmd)?.name.clone());
     }
     let before = std::mem::replace(&mut s.tools.brush, b);
+    if p.get("preset").and_then(Value::as_str).is_some() {
+        // Reuse the immutable prepared tips when the pen first touches the canvas.
+        prism_paint::BrushContext::prewarm(&s.tools.brush);
+    }
     // A coalesced gesture (one slider drag) journals as one call: remember the brush it started from.
     let key = p.get("coalesce").and_then(Value::as_str).filter(|_| p.get("preset").is_none() && p.get("reset").is_none());
     let continuing = |s: &Session, k: &str| {

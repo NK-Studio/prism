@@ -1,5 +1,37 @@
 //! Brush-engine tests: tips, spacing, dynamics, masks, smoothing, determinism, formats.
 
+#[test]
+fn csp_correction_ignores_photoshop_smoothing_and_preserves_it_for_switching_back() {
+    let points: Vec<_> = (0..60)
+        .map(|i| StrokePoint { x: 10.0 + f64::from(i) * 2.0, y: 20.0 + (f64::from(i) * 0.7).sin() * 6.0, time: f64::from(i) * 8.0, ..Default::default() })
+        .collect();
+    for level in [0, 12] {
+        let csp = BrushSettings {
+            csp_correction: true,
+            csp_stabilizer: (level > 0).then_some(crate::CspStabilizer { level, ..Default::default() }),
+            size: 6.0,
+            ..brush()
+        };
+        let reference = dabs(&Stroke { brush: csp.clone(), points: points.clone() });
+        for amount in [0.0, 0.1, 1.0] {
+            let photoshop = BrushSettings { smoothing: Smoothing { amount, ..Default::default() }, ..brush() };
+            let selected = csp.clone().picked_over(&photoshop);
+            assert_eq!(dabs(&Stroke { brush: selected.clone(), points: points.clone() }), reference);
+            let mut live = StrokeRenderer::new(&selected, None, 1.0).record_dabs();
+            for chunk in points.chunks(7) {
+                live.push(chunk);
+            }
+            live.finish();
+            assert_eq!(live.dabs(), reference.as_slice());
+            assert_eq!(photoshop.clone().picked_over(&selected).smoothing, photoshop.smoothing);
+            let restored: BrushSettings = serde_json::from_value(serde_json::to_value(&selected).unwrap()).unwrap();
+            assert!(restored.csp_correction);
+            assert_eq!(dabs(&Stroke { brush: restored, points: points.clone() }), reference);
+        }
+    }
+    assert!(!serde_json::from_str::<BrushSettings>("{}").unwrap().csp_correction);
+}
+
 use prism_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use prism_geom::{Point, Rect};
 use prism_raster::Surface;
@@ -9,6 +41,56 @@ use crate::dynamics::{Smoother, smooth_points};
 use crate::render::{BrushContext, StrokeRenderer, mask_combine, render_stroke};
 use crate::tile::GrayTile;
 use crate::{Dab, PressureCurve, Stroke, StrokePoint, dabs};
+
+#[test]
+fn live_preview_clones_share_immutable_brush_pixels() {
+    use std::sync::Arc;
+    let mut source = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(128, 128, |_, _| 1.0)), ..brush() };
+    let context = BrushContext::new(&source);
+    let builder = crate::dynamics::DabBuilder::new(&source);
+    let dual = crate::dynamics::DualBuilder::new(&source);
+    assert!(Arc::ptr_eq(&context.brush, &context.clone().brush));
+    assert!(Arc::ptr_eq(&builder.brush, &builder.clone().brush));
+    assert!(Arc::ptr_eq(&dual.brush, &dual.clone().brush));
+    // Later tool edits cannot modify the immutable snapshot used by the live stroke.
+    source.size = 123.0;
+    if let TipShape::Sampled(tip) = &mut source.tip {
+        tip.data.fill(0);
+    }
+    assert_ne!(context.brush.size, source.size);
+    assert_eq!(context.brush.tip, builder.brush.tip);
+    assert_ne!(context.brush.tip, source.tip);
+}
+
+#[test]
+fn csp_fixed_sub_color_is_seed_independent_and_survives_serialization() {
+    let mut b = BrushSettings { color: [1.0, 0.0, 0.0, 1.0], background: [0.0, 0.0, 1.0, 1.0], csp_sub_color: Some(0.25), ..brush() };
+    let pts = vec![StrokePoint::new(10.0, 10.0, 1.0), StrokePoint::new(60.0, 10.0, 1.0)];
+    for seed in [0, 7, 99] {
+        b.seed = seed;
+        let restored = serde_json::from_value(serde_json::to_value(&b).unwrap()).unwrap();
+        let out = dabs(&Stroke { brush: restored, points: pts.clone() });
+        assert!(!out.is_empty());
+        for dab in out {
+            assert_eq!(dab.color, [0.75, 0.0, 0.25, 1.0]);
+        }
+    }
+    b.csp_sub_color = None;
+    assert!(dabs(&Stroke { brush: b, points: pts }).iter().all(|d| d.color == [1.0, 0.0, 0.0, 1.0]));
+}
+
+#[test]
+fn csp_fixed_sub_color_renders_at_every_depth() {
+    let b = BrushSettings { size: 10.0, color: [1.0, 0.0, 0.0, 1.0], background: [0.0, 0.0, 1.0, 1.0], csp_sub_color: Some(0.25), ..brush() };
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+        render_stroke(&mut surface, &b, &[StrokePoint::new(20.0, 20.0, 1.0)], None, false, 1.0);
+        let actual = surface.rgba(20, 20);
+        for (actual, expected) in actual.iter().zip([0.75, 0.0, 0.25, 1.0]) {
+            assert!((actual - expected).abs() < 0.005, "{sample:?}: {actual} vs {expected}");
+        }
+    }
+}
 
 fn brush() -> BrushSettings {
     BrushSettings { pressure_size: false, spacing: 0.25, ..Default::default() }

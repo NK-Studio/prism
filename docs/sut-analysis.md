@@ -1,5 +1,14 @@
 # Clip Studio Paint SUT investigation
 
+2026-11-03: [Current compatibility audit](sut-compatibility-audit.md) reconciles
+the 444-material library (154 brushes, 2 other sub-tools, 288 image/layer materials),
+reruns the local stroke check, and records the SUT/Photoshop smoothing coupling,
+active option gaps and fresh read-only REA/direct-Ghidra evidence.
+
+2026-11-03: [Brush response investigation](brush-latency.md) records the matched
+local bush-brush settings, CPU preparation/preview costs, original-app capture
+limits and the short mouse-gesture input regression separately from static REA.
+
 Investigation: 2026-10-15, on `codex/feature-sut-brush`. This continues the initial
 importer described in [sut-brushes.md](sut-brushes.md). Successful import is not
 evidence of matching Clip Studio rendering.
@@ -830,15 +839,26 @@ averaged, and missing or >1000 ms old samples repeat the oldest sample still use
   level 30 the plain ramp applies. A second flag (`param_5`) that would use half-sample
   steps is not mapped.
 
-**Pen-up** (`0x141afc580`, events 6/9) feeds the release sample again
-`floor(W) − P` times, so with stickiness 0 the line reaches the release point.
+**Pen-up** (`0x141afc580`, events 6/9) initially feeds the release sample again
+`floor(W) − P` times. This is not the whole gesture-finalization path.
 
-**Not established / not mapped.** The state machine `0x141afafe0` can end the stroke
-early while decelerating below a threshold (2 px, or a stickiness-dependent value)
-during catch-up; Prism always completes the repeats. The pressure of the release
-sample and device-type scaling are not modelled; Prism repeats the last input.
-Distances use document pixels × zoom as screen pixels. No matched CSP capture of a
-stabilized stroke has been made.
+**2026-11-03 follow-up.** The actual bush-brush flick comparison exposed a missing
+second phase: the existing direct-Ghidra `stab6/10/11.txt` outputs show the final
+gesture route also draining the release through `0x141afc1e0` until its state ends.
+Independent read-only PE constant checks on the same binary confirm the motion
+threshold 2, minimum 0.5, coefficient 0.04, pressure fall threshold 0.02 and
+negative pressure floor −0.2. Pressure reaching zero can interpolate the final
+position; otherwise decelerating motion can end below the threshold. These facts
+are recorded separately from the historical incomplete initial-repeat model;
+no proprietary code or pseudocode is copied into the implementation.
+
+Prism now independently adds a bounded release drain (at most 202 extra samples),
+pressure-zero interpolation and deceleration termination, keeping stationary dot
+pressure and making finish idempotent. The source's initial release-packet pressure
+and device-type scaling remain unverified; initial repeats still retain the last
+contact pressure. Threshold distances use document pixels × zoom in Prism, pending
+physical-pen comparison. The full live-preview policy is also not a CSP pixel oracle.
+See [matched settings, timings and capture limits](brush-latency.md).
 
 ## Start and end (2026-10-16)
 

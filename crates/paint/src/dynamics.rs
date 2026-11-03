@@ -5,6 +5,7 @@
 //! jitter comes from [`crate::rng`] keyed by the stroke seed and the step/dab index.
 
 use prism_geom::Point;
+use std::sync::Arc;
 
 use crate::brush::{BrushSettings, Control, Dynamic, Smoothing};
 use crate::rng::{rand_signed, rand01, stream};
@@ -423,8 +424,14 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
 pub fn dynamic_color(b: &BrushSettings, s: &StepInput, seed: u64, index: u64) -> [f32; 4] {
     let cd = &b.color_dynamics;
     let (fg, bg) = (b.color, b.background);
+    if !cd.enabled {
+        let t = b.csp_sub_color.filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
+        return std::array::from_fn(|i| fg[i] + (bg[i] - fg[i]) * t);
+    }
     let r = |st: u64| rand01(seed, index, st);
     let base = if cd.fg_bg.control != Control::Off { 1.0 - dynamic_control(&cd.fg_bg, s) } else { 0.0 };
+    let fixed = b.csp_sub_color.filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
+    let base = fixed + (1.0 - fixed) * base;
     let t = (base + (1.0 - base) * cd.fg_bg.jitter.clamp(0.0, 1.0) * r(stream::FG_BG)).clamp(0.0, 1.0);
     let rgb = [fg[0] + (bg[0] - fg[0]) * t, fg[1] + (bg[1] - fg[1]) * t, fg[2] + (bg[2] - fg[2]) * t];
     let [mut h, mut sat, mut v] = rgb_to_hsv(rgb);
@@ -454,7 +461,8 @@ pub fn dab_diameter(b: &BrushSettings, s: &StepInput, r: f32) -> f32 {
 /// Builds the primary dabs of a step (Shape Dynamics, Scattering, Transfer, Color, Texture depth).
 #[derive(Clone, Debug)]
 pub struct DabBuilder {
-    pub brush: BrushSettings,
+    /// Immutable stroke settings; cloning a preview must not copy sampled tip pixels.
+    pub brush: Arc<BrushSettings>,
     pub seed: u64,
     /// Per-stroke colour (Color Dynamics with per-tip off), computed at the first step.
     stroke_color: Option<[f32; 4]>,
@@ -477,7 +485,7 @@ impl DabBuilder {
             };
             crate::csp_ribbon::RibbonState::new(ribbon, tips)
         });
-        Self { brush: brush.clone(), seed: brush.seed, stroke_color: None, next_index: 0, in_out, ribbon }
+        Self { brush: Arc::new(brush.clone()), seed: brush.seed, stroke_color: None, next_index: 0, in_out, ribbon }
     }
 
     /// Distance to the next step after a dab of `diameter`: Photoshop spaces dabs by the diameter of
@@ -625,7 +633,7 @@ impl DabBuilder {
                 opacity *= s.point.pressure.clamp(0.0, 1.0);
             }
             // Colour.
-            let color = if b.color_dynamics.enabled {
+            let color = if b.color_dynamics.enabled || b.csp_sub_color.is_some() {
                 if b.color_dynamics.per_tip { dynamic_color(b, s, seed, i) } else { *self.stroke_color.get_or_insert_with(|| dynamic_color(b, s, seed, 0)) }
             } else {
                 b.color
@@ -670,13 +678,13 @@ impl DabBuilder {
 /// Builds Dual Brush dabs (the second tip: size, spacing, scatter, count, flip).
 #[derive(Clone, Debug)]
 pub struct DualBuilder {
-    pub brush: BrushSettings,
+    pub brush: Arc<BrushSettings>,
     next_index: u64,
 }
 
 impl DualBuilder {
     pub fn new(brush: &BrushSettings) -> Self {
-        Self { brush: brush.clone(), next_index: 0 }
+        Self { brush: Arc::new(brush.clone()), next_index: 0 }
     }
     /// The Dual Brush tip's fixed spacing.
     fn step(&self) -> f64 {
@@ -767,7 +775,7 @@ impl DabGenerator {
         Self {
             zoom,
             stabilizer: crate::csp_stabilizer::Stabilizer::new(&brush.csp_stabilizer.clone().unwrap_or_default(), zoom),
-            smoother: Smoother::new(&brush.smoothing, zoom),
+            smoother: Smoother::new(&brush.effective_smoothing(), zoom),
             walker: if brush.spacing_enabled { PathWalker::new(interval) } else { PathWalker::new(interval).speed_spacing(SPEED_SPACING_MS) },
             dual_walker: dual_on.then(|| PathWalker::new(None)),
             builder: DabBuilder::new(&brush),
@@ -793,7 +801,7 @@ impl DabGenerator {
         let Some(cfg) = self.builder.brush.csp_in_out.clone() else { return };
         let b = &self.builder.brush;
         let mut stabilizer = crate::csp_stabilizer::Stabilizer::new(&b.csp_stabilizer.clone().unwrap_or_default(), self.zoom);
-        let mut smoother = Smoother::new(&b.smoothing, self.zoom);
+        let mut smoother = Smoother::new(&b.effective_smoothing(), self.zoom);
         let mut walked = Vec::with_capacity(pts.len());
         let mut caught_up = Vec::new();
         for p in pts {

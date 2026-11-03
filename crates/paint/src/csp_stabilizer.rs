@@ -122,15 +122,54 @@ impl Stabilizer {
         if !averaged { p } else { self.average(p) }
     }
 
-    /// Pen-up: the source feeds the last sample again `floor(window) - stickiness` times, so the
-    /// average catches up with the release point (completely when stickiness is 0).
+    /// Pen-up has two phases: initial repeats, then a bounded release-pressure drain until
+    /// the filtered motion settles or pressure reaches zero. Omitting the second phase can
+    /// leave a short flick halfway to the cursor when its window is smaller than stickiness.
     pub fn finish(&mut self, out: &mut Vec<StrokePoint>) {
         let Some(last) = self.history.back().copied().filter(|_| self.active() && self.drawing) else { return };
+        let moved = self.history.iter().any(|p| p.x != last.x || p.y != last.y);
         let repeats = (self.window.floor() as i64 - i64::from(self.cfg.stickiness)).clamp(0, i64::from(MAX_LEVEL));
         for _ in 0..repeats {
             let p = self.push(last);
             out.push(p);
         }
+        // A stationary click retains its contact pressure and dot size.
+        if moved {
+            let mut previous = self.average(last);
+            let mut previous_delta: Option<(f64, f64)> = None;
+            let threshold = if self.cfg.stickiness == 0 { 2.0 } else { (2.0 - 0.04 * (f64::from(self.cfg.stickiness) + self.window)).max(0.5) };
+            for _ in 0..MAX_LEVEL.saturating_mul(2).saturating_add(2) {
+                let mut pressure = 0.0;
+                if let Some(recent) = self.history.back()
+                    && let Some(older) = self.history.len().checked_sub(2).and_then(|i| self.history.get(i))
+                    && recent.pressure + 0.02 < older.pressure
+                {
+                    pressure = (2.0 * recent.pressure - older.pressure).clamp(-0.2, 0.0);
+                }
+                let mut p = self.push(StrokePoint { pressure, ..last });
+                let delta = ((p.x - previous.x) * self.zoom, (p.y - previous.y) * self.zoom);
+                let step2 = delta.0 * delta.0 + delta.1 * delta.1;
+                let settled =
+                    previous_delta.is_some_and(|d| d.0 * delta.0 + d.1 * delta.1 >= 0.0 && step2 <= threshold * threshold && step2 < d.0 * d.0 + d.1 * d.1);
+                let ended = p.pressure <= 0.0;
+                if ended {
+                    let span = previous.pressure - p.pressure;
+                    if previous.pressure > 0.0 && span.is_finite() && span > 0.0 {
+                        let t = f64::from((previous.pressure / span).clamp(0.0, 1.0));
+                        p.x = previous.x + (p.x - previous.x) * t;
+                        p.y = previous.y + (p.y - previous.y) * t;
+                    }
+                    p.pressure = 0.0;
+                }
+                out.push(p);
+                if ended || settled {
+                    break;
+                }
+                previous_delta = Some(delta);
+                previous = p;
+            }
+        }
+        self.drawing = false;
     }
 
     /// Speed type 1: move the window towards a target from the newest samples' mean step length

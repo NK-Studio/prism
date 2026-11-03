@@ -545,6 +545,38 @@ fn pointer_moves(events: &[egui::Event], button: egui::PointerButton, down_at_st
     out
 }
 
+/// A whole primary gesture can arrive between repaints. egui may report only a click at
+/// its final position; retain the actual press and path for freehand painting instead.
+/// Multiple presses are left to the normal response path rather than joined together.
+fn completed_pointer_stroke(events: &[egui::Event], rect: Rect) -> Option<(Vec<Pos2>, egui::Modifiers)> {
+    let (mut down, mut finished) = (false, false);
+    let mut points = Vec::new();
+    let mut modifiers = egui::Modifiers::NONE;
+    for e in events {
+        match e {
+            egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: m } => {
+                if down || finished || !rect.contains(*pos) {
+                    return None;
+                }
+                down = true;
+                modifiers = *m;
+                points.push(*pos);
+            }
+            egui::Event::PointerMoved(pos) if down => points.push(*pos),
+            egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, .. } if down => {
+                if points.last() != Some(pos) {
+                    points.push(*pos);
+                }
+                down = false;
+                finished = true;
+            }
+            _ => {}
+        }
+    }
+    let moved = points.first().is_some_and(|first| points.iter().any(|p| p != first));
+    (finished && moved).then_some((points, modifiers))
+}
+
 /// Modifiers attached to the pointer event itself. Some input sources provide these without a
 /// separate `ModifiersChanged` event, so use them for click gestures before falling back to the
 /// frame-wide modifier state.
@@ -2476,6 +2508,29 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         // A drag is only recognised once the pointer has moved past egui's click distance: the
         // gesture starts where the button went down, not where it is now (#123).
         if !pen_handled {
+            if strokes_live(tool)
+                && !under_dialog
+                && app.drag.is_none()
+                && !app.secondary_erase
+                && response.enabled()
+                && let Some((points, press_mods)) = ui.input(|i| completed_pointer_stroke(&i.events, rect))
+                && let (Some(first), Some(last)) = (points.first(), points.last())
+                && ctx.layer_id_at(*first) == Some(response.layer_id)
+            {
+                let start = xf.to_doc(*first);
+                tool_event(app, ToolEvent::Down { x: start[0], y: start[1], pressure: app.stylus.pressure() }, press_mods);
+                app.defer_live_stroke = true;
+                for p in points.iter().skip(1) {
+                    let d = xf.to_doc(*p);
+                    tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+                }
+                app.defer_live_stroke = false;
+                feed_live_stroke(app);
+                let end = xf.to_doc(*last);
+                tool_event(app, ToolEvent::Up { x: end[0], y: end[1] }, mods);
+                (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
+                app.press_stroke = false;
+            }
             let gesture_active_before = app.drag.is_some();
             // Live painting tools start on the press, not once the pointer passes egui's click
             // distance: the first dab shows at once. The drag recognised later continues that stroke,
@@ -2506,7 +2561,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                 let press_mods = if tool.is_type() { ctx.data(|d| d.get_temp(type_press)).unwrap_or(mods) } else { mods };
                 tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
             }
-            if buttons.dragged || buttons.stopped {
+            if buttons.dragged || buttons.stopped || press_stroke {
                 // Feed every pointer move the OS delivered this frame, not just the latest position, so
                 // a fast stroke is sampled densely and renders as a smooth curve instead of a coarse
                 // polyline. egui-winit pushes one `PointerMoved` per `CursorMoved`, and they accumulate
@@ -4412,6 +4467,27 @@ mod tests {
         // The button was already down when the frame began: the move before the release counts,
         // the one after it does not.
         assert_eq!(pointer_moves(&events, PointerButton::Primary, true), vec![pos2(1.0, 0.0), pos2(3.0, 0.0), pos2(4.0, 0.0)]);
+    }
+
+    #[test]
+    fn completed_pointer_stroke_keeps_only_its_owned_interval() {
+        use egui::{Event, Modifiers, pos2};
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0));
+        let button = |x, pressed| Event::PointerButton { pos: pos2(x, 10.0), button: PointerButton::Primary, pressed, modifiers: Modifiers::SHIFT };
+        let events = [
+            Event::PointerMoved(pos2(-1.0, 10.0)),
+            button(10.0, true),
+            Event::PointerMoved(pos2(30.0, 10.0)),
+            button(50.0, false),
+            Event::PointerMoved(pos2(90.0, 10.0)),
+        ];
+        let (points, mods) = completed_pointer_stroke(&events, rect).unwrap();
+        assert_eq!(points, vec![pos2(10.0, 10.0), pos2(30.0, 10.0), pos2(50.0, 10.0)]);
+        assert_eq!(mods, Modifiers::SHIFT);
+        assert!(completed_pointer_stroke(&events[..3], rect).is_none(), "a held stroke uses the live path");
+        assert!(completed_pointer_stroke(&[button(-10.0, true), button(50.0, false)], rect).is_none());
+        assert!(completed_pointer_stroke(&[button(10.0, true), button(10.0, false)], rect).is_none(), "stationary clicks keep click semantics");
+        assert!(completed_pointer_stroke(&[button(10.0, true), button(50.0, false), button(60.0, true)], rect).is_none(), "never join separate gestures");
     }
 
     #[test]

@@ -579,7 +579,14 @@ pub struct BrushSettings {
     pub build_up: bool,
     /// Build-up rate in dabs per second.
     pub build_up_rate: f32,
+    /// Photoshop tool smoothing is retained across preset switches, but bypassed for CSP.
     pub smoothing: Smoothing,
+    /// Explicit CSP correction policy, including SUTs with stabilization disabled.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_correction: bool,
+    /// CSP's fixed sub-color contribution when no input effector is active (0..1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_sub_color: Option<f32>,
     /// Imported CSP color mixing (amount/density of paint, color stretch): picks up the colour
     /// under the brush as it moves.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -588,7 +595,7 @@ pub struct BrushSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csp_in_out: Option<crate::csp_in_out::CspInOut>,
     /// Imported CSP Stabilization / Adjust by speed: a moving average of the raw input samples,
-    /// applied before Smoothing.
+    /// Used with the CSP correction policy; legacy explicit stabilizers remain supported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csp_stabilizer: Option<crate::csp_stabilizer::CspStabilizer>,
     /// Imported CSP Ribbon: the sampled tip is laid continuously along the stroke instead of
@@ -660,6 +667,8 @@ impl Default for BrushSettings {
             build_up: false,
             build_up_rate: 20.0,
             smoothing: Smoothing::default(),
+            csp_correction: false,
+            csp_sub_color: None,
             csp_stabilizer: None,
             csp_in_out: None,
             csp_mixing: None,
@@ -678,6 +687,11 @@ impl Default for BrushSettings {
 }
 
 impl BrushSettings {
+    /// Keep Photoshop's tool setting available for switching back without filtering CSP input.
+    pub fn effective_smoothing(&self) -> Smoothing {
+        if self.csp_correction { Smoothing::default() } else { self.smoothing.clone() }
+    }
+
     /// Copy the settings with the primary and dual diameters and Scatter amounts constrained for
     /// rasterization.
     ///
