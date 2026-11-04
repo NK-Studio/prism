@@ -147,33 +147,56 @@ checkboxes; 1003 at least 1 pixel (`csp_at_least_1px`, imported and editable). T
 
 ### Remaining work, in the recommended order
 
-1. ~~**Panel rows for imported settings (A, from D: 7 IDs).**~~ Done 2026-11-04: all seven have
-   controls (test `imported_texture_mixing_dual_and_sub_color_rows_edit_the_brush`). Emphasize
-   density is now a flag (`Texture::csp_emphasize`, applied by `Texture::effective_contrast`)
-   instead of being baked into the contrast, so it can be switched off.
-   - Texture block: 101 apply to each brush tip, 102 texture blending mode, 113 reverse density,
-     114 emphasize density (its effect stays an approximation).
-   - 1087 colour mixing method (inside the mixing block), 1911 dual brush blending mode (dual
-     block), 1101 sub color (beside hue/saturation/luminosity).
-2. **Behaviour still missing (C).** Each needs rendering or tool work, not only a row.
+Updated 2026-11-04 after commit 73a6618. Done: groups A and B rows, ribbon, every former group-D
+key, 1003/1074/1075, and the seven imported group-D settings (101, 102, 113, 114, 1087, 1911,
+1101; test `imported_texture_mixing_dual_and_sub_color_rows_edit_the_brush`). Emphasize density
+is now `Texture::csp_emphasize`, applied by `Texture::effective_contrast` at render time.
+Commits f4306f6, e024e59 and 73a6618 are local on `codex/sut-brush-response`, not pushed yet.
 
-   | ID | Setting | Presets | Note |
-   |---|---|---|---|
-   | 1230 | Enable snapping | 6 | connect to Prism's ruler/guide snapping |
-   | 1151 | Post correction | 6 | smoothing after the stroke; trace its interaction with start/end |
-   | 1250 | Refer to other layers | 12 | largest: needs a reference-layer concept first |
-   | 1120 | Blend tip images by darken | 2 | |
-   | 1913 | Dual brush affects colour | 2 | |
-   | 1022 | Adjust density by spacing | 1 | |
-   | 1500 | Adjust position (copy stamp) | 1 | |
+**0. Check what just landed (before new work).**
+- Look at the new rows in the running app or the offscreen snapshot (Tool Property, Advanced
+  Settings) with real materials: Chainmail pen (1003), Deciduous Trees (1074), 法線ブラシ (1075),
+  Crystal sparkles/base (101, 102, 113, 114, 1101), R4_SPARKS (1087), D/Kaminari (1911). Check
+  layout in Korean and in a narrow panel.
+- Re-run the local scan (below): only C IDs should still be listed by `VariantShowParam` without
+  a control.
 
-   Suggested order: 1230 and 1151 first (most presets with a bounded scope), 1250 when the
-   reference-layer design exists, then the single-material items.
-3. **Approximations that need a CSP experiment first (B).** Fade type 2 (물번짐구름 브러쉬), the
-   meaning of length unit 2 (茂み1 at several resolutions) and faithful colour mixing type 2
-   (NANAGOM PEN). Materials and procedures: [sut-experiment-materials.md](sut-experiment-materials.md).
-4. **Verification only.** Compare 1003 at least 1 pixel with CSP using the Chainmail pens (the
-   behaviour is inferred from the key name); confirm the "inferred" labels in C against CSP's UI.
+**1. Behaviour still missing (C).** Each needs rendering or tool work, not only a row. Today
+1250, 1151 and 1500 are named read-only rows; 1230, 1120, 1913 and 1022 still show as
+"Unsupported CSP setting" because their keys are not in `PARAMETER_KEYS`.
+
+| Order | ID | Key | Setting | Presets | Work | Done when |
+|---|---|---|---|---|---|---|
+| 1 | 1230 | `BrushEnableSnap` | Enable snapping (inferred) | 6 | Import into a brush flag; when off, the stroke ignores ruler/guide snapping. Hook: `engine::special_ruler_snap` (`StrokeSnapper`, used by `ui-egui/src/canvas.rs` and `special_ruler_ui.rs`) and `engine/src/snap.rs`. Checkbox row. First confirm in CSP what the option snaps to. | a brush with snapping off draws freely across a ruler; on snaps as today; test for both |
+| 2 | 1151 | `BrushRevision` (+`BrushUseRevision`) | Post correction | 6 | Smooth the committed stroke after pen-up (CSP's post correction), independent of the live stabilizer (`csp_stabilizer`, `BrushSettings::csp_correction`). Trace how it interacts with start/end taper and pressure. Replace the read-only row with an on/off + level control. | R4_FIRE and 木目ブラシ strokes smoothed after pen-up; warning removed; ABR/Photoshop smoothing unaffected |
+| 3 | 1250 | `BrushUseReferLayer` | Refer to other layers | 12 | Largest: needs a reference-layer concept in the document (CSP's "Set as reference layer") before the brush can stop at its lines. Write a short design first (doc model field, UI, `.prism`/PSD round-trip). | design agreed; then brush stops at reference-layer lines |
+| 4 | 1120 | `BrushBlendPatternByDarken` | Blend tip images by darken (inferred) | 2 | Overlapping tip images of one stroke combine with Darken instead of normal. Confirm in CSP with 法線ブラシ 円/四角, then add to the dab compositor and a checkbox row. | matched CSP capture of 法線ブラシ |
+| 5 | 1913 | `ChangeRGBByDual` | Dual brush affects colour (inferred) | 2 | The dual brush changes RGB as well as alpha. Confirm with D/Kaminari, D/Raigeki; then the dual brush compositor and a checkbox in the dual block. | matched CSP capture |
+| 6 | 1022 | `BrushAdjustFlowByInterval` | Adjust density by spacing (inferred) | 1 | Density compensated for dab spacing (물번짐구름 브러쉬). Measure in CSP how density changes with spacing, then scale `flow` per dab. | stroke density stays constant across spacing changes as in CSP |
+| 7 | 1500 | `StampAdjustPosition` (+1510 `StampSetReferPointMode`) | Adjust position (copy stamp) | 1 | Copy-stamp sub-tool option; belongs with the clone stamp tool work, not the brush. | copy stamp honours the option |
+
+Rows marked "inferred" have traced keys; their meaning comes from the key name. Check each in
+CSP's UI before implementing.
+
+**2. Approximations that need a CSP experiment first (B).** Procedures and materials:
+[sut-experiment-materials.md](sut-experiment-materials.md).
+- Fade type 2 (`BrushInOutType` 2): 물번짐구름 브러쉬; today start/end is dropped with a warning.
+- Length unit 2 (`*Unit` = 2): 茂み1 (size 100) at 72/350/600 dpi; then one shared
+  length-with-unit conversion for 1000, 1131, 1171, 1181, 1201 and 51000.
+- Colour mixing type 2: NANAGOM PEN with only the type switched; type-0 controls are listed in
+  the experiment document.
+- Emphasize density (114) stays a +0.5 contrast approximation until compared with CSP.
+
+**3. Verification only.**
+- 1003 at least 1 pixel: compare with CSP using the Chainmail pens (behaviour inferred).
+- Confirm the "inferred" labels against CSP's UI and correct the English and Korean labels.
+
+**4. Housekeeping.**
+- `save_ui` has three failing ui-egui tests on this machine (temp folder path with a trailing
+  backslash); they fail on the base commit too and are unrelated to SUT work.
+- Workspace clippy has pre-existing `collapsible_match` and one boolean lint in other ui-egui
+  files (analysis_ui, canvas, gradient_ui, native_dialogs, transform_tool) and in
+  `prism-affinity`; run clippy with `--no-deps` on SUT crates until they are fixed.
 
 When a row lands, mark it done in its table and update this list.
 
