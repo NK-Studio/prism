@@ -139,6 +139,42 @@ New unknown IDs found by a re-scan go here until their key is traced.
 - Tests: `remaining_backlog_rows_are_named_and_survive_hostile_values`,
   `ending_switched_off_last_removes_the_taper_and_on_starts_with_a_size_target`.
 
+## Status 2026-11-04 (after group D)
+
+Done since the previous status (commit f4306f6): every group-D key traced; 1074/1075 flip
+checkboxes; 1003 at least 1 pixel (`csp_at_least_1px`, imported and editable). Tests:
+`csp_at_least_1px_lays_sub_pixel_dabs_as_full_1px_dabs`, `flip_and_at_least_1px_rows_toggle_the_brush`.
+
+### Remaining work, in the recommended order
+
+1. **Panel rows for imported settings (A, from D: 7 IDs).** Rendering already uses them; each is
+   a control in an existing block. Small, can land as one change.
+   - Texture block: 101 apply to each brush tip, 102 texture blending mode, 113 reverse density,
+     114 emphasize density (its effect stays an approximation).
+   - 1087 colour mixing method (inside the mixing block), 1911 dual brush blending mode (dual
+     block), 1101 sub color (beside hue/saturation/luminosity).
+2. **Behaviour still missing (C).** Each needs rendering or tool work, not only a row.
+
+   | ID | Setting | Presets | Note |
+   |---|---|---|---|
+   | 1230 | Enable snapping | 6 | connect to Prism's ruler/guide snapping |
+   | 1151 | Post correction | 6 | smoothing after the stroke; trace its interaction with start/end |
+   | 1250 | Refer to other layers | 12 | largest: needs a reference-layer concept first |
+   | 1120 | Blend tip images by darken | 2 | |
+   | 1913 | Dual brush affects colour | 2 | |
+   | 1022 | Adjust density by spacing | 1 | |
+   | 1500 | Adjust position (copy stamp) | 1 | |
+
+   Suggested order: 1230 and 1151 first (most presets with a bounded scope), 1250 when the
+   reference-layer design exists, then the single-material items.
+3. **Approximations that need a CSP experiment first (B).** Fade type 2 (물번짐구름 브러쉬), the
+   meaning of length unit 2 (茂み1 at several resolutions) and faithful colour mixing type 2
+   (NANAGOM PEN). Materials and procedures: [sut-experiment-materials.md](sut-experiment-materials.md).
+4. **Verification only.** Compare 1003 at least 1 pixel with CSP using the Chainmail pens (the
+   behaviour is inferred from the key name); confirm the "inferred" labels in C against CSP's UI.
+
+When a row lands, mark it done in its table and update this list.
+
 ## Re-measuring
 
 The counts come from importing every ready material with `brush.cspLibrary.list` /
