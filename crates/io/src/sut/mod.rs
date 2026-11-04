@@ -724,7 +724,7 @@ fn texture(materials: &dyn Fn() -> Result<Vec<Row>, String>, r: &Row, refs: &[u8
     t.each_tip = enabled(r, "TextureForPlot");
     t.depth = (num(r, "TextureDensity", 100.0) / 100.0).clamp(0.0, 1.0);
     if enabled(r, "TextureStressDensity") {
-        t.contrast = (t.contrast + 0.5).clamp(-1.0, 2.0);
+        t.csp_emphasize = true;
         warnings.push("SUT emphasize texture density is approximated by extra contrast".into());
     }
     if let Some(dynamic) = pressure_effector(r, "TextureDensityEffector", warnings) {

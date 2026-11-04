@@ -318,6 +318,18 @@ pub struct Texture {
     pub depth: f32,
     /// Depth jitter / control (per tip only); `minimum` is Minimum Depth.
     pub depth_jitter: Dynamic,
+    /// Imported CSP Emphasize density (`TextureStressDensity`, property 114), approximated by
+    /// extra contrast at render time ([`Texture::effective_contrast`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_emphasize: bool,
+}
+
+impl Texture {
+    /// The contrast the texture renders with: [`Self::contrast`], plus 0.5 with Emphasize density.
+    pub fn effective_contrast(&self) -> f32 {
+        let c = if self.contrast.is_finite() { self.contrast } else { 0.0 };
+        if self.csp_emphasize { (c + 0.5).clamp(-1.0, 2.0) } else { c }
+    }
 }
 
 impl Default for Texture {
@@ -334,6 +346,7 @@ impl Default for Texture {
             csp_mode: None,
             depth: 1.0,
             depth_jitter: Dynamic::default(),
+            csp_emphasize: false,
         }
     }
 }

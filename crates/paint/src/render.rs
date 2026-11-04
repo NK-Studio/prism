@@ -182,7 +182,7 @@ fn prepare_pattern(b: &BrushSettings) -> (Option<Arc<PatternImage>>, f32) {
         }
         return (Some(Arc::new(img)), scale);
     }
-    let (br, ct) = (t.brightness.clamp(-1.0, 1.0), t.contrast.clamp(-1.0, 1.0));
+    let (br, ct) = (t.brightness.clamp(-1.0, 1.0), t.effective_contrast().clamp(-1.0, 1.0));
     for v in &mut img.data {
         let mut x = (*v - 0.5) * (1.0 + ct) + 0.5 + br;
         x = x.clamp(0.0, 1.0);
@@ -321,7 +321,7 @@ impl BrushContext {
         };
         if texture.csp_mode.is_some() {
             // GrayTile stores luminance; CSP samples black/alpha coverage.
-            crate::csp_texture::luminance(1.0 - value, texture.invert, texture.brightness, texture.contrast)
+            crate::csp_texture::luminance(1.0 - value, texture.invert, texture.brightness, texture.effective_contrast())
         } else {
             value
         }

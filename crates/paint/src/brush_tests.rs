@@ -105,6 +105,19 @@ fn dabs_of(b: &BrushSettings, pts: &[StrokePoint]) -> Vec<Dab> {
 }
 
 #[test]
+fn csp_emphasize_density_adds_contrast_only_at_render_time() {
+    let mut t = Texture { contrast: 0.2, ..Default::default() };
+    assert_eq!(t.effective_contrast(), 0.2);
+    t.csp_emphasize = true;
+    assert_eq!(t.effective_contrast(), 0.7);
+    assert_eq!(t.contrast, 0.2, "the stored contrast stays editable");
+    for c in [f32::NAN, f32::INFINITY, 5.0, -9.0] {
+        t.contrast = c;
+        assert!((-1.0..=2.0).contains(&t.effective_contrast()), "{c}");
+    }
+}
+
+#[test]
 fn csp_at_least_1px_lays_sub_pixel_dabs_as_full_1px_dabs() {
     let tiny = BrushSettings { size: 0.5, ..brush() };
     let faded = dabs_of(&tiny, &line(10.0, 20.0, 10.0));

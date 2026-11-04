@@ -3554,3 +3554,17 @@ cspTool	Space evenly	균등 배치
 	At least 1 pixel	최소 1픽셀
 	Flip horizontal	좌우 반전
 	Flip vertical	상하 반전
+	Color mixing method	혼색 방식
+	Dual brush blending mode	듀얼 브러시 합성 모드
+	Apply to each brush tip	브러시 끝마다 적용
+	Texture blending mode	텍스처 합성 모드
+	Reverse density	농도 반전
+	Emphasize density	농도 강조
+	Turn on Color mixing to use it	혼색을 켜면 사용할 수 있습니다
+	Approximated by extra contrast	대비를 높여 근사합니다
+	Add (Glow)	더하기(발광)
+	Color dodge	컬러 닷지
+	Color burn	컬러 번
+	Linear burn	선형 번
+	Hard mix	하드 혼합
+	Height (Linear)	높이(선형)

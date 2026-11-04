@@ -25,6 +25,7 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1081, "Amount of paint", "BrushMixColor", "Ink"),
     (1083, "Density of paint", "BrushMixAlpha", "Ink"),
     (1085, "Color stretch", "BrushMixColorExtension", "Ink"),
+    (1087, "Color mixing method", "BrushColorMixingMode", "Ink"),
     (20, "Anti-aliasing", "AntiAlias", "Anti-aliasing"),
     (1030, "Hardness", "BrushHardness", "Brush tip"),
     (1050, "Thickness", "BrushThickness", "Brush tip"),
@@ -43,6 +44,7 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1061, "Direction of particle", "BrushRotationInSpray", "Spray"),
     (1043, "Continuous spraying", "BrushContinuousPlot", "Spray"),
     (1102, "Change brush tip color", "BrushChangePatternColor", "Color jitter"),
+    (1101, "Sub color", "BrushSubColor", "Color jitter"),
     (1103, "Hue", "BrushHueChange", "Color jitter"),
     (1105, "Saturation", "BrushSaturationChange", "Color jitter"),
     (1107, "Luminosity", "BrushValueChange", "Color jitter"),
@@ -52,10 +54,15 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1171, "Starting", "BrushInLength", "Starting and ending"),
     (1181, "Ending", "BrushOutLength", "Starting and ending"),
     (1910, "Dual brush", "UseDualBrush", "Dual brush"),
+    (1911, "Dual brush blending mode", "DualBrushCompositeMode", "Dual brush"),
     (51000, "Dual brush size", "DualSize", "Dual brush"),
     (100, "Texture", "TextureImage", "Texture"),
+    (101, "Apply to each brush tip", "TextureForPlot", "Texture"),
+    (102, "Texture blending mode", "TextureCompositeMode", "Texture"),
     (110, "Texture density", "TextureDensity", "Texture"),
     (120, "Scale ratio", "TextureScale2", "Texture"),
+    (113, "Reverse density", "TextureReverseDensity", "Texture"),
+    (114, "Emphasize density", "TextureStressDensity", "Texture"),
     (1201, "Watercolor edge", "BrushWaterEdgeRadius", "Watercolor edge"),
     (1202, "Opacity influence", "BrushWaterEdgeAlphaPower", "Watercolor edge"),
     (1203, "Darkness influence", "BrushWaterEdgeValuePower", "Watercolor edge"),
@@ -237,7 +244,10 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
                 b.csp_mixing = on.then(prism_engine::paint::CspColorMixing::default);
             }
             if let Some(mixing) = &mut b.csp_mixing {
-                ui.checkbox(&mut mixing.perceptual, tl!("Perceptual color mixing"));
+                // Property 1087 edits the same switch when it has its own row in this view.
+                if !details && !m.effective().visible.contains(&1087) {
+                    ui.checkbox(&mut mixing.perceptual, tl!("Perceptual color mixing"));
+                }
                 if source(m, key) >= 2.0 {
                     ui.small(tl!("CSP mixing type 2 is approximated by blending"));
                 }
@@ -247,6 +257,110 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
         1171 | 1181 => in_out_length(ui, id, label, m, b),
         1910 => {
             ui.checkbox(&mut b.dual_brush.enabled, tl!(label));
+        }
+        1087 => {
+            let usable = b.csp_mixing.is_some();
+            let mut on = b.csp_mixing.as_ref().is_some_and(|mixing| mixing.perceptual);
+            let changed = ui.add_enabled_ui(usable, |ui| ui.checkbox(&mut on, tl!(label)).changed()).inner;
+            if changed && let Some(mixing) = &mut b.csp_mixing {
+                mixing.perceptual = on;
+            }
+            if !usable {
+                ui.small(tl!("Turn on Color mixing to use it"));
+            }
+        }
+        1911 => {
+            use prism_engine::paint::csp_blend::{CSP_DUAL_MODES, CspDualMode};
+            let d = &mut b.dual_brush;
+            let current = CSP_DUAL_MODES
+                .iter()
+                .find(|(_, _, run)| match run {
+                    CspDualMode::Adds(add) => d.csp_add == Some(*add),
+                    CspDualMode::Mask(mode) => d.csp_add.is_none() && d.mode == *mode,
+                })
+                .map(|(code, _, _)| *code);
+            let mut picked = current.unwrap_or(-1);
+            let mut opts: Vec<(i64, &str)> = CSP_DUAL_MODES.iter().map(|(code, name, _)| (*code, *name)).collect();
+            if current.is_none() {
+                opts.insert(0, (-1, "Other"));
+            }
+            let changed = ui
+                .add_enabled_ui(d.enabled, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(tl!(label));
+                        crate::widgets::dropdown(ui, "sut-dual-mode", &mut picked, &opts, ui.available_width().min(200.0))
+                    })
+                    .inner
+                })
+                .inner;
+            if changed && let Some((_, _, run)) = CSP_DUAL_MODES.iter().find(|(code, _, _)| *code == picked) {
+                match run {
+                    CspDualMode::Mask(mode) => {
+                        d.mode = *mode;
+                        d.csp_add = None;
+                    }
+                    CspDualMode::Adds(add) => {
+                        d.mode = prism_engine::paint::DualBrush::default().mode;
+                        d.csp_add = Some(*add);
+                    }
+                }
+            }
+        }
+        1101 => {
+            // A fixed sub-colour blend (`csp_sub_color`); a random one is the colour jitter's.
+            let cd = &b.color_dynamics;
+            let on = cd.enabled && cd.per_tip;
+            let fixed = b.csp_sub_color.filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
+            let mut percent = fixed * 100.0;
+            let changed = ui.add_enabled_ui(on, |ui| number(ui, label, &mut percent, 0.0..=100.0, " %")).inner;
+            if changed {
+                let v = (percent / 100.0).clamp(0.0, 1.0);
+                b.csp_sub_color = (v > 0.0).then_some(v);
+            }
+            if !on {
+                ui.small(tl!("Turn on Change brush tip color to use it"));
+            }
+        }
+        101 | 113 | 114 => {
+            let t = &mut b.texture;
+            let value = match id {
+                101 => &mut t.each_tip,
+                113 => &mut t.invert,
+                _ => &mut t.csp_emphasize,
+            };
+            ui.add_enabled_ui(t.enabled, |ui| ui.checkbox(value, tl!(label)));
+            if id == 114 && t.csp_emphasize {
+                ui.small(tl!("Approximated by extra contrast"));
+            }
+        }
+        102 => {
+            use prism_engine::paint::CspTextureMode as M;
+            let opts = [
+                (M::Normal, "Normal"),
+                (M::Multiply, "Multiply"),
+                (M::Subtract, "Subtract"),
+                (M::Compare, "Compare"),
+                (M::Outline, "Outline"),
+                (M::Overlay, "Overlay"),
+                (M::ColorDodge, "Color dodge"),
+                (M::ColorBurn, "Color burn"),
+                (M::HardMix, "Hard mix"),
+                (M::Height, "Height"),
+            ];
+            let t = &mut b.texture;
+            let mut picked = t.csp_mode.unwrap_or(M::Multiply);
+            let changed = ui
+                .add_enabled_ui(t.enabled, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(tl!(label));
+                        crate::widgets::dropdown(ui, "sut-texture-mode", &mut picked, &opts, ui.available_width().min(200.0))
+                    })
+                    .inner
+                })
+                .inner;
+            if changed {
+                t.csp_mode = Some(picked);
+            }
         }
         51000 => {
             ui.add_enabled_ui(b.dual_brush.enabled, |ui| {
@@ -983,6 +1097,54 @@ mod tests {
         assert_eq!(h.state().session.journal.last().unwrap().0, "tools.setBrush");
         crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
             for label in ["At least 1 pixel", "Flip horizontal", "Flip vertical"] {
+                assert_ne!(tl!(label), label, "{label}");
+            }
+        });
+    }
+
+    #[test]
+    fn imported_texture_mixing_dual_and_sub_color_rows_edit_the_brush() {
+        let ids = vec![101, 102, 113, 114, 1087, 1911, 1101];
+        for hostile in [false, true] {
+            let mut h = harness();
+            {
+                let app = h.state_mut();
+                let b = &mut app.session.tools.brush;
+                b.texture.enabled = true;
+                b.texture.contrast = if hostile { f32::NAN } else { 0.1 };
+                b.csp_mixing = Some(prism_engine::paint::CspColorMixing::default());
+                b.dual_brush.enabled = true;
+                // An additive mode with a mask mode beside it: the additive one wins.
+                b.dual_brush.csp_add = hostile.then_some(prism_engine::paint::CspDualAdd::Screen);
+                b.color_dynamics.enabled = true;
+                b.color_dynamics.per_tip = true;
+                b.csp_sub_color = Some(if hostile { f32::INFINITY } else { 0.3 });
+                let brush = b.clone();
+                let preset = app.session.tools.presets.last_mut().unwrap();
+                preset.brush = brush;
+                preset.sut.as_mut().unwrap().original.visible = ids.clone();
+            }
+            h.run_steps(3);
+            assert!(h.query_by_label_contains("Unsupported CSP setting").is_none(), "hostile={hostile}");
+            for label in ["Texture blending mode", "Dual brush blending mode"] {
+                assert!(h.query_all_by_label_contains(label).next().is_some(), "{label} (hostile={hostile})");
+            }
+            h.get_by_role_and_label(egui::accesskit::Role::Slider, "Sub color");
+            for label in ["Apply to each brush tip", "Reverse density", "Emphasize density", "Color mixing method"] {
+                h.get_by_label(label).click();
+                h.run_steps(2);
+            }
+            let b = &h.state().session.tools.brush;
+            assert!(b.texture.effective_contrast().is_finite(), "hostile={hostile}");
+            // Hostile values (NaN contrast, infinite sub colour) only have to draw without panicking.
+            if !hostile {
+                assert!(b.texture.each_tip && b.texture.invert && b.texture.csp_emphasize);
+                assert!(b.csp_mixing.as_ref().is_some_and(|m| m.perceptual));
+                assert_eq!(h.state().session.journal.last().unwrap().0, "tools.setBrush");
+            }
+        }
+        crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
+            for label in ["Color mixing method", "Dual brush blending mode", "Apply to each brush tip", "Texture blending mode", "Reverse density", "Emphasize density"] {
                 assert_ne!(tl!(label), label, "{label}");
             }
         });

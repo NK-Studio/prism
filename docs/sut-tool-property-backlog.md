@@ -60,13 +60,13 @@ below already renders; only the editable control is missing.
 | ~~P3~~ done 2026-11-04 | 1270 | `BrushChangeStrokeColor` | Change color per stroke | 1 | `color_dynamics` (per stroke) | checkbox; warn that per-tip + per-stroke together uses per-tip |
 | ~~P2~~ done 2026-11-04 (from D) | 1074 | `BrushPatternReverseHorizontal` | Flip horizontal (brush tip) | 6 | `flip_x` | checkbox |
 | ~~P2~~ done 2026-11-04 (from D) | 1075 | `BrushPatternReverseVertical` | Flip vertical (brush tip) | 2 | `flip_y` | checkbox |
-| P3 (from D) | 1087 | `BrushColorMixingMode` | Color mixing method | 3 | `csp_mixing.perceptual` | toggle inside the colour-mixing block (needs `csp_mixing`) |
-| P3 (from D) | 1911 | `DualBrushCompositeMode` | Dual brush blending mode | 2 | `dual_brush.mode` / additive modes (`csp_dual_mode`) | list in the dual sub-panel (1910) |
-| P3 (from D) | 101 | `TextureForPlot` | Apply to each brush tip (texture) | 1 | `texture.each_tip` | checkbox in the texture block |
-| P3 (from D) | 102 | `TextureCompositeMode` | Texture blending mode | 1 | `texture.csp_mode` | list of the CSP texture modes |
-| P3 (from D) | 113 | `TextureReverseDensity` | Reverse density | 1 | `texture.invert` | checkbox in the texture block |
-| P3 (from D) | 114 | `TextureStressDensity` | Emphasize density | 1 | `texture.contrast` +0.5 (approximation, warns) | checkbox; faithful effect stays open |
-| P3 (from D) | 1101 | `BrushSubColor` | Sub color (brush tip color change) | 1 | `csp_sub_color` (fixed) or `color_dynamics.fg_bg.jitter` (random) | slider 0–100 % beside 1103–1107 |
+| ~~P3~~ done 2026-11-04 (from D) | 1087 | `BrushColorMixingMode` | Color mixing method | 3 | `csp_mixing.perceptual` | toggle inside the colour-mixing block (needs `csp_mixing`) |
+| ~~P3~~ done 2026-11-04 (from D) | 1911 | `DualBrushCompositeMode` | Dual brush blending mode | 2 | `dual_brush.mode` / additive modes (`csp_dual_mode`) | list in the dual sub-panel (1910) |
+| ~~P3~~ done 2026-11-04 (from D) | 101 | `TextureForPlot` | Apply to each brush tip (texture) | 1 | `texture.each_tip` | checkbox in the texture block |
+| ~~P3~~ done 2026-11-04 (from D) | 102 | `TextureCompositeMode` | Texture blending mode | 1 | `texture.csp_mode` | list of the CSP texture modes |
+| ~~P3~~ done 2026-11-04 (from D) | 113 | `TextureReverseDensity` | Reverse density | 1 | `texture.invert` | checkbox in the texture block |
+| ~~P3~~ done 2026-11-04 (from D) | 114 | `TextureStressDensity` | Emphasize density | 1 | `texture.csp_emphasize` (+0.5 contrast at render time; approximation, warns) | checkbox; faithful effect stays open |
+| ~~P3~~ done 2026-11-04 (from D) | 1101 | `BrushSubColor` | Sub color (brush tip color change) | 1 | `csp_sub_color` (fixed) or `color_dynamics.fg_bg.jitter` (random) | slider 0–100 % beside 1103–1107 |
 
 P1 status (2026-11-04): all six rows have Tool Property controls (`sut_panel::control`);
 hardness re-derives automatic spacing, direction keeps a ribbon's quarter turns in sync, particle
@@ -147,8 +147,10 @@ checkboxes; 1003 at least 1 pixel (`csp_at_least_1px`, imported and editable). T
 
 ### Remaining work, in the recommended order
 
-1. **Panel rows for imported settings (A, from D: 7 IDs).** Rendering already uses them; each is
-   a control in an existing block. Small, can land as one change.
+1. ~~**Panel rows for imported settings (A, from D: 7 IDs).**~~ Done 2026-11-04: all seven have
+   controls (test `imported_texture_mixing_dual_and_sub_color_rows_edit_the_brush`). Emphasize
+   density is now a flag (`Texture::csp_emphasize`, applied by `Texture::effective_contrast`)
+   instead of being baked into the contrast, so it can be switched off.
    - Texture block: 101 apply to each brush tip, 102 texture blending mode, 113 reverse density,
      114 emphasize density (its effect stays an approximation).
    - 1087 colour mixing method (inside the mixing block), 1911 dual brush blending mode (dual
