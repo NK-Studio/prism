@@ -129,7 +129,7 @@ codesign --verify --strict --deep --verbose=2 "$APP"
 if [ "$NOTARIZE" = 1 ]; then
   ditto -c -k --keepParent "$APP" "$WORK/Prism-notarize.zip"
   notarize "$WORK/Prism-notarize.zip"
-  xcrun stapler staple "$APP"
+  stapler_staple "$APP"
   stapler_validate "$APP"
   spctl --assess --type execute -vvv "$APP"
 fi
@@ -162,7 +162,7 @@ sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 if [ "$NOTARIZE" = 1 ]; then
   notarize "$DMG"
-  xcrun stapler staple "$DMG"
+  stapler_staple "$DMG"
   stapler_validate "$DMG"
   spctl --assess --type open --context context:primary-signature -vvv "$DMG"
 fi
