@@ -128,7 +128,7 @@ fi
 echo "==> $(basename "$DMG")"
 codesign --verify --strict --verbose=2 "$DMG"
 if [ "$STRICT" = 1 ]; then
-  xcrun stapler validate "$DMG" || fail "no notarization ticket stapled to the DMG"
+  stapler_validate "$DMG" || fail "no notarization ticket stapled to the DMG"
   assess --assess --type open --context context:primary-signature -vv "$DMG" \
     || fail "Gatekeeper rejects the DMG"
 fi

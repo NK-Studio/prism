@@ -11,7 +11,8 @@
 #
 # Sets NOTARY_KIND to "api-key", "apple-id" or "" (incomplete). notary_auth fills NOTARY_AUTH with
 # the matching notarytool arguments; a key given as contents is written to a private temp file that
-# is removed on exit. Nothing here prints a secret's value.
+# is removed on exit. stapler_validate retries `xcrun stapler validate`, whose CloudKit lookup drops
+# the connection on CI runners now and then (error 68). Nothing here prints a secret's value.
 
 NOTARY_KIND=""
 if [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
@@ -38,4 +39,15 @@ notary_auth() {
       NOTARY_AUTH=(--apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID")
       ;;
   esac
+}
+
+# stapler_validate <app|dmg|pkg>: up to three attempts, 10 s apart; returns the last status.
+stapler_validate() {
+  local attempt
+  for attempt in 1 2 3; do
+    xcrun stapler validate "$1" && return 0
+    [ "$attempt" = 3 ] && return 1
+    echo "stapler validate failed (attempt $attempt of 3), retrying in 10 s" >&2
+    sleep 10
+  done
 }
