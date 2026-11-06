@@ -45,7 +45,7 @@ jobs:
       PRISM_UPDATE_SECRET_KEY: ${{ secrets.PRISM_UPDATE_SECRET_KEY }}
       UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Check the release is published
         run: |
@@ -60,7 +60,7 @@ jobs:
           gh release download "v$VERSION" --dir packages --pattern "prism-$VERSION-macos-*.app.zip" --pattern "prism-$VERSION-windows-*.msi"
           ls -l packages
       - name: Check out the site
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ vars.UPDATE_SITE_REPO }}
           token: ${{ secrets.UPDATE_SITE_TOKEN }}

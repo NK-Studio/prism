@@ -38,7 +38,7 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -73,7 +73,7 @@ jobs:
       # runs the runner out of disk (as `-p prism-text -p prism-ui-egui` did after #800).
       - name: Check out craft-fonts
         if: runner.os == 'macOS'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: storytold/craft-fonts
           ref: abb83316d96aa59c1cf64784289e378fe9fa5695
@@ -113,7 +113,7 @@ jobs:
       CARGO_PROFILE_RELEASE_LTO: "false"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -121,7 +121,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Restore test corpora
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: corpus/
           key: corpus-${{ hashFiles('xtask/src/corpus_pins.rs', 'xtask/*.sha256') }}
@@ -153,7 +153,7 @@ jobs:
           - { crate: affinity, name: import_preview, args: "--features io" }
           - { crate: format, name: load }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
@@ -165,7 +165,7 @@ jobs:
         run: cargo fuzz run ${{ matrix.target.name }} ${{ matrix.target.args }} -- -max_total_time=${{ inputs.fuzz_seconds }}
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-${{ matrix.target.crate }}-${{ matrix.target.name }}
           path: crates/${{ matrix.target.crate }}/fuzz/artifacts
