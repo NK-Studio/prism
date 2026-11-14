@@ -38,6 +38,7 @@ save this as `$S/ctl.py` and run it with `python -I "$S/ctl.py" '[[method, param
 
 ```python
 import json, socket, sys, pathlib
+sys.stdout.reconfigure(encoding="utf-8")  # Korean/Japanese sub tool names break the cp949 console
 here = pathlib.Path(__file__).parent
 token = (here / "control.token").read_text().strip()
 s = socket.create_connection(("127.0.0.1", 7979), timeout=60)
@@ -48,7 +49,7 @@ for i, (method, params) in enumerate(calls):
     f.write(json.dumps({"id": i, "method": method, "params": params}) + "\n"); f.flush()
     line = f.readline()
     if len(sys.argv) > 2 and i == len(calls) - 1:
-        (here / sys.argv[2]).write_text(line); print(method, "->", sys.argv[2])
+        (here / sys.argv[2]).write_text(line, encoding="utf-8"); print(method, "->", sys.argv[2])
     else:
         print(method, "->", line[:400])
 ```
@@ -99,11 +100,32 @@ cargo run -p prism-tablet --example pen_inject -- --window Prism --file trace.js
 ## Comparing with CLIP STUDIO PAINT / Photoshop
 
 The same stroke can drive another app as an observation oracle (clean-room rules in AGENTS.md
-apply: compare outputs only). For CLIP STUDIO, File › Preferences › Tablet must be **TabletPC**
-(Windows Ink); Wintab does not see synthetic pens. Match canvas size, zoom, brush size and
-settings. Inject with `--window "CLIP STUDIO"` and the same `--ramp` / `--file` mapped to that
-canvas. Ask the user before changing CLIP STUDIO or Photoshop preferences or tools, and leave them
-as found. Keep oracle renders under `target/` (never committed).
+apply: compare outputs only). Drive the other app's UI with **cua-driver** (load the `cua-driver`
+skill), not computer-use. Ask the user before changing its preferences or tools, and leave them as
+found. Keep oracle renders in the scratchpad or `target/` (never committed).
+
+CLIP STUDIO PAINT, as done on 2026-11-14 (`docs/pen-input-validation.md` › G-pen comparison):
+
+1. **Tablet service.** This machine uses **Wintab**, which ignores synthetic pens: the stroke draws
+   at constant width as if from a mouse. With the user's OK, open Preferences (`Ctrl+K`) › Tablet ›
+   **Tablet PC** › OK. It applies without a restart. Switch back to Wintab afterwards and confirm
+   `Tablet` in a *copy* of `%APPDATA%/CELSYSUserData/CELSYS/CLIPStudioPaintVer1_5_0/Preference/Config.sqlite`
+   matches the copy taken before (`ContextKind 1000`).
+2. **Canvas.** `Ctrl+N` (foreground). Its number fields accept only `type_text` with `delay_ms`
+   after a double-click; separate `press_key` digits leak to the main window as tool shortcuts.
+3. **Brush.** Pick the same sub tool in both apps. Prism: `ui.cspTool {"tool":"pen","subTool":"G펜"}`
+   loads CSP's own sub tool; then match the size the user's CSP shows (`ui.set {brushSize}`).
+4. **Same physical scale.** Prism `ui.set {"zoom": cspZoom / pixelsPerPoint}` (`ui.inspect` › `window`).
+   Find each canvas origin from a native-resolution screenshot (the white rectangle), then inject the
+   same doc-coordinate file with `--origin <client x,y> --scale <zoom>` into each app. Inject one
+   warm-up stroke first.
+5. **Measure.** Prism: `app.save` a PNG (exact doc pixels). CSP: set View 100 % (`Ctrl+Alt+0`) and
+   take a native screenshot; CSP's clipboard holds only a private format, so `Ctrl+C` gives no image,
+   and its 89.9 % display is resampled. Compare coverage-weighted width per column (sum of
+   `(255-G)/(255-G_ink)` down the column), extent and peak, and calibrate with a constant-width
+   stroke.
+6. **Restore.** Close the test canvas with Do Not Save, reselect the user's sub tool, set the tablet
+   service back.
 
 ## Cleanup
 

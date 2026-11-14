@@ -222,6 +222,34 @@ brought the previously background window forward, reached the trace without its
 with a single 16 ms hover frame, all committed. Whether a physical pen touching
 just as the window activates loses its stroke the same way is not yet established.
 
+## G-pen comparison with CLIP STUDIO PAINT (2026-11-14)
+
+The same synthetic stroke drove CLIP STUDIO PAINT PRO and Prism: document x 200 → 1400 at a fixed
+y, 301 samples 8 ms apart, pressure 0 → 1 → 0, no tilt. Both used a 1600×900 RGB canvas at the
+same physical scale (0.899 screen px per document px) and the G-pen sub tool: CLIP STUDIO's own,
+and Prism's from `ui.cspTool {"tool":"pen","subTool":"G펜"}`. Size was 25 in both (CLIP STUDIO's
+user setting; Prism's imported default is 10, so it was set to 25). Stabilization was 6 and
+"Adjust by speed" was on. CLIP STUDIO first used Wintab and drew the synthetic stroke at a
+constant width, as from a mouse. It was switched to Tablet PC for the run and back afterwards.
+
+Width is the coverage summed down each column (CLIP STUDIO measured at 100 % view, Prism from
+the saved PNG):
+
+| Pressure | 0.17 | 0.33 | 0.50 | 0.67 | 0.83 | 1.00 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CLIP STUDIO (rising / falling), px | 2.6 / 2.7 | 7.0 / 7.1 | 11.3 / 11.4 | 15.4 / 15.5 | 19.5 / 19.6 | 23.4 |
+| Prism, px | 4.4 | 8.9 | 13.2 | 17.2 | 21.3 | 25.2 |
+
+- **Pressure response matches.** Both are linear with a zero minimum: about 24.9 px per unit of
+  pressure in each. The peak sits at x 798 (CLIP STUDIO) and 802 (Prism), and the profile is
+  symmetric in both.
+- **Prism is a constant 1.6–1.9 px wider.** The gap does not depend on pressure. A CLIP STUDIO
+  G-pen stroke of size 25 without pressure also measures 23.7 px, so this is how wide a dab of
+  a given size is drawn (edge or anti-aliasing), not the pressure curve. The thin ends follow:
+  ink above half coverage spans x 225–1376 in CLIP STUDIO and 220–1380 in Prism.
+- Not measured: tilt, speed-dependent stabilization at other speeds, other sub tools, and opacity
+  or density pressure.
+
 ## Remaining physical acceptance
 
 No physical tablet stroke has been driven or observed by this validation run.
