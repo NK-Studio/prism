@@ -124,7 +124,13 @@ CLIP STUDIO PAINT, as done on 2026-11-14 (`docs/pen-input-validation.md` › G-p
    and its 89.9 % display is resampled. Compare coverage-weighted width per column (sum of
    `(255-G)/(255-G_ink)` down the column), extent and peak, and calibrate with a constant-width
    stroke.
-6. **Restore.** Close the test canvas with Do Not Save, reselect the user's sub tool, set the tablet
+6. **Isolate dab vs line.** A gap in line width can come from the dab itself or from how
+   overlapping dabs build up. Measure one dab too: on Wintab a one-sample `--file` is a full-size
+   mouse click, so no preference change is needed.
+7. **cua-driver pixel coordinates** are relative to that window's *most recent* screenshot. After
+   a native-resolution capture (`max_image_dimension: 0`), take a scaled read again before
+   clicking by pixels from a scaled image. A mismatched click selected a different tool once.
+8. **Restore.** Close the test canvas with Do Not Save, reselect the user's sub tool, set the tablet
    service back.
 
 ## Cleanup

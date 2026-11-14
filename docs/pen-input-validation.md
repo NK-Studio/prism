@@ -250,6 +250,33 @@ the saved PNG):
 - Not measured: tilt, speed-dependent stabilization at other speeds, other sub tools, and opacity
   or density pressure.
 
+**Cause of the width gap (same day).** The user's CLIP STUDIO G-pen and the installed default
+differ only in size: 25 against 10, with hardness 100, thickness 100, angle 0 and automatic spacing
+type 2 in both (read from copies of both `EditImageTool.todb`). So the gap comes from how each app
+renders, not from the settings. Measurements at 100 % view, with CLIP STUDIO on Wintab (synthetic
+pen = full-size mouse input):
+
+| G-pen, size 25 | CLIP STUDIO | Prism |
+| --- | ---: | ---: |
+| One dab: area → equivalent diameter | 399 px² → **22.5 px** | 491 px² → **25.0 px** |
+| One dab: centre column | 0.39, 0.79, 20 × 1, 0.79, 0.39 (22.4) | 0.13, 0.88, 23 × 1, 0.88, 0.13 (25.0) |
+| Constant line: cross-section | 0.79, 22 × 1, 0.79 (23.6) | 0.82, 24 × 1, 0.82 (25.6) |
+
+- **Overlapping dabs widen a line by a similar amount in both apps**: +1.1 px in CLIP STUDIO and
+  +0.6 px in Prism. Both build up the partly covered edge pixels as dabs overlap (Prism:
+  `CovMap::accumulate`, "over" unless wet edges).
+- **The single dab is the difference.** CLIP STUDIO's medium anti-aliased round tip of size 25 is
+  about 2.5 px smaller across than its nominal size. Prism draws the exact circle, and its test
+  `csp_anti_alias_levels_sample_like_csp_and_parse_legacy_flags` asserts that "coverage across the
+  dab stays its diameter". That assumption is the code-side cause.
+- Across the pressure ramp, line width against nominal size fits `0.998·size − 1.21` in CLIP STUDIO
+  and `1.006·size + 0.42` in Prism. The dab shrink therefore looks like a constant offset (about
+  −1.2 px of radius), not a scale. This is fitted from line widths only; single dabs were measured
+  at size 25 only.
+- Not established: whether the offset depends on the anti-aliasing level (an earlier weak-AA
+  mixing brush of size 50 measured 49.4 px as a line) or on size. Pinning the rule needs single
+  dabs at each AA level and at several sizes.
+
 ## Remaining physical acceptance
 
 No physical tablet stroke has been driven or observed by this validation run.
