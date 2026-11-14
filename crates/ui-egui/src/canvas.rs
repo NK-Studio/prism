@@ -2856,13 +2856,8 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                     }
                 }
                 Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
-                Tool::Zoom => {
-                    if zoom_out(alt) {
-                        egui::CursorIcon::ZoomOut
-                    } else {
-                        egui::CursorIcon::ZoomIn
-                    }
-                }
+                // The magnifying glass, for the Zoom tool and the temporary zoom keys alike.
+                Tool::Zoom => crate::tool_cursor::zoom(&painter, p, zoom_out(alt)),
                 Tool::Type | Tool::VerticalType => egui::CursorIcon::Text,
                 // Path Selection's black arrow, Direct Selection's white one; ⌘ swaps them while
                 // held, with what a press does (direct_select.rs).

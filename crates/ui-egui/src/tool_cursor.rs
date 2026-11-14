@@ -10,17 +10,49 @@ const MAX_SIDE: u16 = 2048;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Shape {
-    Circle { radius: f32, centre: bool },
-    Crosshair { length: f32, gap: f32 },
+    Circle {
+        radius: f32,
+        centre: bool,
+    },
+    Crosshair {
+        length: f32,
+        gap: f32,
+    },
     Move,
     /// A plain arrow: black (Path Selection) or white (Direct Selection).
-    Arrow { white: bool },
+    Arrow {
+        white: bool,
+    },
+    /// A magnifying glass with a plus (zoom in) or a minus (`out`). The hotspot is the lens centre.
+    Zoom {
+        out: bool,
+    },
 }
 
 impl Shape {
     /// An arrow cursor (its hotspot is the tip, its fallback the standard pointer).
     fn is_arrow(self) -> bool {
         matches!(self, Shape::Move | Shape::Arrow { .. })
+    }
+
+    /// Fixed artwork: an OS bitmap on every platform, never sized by the document or the brush.
+    fn is_artwork(self) -> bool {
+        self.is_arrow() || matches!(self, Shape::Zoom { .. })
+    }
+
+    /// The hotspot of fixed artwork, in points from the bitmap's corner.
+    fn artwork_hotspot(self) -> f32 {
+        if matches!(self, Shape::Zoom { .. }) { ZOOM_CENTRE } else { 2.0 }
+    }
+
+    /// The stock cursor a backend shows if it cannot upload the bitmap.
+    fn fallback(self) -> CursorIcon {
+        match self {
+            Shape::Move | Shape::Arrow { .. } => CursorIcon::Default,
+            Shape::Zoom { out: true } => CursorIcon::ZoomOut,
+            Shape::Zoom { out: false } => CursorIcon::ZoomIn,
+            Shape::Circle { .. } | Shape::Crosshair { .. } => CursorIcon::Crosshair,
+        }
     }
 }
 
@@ -103,14 +135,24 @@ pub(crate) fn move_tool(painter: &Painter, at: Pos2, dragging: bool) -> CursorIc
     if dragging { CursorIcon::Default } else { show(painter, at, Shape::Move) }
 }
 
+/// The Zoom tool's magnifying glass (also the temporary zoom keys'): a plus, or a minus when a
+/// click zooms `out`. Clean-room artwork; the hotspot is the centre of the lens.
+pub(crate) fn zoom(painter: &Painter, at: Pos2, out: bool) -> CursorIcon {
+    let stock = if out { CursorIcon::ZoomOut } else { CursorIcon::ZoomIn };
+    if let Some(icon) = crate::cursor_pack::show(painter.ctx(), at, if out { 1007 } else { 1006 }, stock) {
+        return icon;
+    }
+    show(painter, at, Shape::Zoom { out })
+}
+
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
     let ctx = painter.ctx();
     let fallback_key = fallback_key(ctx);
-    let fallback = if shape.is_arrow() { CursorIcon::Default } else { CursorIcon::Crosshair };
+    let fallback = shape.fallback();
     ctx.data_mut(|d| d.insert_temp(fallback_key, fallback));
     // The native backend uploads cursor images in root and immediate document viewports.
     // Unsupported/oversize artwork retains the painter fallback below.
-    if cfg!(target_os = "windows") || shape.is_arrow() {
+    if cfg!(target_os = "windows") || shape.is_artwork() {
         let scale = native_raster_scale(ctx.pixels_per_point());
         if let Some(image) = cached_image(ctx, shape, scale) {
             ctx.set_cursor_image(Some(image));
@@ -151,7 +193,7 @@ fn cached_image(ctx: &egui::Context, shape: Shape, scale: f32) -> Option<CustomC
 }
 
 fn paint(painter: &Painter, at: Pos2, shape: Shape) {
-    if shape.is_arrow() {
+    if shape.is_artwork() {
         let ctx = painter.ctx();
         let scale = ctx.pixels_per_point();
         let id = egui::Id::new(("arrow-cursor-texture", format!("{shape:?}")));
@@ -167,7 +209,7 @@ fn paint(painter: &Painter, at: Pos2, shape: Shape) {
             Some(tex)
         });
         if let Some(tex) = texture {
-            let min = at - vec2(2.0, 2.0);
+            let min = at - vec2(shape.artwork_hotspot(), shape.artwork_hotspot());
             painter.image(
                 tex.id(),
                 egui::Rect::from_min_size(min, tex.size_vec2() / scale),
@@ -191,7 +233,7 @@ fn paint(painter: &Painter, at: Pos2, shape: Shape) {
                 }
             }
             Shape::Crosshair { length, gap } => paint_crosshair(painter, at, length, gap, stroke),
-            Shape::Move | Shape::Arrow { .. } => {}
+            Shape::Move | Shape::Arrow { .. } | Shape::Zoom { .. } => {}
         }
     }
 }
@@ -223,7 +265,7 @@ fn extent(shape: Shape) -> Option<f32> {
             }
             length
         }
-        Shape::Move | Shape::Arrow { .. } => 30.0,
+        Shape::Move | Shape::Arrow { .. } | Shape::Zoom { .. } => 30.0,
     })
 }
 
@@ -231,6 +273,7 @@ fn rasterize(shape: Shape, scale: f32) -> Option<CustomCursorImage> {
     match shape {
         Shape::Move => return rasterize_arrow(scale, true, false),
         Shape::Arrow { white } => return rasterize_arrow(scale, false, white),
+        Shape::Zoom { out } => return rasterize_zoom(scale, out),
         _ => {}
     }
     if !scale.is_finite() || scale <= 0.0 {
@@ -258,7 +301,7 @@ fn rasterize(shape: Shape, scale: f32) -> Option<CustomCursorImage> {
                     if centre { ring.min(cross_distance(x, y, 3.0 * scale, 0.0)) } else { ring }
                 }
                 Shape::Crosshair { length, gap } => cross_distance(x, y, length * scale, gap * scale),
-                Shape::Move | Shape::Arrow { .. } => 0.0,
+                Shape::Move | Shape::Arrow { .. } | Shape::Zoom { .. } => 0.0,
             };
             let a_dark = (1.5 * scale + 0.5 - distance).clamp(0.0, 1.0) * f32::from(dark.a()) / 255.0;
             let a_light = (0.5 * scale + 0.5 - distance).clamp(0.0, 1.0) * f32::from(light.a()) / 255.0;
@@ -339,6 +382,53 @@ fn rasterize_arrow(scale: f32, badge_on: bool, white: bool) -> Option<CustomCurs
             let edge = ((0.55 - distance.abs()) * scale + 0.5).clamp(0.0, 1.0);
             let value = |a: u8, b: u8| (f32::from(a) * (1.0 - edge) + f32::from(b) * edge).round() as u8;
             rgba.extend_from_slice(&[value(dark.r(), light.r()), value(dark.g(), light.g()), value(dark.b(), light.b()), (alpha * 255.0).round() as u8]);
+        }
+    }
+    Some(CustomCursorImage { rgba: Arc::from(rgba), size: [side, side], hotspot: [hotspot, hotspot] })
+}
+
+/// The zoom cursor's box and the centre of its lens (the hotspot), in points.
+const ZOOM_SIDE: f32 = 24.0;
+const ZOOM_CENTRE: f32 = 9.0;
+/// The lens ring's radius.
+const ZOOM_LENS: f32 = 6.5;
+
+/// Distance from `p` to the segment `a`-`b`.
+fn segment_distance(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let ab = [b[0] - a[0], b[1] - a[1]];
+    let ap = [p[0] - a[0], p[1] - a[1]];
+    let len = ab[0] * ab[0] + ab[1] * ab[1];
+    let t = if len > 0.0 { ((ap[0] * ab[0] + ap[1] * ab[1]) / len).clamp(0.0, 1.0) } else { 0.0 };
+    (ap[0] - t * ab[0]).hypot(ap[1] - t * ab[1])
+}
+
+/// The magnifying glass: a dark ring, handle and plus/minus on a light lens, with a light halo
+/// so it reads on any image.
+fn rasterize_zoom(scale: f32, out: bool) -> Option<CustomCursorImage> {
+    if !scale.is_finite() || scale <= 0.0 || ZOOM_SIDE * scale > f32::from(MAX_SIDE) {
+        return None;
+    }
+    let side = (ZOOM_SIDE * scale).ceil() as u16;
+    let hotspot = (ZOOM_CENTRE * scale).round() as u16;
+    let mut rgba = Vec::with_capacity(usize::from(side).checked_mul(usize::from(side))?.checked_mul(4)?);
+    let [dark, light] = crate::theme::Tokens::cursor_outline();
+    let c = ZOOM_CENTRE;
+    for y in 0..side {
+        for x in 0..side {
+            let p = [(f32::from(x) - f32::from(hotspot)) / scale + c, (f32::from(y) - f32::from(hotspot)) / scale + c];
+            let from_centre = (p[0] - c).hypot(p[1] - c);
+            let ring = (from_centre - ZOOM_LENS).abs() - 0.9;
+            let handle = segment_distance(p, [14.7, 14.7], [20.5, 20.5]) - 1.5;
+            let minus = segment_distance(p, [c - 3.0, c], [c + 3.0, c]) - 0.75;
+            let glyph = if out { minus } else { minus.min(segment_distance(p, [c, c - 3.0], [c, c + 3.0]) - 0.75) };
+            // Signed distances in points: the ink, then the lens and a halo around the ink.
+            let ink = ring.min(handle).min(glyph);
+            let body = (ink - 1.1).min(from_centre - ZOOM_LENS);
+            let a_ink = (0.5 - ink * scale).clamp(0.0, 1.0);
+            let alpha = (0.5 - body * scale).clamp(0.0, 1.0);
+            let value = |a: u8, b: u8| (f32::from(a) * (1.0 - a_ink) + f32::from(b) * a_ink).round() as u8;
+            // Straight RGBA, as required by winit.
+            rgba.extend_from_slice(&[value(light.r(), dark.r()), value(light.g(), dark.g()), value(light.b(), dark.b()), (alpha * 255.0).round() as u8]);
         }
     }
     Some(CustomCursorImage { rgba: Arc::from(rgba), size: [side, side], hotspot: [hotspot, hotspot] })
