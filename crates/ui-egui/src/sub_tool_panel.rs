@@ -223,6 +223,13 @@ pub fn sub_tools(app: &PrismApp, tool: CspTool) -> Vec<SubTool> {
     out
 }
 
+/// Whether preset `name` is an imported copy-stamp sub-tool, and its "Adjust position"
+/// (`StampAdjustPosition`) when the sub-tool stores one.
+fn copy_stamp(app: &PrismApp, name: &str) -> Option<Option<bool>> {
+    let m = app.session.tools.presets.iter().find(|p| p.name == name)?.sut.as_ref()?;
+    (m.kind() == prism_engine::paint::sut::SutToolKind::CopyStamp).then(|| m.parameters.get("StampAdjustPosition").map(|v| *v != 0.0))
+}
+
 /// Use `sub` as `tool`'s current sub-tool.
 pub fn apply(app: &mut PrismApp, tool: CspTool, sub: &SubTool) {
     if !sub.usable {
@@ -230,9 +237,15 @@ pub fn apply(app: &mut PrismApp, tool: CspTool, sub: &SubTool) {
     }
     app.ui.csp_tool = tool;
     app.ui.csp_sub_tools.insert(tool, sub.id.clone());
+    // An imported copy-stamp sub-tool clones with its brush: the Clone Stamp tool runs it.
+    let stamp = match &sub.source {
+        Source::Preset(name) => copy_stamp(app, name),
+        _ => None,
+    };
     app.ui.tool = match &sub.source {
         Source::Builtin(b) => b.tool(),
         Source::Imported { tool: t, .. } => *t,
+        Source::Preset(_) if stamp.is_some() => Tool::CloneStamp,
         Source::Preset(_) => tool.backing(),
     };
     crate::paint_mouse::sync_tool_brush(app);
@@ -240,6 +253,10 @@ pub fn apply(app: &mut PrismApp, tool: CspTool, sub: &SubTool) {
         Source::Preset(name) => {
             if let Err(e) = app.run("tools.setBrush", json!({"preset": name})) {
                 app.ui.status = e;
+            }
+            // "Adjust position" (`StampAdjustPosition`, 1500) is the Clone Stamp's Aligned.
+            if let Some(Some(aligned)) = stamp {
+                app.ui.tool_options.clone_aligned = aligned;
             }
         }
         Source::Builtin(b) => b.apply(app),

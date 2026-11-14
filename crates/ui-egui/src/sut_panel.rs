@@ -421,12 +421,13 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
             }
         }
         1500 => {
-            let on = source(m, key) != 0.0;
-            let value = format!("{:.0}", source(m, key));
-            unsupported(ui, label, value, false);
-            if on {
-                ui.small(tl!("The stroke is drawn without this CSP effect"));
-            }
+            // The copy-stamp sub-tool runs on the Clone Stamp, whose Aligned option this sets
+            // when the sub-tool is picked (`sub_tool_panel::apply`); it is edited there.
+            ui.add_enabled_ui(false, |ui| {
+                ui.label(tl!(label));
+                ui.label(if source(m, key) != 0.0 { tl!("On") } else { tl!("Off") });
+            });
+            ui.small(tl!("Change it with Aligned in the Clone Stamp options"));
         }
         1130 => {
             let mut on = b.csp_spray.is_some();

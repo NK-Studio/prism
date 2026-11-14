@@ -12,6 +12,35 @@ fn preset(name: &str, sut: Option<(i64, i64, i64)>) -> BrushPreset {
     }
 }
 
+/// An imported copy-stamp sub-tool runs on the Clone Stamp with its brush, and its "Adjust
+/// position" becomes the tool's Aligned option.
+#[test]
+fn copy_stamp_sub_tools_run_the_clone_stamp() {
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+    let mut stamp = preset("Stamp", Some((13, 13, 109)));
+    stamp.brush.size = 33.0;
+    app.session.tools.presets = vec![stamp, preset("Blender", Some((12, 12, 109)))];
+    let pick = |app: &mut PrismApp, name: &str| {
+        let sub = sub_tools(app, CspTool::Blend).into_iter().find(|s| s.name == name).unwrap();
+        apply(app, CspTool::Blend, &sub);
+    };
+    assert_eq!(app.session.tools.presets[0].sut.as_ref().unwrap().kind(), prism_engine::paint::sut::SutToolKind::CopyStamp);
+    // No stored "Adjust position": the tool's Aligned stays as it was.
+    app.ui.tool_options.clone_aligned = false;
+    pick(&mut app, "Stamp");
+    assert_eq!((app.ui.tool, app.session.tools.brush.size, app.ui.tool_options.clone_aligned), (Tool::CloneStamp, 33.0, false));
+    for (stored, aligned) in [(1.0, true), (0.0, false), (f64::NAN, true)] {
+        app.session.tools.presets[0].sut.as_mut().unwrap().parameters.insert("StampAdjustPosition".into(), stored);
+        pick(&mut app, "Stamp");
+        assert_eq!((app.ui.tool, app.ui.tool_options.clone_aligned), (Tool::CloneStamp, aligned), "{stored}");
+    }
+    // Another sub-tool of the same CSP tool goes back to its own Prism tool.
+    if sub_tools(&app, CspTool::Blend).iter().any(|s| s.name == "Blender" && s.usable) {
+        pick(&mut app, "Blender");
+        assert_ne!(app.ui.tool, Tool::CloneStamp);
+    }
+}
+
 #[test]
 fn sub_tools_list_built_ins_then_imported_and_mark_unsupported_ones() {
     let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
