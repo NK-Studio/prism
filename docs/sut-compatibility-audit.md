@@ -102,7 +102,7 @@ implementation does not establish exact Photoshop fidelity for ABR brushes.
 | Particle rotation input | 9 | 2026-11-04: inputs 0x10/0x20/0x40/0x100/0x200 and random 0x80 applied (`CspSpray.angleInput`); several inputs at once use the first |
 | Spray particle size units | 6 | Treats values as pixels; `mod.rs` |
 | Color mixing type 2 | 5 | Approximated with blending; `mod.rs::color_mixing` |
-| Missing dual-tip assets | 2 | 2026-11-04: dual brush kept with the present tips (round tip when none), with a warning |
+| Missing dual-tip assets | 2 | 2026-11-04: dual brush kept with the present tips (round tip when none), with a warning; 2026-11-15: with none, an adding dual brush (both lightning brushes) is left off instead of painting round discs |
 | Dual input/random dynamics and rotation | 1 | Ignored; `io/src/sut/dual.rs` |
 | Size effector control 0x40 | 1 | Additional control unsupported; `io/src/sut/effector.rs` |
 | Watercolor-edge units | 1 | Value used in pixels; `mod.rs` |

@@ -2097,6 +2097,14 @@ warning names how many are missing. Unreadable reference blobs and ambiguous mat
 still leave it off (a broken file, not a missing asset). What CLIP STUDIO itself paints when a
 dual tip material is missing was not observed.
 
+**2026-11-15:** the round stand-in now applies only to masking modes. Both lightning brushes use
+dual mode 0 (Normal), an adding mode, where the second brush paints its own tips in the brush
+colour: the stand-in laid solid `DualSize` discs (746 px for D/Kaminari) over the stroke and,
+in the local contact sheet, over the neighbouring cells. With every tip missing an adding dual
+brush is now left off ("the adding dual brush is not applied") and the first brush (a
+Compare-density ribbon of the bolt image) paints alone. Test:
+`adding_dual_brush_without_any_tip_is_left_off`.
+
 ### Input rate (2026-11-04)
 
 The stabilization window now spans the time of that many samples at 125 Hz when input is

@@ -45,9 +45,13 @@ pub(super) fn dual_brush(
         Some(v) => v.blob(),
     };
     match refs.filter(|_| enabled(r, "DualUsePatternImage")) {
-        Some(refs) => match dual_tips(refs, materials, ctl, warnings) {
+        Some(refs) => match dual_tips(refs, materials, ctl, csp_add.is_some(), warnings) {
             Ok(Some(tip)) => d.tip = tip,
-            // Every referenced tip is missing: a round second tip keeps the brush's dual texture.
+            // Every referenced tip is missing. An adding dual brush paints its own tips in the
+            // brush colour, so a round stand-in would lay solid discs of `DualSize` (D/Kaminari:
+            // 746 px) over the stroke: leave it off and keep the first brush.
+            Ok(None) if csp_add.is_some() => return Ok(()),
+            // A masking one only shapes the first brush: a round second tip keeps its texture.
             Ok(None) => d.hardness = (num(r, "DualHardness", 100.0) / 100.0).clamp(0.0, 1.0),
             Err(e) => {
                 ctl.check().map_err(|e| e.to_string())?;
@@ -153,10 +157,11 @@ fn dual_tips(
     refs: &[u8],
     materials: &dyn Fn() -> Result<Vec<Row>, String>,
     ctl: &prism_raster::Interrupt,
+    adds: bool,
     warnings: &mut Vec<String>,
 ) -> Result<Option<TipShape>, String> {
     let materials = materials()?;
-    let ordered = available(refs, &materials, warnings)?;
+    let ordered = available(refs, &materials, adds, warnings)?;
     if ordered.is_empty() {
         return Ok(None);
     }
@@ -181,8 +186,9 @@ fn dual_tips(
 
 /// The referenced dual tips that are present, in file order. A download cache can lack some
 /// tip materials; the dual brush then runs with the tips it has (a warning names how many are
-/// missing) instead of being switched off. Unreadable references and ambiguous paths still fail.
-fn available<'a>(refs: &[u8], materials: &'a [Row], warnings: &mut Vec<String>) -> Result<Vec<&'a Row>, String> {
+/// missing) instead of being switched off. With none present a masking dual brush uses a round
+/// tip and an adding one (`adds`) is left off. Unreadable references and ambiguous paths still fail.
+fn available<'a>(refs: &[u8], materials: &'a [Row], adds: bool, warnings: &mut Vec<String>) -> Result<Vec<&'a Row>, String> {
     let paths = reference_paths(refs, "dual brush tips")?;
     let mut found = Vec::with_capacity(paths.len());
     for path in &paths {
@@ -198,7 +204,12 @@ fn available<'a>(refs: &[u8], materials: &'a [Row], warnings: &mut Vec<String>) 
         warnings.push(format!(
             "{missing} of {} referenced SUT dual brush tips are missing; {}",
             paths.len(),
-            if found.is_empty() { "the dual brush uses a round tip" } else { "the dual brush uses the remaining tips" }
+            match (found.is_empty(), adds) {
+                (false, _) => "the dual brush uses the remaining tips",
+                (true, false) => "the dual brush uses a round tip",
+                // A round stand-in would paint solid discs over the stroke.
+                (true, true) => "the adding dual brush is not applied",
+            }
         ));
     }
     Ok(found)
