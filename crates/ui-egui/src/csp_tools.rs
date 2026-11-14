@@ -108,25 +108,26 @@ impl CspTool {
         }
     }
 
+    /// The toolbar glyph: Prism's solid tool artwork (`assets/icons/tools/`), one per tool.
     pub fn icon(self) -> &'static str {
         match self {
-            CspTool::Zoom => "zoom-in",
-            CspTool::Hand => "hand",
-            CspTool::MoveLayer => "move",
-            CspTool::Selection => "square-dashed",
-            CspTool::AutoSelect => "wand",
-            CspTool::Eyedropper => "pipette",
-            CspTool::Pen => "pen-tool",
-            CspTool::Pencil => "pencil",
-            CspTool::Brush => "brush",
-            CspTool::Airbrush => "droplet",
-            CspTool::Decoration => "sparkles",
-            CspTool::Eraser => "eraser",
-            CspTool::Blend => "blend",
-            CspTool::Fill => "paint-bucket",
-            CspTool::Gradient => "square-dot",
-            CspTool::Figure => "pentagon",
-            CspTool::Text => "type",
+            CspTool::Zoom => "tool-zoom",
+            CspTool::Hand => "tool-hand",
+            CspTool::MoveLayer => "tool-move",
+            CspTool::Selection => "tool-marquee-rect",
+            CspTool::AutoSelect => "tool-magic-wand",
+            CspTool::Eyedropper => "tool-eyedropper",
+            CspTool::Pen => "tool-pen",
+            CspTool::Pencil => "tool-pencil",
+            CspTool::Brush => "tool-brush",
+            CspTool::Airbrush => "tool-airbrush",
+            CspTool::Decoration => "tool-decoration",
+            CspTool::Eraser => "tool-eraser",
+            CspTool::Blend => "tool-smudge",
+            CspTool::Fill => "tool-paint-bucket",
+            CspTool::Gradient => "tool-gradient",
+            CspTool::Figure => "tool-polygon",
+            CspTool::Text => "tool-type",
         }
     }
 

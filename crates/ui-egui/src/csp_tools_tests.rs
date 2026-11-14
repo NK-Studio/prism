@@ -123,3 +123,15 @@ fn clip_studio_tools_window_and_panels_replace_photoshop_tools() {
     h.run_steps(3);
     assert!(h.query_by_label("Decoration").is_none());
 }
+
+/// The Clip Studio toolbar draws Prism's solid tool artwork: one registered glyph a tool.
+#[test]
+fn every_csp_tool_has_its_own_solid_glyph() {
+    let mut seen = std::collections::HashSet::new();
+    for tool in CspTool::ALL {
+        let name = tool.icon();
+        assert!(name.starts_with("tool-"), "{tool:?} uses {name}");
+        assert!(crate::icon_data::ICONS.iter().any(|(n, _)| *n == name), "{name} is not registered");
+        assert!(seen.insert(name), "{tool:?} shares {name}");
+    }
+}

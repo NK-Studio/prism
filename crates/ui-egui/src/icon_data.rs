@@ -132,6 +132,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("x", include_bytes!("../../../assets/icons/x.svg")),
     ("zoom-in", include_bytes!("../../../assets/icons/zoom-in.svg")),
     // Toolbar glyphs: original artwork, see assets/icons/tools/LICENSE.txt.
+    ("tool-airbrush", include_bytes!("../../../assets/icons/tools/airbrush.svg")),
     ("tool-arrow", include_bytes!("../../../assets/icons/tools/arrow.svg")),
     ("tool-blur", include_bytes!("../../../assets/icons/tools/blur.svg")),
     ("tool-brush", include_bytes!("../../../assets/icons/tools/brush.svg")),
@@ -140,6 +141,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("tool-content-aware-move", include_bytes!("../../../assets/icons/tools/content-aware-move.svg")),
     ("tool-count", include_bytes!("../../../assets/icons/tools/count.svg")),
     ("tool-crop", include_bytes!("../../../assets/icons/tools/crop.svg")),
+    ("tool-decoration", include_bytes!("../../../assets/icons/tools/decoration.svg")),
     ("tool-custom-shape", include_bytes!("../../../assets/icons/tools/custom-shape.svg")),
     ("tool-direct-selection", include_bytes!("../../../assets/icons/tools/direct-selection.svg")),
     ("tool-dodge", include_bytes!("../../../assets/icons/tools/dodge.svg")),
