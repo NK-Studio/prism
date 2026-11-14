@@ -273,9 +273,33 @@ pen = full-size mouse input):
   and `1.006·size + 0.42` in Prism. The dab shrink therefore looks like a constant offset (about
   −1.2 px of radius), not a scale. This is fitted from line widths only; single dabs were measured
   at size 25 only.
-- Not established: whether the offset depends on the anti-aliasing level (an earlier weak-AA
-  mixing brush of size 50 measured 49.4 px as a line) or on size. Pinning the rule needs single
-  dabs at each AA level and at several sizes.
+**The rule, measured (same day).** Single full-pressure G-pen dabs in CLIP STUDIO at every
+anti-aliasing level and five sizes (Wintab mouse input, 100 % view, area converted to an
+equivalent diameter, px):
+
+| AA level | 5 | 10 | 25 | 50 | 100 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| none | 5.05 | 10.09 | 25.03 | 50.16 | 100.12 |
+| weak | 3.55 | 8.58 | 23.50 | 48.53 | 98.51 |
+| medium | 2.86 | 7.65 | 22.54 | 47.53 | 97.52 |
+| strong | 2.86 | 6.83 | 21.59 | 46.55 | 96.53 |
+
+Radial profiles of the size-100 dabs show the mechanism. Coverage reaches 0 at exactly
+r = size / 2 at every level. The anti-aliasing is a linear ramp laid **inside** that edge
+(weak 48.5 → 50, medium 47.5 → 50, strong 46.5 → 50), not centred on it. All 20 dabs fit within
+0.16 px:
+
+    coverage = clamp((R − d) / w, 0, 1),  R = size / 2,  d = distance from the dab centre
+    to the pixel centre,  w = min(W, R),  W = 0 (none), 1.5 (weak), 2.5 (medium), 3.5 (strong)
+
+The cap w ≤ R explains why medium and strong are equal at size 5. Prism's computed round tip
+centres its anti-aliasing on R (2×2 samples, plus a box for medium and strong), so it keeps the
+nominal diameter at every level. That is the whole width gap: at medium, size 25 gives
+22.5 px in CLIP STUDIO and 25.0 px in Prism.
+
+Not covered: image (sampled) tips, elliptical tips (thickness < 100), and soft tips. CLIP STUDIO
+forces anti-aliasing off for a soft round tip wider than 25 px of falloff (`docs/sut-analysis.md`
+› Anti-aliasing levels).
 
 ## Remaining physical acceptance
 
