@@ -77,6 +77,20 @@ fn shift_and_the_snap_toggle_override_the_ruler() {
     assert!(snapper(&a, Tool::Brush, [20.0, 120.0]).is_some());
 }
 
+/// A CSP brush imported with "Enable snapping" off draws freely across the ruler; on, it snaps.
+#[test]
+fn a_csp_brush_with_snapping_off_ignores_the_ruler() {
+    let mut a = app();
+    a.session.tools.brush.csp_no_snap = true;
+    assert!(snapper(&a, Tool::Brush, [20.0, 120.0]).is_none());
+    let start = drag(&mut a, egui::Modifiers::NONE);
+    assert!(!last_stroke_points(&a).iter().all(|p| on_line(*p, start, 30.6163181116636)));
+    let mut a = app();
+    a.session.tools.brush.csp_no_snap = false;
+    let start = drag(&mut a, egui::Modifiers::NONE);
+    assert!(last_stroke_points(&a).iter().all(|p| on_line(*p, start, 30.6163181116636)));
+}
+
 #[test]
 fn the_snap_to_menu_item_toggles_ruler_snapping() {
     let mut app = app();

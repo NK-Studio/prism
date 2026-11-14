@@ -25,7 +25,8 @@ const MAX_DRAWN: f64 = 1e6;
 
 /// Strokes of `tool` snap to special rulers right now.
 pub fn snaps(app: &PrismApp, tool: Tool) -> bool {
-    tool.is_brushlike() && app.ui.extras.snap && app.ui.view.snap_to.special_ruler
+    // A CSP brush with "Enable snapping" off draws freely across the rulers.
+    tool.is_brushlike() && app.ui.extras.snap && app.ui.view.snap_to.special_ruler && !app.session.tools.brush.csp_no_snap
 }
 
 /// The snapper for a stroke of `tool` starting at `start` on the active layer; `None` when

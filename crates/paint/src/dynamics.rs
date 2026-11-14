@@ -362,6 +362,18 @@ fn jittered(d: &Dynamic, cv: f32, r: f32) -> f32 {
     min + (1.0 - min) * cv.clamp(0.0, 1.0) * (1.0 - d.jitter.clamp(0.0, 1.0) * r)
 }
 
+/// CSP "Adjust brush density by gap" (`BrushSettings::csp_flow_by_spacing`): the per-dab density
+/// whose overlap at the brush's spacing builds up to `flow`. A point of the stroke is crossed by
+/// about `1 / spacing` dabs, each adding `c + f·(1 − c)`, so `f = 1 − (1 − flow)^spacing`. A gap
+/// of the diameter or more leaves the density alone. The formula is Prism's (constant density
+/// across gaps); CLIP STUDIO's own curve is not measured (docs/sut-analysis.md).
+fn spacing_flow(b: &BrushSettings, flow: f32) -> f32 {
+    if !b.csp_flow_by_spacing || !flow.is_finite() || !b.spacing.is_finite() || b.spacing >= 1.0 {
+        return flow;
+    }
+    1.0 - (1.0 - flow.clamp(0.0, 1.0)).powf(b.spacing.max(0.01))
+}
+
 /// [`jittered`] with the dynamic's own control (1 when the dynamic is off).
 fn scalar(d: &Dynamic, s: &StepInput, r: f32) -> f32 {
     if !d.is_active() {
@@ -645,6 +657,7 @@ impl DabBuilder {
                 flow *= scalar(&tr.flow, s, r(stream::FLOW));
             }
             flow *= taper(Taper::Flow);
+            flow = spacing_flow(b, flow);
             let (wet, mix) = if tr.enabled { (scalar(&tr.wetness, s, r(stream::WET)), scalar(&tr.mix, s, r(stream::MIX))) } else { (1.0, 1.0) };
             if b.pressure_opacity && !(tr.enabled && tr.opacity.control != Control::Off) {
                 opacity *= s.point.pressure.clamp(0.0, 1.0);

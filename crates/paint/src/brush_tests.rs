@@ -118,6 +118,57 @@ fn csp_emphasize_density_adds_contrast_only_at_render_time() {
 }
 
 #[test]
+fn csp_density_by_gap_keeps_the_stroke_density_across_spacings() {
+    // The density a stroke builds up to where `1 / spacing` dabs overlap.
+    let built = |spacing: f32, on: bool| {
+        let b = BrushSettings { size: 20.0, flow: 0.5, spacing, pressure_size: false, csp_flow_by_spacing: on, ..brush() };
+        let d = dabs_of(&b, &line(10.0, 200.0, 10.0));
+        let alpha = d.first().map_or(0.0, |d| d.alpha);
+        assert!(d.iter().all(|d| (d.alpha - alpha).abs() < 1e-6));
+        1.0 - (1.0 - alpha).powf(1.0 / spacing)
+    };
+    for spacing in [0.05, 0.1, 0.25, 0.5] {
+        // The brush density is quantized to 8-bit levels before it is used.
+        assert!((built(spacing, true) - 0.5).abs() < 5e-3,"{spacing}: {}", built(spacing, true));
+        assert!(built(spacing, false) > 0.7, "{spacing}: without the option the overlap builds up");
+    }
+    // A gap of the diameter or more, and hostile values, leave finite densities.
+    let wide = BrushSettings { flow: 0.5, spacing: 1.5, csp_flow_by_spacing: true, ..brush() };
+    assert!(dabs_of(&wide, &line(10.0, 200.0, 10.0)).iter().all(|d| (d.alpha - 0.5).abs() < 5e-3));
+    for (flow, spacing) in [(f32::NAN, 0.1), (0.5, f32::NAN), (f32::INFINITY, 0.0), (-2.0, -1.0)] {
+        let b = BrushSettings { flow, spacing, csp_flow_by_spacing: true, ..brush() };
+        assert!(dabs_of(&b, &line(10.0, 60.0, 10.0)).iter().all(|d| d.alpha.is_finite() && (0.0..=1.0).contains(&d.alpha)), "{flow} {spacing}");
+    }
+}
+
+#[test]
+fn csp_darken_tips_never_lighten_the_stroke_colour() {
+    use crate::render::CoverageMap;
+    let rect = Rect::new(0, 0, 1, 1);
+    let lay = |darken: bool, second: f32| {
+        let mut m = CoverageMap::new(3);
+        m.darken = darken;
+        m.accumulate(rect, &[1.0], 1.0, false, Some(&[0.2, 0.8, 0.5]));
+        m.accumulate(rect, &[second], 1.0, false, Some(&[0.6, 0.3, 0.5]));
+        (m.get(0, 0), m.color_at(0, 0).map(<[f32]>::to_vec).unwrap())
+    };
+    // Normal: a full pixel keeps the first dab's colour.
+    assert_eq!(lay(false, 1.0), (1.0, vec![0.2, 0.8, 0.5]));
+    // Darken: each channel takes the darker value; a half dab moves half way, only downwards.
+    let (c, col) = lay(true, 1.0);
+    assert!(c == 1.0 && (col[0] - 0.2).abs() < 1e-6 && (col[1] - 0.3).abs() < 1e-6 && (col[2] - 0.5).abs() < 1e-6, "{col:?}");
+    let (_, col) = lay(true, 0.5);
+    assert!((col[0] - 0.2).abs() < 1e-6 && (col[1] - 0.55).abs() < 1e-6, "{col:?}");
+    // Hostile values stay finite.
+    let mut m = CoverageMap::new(3);
+    m.darken = true;
+    m.accumulate(rect, &[1e-30], 1.0, false, Some(&[0.5, 0.5, 0.5]));
+    m.accumulate(rect, &[f32::NAN], f32::INFINITY, false, Some(&[f32::NAN, -1.0, 9.0]));
+    m.accumulate(rect, &[1.0], 1.0, false, Some(&[0.1, 0.1, 0.1]));
+    assert!(m.get(0, 0).is_finite());
+}
+
+#[test]
 fn csp_at_least_1px_lays_sub_pixel_dabs_as_full_1px_dabs() {
     let tiny = BrushSettings { size: 0.5, ..brush() };
     let faded = dabs_of(&tiny, &line(10.0, 20.0, 10.0));

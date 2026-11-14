@@ -637,6 +637,19 @@ pub struct BrushSettings {
     /// 1 px is laid as a full 1 px dab instead of fading with its area.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub csp_at_least_1px: bool,
+    /// Imported CSP "Enable snapping" (`BrushEnableSnap`, property 1230) switched off: strokes
+    /// of this brush ignore the special rulers. Stored inverted so every other brush still snaps.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_no_snap: bool,
+    /// Imported CSP "Blend brush tips with Darken" (`BrushBlendPatternByDarken`, property 1120):
+    /// a dab never lightens the colour the stroke already holds at a pixel (per channel).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_darken_tips: bool,
+    /// Imported CSP "Adjust brush density by gap" (`BrushAdjustFlowByInterval`, property 1022):
+    /// each dab's density is reduced for the overlap its spacing gives, so the stroke's density
+    /// stays the brush density whatever the gap.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_flow_by_spacing: bool,
     /// Keep the current texture (pattern + scale) when switching to another textured preset.
     pub protect_texture: bool,
     /// Sections whose settings stay when another preset is picked (tool state, like Photoshop's locks).
@@ -696,6 +709,9 @@ impl Default for BrushSettings {
             csp_stroke: None,
             csp_size_by_view: false,
             csp_at_least_1px: false,
+            csp_no_snap: false,
+            csp_darken_tips: false,
+            csp_flow_by_spacing: false,
             protect_texture: false,
             locks: SectionLocks::default(),
             mixer: MixerSettings::default(),

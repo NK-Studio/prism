@@ -31,10 +31,12 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1050, "Thickness", "BrushThickness", "Brush tip"),
     (1052, "Thickness direction", "BrushVerticalThicknes", "Brush tip"),
     (1060, "Direction", "BrushRotation", "Brush tip"),
+    (1022, "Adjust brush density by gap", "BrushAdjustFlowByInterval", "Brush tip"),
     (1071, "Tip order", "BrushPatternOrderType", "Brush tip"),
     (1074, "Flip horizontal", "BrushPatternReverseHorizontal", "Brush tip"),
     (1075, "Flip vertical", "BrushPatternReverseVertical", "Brush tip"),
     (1110, "Ribbon", "BrushRibbon", "Brush tip"),
+    (1120, "Blend brush tips with Darken", "BrushBlendPatternByDarken", "Brush tip"),
     (1040, "Spacing", "BrushInterval", "Brush tip"),
     (1042, "Spacing type", "BrushAutoIntervalType", "Brush tip"),
     (1130, "Spray effect", "BrushUseSpray", "Spray"),
@@ -71,6 +73,7 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (42, "Speed adjustment type", "FlickerReductionBySpeedType", "Correction"),
     (50, "Stickiness", "Stickness", "Correction"),
     (1151, "Post correction", "BrushRevision", "Correction"),
+    (1230, "Enable snapping", "BrushEnableSnap", "Correction"),
     (1250, "Refer to other layers", "BrushUseReferLayer", "Correction"),
     (1241, "Vector magnet", "BrushVectorMagnetPower", "Correction"),
     (1500, "Adjust position", "StampAdjustPosition", "Copy stamp"),
@@ -162,6 +165,18 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
         }
         1003 => {
             ui.checkbox(&mut b.csp_at_least_1px, tl!(label));
+        }
+        1230 => {
+            let mut on = !b.csp_no_snap;
+            if ui.checkbox(&mut on, tl!(label)).changed() {
+                b.csp_no_snap = !on;
+            }
+        }
+        1120 => {
+            ui.checkbox(&mut b.csp_darken_tips, tl!(label));
+        }
+        1022 => {
+            ui.checkbox(&mut b.csp_flow_by_spacing, tl!(label));
         }
         1074 => {
             ui.checkbox(&mut b.flip_x, tl!(label));
@@ -1097,6 +1112,41 @@ mod tests {
         assert_eq!(h.state().session.journal.last().unwrap().0, "tools.setBrush");
         crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
             for label in ["At least 1 pixel", "Flip horizontal", "Flip vertical"] {
+                assert_ne!(tl!(label), label, "{label}");
+            }
+        });
+    }
+
+    #[test]
+    fn snapping_darken_and_density_by_gap_rows_toggle_the_brush() {
+        let mut h = harness();
+        h.state_mut().session.tools.presets.last_mut().unwrap().sut.as_mut().unwrap().original.visible = vec![1230, 1120, 1022];
+        h.run_steps(2);
+        assert!(h.query_by_label_contains("Unsupported CSP setting").is_none());
+        // Snapping starts on (every brush snaps unless a CSP brush turned it off).
+        for label in ["Enable snapping", "Blend brush tips with Darken", "Adjust brush density by gap"] {
+            h.get_by_label(label).click();
+            h.run_steps(2);
+        }
+        let b = &h.state().session.tools.brush;
+        assert!(b.csp_no_snap && b.csp_darken_tips && b.csp_flow_by_spacing);
+        assert_eq!(h.state().session.journal.last().unwrap().0, "tools.setBrush");
+        // A brush imported with snapping off: the row is unchecked and one click turns it on.
+        let mut h = harness();
+        {
+            let app = h.state_mut();
+            app.session.tools.brush.csp_no_snap = true;
+            let brush = app.session.tools.brush.clone();
+            let preset = app.session.tools.presets.last_mut().unwrap();
+            preset.brush = brush;
+            preset.sut.as_mut().unwrap().original.visible = vec![1230];
+        }
+        h.run_steps(2);
+        h.get_by_label("Enable snapping").click();
+        h.run_steps(2);
+        assert!(!h.state().session.tools.brush.csp_no_snap);
+        crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
+            for label in ["Enable snapping", "Blend brush tips with Darken", "Adjust brush density by gap"] {
                 assert_ne!(tl!(label), label, "{label}");
             }
         });

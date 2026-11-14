@@ -330,6 +330,19 @@ fn brush_patch_removes_cleared_optional_settings_and_switches_enum_variants() {
     }
 }
 
+/// Flags stored only when on are switched off again by the panel's patch (a null).
+#[test]
+fn brush_patch_switches_stored_when_on_flags_off() {
+    let on = BrushSettings { csp_no_snap: true, csp_at_least_1px: true, csp_darken_tips: true, csp_flow_by_spacing: true, csp_size_by_view: true, ..Default::default() };
+    let off = BrushSettings::default();
+    for (from, to) in [(&on, &off), (&off, &on)] {
+        let patch = brush_patch(from, to);
+        assert_eq!(merge_brush(from, &patch, "tools.setBrush").unwrap(), *to, "{patch}");
+    }
+    // A null for any other setting resets it to its default; it never panics.
+    assert!(merge_brush(&off, &json!({"size": null}), "tools.setBrush").is_ok_and(|b| b.size == off.size));
+}
+
 #[test]
 fn set_brush_keeps_untouched_bitmaps_and_replaces_touched_ones() {
     let tile = |w, h, k: u32| GrayTile::from_fn(w, h, move |x, y| ((x * k + y) % 5) as f32 / 4.0);

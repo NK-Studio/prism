@@ -819,6 +819,9 @@ pub struct CoverageMap {
     /// Each dab paints over the colour already stored (by its own tip value), even where the
     /// coverage is full: CSP colour mixing lays every dab onto the layer in turn.
     pub(crate) paint_over: bool,
+    /// CSP "Blend brush tips with Darken": a dab's colour only ever darkens the colour the
+    /// stroke already holds at a pixel (per channel). Colour maps of additive modes only.
+    pub(crate) darken: bool,
 }
 
 impl CoverageMap {
@@ -896,12 +899,25 @@ impl CoverageMap {
                         } else {
                             c
                         };
-                        if nv <= c && !self.paint_over {
+                        let darken = self.darken && want_col && c > 0.0;
+                        if nv <= c && !self.paint_over && !darken {
                             continue;
                         }
                         if let (true, Some((all, per_pixel))) = (want_col, color) {
                             let at = (row + (x - rect.x0) as usize) * nc;
                             let Some(col) = (if per_pixel { all.get(at..at + nc) } else { all.get(..nc) }) else { continue };
+                            if darken {
+                                // The stored colour is premultiplied by the coverage: darken the
+                                // straight colour by the dab's own weight, never lighten it.
+                                let (a, nv) = ((v * ceil).clamp(0.0, 1.0), nv.max(c));
+                                let p = &mut tile.col[ti * nc..(ti + 1) * nc];
+                                for i in 0..nc {
+                                    let old = p[i] / c;
+                                    p[i] = (old + a * (col[i] - old).min(0.0)) * nv;
+                                }
+                                tile.cov[ti] = nv;
+                                continue;
+                            }
                             let k = if self.paint_over {
                                 (v * ceil).clamp(0.0, 1.0)
                             } else if c < 1.0 {
@@ -1049,7 +1065,15 @@ impl StrokeRenderer {
         Self {
             ctx,
             generator: DabGenerator::new(brush, zoom),
-            cov: CoverageMap { paint_over: mixing.is_some(), ..CoverageMap::new(nc) },
+            cov: CoverageMap {
+                paint_over: mixing.is_some(),
+                // Darken compares colour values: only where a larger value is lighter.
+                darken: brush.csp_darken_tips
+                    && per_dab_color
+                    && mixing.is_none()
+                    && fmt.is_some_and(|f| matches!(f.mode, prism_color::ColorMode::Rgb | prism_color::ColorMode::Grayscale)),
+                ..CoverageMap::new(nc)
+            },
             dual: brush.dual_brush.enabled.then(|| CoverageMap::new(0)),
             fmt,
             per_dab_color,
@@ -1224,6 +1248,7 @@ impl StrokeRenderer {
             bounds: m.bounds,
             dirty: HashSet::new(),
             paint_over: m.paint_over,
+            darken: m.darken,
         };
         let mut t = StrokeRenderer {
             ctx: self.ctx.clone(),

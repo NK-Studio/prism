@@ -160,6 +160,11 @@ pub(super) fn options(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<String>
     b.csp_size_by_view = enabled(r, "BrushSizeSyncViewScale");
     // Property 1003 (key traced, behaviour inferred from the name: docs/sut-tool-property-backlog.md).
     b.csp_at_least_1px = enabled(r, "BrushAtLeast1Pixel");
+    // "Enable snapping" (1230): only a stored 0 switches the special-ruler snap off.
+    b.csp_no_snap = r.contains_key("BrushEnableSnap") && !enabled(r, "BrushEnableSnap");
+    // "Blend brush tips with Darken" (1120) and "Adjust brush density by gap" (1022).
+    b.csp_darken_tips = enabled(r, "BrushBlendPatternByDarken");
+    b.csp_flow_by_spacing = enabled(r, "BrushAdjustFlowByInterval");
     if enabled(r, "BrushUseRevision") && num(r, "BrushRevision", 0.0) > 0.0 {
         warnings.push("SUT post correction is not supported; strokes are not smoothed after drawing".into());
     }

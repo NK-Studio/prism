@@ -220,3 +220,17 @@ fn continuous_spraying_view_scale_and_unsupported_options() {
     assert!(!plain.presets[0].brush.build_up && !plain.presets[0].brush.csp_size_by_view && !plain.presets[0].brush.csp_at_least_1px);
     assert!(plain.warnings.is_empty(), "{:?}", plain.warnings);
 }
+
+#[test]
+fn snapping_darken_and_density_by_gap_options() {
+    let plain = import(&[]);
+    let b = &plain.presets[0].brush;
+    assert!(!b.csp_no_snap && !b.csp_darken_tips && !b.csp_flow_by_spacing, "a sub-tool without the keys keeps the defaults");
+    let on = import(&[("BrushEnableSnap", int(1)), ("BrushBlendPatternByDarken", int(1)), ("BrushAdjustFlowByInterval", int(1))]);
+    let b = &on.presets[0].brush;
+    assert!(!b.csp_no_snap && b.csp_darken_tips && b.csp_flow_by_spacing);
+    // Only a stored 0 switches snapping off; hostile values never panic.
+    let off = import(&[("BrushEnableSnap", int(0)), ("BrushBlendPatternByDarken", Value::Number(f64::NAN)), ("BrushAdjustFlowByInterval", Value::Number(f64::INFINITY))]);
+    assert!(off.presets[0].brush.csp_no_snap);
+    assert!(on.warnings.is_empty() && off.warnings.is_empty(), "{:?} {:?}", on.warnings, off.warnings);
+}

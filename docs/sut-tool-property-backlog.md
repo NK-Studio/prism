@@ -107,10 +107,10 @@ should cover 1131, 1171, 1181, 1201 and 51000.
 | ~~P3~~ done 2026-11-04 | 1110 | `BrushRibbon` | Ribbon | 1 | rendered (`csp_ribbon`) but no control; add a checkbox (valid only with tip images and no spray) |
 | P3 (named row, behaviour open) | 1500 | `StampAdjustPosition` | Adjust position (copy stamp) | 1 | copy-stamp sub-tool; also 1510 `StampSetReferPointMode` |
 | ~~P2~~ done 2026-11-04 (from D) | 1003 | `BrushAtLeast1Pixel` | At least 1 pixel (inferred) | 12 | Chainmail pens. Imported into `csp_at_least_1px`: a dab under 1 px is laid as a full-ink 1 px dab instead of fading with its area; checkbox row. Behaviour inferred from the key name, not yet compared with CSP |
-| P2 (from D) | 1230 | `BrushEnableSnap` | Enable snapping (inferred) | 6 | R4_FIRE, 木目ブラシ; whether the brush snaps to rulers/guides |
-| P3 (from D) | 1120 | `BrushBlendPatternByDarken` | Blend tip images by darken (inferred) | 2 | 法線ブラシ 円/四角; overlapping tip images combine with Darken instead of normal |
-| P3 (from D) | 1913 | `ChangeRGBByDual` | Dual brush affects colour (inferred) | 2 | D/Kaminari, D/Raigeki; dual brush changes RGB, not only alpha |
-| P3 (from D) | 1022 | `BrushAdjustFlowByInterval` | Adjust density by spacing (inferred) | 1 | 물번짐구름 브러쉬; density compensated for the dab spacing |
+| ~~P2~~ done 2026-11-14 (from D) | 1230 | `BrushEnableSnap` | Enable snapping | 6 | Imported into `csp_no_snap` (only a stored 0 switches it off); a brush with it off ignores the special rulers (`special_ruler_ui::snaps`). Checkbox row. Label confirmed in CSP; what CSP's option snaps to besides rulers is not compared |
+| ~~P3~~ done 2026-11-14 (from D) | 1120 | `BrushBlendPatternByDarken` | Blend brush tips with Darken | 2 | Imported into `csp_darken_tips`: a dab's colour never lightens the colour the stroke holds at a pixel (per channel; RGB and Gray, per-dab colour, no colour mixing). Checkbox row. Label confirmed; pixels not compared with CSP |
+| P3 (from D) | 1913 | `ChangeRGBByDual` | Apply RGB value (label confirmed) | 2 | D/Kaminari, D/Raigeki; child of Dual brush under Mode; dual brush changes RGB, not only alpha |
+| ~~P3~~ done 2026-11-14 (from D) | 1022 | `BrushAdjustFlowByInterval` | Adjust brush density by gap | 1 | Imported into `csp_flow_by_spacing`: per-dab density `1 − (1 − flow)^spacing` so the stroke builds up to the brush density at any gap (`dynamics::spacing_flow`). Checkbox row. Label confirmed; the curve is Prism's, CSP's is not measured |
 
 ## D. IDs with no traced key
 
@@ -199,6 +199,25 @@ CSP's UI before implementing.
   `prism-affinity`; run clippy with `--no-deps` on SUT crates until they are fixed.
 
 When a row lands, mark it done in its table and update this list.
+
+## Status 2026-11-14
+
+- CSP PAINT PRO 5.0.4 (English UI) labels read from Advanced Tool Settings: 1003 "At least 1
+  pixel" (Brush Size), 1022 "Adjust brush density by gap" (Brush tip), 1120 "Blend brush tips
+  with Darken" (Stroke), 1230 "Enable snapping" (Correction), 1913 "Apply RGB value" (2 - Brush
+  shape, under Dual brush › Mode), 1250 "Do not cross lines of reference layer" (Anti-overflow),
+  1151 "Post correction" (a checkbox with five levels; children Adjust by speed, Adjust by scale,
+  Bezier curve). The Korean UI labels were not read; Prism's Korean labels are its own.
+- Done: 1230, 1120 and 1022 (behaviour and rows; tests
+  `a_csp_brush_with_snapping_off_ignores_the_ruler`, `csp_darken_tips_never_lighten_the_stroke_colour`,
+  `csp_density_by_gap_keeps_the_stroke_density_across_spacings`,
+  `snapping_darken_and_density_by_gap_rows_toggle_the_brush`). Re-scan
+  (`local_csp_unknown_parameter_scan`): 154 brush-family presets; before this change the unknown
+  IDs were 1022, 1120, 1230 and 1913 only.
+- Fixed on the way: a flag stored only when on (`cspAtLeast1px`, `cspSizeByView`, …) could not
+  be switched off from the panel: the patch's null failed to deserialize. `merge` now removes
+  the key (`brush_patch_switches_stored_when_on_flags_off`).
+- Housekeeping (section 4) is done: the save_ui tests pass and workspace clippy is clean.
 
 ## Re-measuring
 

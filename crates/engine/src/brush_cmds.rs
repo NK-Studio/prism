@@ -99,6 +99,11 @@ fn merge(base: &mut Value, patch: &Value) {
             for (k, v) in p {
                 match b.get_mut(k) {
                     Some(bv) if bv.is_object() && v.is_object() => merge(bv, v),
+                    // null clears a setting back to its default: an optional section, or a flag
+                    // that is only stored when on (`cspNoSnap`, `cspAtLeast1px`…).
+                    _ if v.is_null() => {
+                        b.remove(k);
+                    }
                     _ => {
                         b.insert(k.clone(), v.clone());
                     }
