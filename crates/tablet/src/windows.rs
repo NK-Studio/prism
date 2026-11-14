@@ -427,9 +427,18 @@ unsafe extern "system" fn collect_window(hwnd: HWND, _: LPARAM) -> windows_sys::
     1
 }
 
-/// The first visible top-level window whose title contains `needle` (case-insensitive).
+/// The visible, non-minimized top-level window titled `needle` (case-insensitive), else the first
+/// one whose title contains it. Windows with an empty client area are skipped: a minimized window
+/// reports 0×0 at (−32000, −32000), and injecting there lands off screen.
 pub fn find_window(needle: &str) -> Result<Option<WindowTarget>, Error> {
     let needle = needle.to_lowercase();
+    let found = matching_windows(&needle)?;
+    Ok(crate::synthetic_pen::pick_window(found.iter().map(|t| (t.title.as_str(), t.client_width, t.client_height)), &needle)
+        .and_then(|i| found.into_iter().nth(i)))
+}
+
+fn matching_windows(needle: &str) -> Result<Vec<WindowTarget>, Error> {
+    let mut found = Vec::new();
     ENUMERATED.with(|all| all.borrow_mut().clear());
     // SAFETY: the callback has the exact WNDENUMPROC ABI and keeps no pointer; it records
     // handles in a thread-local bounded list on this (the calling) thread.
@@ -447,7 +456,7 @@ pub fn find_window(needle: &str) -> Result<Option<WindowTarget>, Error> {
         // SAFETY: the buffer length passed equals the array length.
         let len = unsafe { GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32) };
         let Some(title) = text.get(..len.max(0) as usize).map(String::from_utf16_lossy) else { continue };
-        if !title.to_lowercase().contains(&needle) {
+        if !title.to_lowercase().contains(needle) {
             continue;
         }
         let mut rect = windows_sys::Win32::Foundation::RECT::default();
@@ -456,16 +465,16 @@ pub fn find_window(needle: &str) -> Result<Option<WindowTarget>, Error> {
         if unsafe { GetClientRect(hwnd, &mut rect) } == 0 || unsafe { windows_sys::Win32::Graphics::Gdi::ClientToScreen(hwnd, &mut origin) } == 0 {
             continue;
         }
-        return Ok(Some(WindowTarget {
+        found.push(WindowTarget {
             handle: key,
             title,
             client_x: origin.x,
             client_y: origin.y,
             client_width: rect.right.saturating_sub(rect.left),
             client_height: rect.bottom.saturating_sub(rect.top),
-        }));
+        });
     }
-    Ok(None)
+    Ok(found)
 }
 
 /// Ask Windows to bring `target` to the foreground (may be refused by focus-stealing rules;

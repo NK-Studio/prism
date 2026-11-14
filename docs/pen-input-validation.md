@@ -297,6 +297,23 @@ centres its anti-aliasing on R (2×2 samples, plus a box for medium and strong),
 nominal diameter at every level. That is the whole width gap: at medium, size 25 gives
 22.5 px in CLIP STUDIO and 25.0 px in Prism.
 
+**Fixed.** `prism-paint` now renders an anti-aliased hard computed CSP tip with this ramp,
+evaluated once at each pixel centre. The edge distance is first order, (1 − q) / |∇q|, taken
+through the linear tip map, so rotated and flattened tips follow the same rule. This replaces the
+2×2 samples and box filter. The unit test
+`csp_anti_aliased_round_dab_matches_measured_clip_studio_diameters` checks all 20 measured dabs
+at three sub-pixel phases (within 0.25 px; 0.6 px for the binary level 0). Re-running the same
+synthetic pressure stroke through the rebuilt app:
+
+| Pressure | 0.17 | 0.33 | 0.50 | 0.67 | 0.83 | 1.00 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CLIP STUDIO, px | 2.61 | 6.97 | 11.28 | 15.39 | 19.52 | 23.39 |
+| Prism before, px | 4.42 | 8.88 | 13.18 | 17.19 | 21.35 | 25.24 |
+| Prism after, px | 2.69 | 7.05 | 11.38 | 15.47 | 19.59 | 23.39 |
+
+The mean |difference| over the stroke is 0.06 px. A single size-25 dab is 22.55 px in Prism and
+22.54 px in CLIP STUDIO. Line fits: CLIP STUDIO `0.998·size − 1.21`, Prism `1.005·size − 1.33`.
+
 Not covered: image (sampled) tips, elliptical tips (thickness < 100), and soft tips. CLIP STUDIO
 forces anti-aliasing off for a soft round tip wider than 25 px of falloff (`docs/sut-analysis.md`
 › Anti-aliasing levels).

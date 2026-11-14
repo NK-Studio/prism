@@ -217,6 +217,14 @@ impl Stroke {
     }
 }
 
+/// Which of the candidate windows `(title, client width, client height)` to target for
+/// `needle` (lowercase): an exact title match first, else the first containing it, skipping any
+/// with an empty client area (minimized windows).
+pub fn pick_window<'a>(candidates: impl Iterator<Item = (&'a str, i32, i32)>, needle: &str) -> Option<usize> {
+    let usable: Vec<(usize, String)> = candidates.enumerate().filter(|(_, (_, w, h))| *w > 0 && *h > 0).map(|(i, (t, _, _))| (i, t.to_lowercase())).collect();
+    usable.iter().find(|(_, t)| t == needle).or_else(|| usable.iter().find(|(_, t)| t.contains(needle))).map(|(i, _)| *i)
+}
+
 /// A canonical pressure test: a horizontal line of `length` pixels starting at `(x, y)`, sampled
 /// every 4 px at 8 ms, whose pressure rises 0→1 over the first half and falls back to 0.
 pub fn pressure_ramp(x: f64, y: f64, length: f64) -> Result<Stroke, Error> {
@@ -296,6 +304,15 @@ mod tests {
         assert!(Stroke::new(vec![f(Phase::Hover, 0.0); MAX_FRAMES + 1]).is_err());
         assert!(Stroke::new(vec![f(Phase::Hover, 0.0), f(Phase::Down, 0.2), f(Phase::Move, 0.9), f(Phase::Up, 0.0), f(Phase::Leave, 0.0)]).is_ok());
         assert!(Stroke::from_contact(&[]).is_err());
+    }
+
+    #[test]
+    fn window_pick_prefers_exact_titles_and_skips_minimized() {
+        let w = [("prism – README.md", 0, 0), ("Prism - notes", 800, 600), ("Prism", 3840, 2088)];
+        assert_eq!(pick_window(w.iter().copied(), "prism"), Some(2), "exact title wins");
+        assert_eq!(pick_window(w[..2].iter().copied(), "prism"), Some(1), "minimized skipped");
+        assert_eq!(pick_window(w[..1].iter().copied(), "prism"), None);
+        assert_eq!(pick_window(w.iter().copied(), "clip studio"), None);
     }
 
     #[test]

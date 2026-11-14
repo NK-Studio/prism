@@ -1157,8 +1157,8 @@ fn csp_anti_alias_levels_sample_like_csp_and_parse_legacy_flags() {
     let b = BrushSettings { csp_anti_alias: Some(3), ..brush() };
     assert_eq!(serde_json::from_str::<BrushSettings>(&serde_json::to_string(&b).unwrap()).unwrap(), b);
     assert_eq!(BrushSettings { csp_anti_alias: Some(9), ..brush() }.bounded_for_render().csp_anti_alias, Some(3));
-    // A hard round dab, 20 px across, centred on a pixel corner: level 0 is binary; weak
-    // averages 2×2 samples (values in quarters); medium and strong soften the edge further.
+    // A hard round dab, 20 px across, centred on a pixel corner: level 0 is binary; the others
+    // ramp inward from the outline, wider for each level.
     let edge = |level: u8| {
         let b = BrushSettings { size: 20.0, hardness: 1.0, pressure_size: false, csp_anti_alias: Some(level), ..brush() };
         let s = paint(&b, &[StrokePoint::new(30.0, 30.0, 1.0)], 60, 60);
@@ -1167,14 +1167,12 @@ fn csp_anti_alias_levels_sample_like_csp_and_parse_legacy_flags() {
     let none = edge(0);
     assert!(none.iter().all(|a| *a == 0.0 || *a == 1.0), "{none:?}");
     assert_eq!(none.iter().filter(|a| **a == 1.0).count(), 20);
-    let weak = edge(1);
-    assert!(weak.iter().all(|a| (a * 4.0 - (a * 4.0).round()).abs() < 1e-3), "{weak:?}");
     let soft = |row: &[f32]| row.iter().filter(|a| **a > 0.0 && **a < 1.0).count();
-    let (medium, strong) = (edge(2), edge(3));
-    assert!(soft(&strong) >= soft(&medium) && soft(&medium) >= soft(&weak), "{weak:?} {medium:?} {strong:?}");
+    let (weak, medium, strong) = (edge(1), edge(2), edge(3));
+    assert!(soft(&strong) >= soft(&medium) && soft(&medium) >= soft(&weak) && soft(&weak) > 0, "{weak:?} {medium:?} {strong:?}");
+    // The outline stays at the radius: nothing is inked outside the level-0 dab.
     for row in [&weak, &medium, &strong] {
-        let total: f32 = row.iter().sum();
-        assert!((total - 20.0).abs() < 1.0, "coverage across the dab stays its diameter: {total}");
+        assert!(row.iter().zip(&none).all(|(a, n)| *n == 1.0 || *a == 0.0), "{row:?}");
     }
     // A sampled tip at strong reads a reduced level, so a one-texel checkerboard averages out.
     let checker = BrushSettings {
@@ -1187,6 +1185,38 @@ fn csp_anti_alias_levels_sample_like_csp_and_parse_legacy_flags() {
     let s = paint(&checker, &[StrokePoint::new(20.0, 20.0, 1.0)], 40, 40);
     let a = s.rgba(20, 20)[3];
     assert!((a - 0.5).abs() < 0.05, "{a}");
+}
+
+/// Single hard round dabs measured in CLIP STUDIO PAINT 5 (G-pen, full pressure; area as an
+/// equivalent diameter, docs/pen-input-validation.md › G-pen comparison): anti-aliasing ramps
+/// inward from the outline, so a dab is narrower than its size by about the ramp width.
+#[test]
+fn csp_anti_aliased_round_dab_matches_measured_clip_studio_diameters() {
+    // (level, [size 5, 10, 25, 50, 100]) as measured.
+    let measured: [(u8, [f32; 5]); 4] = [
+        (0, [5.05, 10.09, 25.03, 50.16, 100.12]),
+        (1, [3.55, 8.58, 23.50, 48.53, 98.51]),
+        (2, [2.86, 7.65, 22.54, 47.53, 97.52]),
+        (3, [2.86, 6.83, 21.59, 46.55, 96.53]),
+    ];
+    let mut bad = Vec::new();
+    for (level, row) in measured {
+        for (size, want) in [5.0_f32, 10.0, 25.0, 50.0, 100.0].into_iter().zip(row) {
+            // Off the pixel grid too: the diameter must not depend on the sub-pixel phase.
+            for (cx, cy) in [(80.0, 80.0), (80.5, 80.0), (80.3, 80.7)] {
+                let b = BrushSettings { size, hardness: 1.0, pressure_size: false, csp_anti_alias: Some(level), ..brush() };
+                let s = paint(&b, &[StrokePoint::new(cx, cy, 1.0)], 160, 160);
+                let area = alpha_sum(&s, Rect::new(0, 0, 160, 160));
+                let got = 2.0 * (area / std::f32::consts::PI).sqrt();
+                // Level 0 is a binary disc: its pixel count depends on the sub-pixel phase.
+                let tolerance = if level == 0 { 0.6 } else { 0.25 };
+                if (got - want).abs() >= tolerance {
+                    bad.push(format!("level {level} size {size} at ({cx}, {cy}): {got:.3} px, CLIP STUDIO {want} px"));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
 #[test]

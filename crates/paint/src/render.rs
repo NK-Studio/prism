@@ -590,7 +590,8 @@ impl BrushContext {
             None => (0, 1.0, 1.0, 1.0),
         };
         // A CSP tip value at a pixel-space offset from the dab centre: the nearest texel of the
-        // chosen level (a computed tip is its exact shape, box-filtered for medium/strong).
+        // chosen level, or a computed tip's exact shape (binary when hard; an anti-aliased hard
+        // computed tip uses `csp_ramp` below instead).
         let csp_tip_value = |dx: f32, dy: f32| -> f32 {
             let (u, v) = to_tip(dx, dy);
             match mips {
@@ -598,28 +599,52 @@ impl BrushContext {
                     let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
                     m.sample_nearest(level, px / tw, py / th)
                 }
-                None => {
-                    let box_px = match csp_aa {
-                        Some(2) => 1.0,
-                        Some(3..) => 2.0,
-                        _ => 0.0,
-                    };
-                    if box_px <= 0.0 || !falloff.is_hard() {
-                        return if falloff.is_hard() { if (u * inv_major).powi(2) + (v * inv_minor).powi(2) <= 1.0 { 1.0 } else { 0.0 } } else { texel(u, v) };
+                None if falloff.is_hard() => {
+                    if (u * inv_major).powi(2) + (v * inv_minor).powi(2) <= 1.0 {
+                        1.0
+                    } else {
+                        0.0
                     }
-                    let mut sum = 0.0;
-                    for j in 0..4 {
-                        for i in 0..4 {
-                            let (ox, oy) = ((i as f32 + 0.5) / 4.0 - 0.5, (j as f32 + 0.5) / 4.0 - 0.5);
-                            let (su, sv) = to_tip(dx + ox * box_px, dy + oy * box_px);
-                            if (su * inv_major).powi(2) + (sv * inv_minor).powi(2) <= 1.0 {
-                                sum += 1.0 / 16.0;
-                            }
-                        }
-                    }
-                    sum
                 }
+                None => texel(u, v),
             }
+        };
+        // CSP's anti-aliased hard computed tip, measured against CLIP STUDIO PAINT
+        // (docs/pen-input-validation.md › G-pen comparison): the edge stays at the tip's outline
+        // and coverage ramps linearly *inside* it, `clamp(e / w)` for a pixel centre `e` pixels
+        // inside the outline, with `w` 1.5 / 2.5 / 3.5 px for weak / medium / strong, at most the
+        // tip's smaller radius. The outline distance is first order, (1 − q) / |∇q| (exact on a
+        // circle), with the gradient taken in pixels through the linear `to_tip` map.
+        let csp_ramp = match csp_aa {
+            Some(aa @ 1..) if mips.is_none() && falloff.is_hard() => {
+                let width = match aa {
+                    1 => 1.5_f32,
+                    2 => 2.5,
+                    _ => 3.5,
+                };
+                // Pixel offsets → relative-radius space (qu, qv): the columns of that linear map.
+                let (ux, vx) = to_tip(1.0, 0.0);
+                let (uy, vy) = to_tip(0.0, 1.0);
+                let (a, b, c, e) = (ux * inv_major, uy * inv_major, vx * inv_minor, vy * inv_minor);
+                // The smallest pixel radius is 1 / the largest singular value of [[a, b], [c, e]].
+                let (saa, sab, sbb) = (a * a + c * c, a * b + c * e, b * b + e * e);
+                let sigma_max = ((saa + sbb) / 2.0 + (((saa - sbb) / 2.0).powi(2) + sab * sab).sqrt()).max(0.0).sqrt();
+                let width = if sigma_max > 0.0 && sigma_max.is_finite() { width.min(1.0 / sigma_max) } else { width };
+                Some(move |dx: f32, dy: f32| -> f32 {
+                    let (qu, qv) = (a * dx + b * dy, c * dx + e * dy);
+                    let q = qu.hypot(qv);
+                    if q >= 1.0 {
+                        return 0.0;
+                    }
+                    let (gx, gy) = (qu * a + qv * c, qu * b + qv * e);
+                    let g = if q > 1e-6 { gx.hypot(gy) / q } else { 0.0 };
+                    if g <= 0.0 || width <= 0.0 {
+                        return 1.0;
+                    }
+                    ((1.0 - q) / g / width).clamp(0.0, 1.0)
+                })
+            }
+            _ => None,
         };
         for yy in 0..h {
             let y = rect.y0 + yy as i32;
@@ -629,9 +654,12 @@ impl BrushContext {
                 let dx = x as f32 + 0.5 - cx;
                 let (val, rn) = match (csp_aa, mips) {
                     // CSP: one sample at the pixel centre without anti-aliasing; otherwise the mean
-                    // of 2×2 samples half a pixel apart around it.
+                    // of 2×2 samples half a pixel apart around it (a hard computed tip uses the
+                    // measured inward ramp instead).
                     (Some(aa), _) => {
-                        let val = if aa == 0 {
+                        let val = if let Some(ramp) = &csp_ramp {
+                            ramp(dx, dy)
+                        } else if aa == 0 {
                             csp_tip_value(dx, dy)
                         } else {
                             let (x0, y0) = (dx - 0.25, dy - 0.25);

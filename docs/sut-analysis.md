@@ -1006,10 +1006,13 @@ texel at the pixel centre. There is no bilinear filtering at any level.
 Prism (`render.rs`, `csp_aa`): level 0 samples once at the pixel centre; other levels
 average 2×2 nearest samples at ±¼ pixel around the centre (the source starts its rows at
 the pixel corner, but CSP's own stroke edges are symmetric, so the offsets are taken as
-centred); sampled tips use mip level 0 / `level_for(d)` / `level_for(d/2)`. A computed
-round tip is sampled as its exact shape (hard) or Prism's falloff (soft); medium and
-strong average a 1 px or 2 px box around each sample to stand in for the reduced levels
-of CSP's generated tip bitmap, whose resolution is not known. `cspAntiAlias` is now a
+centred); sampled tips use mip level 0 / `level_for(d)` / `level_for(d/2)`. A soft computed
+round tip uses Prism's falloff. A hard computed round tip with anti-aliasing follows the
+measured CLIP STUDIO rule (2026-11-14, `docs/pen-input-validation.md` › G-pen comparison).
+Coverage is `clamp((R − d) / w)`: the edge stays at R and the ramp runs inward, with w =
+1.5 / 2.5 / 3.5 px for weak / medium / strong, capped at R. It is evaluated once at each pixel
+centre. The earlier 1 px / 2 px box filter kept the nominal diameter, which CLIP STUDIO does
+not (a size-25 medium dab is 22.5 px across). `cspAntiAlias` is now a
 level 0..3; older presets stored a boolean (false = 0, true = 1). Grainy Pen (level 0)
 renders unchanged.
 
