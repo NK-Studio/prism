@@ -54,7 +54,7 @@ pub fn show(
         .with_maximize_button(false)
         .with_inner_size(measured.unwrap_or(egui::vec2(380.0, 200.0)))
         .with_position(position)
-        .with_visible(measured.is_some())
+        .with_visible(measured.is_some() && !held(ctx, key))
         .with_window_level(crate::doc_windows::dialog_level(app, ctx));
     ctx.show_viewport_immediate(viewport, builder, |ui, _| {
         let child = ui.ctx().clone();
@@ -72,9 +72,24 @@ pub fn show(
     });
 }
 
-/// Whether the window shown under `key` has been laid out (and so is visible).
+/// Whether the window shown under `key` has been laid out.
 pub fn measured(ctx: &egui::Context, key: egui::Id) -> bool {
     ctx.data(|m| m.get_temp::<egui::Vec2>(key.with("size"))).is_some()
+}
+
+/// Whether the window shown under `key` is laid out and not held back (and so is visible).
+pub fn shown(ctx: &egui::Context, key: egui::Id) -> bool {
+    measured(ctx, key) && !held(ctx, key)
+}
+
+/// Keeps the window shown under `key` hidden even once it is laid out (to prepare it unseen,
+/// e.g. make it transparent before it fades in), or lets it show.
+pub fn hold(ctx: &egui::Context, key: egui::Id, held: bool) {
+    ctx.data_mut(|m| m.insert_temp(key.with("hold"), held));
+}
+
+fn held(ctx: &egui::Context, key: egui::Id) -> bool {
+    ctx.data(|m| m.get_temp::<bool>(key.with("hold"))).unwrap_or(false)
 }
 
 /// The frame of a modal drawn in its own window: the OS window is its edge, so no shadow or

@@ -25,6 +25,20 @@ pub struct Prompt {
     docs: Vec<DocId>,
     window: Option<u64>,
     presented: bool,
+    entry: Entry,
+}
+
+/// The prompt's entry animation.
+#[derive(Default)]
+struct Entry {
+    /// Its own window was sent back to be measured afresh (hidden, so it can be faded out first).
+    remeasured: bool,
+    /// The opacity its own window was last given, if any.
+    alpha: Option<f32>,
+    /// Frames spent hidden trying to make its own window transparent.
+    tries: u8,
+    /// When it started to appear (`InputState::time`); `-inf` shows it at once.
+    shown_at: Option<f64>,
 }
 
 fn index_of(app: &PrismApp, id: DocId) -> Option<usize> {
@@ -69,8 +83,15 @@ pub fn intercept(app: &mut PrismApp, id: &str, params: &Value) -> bool {
     if docs.is_empty() {
         return false;
     }
-    let prompt =
-        Prompt { id: id.to_string(), params: params.clone(), target, docs, window: if id == EXIT { None } else { app.ui.active_window }, presented: false };
+    let prompt = Prompt {
+        id: id.to_string(),
+        params: params.clone(),
+        target,
+        docs,
+        window: if id == EXIT { None } else { app.ui.active_window },
+        presented: false,
+        entry: Entry::default(),
+    };
     match &app.discard {
         None => app.discard = Some(prompt),
         // Quitting overrides whatever is pending: it covers every document, so nothing is lost.
@@ -205,7 +226,7 @@ fn focus_prompt(app: &mut PrismApp, ctx: &egui::Context) -> bool {
     }
     let (own_window, prompt) = (!ctx.embed_viewports(), viewport());
     // Its first frame only measures it, hidden: present it once it can be seen.
-    if own_window && !crate::floating_window::measured(ctx, egui::Id::new("discard-prompt")) {
+    if own_window && !crate::floating_window::shown(ctx, egui::Id::new("discard-prompt")) {
         return false;
     }
     let other_focused = if own_window {
@@ -248,6 +269,8 @@ pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
     if app.file_dialog_open() || app.tiff_options.is_some() {
         if let Some(p) = &mut app.discard {
             p.presented = false;
+            // It comes back with its entry animation once the save dialog is dismissed.
+            p.entry = Entry::default();
         }
         return;
     }
@@ -256,6 +279,17 @@ pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
         return;
     }
     let focus = focus_prompt(app, ctx);
+    let id = egui::Id::new("discard-prompt");
+    if let Some(p) = &mut app.discard
+        && !ctx.embed_viewports()
+        && !p.entry.remeasured
+    {
+        // Laid out again, hidden, and kept hidden until it is transparent: each prompt's window
+        // then fades in from nothing instead of flashing up first.
+        p.entry.remeasured = true;
+        ctx.data_mut(|m| m.remove::<egui::Vec2>(id.with("size")));
+        crate::floating_window::hold(ctx, id, can_prefade(app));
+    }
     let Some(p) = &app.discard else { return };
     let Some(&doc) = p.docs.first() else { return };
     let (exits, reverts) = (p.id == EXIT, p.id == "file.revert");
@@ -294,62 +328,93 @@ pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
     let row: Vec<DialogButton> = buttons.iter().zip(&labels).map(|(b, label)| DialogButton::new(b.0, label, b.3)).collect();
     let title = tl!(&title).to_string();
     let mut answer = None;
-    let id = egui::Id::new("discard-prompt");
-    crate::floating_window::show(app, ctx, id, viewport(), title.clone(), |_, ctx| {
+    crate::floating_window::show(app, ctx, id, viewport(), title.clone(), |app, ctx| {
         let own_window = !ctx.embed_viewports();
         if focus && own_window {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
-        answer = ctx.input_mut(|i| buttons.iter().find(|b| b.2.is_some_and(|k| i.consume_key(egui::Modifiers::NONE, k))).map(|b| b.4));
-        let mut modal = egui::Modal::new(id);
-        if own_window {
-            modal = modal.area(crate::floating_window::area(id)).frame(crate::floating_window::frame(ctx)).backdrop_color(egui::Color32::TRANSPARENT);
+        // Its own window fades as a whole; embedded, the contents do.
+        let entry = if own_window { fade_window(app, ctx, id) } else { entry_progress(app, ctx) };
+        let opacity = if own_window { 1.0 } else { entry };
+        if entry < 1.0 {
+            ctx.request_repaint();
         }
+        answer = ctx.input_mut(|i| buttons.iter().find(|b| b.2.is_some_and(|k| i.consume_key(egui::Modifiers::NONE, k))).map(|b| b.4));
+        // The frame is drawn inside the content so the entry animation fades and lifts it too.
+        let mut modal = egui::Modal::new(id).frame(egui::Frame::NONE);
+        let frame = if own_window {
+            modal = modal.area(crate::floating_window::area(id)).backdrop_color(egui::Color32::TRANSPARENT);
+            crate::floating_window::frame(ctx)
+        } else {
+            modal = modal.backdrop_color(egui::Color32::from_black_alpha((100.0 * entry).round() as u8));
+            egui::Frame::popup(&ctx.global_style())
+        };
+        // Embedded, it also grows from 96 % and rises 8 pt into place; its own window is its
+        // edge, so there only the window fades.
+        let rect_key = id.with("entry-rect");
+        let lift = match ctx.data(|m| m.get_temp::<egui::Rect>(rect_key)) {
+            Some(r) if !own_window && entry < 1.0 => {
+                let c = r.center().to_vec2();
+                let scale = 0.96 + 0.04 * entry;
+                egui::emath::TSTransform::from_translation(c + egui::vec2(0.0, 8.0 * (1.0 - entry)))
+                    * egui::emath::TSTransform::from_scaling(scale)
+                    * egui::emath::TSTransform::from_translation(-c)
+            }
+            _ => egui::emath::TSTransform::IDENTITY,
+        };
         let mut sizing = false;
         let modal = modal.show(ctx, |ui| {
-            sizing = ui.is_sizing_pass();
-            if mac {
-                // A macOS alert: caution sign, bold title, message, and full-width answers stacked
-                // Save / Don't Save / Cancel, all left-aligned in a narrow column.
-                let pad = 10.0;
-                ui.set_width(MAC_ALERT_WIDTH + 2.0 * pad);
-                egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
-                    ui.set_width(MAC_ALERT_WIDTH);
-                    let icon = crate::widgets::caution_icon(ui, 48.0).rect;
+            ui.multiply_opacity(opacity);
+            ui.with_visual_transform(lift, |ui| {
+                frame.show(ui, |ui| {
+                    sizing = ui.is_sizing_pass();
+                    if mac {
+                        // A macOS alert: caution sign, bold title, message, and full-width answers stacked
+                        // Save / Don't Save / Cancel, all left-aligned in a narrow column.
+                        let pad = 10.0;
+                        ui.set_width(MAC_ALERT_WIDTH + 2.0 * pad);
+                        egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
+                            ui.set_width(MAC_ALERT_WIDTH);
+                            let icon = crate::widgets::caution_icon(ui, 48.0).rect;
+                            if own_window {
+                                let bar = egui::Rect::from_min_max(icon.min, egui::pos2(ui.max_rect().right(), icon.bottom()));
+                                crate::floating_window::drag_window(ui.ctx(), &ui.interact(bar, id.with("title"), egui::Sense::DRAG));
+                            }
+                            ui.add_space(14.0);
+                            ui.add(egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(14.0))).selectable(false));
+                            ui.add_space(8.0);
+                            ui.label(&message);
+                            ui.add_space(18.0);
+                            if let Some(role) = crate::widgets::dialog_buttons_stacked(ui, &row, MAC_ALERT_WIDTH) {
+                                answer = buttons.iter().find(|b| b.0 == role).map(|b| b.4);
+                            }
+                        });
+                        return;
+                    }
+                    ui.set_max_width(420.0);
+                    let t = ui.add(egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false)).rect;
+                    let bar = egui::Rect::from_min_max(t.min, egui::pos2(ui.max_rect().right(), t.bottom()));
                     if own_window {
-                        let bar = egui::Rect::from_min_max(icon.min, egui::pos2(ui.max_rect().right(), icon.bottom()));
+                        // Not focusable: Tab walks the answers only.
                         crate::floating_window::drag_window(ui.ctx(), &ui.interact(bar, id.with("title"), egui::Sense::DRAG));
                     }
-                    ui.add_space(14.0);
-                    ui.add(egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(14.0))).selectable(false));
+                    ui.add_space(4.0);
+                    crate::widgets::hairline(ui);
                     ui.add_space(8.0);
                     ui.label(&message);
-                    ui.add_space(18.0);
-                    if let Some(role) = crate::widgets::dialog_buttons_stacked(ui, &row, MAC_ALERT_WIDTH) {
-                        answer = buttons.iter().find(|b| b.0 == role).map(|b| b.4);
-                    }
-                });
-                return;
-            }
-            ui.set_max_width(420.0);
-            let t = ui.add(egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false)).rect;
-            let bar = egui::Rect::from_min_max(t.min, egui::pos2(ui.max_rect().right(), t.bottom()));
-            if own_window {
-                // Not focusable: Tab walks the answers only.
-                crate::floating_window::drag_window(ui.ctx(), &ui.interact(bar, id.with("title"), egui::Sense::DRAG));
-            }
-            ui.add_space(4.0);
-            crate::widgets::hairline(ui);
-            ui.add_space(8.0);
-            ui.label(&message);
-            ui.add_space(12.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                if let Some(role) = crate::widgets::dialog_buttons(ui, &row) {
-                    answer = buttons.iter().find(|b| b.0 == role).map(|b| b.4);
-                }
+                    ui.add_space(12.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        if let Some(role) = crate::widgets::dialog_buttons(ui, &row) {
+                            answer = buttons.iter().find(|b| b.0 == role).map(|b| b.4);
+                        }
+                    });
+                })
             });
         });
+        if !sizing {
+            ctx.data_mut(|m| m.insert_temp(rect_key, modal.response.rect));
+        }
         if modal.should_close() {
             answer = Some(Answer::Cancel);
         }
@@ -366,6 +431,74 @@ pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
         Some(Answer::Save) if save(app, ctx, doc) => advance(app, ctx),
         _ => {}
     }
+}
+
+/// How long the prompt takes to appear, in seconds.
+pub(crate) const ENTRY_SECS: f32 = 0.18;
+
+/// How far the embedded prompt's entry animation has come, eased out (0 hidden, 1 in place).
+fn entry_progress(app: &mut PrismApp, ctx: &egui::Context) -> f32 {
+    let Some(p) = &mut app.discard else { return 1.0 };
+    let now = ctx.input(|i| i.time);
+    eased_since(*p.entry.shown_at.get_or_insert(now), now)
+}
+
+fn eased_since(start: f64, now: f64) -> f32 {
+    eased(((now - start) / f64::from(ENTRY_SECS)).clamp(0.0, 1.0) as f32)
+}
+
+/// Cubic ease-out: quick to start, settling gently.
+fn eased(t: f32) -> f32 {
+    if t.is_finite() { 1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3) } else { 1.0 }
+}
+
+/// How many frames the prompt's window may stay hidden while it is laid out and made transparent,
+/// before it is shown without the fade.
+const HIDDEN_TRIES: u8 = 20;
+
+/// Whether the prompt's window can be made transparent while still hidden, so it can fade in.
+/// Only Windows finds a hidden window (macOS matches visible ones): elsewhere it shows at once.
+fn can_prefade(app: &PrismApp) -> bool {
+    cfg!(windows) && app.services.window_opacity.is_some()
+}
+
+/// Fades the prompt's own OS window in, and returns how far it has come. The window is held hidden
+/// until it has its final size and is fully transparent (Windows ignores the opacity of a window
+/// shown at its old size until it is resized), then fades in; where the platform can't do that,
+/// it is shown at once (never at full opacity first and then faded).
+fn fade_window(app: &mut PrismApp, ctx: &egui::Context, id: egui::Id) -> f32 {
+    let prefade = can_prefade(app);
+    let Some(p) = &mut app.discard else { return 1.0 };
+    let e = &mut p.entry;
+    let now = ctx.input(|i| i.time);
+    let size = ctx.data(|m| m.get_temp::<egui::Vec2>(id.with("size")));
+    let settled = size.is_some_and(|s| ctx.input(|i| i.viewport().inner_rect).is_some_and(|r| (r.size() - s).length() < 2.0));
+    let ready = settled && e.alpha == Some(0.0);
+    if e.shown_at.is_none() && !ready {
+        e.tries = e.tries.saturating_add(1);
+    }
+    let hidden = e.shown_at.is_none() && !ready && e.tries < HIDDEN_TRIES && prefade;
+    crate::floating_window::hold(ctx, id, hidden);
+    let progress = match e.shown_at {
+        Some(start) => eased_since(start, now),
+        None if !hidden && (ready || settled || e.tries >= HIDDEN_TRIES) => {
+            eased_since(*e.shown_at.get_or_insert(if ready { now } else { f64::NEG_INFINITY }), now)
+        }
+        None => 0.0,
+    };
+    // While hidden, keep making it transparent (cheap once the window is found). Nothing to do for
+    // a window never faded that shows at once.
+    if (hidden && e.alpha != Some(0.0)) || (e.alpha != Some(progress) && (e.alpha.is_some() || progress < 1.0)) {
+        if let Some(set) = app.services.window_opacity.as_mut()
+            && set(ctx, progress)
+        {
+            e.alpha = Some(progress);
+        } else if e.alpha.is_some_and(|a| a < 1.0) {
+            // A fade left half-way would leave the prompt translucent: keep trying until it is opaque.
+            ctx.request_repaint();
+        }
+    }
+    if e.shown_at.is_none() { 0.0 } else { progress }
 }
 
 #[derive(Clone, Copy)]
@@ -587,6 +720,96 @@ mod tests {
         assert_eq!(run(false), 1);
         assert_eq!(run(false), 0);
         assert_eq!(run(true), 1);
+    }
+
+    #[test]
+    fn the_prompt_eases_in_then_stays_put() {
+        assert_eq!(eased(0.0), 0.0);
+        assert_eq!(eased(1.0), 1.0);
+        assert!(eased(0.5) > 0.5, "eases out: most of the way there by half time");
+        assert_eq!(eased(f32::NAN), 1.0);
+        let mut app = app_with_docs(1);
+        make_dirty(&mut app, 0);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .with_step_dt(1.0 / 60.0)
+            .build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        assert!(intercept(h.state_mut(), "file.close", &Value::Null));
+        let ctx = h.ctx.clone();
+        let mut seen = Vec::new();
+        for _ in 0..20 {
+            h.step();
+            seen.push(entry_progress(h.state_mut(), &ctx));
+        }
+        assert!(seen[0] < 0.5, "starts faint: {seen:?}");
+        assert!(seen.windows(2).all(|w| w[0] <= w[1]), "never goes backwards: {seen:?}");
+        assert_eq!(seen.last().copied(), Some(1.0), "settles fully opaque: {seen:?}");
+        // Answering hides it; the next prompt animates in again from the start.
+        h.state_mut().discard = None;
+        h.step();
+        assert!(intercept(h.state_mut(), "file.close", &Value::Null));
+        h.step();
+        assert!(entry_progress(h.state_mut(), &ctx) < 0.5);
+    }
+
+    /// Runs one frame of `fade_window` at `time`, with the window's inner size as the OS reports it.
+    fn fade_frame(app: &mut PrismApp, ctx: &egui::Context, time: f64, inner: Option<egui::Vec2>) -> f32 {
+        let mut raw = egui::RawInput { time: Some(time), ..Default::default() };
+        raw.viewports.entry(egui::ViewportId::ROOT).or_default().inner_rect = inner.map(|s| egui::Rect::from_min_size(egui::Pos2::ZERO, s));
+        let mut out = f32::NAN;
+        let mut output = ctx.run_ui(raw, |ui| out = fade_window(app, ui.ctx(), egui::Id::new("discard-prompt")));
+        output.textures_delta.clear();
+        out
+    }
+
+    #[test]
+    fn its_own_window_is_transparent_until_laid_out_then_fades_in() {
+        let set = std::rc::Rc::new(std::cell::RefCell::new(Vec::<f32>::new()));
+        let mut app = app_with_docs(1);
+        make_dirty(&mut app, 0);
+        let log = set.clone();
+        app.services.window_opacity = Some(Box::new(move |_, a| {
+            log.borrow_mut().push(a);
+            true
+        }));
+        assert!(intercept(&mut app, "file.close", &Value::Null));
+        let ctx = egui::Context::default();
+        let size = egui::vec2(300.0, 120.0);
+        // Hidden and still being measured: made transparent once, before it can be seen.
+        assert_eq!(fade_frame(&mut app, &ctx, 0.0, None), 0.0);
+        assert_eq!(fade_frame(&mut app, &ctx, 0.02, None), 0.0);
+        assert!(set.borrow().iter().all(|&a| a == 0.0), "only ever transparent so far: {:?}", set.borrow());
+        assert!(!crate::floating_window::shown(&ctx, egui::Id::new("discard-prompt")), "not measured yet");
+        // Measured, but the window still has its old size: the fade waits.
+        ctx.data_mut(|m| m.insert_temp(egui::Id::new("discard-prompt").with("size"), size));
+        assert_eq!(fade_frame(&mut app, &ctx, 0.04, Some(egui::vec2(380.0, 200.0))), 0.0);
+        // At its final size it fades in, never going back, and ends fully opaque.
+        let mut seen = vec![fade_frame(&mut app, &ctx, 0.06, Some(size))];
+        for i in 1..=15 {
+            seen.push(fade_frame(&mut app, &ctx, 0.06 + f64::from(i) / 60.0, Some(size)));
+        }
+        assert_eq!(seen[0], 0.0);
+        assert!(seen.windows(2).all(|w| w[0] <= w[1]), "{seen:?}");
+        assert_eq!(seen.last().copied(), Some(1.0));
+        assert_eq!(set.borrow().last().copied(), Some(1.0), "left opaque: {:?}", set.borrow());
+    }
+
+    #[test]
+    fn its_own_window_shows_at_once_where_it_cannot_be_faded() {
+        let mut app = app_with_docs(1);
+        make_dirty(&mut app, 0);
+        app.services.window_opacity = Some(Box::new(|_, _| false));
+        assert!(intercept(&mut app, "file.close", &Value::Null));
+        let ctx = egui::Context::default();
+        let size = egui::vec2(300.0, 120.0);
+        ctx.data_mut(|m| m.insert_temp(egui::Id::new("discard-prompt").with("size"), size));
+        let id = egui::Id::new("discard-prompt");
+        assert_eq!(fade_frame(&mut app, &ctx, 0.0, Some(size)), 0.0);
+        assert!(!crate::floating_window::shown(&ctx, id), "held hidden while it tries");
+        let frames: Vec<f32> = (1..=u32::from(HIDDEN_TRIES)).map(|i| fade_frame(&mut app, &ctx, f64::from(i) / 60.0, Some(size))).collect();
+        assert_eq!(frames.last().copied(), Some(1.0), "then shown at once: {frames:?}");
+        assert!(crate::floating_window::shown(&ctx, id));
     }
 
     #[test]

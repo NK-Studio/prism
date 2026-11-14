@@ -1,4 +1,5 @@
-//! Safe Win32 window opacity for the document docking preview (including caption buttons).
+//! Safe Win32 window opacity for the document docking preview (including caption buttons) and
+//! the unsaved-changes prompt's entry fade.
 use prism_ui_egui::WindowOpacityFn;
 use winsafe::{HWND, co};
 
@@ -10,19 +11,35 @@ pub fn service() -> WindowOpacityFn {
         let id = ctx.viewport_id();
         let known = windows.remove(&id).filter(|(h, _)| h.IsWindow() && h.GetWindowThreadProcessId().1 == std::process::id());
         let found = known.or_else(|| {
-            let expected = ctx.input(|i| i.viewport().outer_rect)? * ctx.pixels_per_point();
+            let (expected, title) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().title.clone()));
+            let expected = expected.map(|r| r * ctx.pixels_per_point());
+            // A hidden window (a prompt faded out before it is first shown) has no reliable
+            // position yet: it is matched by its title, which is never empty for those.
+            let title = title.filter(|t| !t.is_empty());
+            if expected.is_none() && title.is_none() {
+                return None;
+            }
             let mut found = None;
             let _ = winsafe::EnumWindows(|h| {
-                if h.GetWindowThreadProcessId().1 == std::process::id()
-                    && h.IsWindowVisible()
-                    && let Ok(r) = h.GetWindowRect()
-                {
-                    let actual = egui::Rect::from_min_max(egui::pos2(r.left as f32, r.top as f32), egui::pos2(r.right as f32, r.bottom as f32));
-                    if (actual.min - expected.min).length() < 3.0 && (actual.size() - expected.size()).length() < 3.0 {
-                        let was_layered = h.style_ex().has(co::WS_EX::LAYERED);
-                        found = Some((h, was_layered));
-                        return false;
-                    }
+                if h.GetWindowThreadProcessId().1 != std::process::id() {
+                    return true;
+                }
+                let by_rect = h.IsWindowVisible()
+                    && expected.is_some_and(|expected| {
+                        h.GetWindowRect().is_ok_and(|r| {
+                            let actual = egui::Rect::from_min_max(egui::pos2(r.left as f32, r.top as f32), egui::pos2(r.right as f32, r.bottom as f32));
+                            (actual.min - expected.min).length() < 3.0 && (actual.size() - expected.size()).length() < 3.0
+                        })
+                    });
+                // Only this thread's own windows: reading another thread's title sends it a message
+                // and waits for the reply, which hangs if that thread isn't pumping messages.
+                let by_title = !h.IsWindowVisible()
+                    && h.GetWindowThreadProcessId().0 == winsafe::GetCurrentThreadId()
+                    && title.as_deref().is_some_and(|t| h.GetWindowText().is_ok_and(|w| w == t));
+                if by_rect || by_title {
+                    let was_layered = h.style_ex().has(co::WS_EX::LAYERED);
+                    found = Some((h, was_layered));
+                    return false;
                 }
                 true
             });

@@ -1105,8 +1105,9 @@ impl PrismApp {
                 control::Outcome::AfterInput => self.input_waiters.push(reply),
                 control::Outcome::AfterJob(job) => self.jobs.waiters.push((job, reply)),
                 control::Outcome::Screenshot { token, path, window, dialog } => {
-                    // Wait out egui's animations (off in Prism's theme) and a few rendered frames first.
-                    let settle = ctx.global_style().animation_time as f64 * 2000.0 + 60.0;
+                    // Wait out egui's animations (off in Prism's theme), the unsaved-changes prompt's
+                    // entry animation, and a few rendered frames first.
+                    let settle = (ctx.global_style().animation_time * 2000.0).max(discard_ui::ENTRY_SECS * 1000.0) as f64 + 60.0;
                     self.queued_screenshots.push((
                         token,
                         gpu_canvas::now_ms() + settle,
