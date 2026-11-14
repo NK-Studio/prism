@@ -51,6 +51,7 @@ pub const PARAMETER_KEYS: &[(u32, &str)] = &[
     (1230, "BrushEnableSnap"),
     (1120, "BrushBlendPatternByDarken"),
     (1022, "BrushAdjustFlowByInterval"),
+    (1913, "ChangeRGBByDual"),
     (1074, "BrushPatternReverseHorizontal"),
     (1075, "BrushPatternReverseVertical"),
     (1087, "BrushColorMixingMode"),

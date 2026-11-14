@@ -57,6 +57,7 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1181, "Ending", "BrushOutLength", "Starting and ending"),
     (1910, "Dual brush", "UseDualBrush", "Dual brush"),
     (1911, "Dual brush blending mode", "DualBrushCompositeMode", "Dual brush"),
+    (1913, "Apply RGB value", "ChangeRGBByDual", "Dual brush"),
     (51000, "Dual brush size", "DualSize", "Dual brush"),
     (100, "Texture", "TextureImage", "Texture"),
     (101, "Apply to each brush tip", "TextureForPlot", "Texture"),
@@ -418,6 +419,14 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
             ui.checkbox(&mut b.csp_refer_layer, tl!(label));
             if b.csp_refer_layer {
                 ui.small(tl!("Set a line art layer as a reference layer (Layer panel menu)"));
+            }
+        }
+        1913 => {
+            // The dual brush shapes the density only; its effect on the colour is not drawn.
+            let on = source(m, key) != 0.0;
+            unsupported(ui, label, if on { tl!("On") } else { tl!("Off") }.to_string(), false);
+            if on {
+                ui.small(tl!("The stroke is drawn without this CSP effect"));
             }
         }
         1500 => {
@@ -1066,7 +1075,7 @@ mod tests {
     #[test]
     fn remaining_backlog_rows_are_named_and_survive_hostile_values() {
         use prism_engine::paint::{CspInOut, CspInOutParam, CspInOutTarget, GrayTile, TipShape};
-        let ids = vec![1043, 50, 1202, 1203, 1270, 1080, 1162, 1171, 1181, 1910, 51000, 1110, 1151, 1250, 1500];
+        let ids = vec![1043, 50, 1202, 1203, 1270, 1080, 1162, 1171, 1181, 1910, 51000, 1110, 1151, 1250, 1500, 1913];
         for hostile in [false, true] {
             let mut h = harness();
             {
@@ -1111,6 +1120,7 @@ mod tests {
                 "Post correction",
                 "Do not cross lines of reference layer",
                 "Adjust position",
+                "Apply RGB value",
             ] {
                 assert!(h.query_all_by_label_contains(label).next().is_some(), "{label} (hostile={hostile})");
             }

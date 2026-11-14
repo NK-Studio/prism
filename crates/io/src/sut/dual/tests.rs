@@ -108,13 +108,14 @@ fn unsupported_dual_settings_are_named_in_one_warning() {
             ("DualSize", Value::Number(500.0)),
             ("DualSprayDensity", int(400)),
             ("DualSprayBias", int(-100)),
+            ("ChangeRGBByDual", int(1)),
         ],
     );
     let d = &imported.presets[0].brush.dual_brush;
     assert!(d.enabled);
     assert_eq!((d.scatter, d.count), (MAX_SCATTER, MAX_COUNT));
     let warning = imported.warnings.iter().find(|w| w.contains("dual brush settings")).expect("one warning");
-    for part in ["flow", "ribbon", "texture", "tip rotation inputs", "spray deviation", "limited"] {
+    for part in ["flow", "ribbon", "texture", "tip rotation inputs", "spray deviation", "limited", "apply RGB value"] {
         assert!(warning.contains(part), "{part}: {warning}");
     }
 }

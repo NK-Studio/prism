@@ -123,6 +123,10 @@ pub(super) fn dual_brush(
     if !matches!(r.get("DualTextureImage"), None | Some(Value::Null)) {
         unsupported.push("texture");
     }
+    // "Apply RGB value" (1913): the dual brush changes the colour as well as the density.
+    if enabled(r, "ChangeRGBByDual") {
+        unsupported.push("apply RGB value");
+    }
     for (key, what) in [
         ("DualRibbon", "ribbon"),
         ("DualContinuousPlot", "continuous spraying"),

@@ -3553,6 +3553,7 @@ cspTool	Space evenly	균등 배치
 	New folder	새 폴더
 	At least 1 pixel	최소 1픽셀
 	Enable snapping	스냅 사용
+	Apply RGB value	RGB 값 적용
 	Change it with Aligned in the Clone Stamp options	복제 도장 옵션의 정렬에서 바꿀 수 있습니다
 	Do not cross lines of reference layer	참조 레이어의 선을 넘지 않음
 	Anti-overflow	색 넘침 방지
