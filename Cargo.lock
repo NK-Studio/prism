@@ -4601,6 +4601,7 @@ dependencies = [
  "prism-color",
  "prism-geom",
  "prism-raster",
+ "rayon",
  "serde",
  "serde_json",
 ]

@@ -177,3 +177,38 @@ those per-frame checks cost microseconds. The window also presents with one queu
 of two (`SurfaceConfig::LOW_LATENCY`), removing about 17 ms at 60 Hz. Physical pen-to-photon
 latency remains unmeasured; the first stroke after selecting a large brush still pays its
 one-time tip preparation (~100 ms cold, see above).
+
+## Colour-tip spray brushes: dab rasterisation (2026-11-14)
+
+Reported: the frame rate collapses while drawing with 가을낙엽_낙엽 (nine 677×700 colour tips,
+particle 78 px, gap Narrow: a dab every 3.1 px). Each dab walked its 112×112 px rectangle five
+times (the shape, then the alpha and the red, green and blue planes for its colours), each time
+transforming every sample again: 2.6 ms a dab, on one core. The live preview also draws the
+stabilizer's catch-up tail every frame, about as many dabs again.
+
+- `BrushContext::rasterize_colored` reads the shape and the three colour planes at the same
+  texels in one pass, and skips the columns of each row that cannot reach the tip (the map to tip
+  coordinates is affine; the exact test stays inside). It applies to CSP-sampled colour tips;
+  ribbons, computed tips and Photoshop sampling keep the separate passes.
+- `StrokeRenderer` rasterises colour-tip dabs in batches of 32 on all cores (rayon) and lays them
+  in stroke order.
+- The prepared-tip prewarm limit rose from 4 to 8 million tip samples (12 to 24 MB of colour), so
+  this brush is prepared when it is selected instead of at the first pen-down (45 ms).
+
+The pixels are unchanged: the rendered comparison image is identical byte for byte, and the unit
+test `csp_colour_tip_one_pass_equals_the_separate_passes` compares the one pass with the separate
+ones at every anti-aliasing level.
+
+Release build, this Windows / Ryzen (24 threads) machine, `LiveStroke::push` per frame (two 8 ms
+samples a frame, 1600×900 document, size 17, gap Narrow), from the ignored test
+`local_csp_live_one`:
+
+| Pen speed | Before mean / p95 / max, ms | After mean / p95 / max, ms |
+|---|---:|---:|
+| 1000 px/s (5 dabs a frame) | 28.3–30.1 / 32.6–35.8 / 41.1–45.6 | 1.9–2.0 / 2.2–2.3 / 2.3–3.0 |
+| 3000 px/s (16 dabs a frame) | 78.5–82.0 / 85.9–91.0 / 87.1–93.5 | 4.1–4.3 / 4.7–5.3 / 4.7–5.8 |
+
+A committed stroke of 1,530 dabs (`local_csp_render_one`, four strokes with their fixed costs)
+fell from 5.08 s to 0.82 s. Not measured: the app's own frame time with a real pen (the
+maintainer's app was running during this change, so no stroke was injected), the `fast`
+profile, and `cargo xtask perf`.

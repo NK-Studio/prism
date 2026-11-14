@@ -11,6 +11,7 @@ workspace = true
 prism-geom = { workspace = true }
 prism-color = { workspace = true }
 prism-raster = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]

@@ -2115,3 +2115,55 @@ fn csp_per_dab_colours_paint_over_earlier_dabs() {
     let s = paint(&b, &pts, 200, 100);
     assert!(same(s.rgba(35, 50), s.rgba(65, 50)));
 }
+
+/// The one-pass colour-tip rasteriser gives exactly the coverage of `rasterize` and the colours of
+/// `rasterize_tip_color`, at every anti-aliasing level, angle and flip; other tips decline it.
+#[test]
+fn csp_colour_tip_one_pass_equals_the_separate_passes() {
+    let (w, h) = (61u32, 47u32);
+    let tip = GrayTile::from_fn(w, h, |x, y| {
+        let r = (x as f32 - 30.0).hypot(y as f32 - 23.0);
+        if r < 9.0 { 1.0 } else if r < 21.0 { ((x * 7 + y * 13) % 11) as f32 / 10.0 } else { 0.0 }
+    });
+    let rgb: Vec<u8> = (0..w * h).flat_map(|i| [(i * 37 % 256) as u8, (i * 91 % 256) as u8, (i * 53 % 256) as u8]).collect();
+    for level in 0..=3u8 {
+        let mut b = BrushSettings {
+            size: 53.0,
+            spacing: 0.3,
+            pressure_size: false,
+            csp_correction: true,
+            csp_anti_alias: Some(level),
+            tip: TipShape::Sampled(tip.clone()),
+            csp_tip_colors: vec![Some(crate::CspTipColor { width: w, height: h, rgb: rgb.clone().into() })],
+            ..brush()
+        };
+        b.shape_dynamics.enabled = true;
+        b.shape_dynamics.angle.jitter = 1.0;
+        b.shape_dynamics.flip_x_jitter = true;
+        b.shape_dynamics.flip_y_jitter = true;
+        b.shape_dynamics.size.jitter = 0.6;
+        let ctx = BrushContext::new(&b);
+        let mut g = crate::dynamics::DabGenerator::new(&b, 1.0);
+        let (mut dabs, mut dual) = (Vec::new(), Vec::new());
+        g.push(&[StrokePoint::new(40.3, 40.7, 1.0), StrokePoint::new(260.9, 91.2, 1.0)], &mut dabs, &mut dual);
+        g.finish(&mut dabs, &mut dual);
+        assert!(dabs.len() > 8, "{}", dabs.len());
+        for d in &dabs {
+            let rect = ctx.dab_rect(d, false);
+            let (mut cov, mut colour) = (Vec::new(), Vec::new());
+            ctx.rasterize(d, false, rect, &mut cov);
+            assert!(ctx.rasterize_tip_color(d, rect, &mut colour));
+            let (mut cov1, mut colour1) = (Vec::new(), Vec::new());
+            assert!(ctx.rasterize_colored(d, rect, &mut cov1, &mut colour1), "level {level}");
+            assert!(cov.iter().any(|v| *v > 0.0));
+            assert_eq!(cov, cov1, "level {level}");
+            assert_eq!(colour, colour1, "level {level}");
+        }
+    }
+    // A tip without colours, and Photoshop sampling, keep the separate passes.
+    let plain = BrushSettings { size: 30.0, csp_anti_alias: Some(2), tip: TipShape::Sampled(tip.clone()), ..brush() };
+    let ctx = BrushContext::new(&plain);
+    let d = crate::dabs(&Stroke { brush: plain.clone(), points: vec![StrokePoint::new(20.0, 20.0, 1.0)] });
+    let (mut cov, mut colour) = (Vec::new(), Vec::new());
+    assert!(d.first().is_some_and(|d| !ctx.rasterize_colored(d, ctx.dab_rect(d, false), &mut cov, &mut colour)));
+}

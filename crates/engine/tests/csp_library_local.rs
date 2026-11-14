@@ -331,3 +331,49 @@ fn local_csp_render_one() {
     println!("painted in {:.0} ms", started.elapsed().as_secs_f64() * 1e3);
     s.execute("file.saveACopy", json!({"path": out.to_string_lossy(), "layers": false})).unwrap();
 }
+
+/// One material by name (`PRISM_CSP_ONE`) drawn as the app draws it live: a 1400 px line at
+/// `PRISM_CSP_SPEED` px/s (default 1000) sampled every 8 ms, two samples a frame, on a 1600×900
+/// document. Prints the time of each frame's `LiveStroke::push` (raster, composite and the
+/// catch-up tail preview). `PRISM_CSP_SIZE` and `PRISM_CSP_PATCH` as in `local_csp_render_one`.
+#[test]
+#[ignore = "reads the local CLIP STUDIO user data folder"]
+fn local_csp_live_one() {
+    let Some(name) = std::env::var_os("PRISM_CSP_ONE") else { return };
+    let name = name.to_string_lossy().to_string();
+    let mut s = Session::new();
+    let listed = s.execute("brush.cspLibrary.list", json!({})).unwrap();
+    let m = listed["brushes"].as_array().unwrap().iter().find(|b| b["name"] == json!(name)).unwrap().clone();
+    s.execute("brush.cspLibrary.import", json!({"uuids": [m["uuid"]], "group": "one"})).unwrap();
+    let preset = s.tools.presets.iter().find(|p| p.group == "one").unwrap().name.clone();
+    s.execute("file.new", json!({"width": 1600, "height": 900, "depth": 8, "background": "white"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let patch: Value = std::env::var("PRISM_CSP_PATCH").ok().map_or(json!({}), |p| serde_json::from_str(&p).unwrap());
+    let speed: f64 = std::env::var("PRISM_CSP_SPEED").ok().and_then(|v| v.parse().ok()).unwrap_or(1000.0);
+    let step = speed * 0.008;
+    let count = (1400.0 / step) as usize;
+    let at = |i: usize| prism_engine::paint::StrokePoint { time: i as f64 * 8.0, ..prism_engine::paint::StrokePoint::new(100.0 + i as f64 * step, 450.0, 1.0) };
+    let mut begin = json!({"preset": preset, "points": [[100.0, 450.0, 1.0, 0.0, 0.0, 0.0, 0.0]], "seed": 7});
+    if patch.as_object().is_some_and(|o| !o.is_empty()) {
+        begin["brush"] = patch;
+    }
+    if let Some(size) = std::env::var("PRISM_CSP_SIZE").ok().and_then(|v| v.parse::<f64>().ok()) {
+        begin["size"] = json!(size);
+    }
+    for round in 0..2 {
+        let started = Instant::now();
+        let mut live = prism_engine::brush_cmds::LiveStroke::begin(&s, &begin).unwrap();
+        let begin_ms = started.elapsed().as_secs_f64() * 1e3;
+        let mut frames = Vec::new();
+        for frame in (1..count).collect::<Vec<_>>().chunks(2) {
+            let pts: Vec<_> = frame.iter().map(|i| at(*i)).collect();
+            let t = Instant::now();
+            live.push(&pts).unwrap();
+            frames.push(t.elapsed().as_secs_f64() * 1e3);
+        }
+        frames.sort_by(|a, b| a.total_cmp(b));
+        let mean = frames.iter().sum::<f64>() / frames.len().max(1) as f64;
+        let p95 = frames[(frames.len() * 95 / 100).min(frames.len() - 1)];
+        println!("round {round}: begin {begin_ms:.1} ms; {} frames at {speed} px/s: mean {mean:.2} p95 {p95:.2} max {:.2} ms", frames.len(), frames[frames.len() - 1]);
+    }
+}

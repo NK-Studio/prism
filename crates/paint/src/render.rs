@@ -235,7 +235,7 @@ impl BrushContext {
         };
         let n = samples(&brush.tip).saturating_add(samples(&brush.dual_brush.tip)).saturating_add(texture_samples);
         let colors = brush.csp_tip_colors.iter().flatten().fold(0usize, |n, c| n.saturating_add(c.rgb.len()));
-        if n > 0 && n <= 4 << 20 && colors <= 12 << 20 {
+        if n > 0 && n <= 8 << 20 && colors <= 24 << 20 {
             drop(Self::new(brush));
         }
     }
@@ -461,6 +461,137 @@ impl BrushContext {
     /// Rasterise a dab over `rect` into `out` (tip shape × noise × per-tip texture × wet edges × flow).
     pub fn rasterize(&self, d: &Dab, dual: bool, rect: Rect, out: &mut Vec<f32>) {
         self.rasterize_with(d, dual, rect, out, None);
+    }
+
+    /// A CSP colour tip's dab in one pass: `cov` as [`Self::rasterize`] and `rgb` as
+    /// [`Self::rasterize_tip_color`] give them, reading the shape and the three colour planes at
+    /// the same texels instead of walking the dab five times. `false` (nothing written) when the
+    /// dab is not a CSP-sampled colour tip (a ribbon, a computed tip, Photoshop sampling, a tip
+    /// that paints in the brush colour): the caller then uses the two separate calls.
+    pub fn rasterize_colored(&self, d: &Dab, rect: Rect, cov: &mut Vec<f32>, rgb: &mut Vec<[f32; 3]>) -> bool {
+        let b = &self.brush;
+        let Some(aa) = b.csp_anti_alias.filter(|_| !b.aliased && d.ribbon.is_none()) else { return false };
+        let slot = if self.sequence.is_empty() { 0 } else { self.tip_slot(d) };
+        let shape = if self.sequence.is_empty() { self.tip.as_deref() } else { self.sequence.get(slot).map(Arc::as_ref) };
+        let (Some(Some(planes)), Some(shape)) = (self.tip_colors.get(slot), shape) else { return false };
+        let Some((w0, h0, _)) = shape.levels.first() else { return false };
+        let (r, (ro, _)) = (d.radius, tip_axes(d));
+        let display = 2.0 * r * ro.max(0.25);
+        // The level `rasterize_with` picks (see there).
+        let level = if aa <= 1 { 0 } else { shape.level_for(display * 2.0) };
+        let Some((lw, lh, alpha)) = shape.levels.get(level) else { return false };
+        fn plane(m: &Mips, level: usize, w: usize, h: usize, len: usize) -> Option<&[f32]> {
+            m.levels.get(level).filter(|(pw, ph, v)| *pw == w && *ph == h && v.len() == len).map(|(_, _, v)| v.as_slice())
+        }
+        let [r_plane, g_plane, b_plane] = planes.as_ref();
+        let (Some(red), Some(green), Some(blue)) =
+            (plane(r_plane, level, *lw, *lh, alpha.len()), plane(g_plane, level, *lw, *lh, alpha.len()), plane(b_plane, level, *lw, *lh, alpha.len()))
+        else {
+            return false;
+        };
+        if lw.checked_mul(*lh) != Some(alpha.len()) {
+            return false;
+        }
+        let (w, h) = (rect.width() as usize, rect.height() as usize);
+        cov.clear();
+        cov.resize(w * h, 0.0);
+        rgb.clear();
+        rgb.resize(w * h, [0.0; 3]);
+        let effects = (b.noise, b.texture.enabled && b.texture.each_tip && self.texture.is_some(), b.wet_edges);
+        let (cx, cy) = (d.center.x as f32, d.center.y as f32);
+        let (sn, cs) = d.angle.sin_cos();
+        let (fx, fy) = (if d.flip_x { -1.0 } else { 1.0 }, if d.flip_y { -1.0 } else { 1.0 });
+        let scale = self.tip_scale(d, false);
+        let proj = (d.proj_scale < 0.999).then(|| {
+            let (ps, pc) = d.proj_angle.sin_cos();
+            (pc, ps, 1.0 / d.proj_scale.max(0.05) - 1.0)
+        });
+        let (tw, th) = (*w0 as f32, *h0 as f32);
+        let inv_scale = *w0.max(h0) as f32 / (2.0 * r);
+        let (lwf, lhf) = (*lw as f32, *lh as f32);
+        // The texel under a pixel-space offset from the dab centre, exactly as `to_tip` and
+        // `Mips::sample_nearest` find it.
+        let normalised = |dx: f32, dy: f32| -> (f32, f32) {
+            let (mut ux, mut uy) = (dx, -dy);
+            if let Some((ax, ay, k)) = proj {
+                let t = (ux * ax + uy * ay) * k;
+                ux += t * ax;
+                uy += t * ay;
+            }
+            let (u, v) = ((ux * cs + uy * sn) * fx / scale[0], (-ux * sn + uy * cs) * fy / scale[1]);
+            let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
+            (px / tw, py / th)
+        };
+        let texel = |dx: f32, dy: f32| -> Option<usize> {
+            let (un, vn) = normalised(dx, dy);
+            if !un.is_finite() || !vn.is_finite() || !(0.0..1.0).contains(&un) || !(0.0..1.0).contains(&vn) {
+                return None;
+            }
+            let (x, y) = ((un * lwf).floor() as usize, (vn * lhf).floor() as usize);
+            y.checked_mul(*lw).and_then(|at| at.checked_add(x)).filter(|at| *at < alpha.len())
+        };
+        let at = |v: &[f32], i: Option<usize>| i.and_then(|i| v.get(i)).copied().unwrap_or(0.0);
+        // The map to normalised tip coordinates is affine: a row reaches the tip only between
+        // the columns where both coordinates are within 0..1. Two pixels of slack cover the
+        // sub-pixel samples and rounding; the test inside stays exact.
+        let (origin, along, down) = (normalised(0.0, 0.0), normalised(1.0, 0.0), normalised(0.0, 1.0));
+        let slope = [along.0 - origin.0, along.1 - origin.1];
+        let fall = [down.0 - origin.0, down.1 - origin.1];
+        let affine = [origin.0, origin.1, slope[0], slope[1], fall[0], fall[1]].iter().all(|v| v.is_finite());
+        let (rx0, rx1) = (rect.x0 as f32 + 0.5 - cx, rect.x1 as f32 - 0.5 - cx);
+        for yy in 0..h {
+            let y = rect.y0 + yy as i32;
+            let dy = y as f32 + 0.5 - cy;
+            let (mut from, mut to) = (0usize, w);
+            if affine {
+                let (mut lo, mut hi) = (rx0, rx1);
+                for (base, k) in [(origin.0 + fall[0] * dy, slope[0]), (origin.1 + fall[1] * dy, slope[1])] {
+                    if k.abs() > 1e-12 {
+                        let (a, b) = ((0.0 - base) / k, (1.0 - base) / k);
+                        lo = lo.max(a.min(b));
+                        hi = hi.min(a.max(b));
+                    } else if !(0.0..1.0).contains(&base) {
+                        hi = lo - 1.0;
+                    }
+                }
+                if hi < lo {
+                    continue;
+                }
+                from = ((lo - rx0 - 2.0).floor().max(0.0) as usize).min(w);
+                to = ((hi - rx0 + 3.0).ceil().max(0.0) as usize).min(w);
+            }
+            for xx in from..to {
+                let x = rect.x0 + xx as i32;
+                let dx = x as f32 + 0.5 - cx;
+                // One sample at the pixel centre, or the mean of 2×2 samples half a pixel apart.
+                let (val, color) = if aa == 0 {
+                    let i = texel(dx, dy);
+                    (at(alpha, i), [at(red, i), at(green, i), at(blue, i)])
+                } else {
+                    let (x0, y0) = (dx - 0.25, dy - 0.25);
+                    let i = [texel(x0, y0), texel(x0 + 0.5, y0), texel(x0, y0 + 0.5), texel(x0 + 0.5, y0 + 0.5)];
+                    let mean = |v: &[f32]| (at(v, i[0]) + at(v, i[1]) + at(v, i[2]) + at(v, i[3])) * 0.25;
+                    let val = mean(alpha);
+                    if val <= 0.0 {
+                        continue;
+                    }
+                    (val, [mean(red), mean(green), mean(blue)])
+                };
+                if val <= 0.0 {
+                    continue;
+                }
+                let i = yy * w + xx;
+                if val > 1e-6
+                    && let Some(o) = rgb.get_mut(i)
+                {
+                    *o = color.map(|p| (p / val).clamp(0.0, 1.0));
+                }
+                if let Some(o) = cov.get_mut(i) {
+                    *o = self.shade(d, val, 1.0 - val, x, y, effects);
+                }
+            }
+        }
+        true
     }
 
     /// [`Self::rasterize`], or with `plane` the raw samples of that plane (shaped and placed like
@@ -838,6 +969,12 @@ struct CovTile {
     col: Vec<f32>,
 }
 
+/// A rasterised colour-tip dab: its coverage and the straight colour of each pixel.
+type ColorDab = (Vec<f32>, Vec<[f32; 3]>);
+
+/// Colour-tip dabs rasterised together before they are laid (bounds the memory of a batch).
+const COLOR_DAB_BATCH: usize = 32;
+
 /// A sparse tiled coverage (+ optional colour) buffer.
 #[derive(Clone, Debug, Default)]
 pub struct CoverageMap {
@@ -1165,9 +1302,40 @@ impl StrokeRenderer {
         let mut duals = std::mem::take(&mut self.dual_buf);
         let wet = self.ctx.brush.wet_edges;
         let mut native = [0.0f32; 8];
-        for d in dabs.iter_mut() {
+        // Colour-tip dabs are independent until they are laid: rasterise a bounded batch of them
+        // on all cores, then lay them in stroke order (the same pixels as one at a time).
+        let batched = self.per_dab_color && self.fmt.is_some() && self.ctx.has_tip_colors() && self.mixing.is_none();
+        let mut ready: std::collections::VecDeque<Option<ColorDab>> = std::collections::VecDeque::new();
+        for i in 0..dabs.len() {
+            if batched && ready.is_empty() {
+                use rayon::prelude::*;
+                let ctx = &self.ctx;
+                let chunk = dabs.get(i..(i + COLOR_DAB_BATCH).min(dabs.len())).unwrap_or(&[]);
+                let done: Vec<_> = chunk
+                    .par_iter()
+                    .map(|d| {
+                        let (mut cov, mut rgb) = (Vec::new(), Vec::new());
+                        ctx.rasterize_colored(d, ctx.dab_rect(d, false), &mut cov, &mut rgb).then_some((cov, rgb))
+                    })
+                    .collect();
+                ready.extend(done);
+            }
+            let Some(d) = dabs.get_mut(i) else { break };
             let rect = self.ctx.dab_rect(d, false);
-            self.ctx.rasterize(d, false, rect, &mut self.scratch);
+            // A colour tip lays its own colour at each pixel: shape and colours in one pass
+            // where the tip allows it.
+            let mut tip_rgb = Vec::new();
+            let colored = match ready.pop_front().flatten() {
+                Some((cov, rgb)) => {
+                    self.scratch = cov;
+                    tip_rgb = rgb;
+                    true
+                }
+                None => self.per_dab_color && self.fmt.is_some() && self.ctx.rasterize_colored(d, rect, &mut self.scratch, &mut tip_rgb),
+            };
+            if !colored {
+                self.ctx.rasterize(d, false, rect, &mut self.scratch);
+            }
             // A colour tip's dab colour: its mean (mixing and ribbons lay one colour a dab).
             if let Some([r, g, b]) = self.ctx.tip_mean_color(d).filter(|_| self.per_dab_color) {
                 d.color = [r, g, b, d.color[3]];
@@ -1204,15 +1372,16 @@ impl StrokeRenderer {
             };
             // Mixing dabs blend towards their own colour and alpha: they build up to full weight.
             let ceiling = if target_alpha.is_some() { 1.0 } else { d.opacity };
-            // A colour tip lays its own colour at each pixel.
-            let mut tip_rgb = Vec::new();
-            match self.fmt.filter(|_| self.per_dab_color && self.ctx.rasterize_tip_color(d, rect, &mut tip_rgb)) {
+            match self.fmt.filter(|_| colored || (self.per_dab_color && self.ctx.rasterize_tip_color(d, rect, &mut tip_rgb))) {
                 Some(f) => {
                     let nc = f.mode.color_channels().min(native.len());
-                    let mut colors = Vec::with_capacity(tip_rgb.len() * nc);
-                    for [r, g, b] in &tip_rgb {
-                        from_rgba_into(&f, [*r, *g, *b, 1.0], &mut native);
-                        colors.extend_from_slice(&native[..nc]);
+                    let mut colors = vec![0.0; tip_rgb.len() * nc];
+                    // Only covered pixels are read back: the rest keep zeros.
+                    for (([r, g, b], v), out) in tip_rgb.iter().zip(&self.scratch).zip(colors.chunks_exact_mut(nc.max(1))) {
+                        if *v > 0.0 {
+                            from_rgba_into(&f, [*r, *g, *b, 1.0], &mut native);
+                            out.copy_from_slice(&native[..nc]);
+                        }
                     }
                     self.cov.accumulate_pixels(rect, &self.scratch, ceiling, wet, &colors);
                 }
