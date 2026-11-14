@@ -1150,6 +1150,38 @@ mod tests {
         });
     }
 
+    /// The rows added for the last backlog IDs, in a narrow panel, in English and Korean.
+    #[test]
+    fn last_backlog_rows_fit_a_narrow_panel_in_both_languages() {
+        for lang in ["en", "ko"] {
+            crate::i18n::with_language(crate::i18n::Lang::from_pref(lang), || {
+                let mut h = harness();
+                {
+                    let app = h.state_mut();
+                    let b = &mut app.session.tools.brush;
+                    b.csp_post_correction = Some(35.0);
+                    b.csp_refer_layer = true;
+                    b.dual_brush.enabled = true;
+                    let brush = b.clone();
+                    let preset = app.session.tools.presets.last_mut().unwrap();
+                    preset.brush = brush;
+                    let sut = preset.sut.as_mut().unwrap();
+                    sut.original.visible = vec![1022, 1120, 1151, 1230, 1250, 1913, 1500];
+                    sut.parameters.insert("ChangeRGBByDual".into(), 1.0);
+                    sut.parameters.insert("StampAdjustPosition".into(), 1.0);
+                }
+                h.run_steps(3);
+                assert!(h.query_by_label_contains("Unsupported CSP setting").is_none(), "{lang}");
+                for label in ["Adjust brush density by gap", "Blend brush tips with Darken", "Post correction", "Enable snapping", "Do not cross lines of reference layer", "Apply RGB value"] {
+                    assert!(h.query_all_by_label_contains(tl!(label)).next().is_some(), "{label} ({lang})");
+                }
+                if let Ok(image) = h.render() {
+                    let _ = image.save(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../target/sut-last-rows-{lang}.png")));
+                }
+            });
+        }
+    }
+
     #[test]
     fn post_correction_row_switches_the_smoothing_on_with_the_imported_level() {
         let mut h = harness();
