@@ -1277,9 +1277,12 @@ pub fn cursor(app: &PrismApp, p: [f64; 2], alt: bool) -> Option<CursorIcon> {
     })
 }
 
-/// Warped preview of the moving pixels plus the box, handles and reference point.
-pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform) {
+/// Warped preview of the moving pixels plus the box, handles and reference point. Like Photoshop,
+/// the pixels show only inside the canvas (`doc_size`, document px); the box and handles can
+/// reach past it.
+pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform, doc_size: [u32; 2]) {
     let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return };
+    let doc_size = [f64::from(doc_size[0]), f64::from(doc_size[1])];
     let scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     if let Some(w) = &t.warp {
         let over_canvas = painter.ctx().input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)).map(|p| xf.to_doc(p));
@@ -1289,7 +1292,7 @@ pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform) {
             let tool = pv.split_tool.or_else(|| (alt || pv.split_quick).then(|| quick_split_kind(&w.to_mesh(1, 1), w.bounds, p)));
             tool.map(|tool| (tool, p))
         });
-        draw_warp(painter, xf, t, w, pv, guide);
+        draw_warp(painter, xf, doc_size, t, w, pv, guide);
         return;
     }
     // Shape layers are redrawn in the document instead ([`shape_display_doc`]).
@@ -1297,25 +1300,9 @@ pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform) {
         && let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], t.quad)
     {
         // A 24×24 grid keeps perspective previews straight.
-        let n = 24;
         let (tex, uv) = pv.texture.pick(painter.ctx(), xf.zoom * painter.ctx().pixels_per_point(), quad_scale(t), t.interpolation == "nearest");
-        let mut mesh = egui::Mesh::with_texture(tex);
         let tint = Color32::from_white_alpha((pv.opacity.clamp(0.0, 1.0) * 255.0) as u8);
-        for j in 0..=n {
-            for i in 0..=n {
-                let (u, v) = (i as f64 / n as f64, j as f64 / n as f64);
-                let (x, y) = h.apply(u, v);
-                mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(x as f32, y as f32), uv: pos2(u as f32 * uv[0], v as f32 * uv[1]), color: tint });
-            }
-        }
-        for j in 0..n {
-            for i in 0..n {
-                let a = (j * (n + 1) + i) as u32;
-                mesh.add_triangle(a, a + 1, a + n as u32 + 2);
-                mesh.add_triangle(a, a + n as u32 + 2, a + n as u32 + 1);
-            }
-        }
-        painter.add(mesh);
+        painter.add(clipped_grid_mesh(tex, tint, 24, uv, doc_size, xf, |u, v| h.apply(u, v)));
     }
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     let pts: Vec<Pos2> = t.quad.iter().map(|q| scr(*q)).collect();
@@ -1338,28 +1325,20 @@ pub fn draw_overlay(app: &PrismApp, painter: &egui::Painter, xf: &ViewXform) {
 /// boundaries are solid. A single patch (Grid › Default) also draws its rule-of-thirds guides;
 /// 3×3, 4×4 and 5×5 are just those even cells, with an anchor at every intersection. `guide` is
 /// the split line following the pointer.
-fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &Warp, pv: &TransformPreview, guide: Option<(SplitTool, [f64; 2])>) {
+fn draw_warp(
+    painter: &egui::Painter,
+    xf: &ViewXform,
+    doc_size: [f64; 2],
+    t: &TransformSession,
+    w: &Warp,
+    pv: &TransformPreview,
+    guide: Option<(SplitTool, [f64; 2])>,
+) {
     let scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     let r = t.rect;
-    let n = 32;
     let (tex, uv) = pv.texture.pick(painter.ctx(), xf.zoom * painter.ctx().pixels_per_point(), 1.0, t.interpolation == "nearest");
-    let mut mesh = egui::Mesh::with_texture(tex);
     let tint = Color32::from_white_alpha((pv.opacity.clamp(0.0, 1.0) * 255.0) as u8);
-    for j in 0..=n {
-        for i in 0..=n {
-            let (u, v) = (i as f64 / n as f64, j as f64 / n as f64);
-            let (x, y) = w.map(r[0] + u * (r[2] - r[0]), r[1] + v * (r[3] - r[1]));
-            mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(x as f32, y as f32), uv: pos2(u as f32 * uv[0], v as f32 * uv[1]), color: tint });
-        }
-    }
-    for j in 0..n {
-        for i in 0..n {
-            let a = (j * (n + 1) + i) as u32;
-            mesh.add_triangle(a, a + 1, a + n as u32 + 2);
-            mesh.add_triangle(a, a + n as u32 + 2, a + n as u32 + 1);
-        }
-    }
-    painter.add(mesh);
+    painter.add(clipped_grid_mesh(tex, tint, 32, uv, doc_size, xf, |u, v| w.map(r[0] + u * (r[2] - r[0]), r[1] + v * (r[3] - r[1]))));
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     let line = Stroke::new(1.0, accent);
     let thin = Stroke::new(0.75, accent.gamma_multiply(0.7));
@@ -1441,6 +1420,104 @@ fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &
 
 /// How much the box enlarges its pixels: the longest edge relative to the original (picks the
 /// preview's texture level and filter).
+/// A preview mesh vertex in document space: position and texture coordinate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ClipVertex {
+    p: [f64; 2],
+    uv: [f64; 2],
+}
+
+/// Keeps the part of `poly` on one side of the line `p[axis] = bound` (`keep_above`: `>=`).
+/// One step of Sutherland–Hodgman; texture coordinates are interpolated along the cut edges.
+fn clip_against(poly: &[ClipVertex], out: &mut Vec<ClipVertex>, axis: usize, bound: f64, keep_above: bool) {
+    out.clear();
+    let inside = |v: &ClipVertex| if keep_above { v.p[axis] >= bound } else { v.p[axis] <= bound };
+    let cut = |a: &ClipVertex, b: &ClipVertex| {
+        // One end is inside and the other strictly outside, so the denominator is not zero.
+        let t = (bound - a.p[axis]) / (b.p[axis] - a.p[axis]);
+        let lerp = |x: f64, y: f64| x + (y - x) * t;
+        let mut p = [lerp(a.p[0], b.p[0]), lerp(a.p[1], b.p[1])];
+        p[axis] = bound;
+        ClipVertex { p, uv: [lerp(a.uv[0], b.uv[0]), lerp(a.uv[1], b.uv[1])] }
+    };
+    let Some(mut prev) = poly.last() else { return };
+    for cur in poly {
+        match (inside(prev), inside(cur)) {
+            (true, true) => out.push(*cur),
+            (true, false) => out.push(cut(prev, cur)),
+            (false, true) => {
+                out.push(cut(prev, cur));
+                out.push(*cur);
+            }
+            (false, false) => {}
+        }
+        prev = cur;
+    }
+}
+
+/// The part of triangle `tri` inside `[0, size[0]] × [0, size[1]]`, as a convex polygon (empty when
+/// nothing is inside or a corner is not finite).
+fn clip_triangle(tri: [ClipVertex; 3], size: [f64; 2]) -> Vec<ClipVertex> {
+    if tri.iter().any(|v| !(v.p[0].is_finite() && v.p[1].is_finite())) || !(size[0] > 0.0 && size[1] > 0.0) {
+        return Vec::new();
+    }
+    let mut poly = tri.to_vec();
+    let mut tmp = Vec::with_capacity(8);
+    for (axis, bound, keep_above) in [(0, 0.0, true), (0, size[0], false), (1, 0.0, true), (1, size[1], false)] {
+        clip_against(&poly, &mut tmp, axis, bound, keep_above);
+        std::mem::swap(&mut poly, &mut tmp);
+        if poly.len() < 3 {
+            return Vec::new();
+        }
+    }
+    poly
+}
+
+/// An `n`×`n` textured grid over the unit square, placed by `map` (unit → document px) and cut to
+/// the canvas `[0, size[0]] × [0, size[1]]`, so a transform preview never paints the pasteboard.
+/// Clipping happens in document space, so it stays exact under view rotation and flips.
+fn clipped_grid_mesh(
+    tex: egui::TextureId,
+    tint: Color32,
+    n: usize,
+    uv_scale: [f32; 2],
+    size: [f64; 2],
+    xf: &ViewXform,
+    map: impl Fn(f64, f64) -> (f64, f64),
+) -> egui::Mesh {
+    let mut mesh = egui::Mesh::with_texture(tex);
+    let n = n.max(1);
+    let mut grid = Vec::with_capacity((n + 1) * (n + 1));
+    for j in 0..=n {
+        for i in 0..=n {
+            let (u, v) = (i as f64 / n as f64, j as f64 / n as f64);
+            let (x, y) = map(u, v);
+            grid.push(ClipVertex { p: [x, y], uv: [u, v] });
+        }
+    }
+    let at = |i: usize, j: usize| grid.get(j * (n + 1) + i).copied();
+    let mut emit = |poly: &[ClipVertex]| {
+        let Ok(base) = u32::try_from(mesh.vertices.len()) else { return };
+        for v in poly {
+            let pos = xf.to_screen(v.p[0] as f32, v.p[1] as f32);
+            mesh.vertices.push(egui::epaint::Vertex { pos, uv: pos2(v.uv[0] as f32 * uv_scale[0], v.uv[1] as f32 * uv_scale[1]), color: tint });
+        }
+        // Convex polygon: a fan from its first vertex.
+        for k in 1..poly.len().saturating_sub(1) {
+            mesh.add_triangle(base, base + k as u32, base + k as u32 + 1);
+        }
+    };
+    for j in 0..n {
+        for i in 0..n {
+            let (Some(a), Some(b), Some(c), Some(d)) = (at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)) else { continue };
+            for tri in [[a, b, c], [a, c, d]] {
+                emit(&clip_triangle(tri, size));
+            }
+        }
+    }
+    mesh
+}
+
 fn quad_scale(t: &TransformSession) -> f32 {
     let (w0, h0) = ((t.rect[2] - t.rect[0]).max(1e-9), (t.rect[3] - t.rect[1]).max(1e-9));
     let len = |a: [f64; 2], b: [f64; 2]| (b[0] - a[0]).hypot(b[1] - a[1]);
@@ -2612,7 +2689,7 @@ mod tests {
                     flip: false,
                     rotation: 0.0,
                 };
-                draw_overlay(&app, &painter, &xf);
+                draw_overlay(&app, &painter, &xf, [w, h]);
             });
             t0.elapsed().as_secs_f64() * 1e3
         };
@@ -2622,6 +2699,53 @@ mod tests {
         eprintln!(
             "transform preview {w}x{h}: texture {size:?}, begin {begin_ms:.1} ms, first frame per level (1x, 0.25x, 3x) {first:.1?} ms, steady frame {steady:.3} ms"
         );
+    }
+
+    fn mesh_doc_bounds(mesh: &egui::Mesh, xf: &ViewXform) -> [f64; 4] {
+        mesh.vertices.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, v| {
+            let d = xf.to_doc(v.pos);
+            [b[0].min(d[0]), b[1].min(d[1]), b[2].max(d[0]), b[3].max(d[1])]
+        })
+    }
+
+    #[test]
+    fn transform_preview_is_cut_to_the_canvas() {
+        // Scaled up 3× about the centre of a 100×80 canvas: the preview reaches past every edge.
+        for rotation in [0.0, 30.0] {
+            let xf =
+                ViewXform { rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0)), zoom: 2.0, center: [50.0, 40.0], flip: false, rotation };
+            let mesh = clipped_grid_mesh(egui::TextureId::default(), Color32::WHITE, 24, [1.0, 1.0], [100.0, 80.0], &xf, |u, v| {
+                (-100.0 + u * 300.0, -80.0 + v * 240.0)
+            });
+            assert!(!mesh.indices.is_empty());
+            let b = mesh_doc_bounds(&mesh, &xf);
+            let eps = 1e-3;
+            assert!(b[0] >= -eps && b[1] >= -eps && b[2] <= 100.0 + eps && b[3] <= 80.0 + eps, "rotation {rotation}: {b:?}");
+            assert!(b[0] < eps && b[1] < eps && b[2] > 100.0 - eps && b[3] > 80.0 - eps, "fills the canvas: {b:?}");
+            // Texture coordinates follow the cut: the canvas's left edge is a third of the way in.
+            let left_uv = mesh.vertices.iter().filter(|v| xf.to_doc(v.pos)[0].abs() < eps).map(|v| v.uv.x).fold(f32::MAX, f32::min);
+            assert!((left_uv - 1.0 / 3.0).abs() < 1e-3, "{left_uv}");
+        }
+    }
+
+    #[test]
+    fn transform_preview_inside_the_canvas_is_untouched() {
+        let xf =
+            ViewXform { rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0)), zoom: 1.0, center: [50.0, 40.0], flip: false, rotation: 0.0 };
+        let mesh = clipped_grid_mesh(egui::TextureId::default(), Color32::WHITE, 4, [1.0, 1.0], [100.0, 80.0], &xf, |u, v| (10.0 + u * 20.0, 10.0 + v * 20.0));
+        assert_eq!(mesh.indices.len(), 4 * 4 * 2 * 3, "no extra triangles when nothing is cut");
+    }
+
+    #[test]
+    fn transform_preview_off_canvas_or_degenerate_draws_nothing() {
+        let xf =
+            ViewXform { rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0)), zoom: 1.0, center: [50.0, 40.0], flip: false, rotation: 0.0 };
+        let off = clipped_grid_mesh(egui::TextureId::default(), Color32::WHITE, 4, [1.0, 1.0], [100.0, 80.0], &xf, |u, v| (200.0 + u * 20.0, v * 20.0));
+        assert!(off.indices.is_empty() && off.vertices.is_empty());
+        let nan = clipped_grid_mesh(egui::TextureId::default(), Color32::WHITE, 4, [1.0, 1.0], [100.0, 80.0], &xf, |_, _| (f64::NAN, f64::INFINITY));
+        assert!(nan.indices.is_empty());
+        let empty = clipped_grid_mesh(egui::TextureId::default(), Color32::WHITE, 4, [1.0, 1.0], [0.0, 0.0], &xf, |u, v| (u, v));
+        assert!(empty.indices.is_empty());
     }
 
     #[test]
