@@ -249,6 +249,28 @@ Still open, in order:
 5. **1510 `StampSetReferPointMode`**: confirm its meaning in CSP, then map it.
 6. **Korean labels**: CSP's own Korean UI labels were not read; Prism's are its own wording.
 
+## Status 2026-11-14 (CSP experiments, second session)
+
+Item 1 of "Remaining work after 2026-11-14" is mostly done. Materials were reached by typing
+in the Material palette's lower search box and dragging the result into the Sub Tool palette
+(temporary sub-tools, deleted afterwards). Details and numbers:
+[sut-experiment-materials.md](sut-experiment-materials.md).
+
+- **Fade** (`BrushInOutType` 2, "How to specify: Fade"): done. The targets fall to their
+  minimum over the Ending length from the start of the stroke and stay there
+  (`CspInOutMode::Fade`). The curve shape between is not fitted.
+- **Colour mixing type 2** ("Smear"): done. It mixes as Blend with the density of paint at
+  100 %; imported that way, no warning. Type 1 ("Running color") is still approximated.
+- **Length unit 2**: pixels; the import no longer warns about it.
+- **Emphasize density** (114): not measured. CSP describes it as emphasizing the texture's
+  contrast and its preview becomes nearly two-level, which agrees in direction with Prism's
+  extra contrast; with a mouse (full pressure) the texture does not show on the canvas, so the
+  amount needs a pen.
+- Labels corrected to CSP's: 101 "Apply by each plot", 102 "Texture mode", 113 "Invert
+  texture", 1087 "Mixing mode".
+
+Still open: items 2–6 of that list, emphasize density's amount, Running color, the fade curve.
+
 ## Re-measuring
 
 The counts come from importing every ready material with `brush.cspLibrary.list` /

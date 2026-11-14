@@ -2061,3 +2061,21 @@ rulers, 1510, and the Korean UI labels (the UI language was not changed).
 
 Post correction, snapping, darken, density by gap and reference-layer lines are no longer in
 the open list above; spray size and water edge units are settled as pixels.
+
+### Fade, Smear and texture labels (2026-11-14, second session)
+
+Evidence (UI): start/end "How to specify" is Specify length / percentage / **Fade** for
+`BrushInOutType` 0 / 1 / 2; in Fade the Starting row and "Starting and ending by speed" are
+disabled. Colour mixing is **Blend / Running color / Smear** for `BrushWaterColor` 0 / 1 / 2;
+Smear disables Density of paint and enables Blending mode. Texture rows are "Invert texture"
+(113), "Emphasize density" (114), "Texture mode" (102) and "Apply by each plot" (101); 1087 is
+"Mixing mode" (Standard / Perceptual) with a "Brightness correction" child.
+
+Evidence (measured, docs/sut-experiment-materials.md): Fade lowers the targets from full to
+their minimum over the Ending length from the start of the stroke, by distance, and holds the
+minimum; Smear paints as Blend with the density of paint at 100 % whatever is stored; Running
+color picked nothing up in the same setup.
+
+Inference: the fade's curve (the quarter sine of the other modes). Unknown: the amount of
+Emphasize density (CSP calls it emphasizing the texture's contrast; not measurable with a
+mouse), Running color, Brightness correction.

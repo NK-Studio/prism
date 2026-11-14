@@ -3553,6 +3553,10 @@ cspTool	Space evenly	균등 배치
 	New folder	새 폴더
 	At least 1 pixel	최소 1픽셀
 	Enable snapping	스냅 사용
+	Apply by each plot	브러시 끝마다 적용
+	Texture mode	텍스처 모드
+	Invert texture	텍스처 반전
+	Mixing mode	혼색 모드
 	Not used by Fade	페이드에서는 쓰지 않습니다
 	Smear: mixes as Blend; the density of paint is not used	스미어: 혼색처럼 섞으며 물감 농도는 쓰지 않습니다
 	Not used by Smear	스미어에서는 쓰지 않습니다

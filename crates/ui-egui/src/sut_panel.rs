@@ -25,7 +25,7 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1081, "Amount of paint", "BrushMixColor", "Ink"),
     (1083, "Density of paint", "BrushMixAlpha", "Ink"),
     (1085, "Color stretch", "BrushMixColorExtension", "Ink"),
-    (1087, "Color mixing method", "BrushColorMixingMode", "Ink"),
+    (1087, "Mixing mode", "BrushColorMixingMode", "Ink"),
     (20, "Anti-aliasing", "AntiAlias", "Anti-aliasing"),
     (1030, "Hardness", "BrushHardness", "Brush tip"),
     (1050, "Thickness", "BrushThickness", "Brush tip"),
@@ -60,11 +60,11 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (1913, "Apply RGB value", "ChangeRGBByDual", "Dual brush"),
     (51000, "Dual brush size", "DualSize", "Dual brush"),
     (100, "Texture", "TextureImage", "Texture"),
-    (101, "Apply to each brush tip", "TextureForPlot", "Texture"),
-    (102, "Texture blending mode", "TextureCompositeMode", "Texture"),
+    (101, "Apply by each plot", "TextureForPlot", "Texture"),
+    (102, "Texture mode", "TextureCompositeMode", "Texture"),
     (110, "Texture density", "TextureDensity", "Texture"),
     (120, "Scale ratio", "TextureScale2", "Texture"),
-    (113, "Reverse density", "TextureReverseDensity", "Texture"),
+    (113, "Invert texture", "TextureReverseDensity", "Texture"),
     (114, "Emphasize density", "TextureStressDensity", "Texture"),
     (1201, "Watercolor edge", "BrushWaterEdgeRadius", "Watercolor edge"),
     (1202, "Opacity influence", "BrushWaterEdgeAlphaPower", "Watercolor edge"),
@@ -1285,11 +1285,11 @@ mod tests {
             }
             h.run_steps(3);
             assert!(h.query_by_label_contains("Unsupported CSP setting").is_none(), "hostile={hostile}");
-            for label in ["Texture blending mode", "Dual brush blending mode"] {
+            for label in ["Texture mode", "Dual brush blending mode"] {
                 assert!(h.query_all_by_label_contains(label).next().is_some(), "{label} (hostile={hostile})");
             }
             h.get_by_role_and_label(egui::accesskit::Role::Slider, "Sub color");
-            for label in ["Apply to each brush tip", "Reverse density", "Emphasize density", "Color mixing method"] {
+            for label in ["Apply by each plot", "Invert texture", "Emphasize density", "Mixing mode"] {
                 h.get_by_label(label).click();
                 h.run_steps(2);
             }
@@ -1303,7 +1303,7 @@ mod tests {
             }
         }
         crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
-            for label in ["Color mixing method", "Dual brush blending mode", "Apply to each brush tip", "Texture blending mode", "Reverse density", "Emphasize density"] {
+            for label in ["Mixing mode", "Dual brush blending mode", "Apply by each plot", "Texture mode", "Invert texture", "Emphasize density"] {
                 assert_ne!(tl!(label), label, "{label}");
             }
         });
