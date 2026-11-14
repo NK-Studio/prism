@@ -37,12 +37,25 @@ pub enum CspTool {
     Text,
 }
 
-/// The Tools window's sections in the Clip Studio workspace.
+/// The Tools window's sections in the Clip Studio workspace: Clip Studio's tools in the order
+/// of Photoshop's toolbar (move, selections and eyedropper, painting, type and shapes, hand and
+/// zoom), so a tool sits where its Photoshop counterpart does in every workspace.
 pub const SECTIONS: &[&[CspTool]] = &[
-    &[CspTool::Zoom, CspTool::Hand, CspTool::MoveLayer],
+    &[CspTool::MoveLayer],
     &[CspTool::Selection, CspTool::AutoSelect, CspTool::Eyedropper],
-    &[CspTool::Pen, CspTool::Pencil, CspTool::Brush, CspTool::Airbrush, CspTool::Decoration, CspTool::Eraser, CspTool::Blend],
-    &[CspTool::Fill, CspTool::Gradient, CspTool::Figure, CspTool::Text],
+    &[
+        CspTool::Brush,
+        CspTool::Pen,
+        CspTool::Pencil,
+        CspTool::Airbrush,
+        CspTool::Decoration,
+        CspTool::Eraser,
+        CspTool::Blend,
+        CspTool::Fill,
+        CspTool::Gradient,
+    ],
+    &[CspTool::Text, CspTool::Figure],
+    &[CspTool::Hand, CspTool::Zoom],
 ];
 
 impl CspTool {
