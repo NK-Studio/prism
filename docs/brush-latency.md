@@ -212,3 +212,40 @@ A committed stroke of 1,530 dabs (`local_csp_render_one`, four strokes with thei
 fell from 5.08 s to 0.82 s. Not measured: the app's own frame time with a real pen (the
 maintainer's app was running during this change, so no stroke was injected), the `fast`
 profile, and `cargo xtask perf`.
+
+## Every brush: dabs in batches, rows of a large dab in parallel (2026-11-14)
+
+The colour-tip change above left ribbons and plain image tips on one core. A dab's pixels depend
+only on the dab, not on what the stroke already holds, so:
+
+- `StrokeRenderer` now rasterises the dabs of every brush in batches (at most 32 dabs or 4 million
+  rectangle pixels) on all cores and lays them in stroke order. Batches under 16 thousand pixels,
+  and single dabs, stay on the calling thread. Colour mixing still samples under each dab in
+  order; only its rasterisation is batched.
+- A dab whose rectangle has at least 32 thousand pixels rasterises its rows in parallel
+  (`rasterize_with`, `rasterize_colored`, `rasterize_ribbon`). This is what helps a large brush
+  with wide spacing, where a frame holds one or two dabs.
+
+Pixels are unchanged: the comparison renders of 茂み1 at size 300, 葉っぱブラシ at 200 and
+가을낙엽_낙엽 at 17 and 60 are identical byte for byte to the renders of the code before any of
+these changes, and `batched_and_row_parallel_dabs_equal_dabs_laid_one_at_a_time` compares a
+stroke pushed at once with the same stroke fed point by point (colour tip, image tip, computed
+tip and ribbon, at 24 and 260 px).
+
+`LiveStroke::push` per frame, release build, same machine (`local_csp_live_one`), mean / p95 ms:
+
+| Brush | Pen speed | Before | After |
+|---|---|---:|---:|
+| 茂み1 (colour ribbon), size 300 | 1000 px/s | 5.11 / 5.88 | 3.58 / 4.87 |
+| 茂み1, size 300 | 3000 px/s | 12.72 / 15.02 | 4.03 / 5.42 |
+| 葉っぱブラシ (image tip), size 200 | 1000 px/s | 2.60 / 6.77 | 1.42 / 4.06 |
+| 葉っぱブラシ, size 200 | 3000 px/s | 7.70 / 11.22 | 4.12 / 5.77 |
+| 가을낙엽_낙엽, size 60 (276 px leaves) | 1000 px/s | 4.07 / 35.21 | 0.21 / 1.66 |
+
+`bench_brush` (500-point stroke on 6016×6016 RGBA8, total ms): CSP hard 200 px medium 591–597 →
+231, strong 586–600 → 219, 25 px medium 113–119 → 101–108.
+
+Not done: a ribbon's colour tip is still read in five passes a dab (only the passes run in
+parallel); colour mixing brushes (NANAGOM PEN: 2.5 ms at 1000 px/s, 7.0 ms at 3000 px/s) are
+bound by the per-dab sampling under the dab, which stays in order; `cargo xtask perf` and the
+`fast` profile were not run.

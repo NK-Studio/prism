@@ -2167,3 +2167,46 @@ fn csp_colour_tip_one_pass_equals_the_separate_passes() {
     let (mut cov, mut colour) = (Vec::new(), Vec::new());
     assert!(d.first().is_some_and(|d| !ctx.rasterize_colored(d, ctx.dab_rect(d, false), &mut cov, &mut colour)));
 }
+
+/// Dabs rasterised as a batch on all cores (a whole stroke pushed at once) and rows of a large
+/// dab rasterised in parallel give the pixels of dabs rasterised one at a time (the stroke fed
+/// point by point): a colour tip, a plain image tip, a computed tip and a ribbon, small and large.
+#[test]
+fn batched_and_row_parallel_dabs_equal_dabs_laid_one_at_a_time() {
+    let (w, h) = (64u32, 40u32);
+    let tip = GrayTile::from_fn(w, h, |x, y| if (x / 5 + y / 3) % 3 == 0 { 0.0 } else { ((x * 5 + y * 3) % 7) as f32 / 6.0 });
+    let rgb: Vec<u8> = (0..w * h).flat_map(|i| [(i * 29 % 256) as u8, (i * 71 % 256) as u8, (i * 113 % 256) as u8]).collect();
+    let colours = vec![Some(crate::CspTipColor { width: w, height: h, rgb: rgb.into() })];
+    let image = |size: f32| BrushSettings { size, spacing: 0.2, pressure_size: false, csp_correction: true, csp_anti_alias: Some(2), tip: TipShape::Sampled(tip.clone()), ..brush() };
+    let mut brushes = Vec::new();
+    for size in [24.0, 260.0] {
+        let mut turning = image(size);
+        turning.shape_dynamics.enabled = true;
+        turning.shape_dynamics.angle.jitter = 1.0;
+        brushes.push(BrushSettings { csp_tip_colors: colours.clone(), ..turning.clone() });
+        brushes.push(turning);
+        brushes.push(BrushSettings { tip: TipShape::Round, hardness: 0.6, ..image(size) });
+        brushes.push(BrushSettings { csp_ribbon: Some(crate::csp_ribbon::CspRibbon::from_rotation(0.0)), csp_tip_colors: colours.clone(), ..image(size) });
+    }
+    let pts: Vec<StrokePoint> = (0..=40).map(|i| StrokePoint::new(150.0 + f64::from(i) * 9.0, 200.0 + f64::from(i % 7) * 6.0, 1.0)).collect();
+    for (k, b) in brushes.iter().enumerate() {
+        let at_once = paint(b, &pts, 700, 500);
+        let mut one_by_one = Surface::new(PixelFormat::RGBA32F);
+        let pre = one_by_one.clone();
+        let mut r = StrokeRenderer::new(b, Some(one_by_one.format()), 1.0).with_full_path(&pts).with_mixing_source(&pre);
+        for p in &pts {
+            r.push(std::slice::from_ref(p));
+        }
+        r.finish();
+        r.composite(&pre, &mut one_by_one, None, false, true);
+        let mut inked = 0;
+        for y in (0..500).step_by(3) {
+            for x in (0..700).step_by(3) {
+                let (a, b) = (at_once.rgba(x, y), one_by_one.rgba(x, y));
+                assert_eq!(a, b, "brush {k} at {x},{y}");
+                inked += usize::from(a[3] > 0.0);
+            }
+        }
+        assert!(inked > 200, "brush {k}: {inked}");
+    }
+}

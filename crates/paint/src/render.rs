@@ -539,7 +539,7 @@ impl BrushContext {
         let fall = [down.0 - origin.0, down.1 - origin.1];
         let affine = [origin.0, origin.1, slope[0], slope[1], fall[0], fall[1]].iter().all(|v| v.is_finite());
         let (rx0, rx1) = (rect.x0 as f32 + 0.5 - cx, rect.x1 as f32 - 0.5 - cx);
-        for yy in 0..h {
+        let fill_row = |yy: usize, cov: &mut [f32], rgb: &mut [[f32; 3]]| {
             let y = rect.y0 + yy as i32;
             let dy = y as f32 + 0.5 - cy;
             let (mut from, mut to) = (0usize, w);
@@ -555,7 +555,7 @@ impl BrushContext {
                     }
                 }
                 if hi < lo {
-                    continue;
+                    return;
                 }
                 from = ((lo - rx0 - 2.0).floor().max(0.0) as usize).min(w);
                 to = ((hi - rx0 + 3.0).ceil().max(0.0) as usize).min(w);
@@ -580,16 +580,21 @@ impl BrushContext {
                 if val <= 0.0 {
                     continue;
                 }
-                let i = yy * w + xx;
                 if val > 1e-6
-                    && let Some(o) = rgb.get_mut(i)
+                    && let Some(o) = rgb.get_mut(xx)
                 {
                     *o = color.map(|p| (p / val).clamp(0.0, 1.0));
                 }
-                if let Some(o) = cov.get_mut(i) {
+                if let Some(o) = cov.get_mut(xx) {
                     *o = self.shade(d, val, 1.0 - val, x, y, effects);
                 }
             }
+        };
+        if w * h >= ROW_PARALLEL_PIXELS {
+            use rayon::prelude::*;
+            cov.par_chunks_mut(w.max(1)).zip(rgb.par_chunks_mut(w.max(1))).enumerate().for_each(|(yy, (c, r))| fill_row(yy, c, r));
+        } else {
+            cov.chunks_mut(w.max(1)).zip(rgb.chunks_mut(w.max(1))).enumerate().for_each(|(yy, (c, r))| fill_row(yy, c, r));
         }
         true
     }
@@ -778,7 +783,8 @@ impl BrushContext {
             }
             _ => None,
         };
-        for yy in 0..h {
+        // One row of the dab. Rows are independent, so a large dab runs them on all cores.
+        let fill_row = |yy: usize, row: &mut [f32]| {
             let y = rect.y0 + yy as i32;
             let dy = y as f32 + 0.5 - cy;
             for xx in 0..w {
@@ -820,7 +826,7 @@ impl BrushContext {
                     }
                     (None, None) => {
                         // The placed texels (above); only Wet Edges reads the relative radius.
-                        let val = out.get(yy * w + xx).copied().unwrap_or(0.0);
+                        let val = row.get(xx).copied().unwrap_or(0.0);
                         if val <= 0.0 {
                             continue;
                         }
@@ -846,8 +852,16 @@ impl BrushContext {
                 if val <= 0.0 {
                     continue;
                 }
-                out[yy * w + xx] = if plane.is_some() { val } else { self.shade(d, val, rn, x, y, (noise, tex_tip, wet)) };
+                if let Some(o) = row.get_mut(xx) {
+                    *o = if plane.is_some() { val } else { self.shade(d, val, rn, x, y, (noise, tex_tip, wet)) };
+                }
             }
+        };
+        if w * h >= ROW_PARALLEL_PIXELS {
+            use rayon::prelude::*;
+            out.par_chunks_mut(w.max(1)).enumerate().for_each(|(yy, row)| fill_row(yy, row));
+        } else {
+            out.chunks_mut(w.max(1)).enumerate().for_each(|(yy, row)| fill_row(yy, row));
         }
     }
 
@@ -897,11 +911,11 @@ impl BrushContext {
             _ => m.level_for(tw.max(th) / slice.texels_per_px(tw, th)),
         };
         let (lw, lh) = m.levels.get(if nearest { 0 } else { level }).map_or((1.0, 1.0), |(w, h, _)| ((*w).max(1) as f32, (*h).max(1) as f32));
-        for (yy, row) in out.chunks_exact_mut(w.max(1)).enumerate() {
+        let fill_row = |yy: usize, row: &mut [f32]| {
             let y = rect.y0.saturating_add(yy as i32);
             // Pixel centres within half a pixel of the outline's span on this row.
             let span = [0.0, 0.5, 1.0].into_iter().filter_map(|k| slice.row_span(f64::from(y) + k)).reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)));
-            let Some((lo, hi)) = span else { continue };
+            let Some((lo, hi)) = span else { return };
             let from = ((lo - f64::from(rect.x0) - 1.0).floor().max(0.0) as usize).min(row.len());
             let to = ((hi - f64::from(rect.x0) + 1.0).ceil().max(0.0) as usize).min(row.len());
             for (xx, o) in row.iter_mut().enumerate().take(to).skip(from) {
@@ -928,6 +942,12 @@ impl BrushContext {
                     *o = self.shade(d, val, 1.0 - val, x, y, effects);
                 }
             }
+        };
+        if out.len() >= ROW_PARALLEL_PIXELS {
+            use rayon::prelude::*;
+            out.par_chunks_exact_mut(w.max(1)).enumerate().for_each(|(yy, row)| fill_row(yy, row));
+        } else {
+            out.chunks_exact_mut(w.max(1)).enumerate().for_each(|(yy, row)| fill_row(yy, row));
         }
     }
 
@@ -969,11 +989,29 @@ struct CovTile {
     col: Vec<f32>,
 }
 
-/// A rasterised colour-tip dab: its coverage and the straight colour of each pixel.
-type ColorDab = (Vec<f32>, Vec<[f32; 3]>);
+/// A rasterised dab: its coverage and, for a colour tip, the straight colour of each pixel.
+type RasterDab = (Vec<f32>, Option<Vec<[f32; 3]>>);
 
-/// Colour-tip dabs rasterised together before they are laid (bounds the memory of a batch).
-const COLOR_DAB_BATCH: usize = 32;
+/// Dabs rasterised together before they are laid, and the pixels of their rectangles a batch
+/// stops at (bounds its memory: about 16 bytes a pixel).
+const DAB_BATCH: usize = 32;
+const DAB_BATCH_PIXELS: usize = 4 << 20;
+/// A dab whose rectangle has at least this many pixels rasterises its rows on all cores.
+const ROW_PARALLEL_PIXELS: usize = 32 << 10;
+/// Batches smaller than this many pixels are rasterised on the calling thread.
+const DAB_PARALLEL_PIXELS: usize = 16 << 10;
+
+/// Rasterise one dab into `cov` (reused): a CSP colour tip in one pass, any other tip as its
+/// coverage and, when it paints its own colours (`want_color`), those.
+fn raster_dab(ctx: &BrushContext, d: &Dab, rect: Rect, want_color: bool, mut cov: Vec<f32>) -> RasterDab {
+    let mut rgb = Vec::new();
+    if want_color && ctx.rasterize_colored(d, rect, &mut cov, &mut rgb) {
+        return (cov, Some(rgb));
+    }
+    ctx.rasterize(d, false, rect, &mut cov);
+    let colored = want_color && ctx.rasterize_tip_color(d, rect, &mut rgb);
+    (cov, colored.then_some(rgb))
+}
 
 /// A sparse tiled coverage (+ optional colour) buffer.
 #[derive(Clone, Debug, Default)]
@@ -1302,40 +1340,40 @@ impl StrokeRenderer {
         let mut duals = std::mem::take(&mut self.dual_buf);
         let wet = self.ctx.brush.wet_edges;
         let mut native = [0.0f32; 8];
-        // Colour-tip dabs are independent until they are laid: rasterise a bounded batch of them
-        // on all cores, then lay them in stroke order (the same pixels as one at a time).
-        let batched = self.per_dab_color && self.fmt.is_some() && self.ctx.has_tip_colors() && self.mixing.is_none();
-        let mut ready: std::collections::VecDeque<Option<ColorDab>> = std::collections::VecDeque::new();
+        // A dab's pixels depend only on the dab, not on what the stroke already holds: rasterise
+        // a bounded batch of dabs on all cores, then lay them in stroke order (the same pixels as
+        // one at a time). Small batches stay on this thread.
+        let want_color = self.per_dab_color && self.fmt.is_some();
+        let mut ready: std::collections::VecDeque<RasterDab> = std::collections::VecDeque::new();
+        let mut inline_until = 0;
         for i in 0..dabs.len() {
-            if batched && ready.is_empty() {
-                use rayon::prelude::*;
+            if ready.is_empty() && i >= inline_until {
                 let ctx = &self.ctx;
-                let chunk = dabs.get(i..(i + COLOR_DAB_BATCH).min(dabs.len())).unwrap_or(&[]);
-                let done: Vec<_> = chunk
-                    .par_iter()
-                    .map(|d| {
-                        let (mut cov, mut rgb) = (Vec::new(), Vec::new());
-                        ctx.rasterize_colored(d, ctx.dab_rect(d, false), &mut cov, &mut rgb).then_some((cov, rgb))
-                    })
-                    .collect();
-                ready.extend(done);
+                let (mut end, mut pixels) = (i, 0usize);
+                while let Some(d) = dabs.get(end).filter(|_| end - i < DAB_BATCH && pixels <= DAB_BATCH_PIXELS) {
+                    let r = ctx.dab_rect(d, false);
+                    pixels = pixels.saturating_add((r.width() as usize).saturating_mul(r.height() as usize));
+                    end += 1;
+                }
+                match dabs.get(i..end) {
+                    Some(chunk) if chunk.len() >= 2 && pixels >= DAB_PARALLEL_PIXELS => {
+                        use rayon::prelude::*;
+                        let done: Vec<RasterDab> = chunk.par_iter().map(|d| raster_dab(ctx, d, ctx.dab_rect(d, false), want_color, Vec::new())).collect();
+                        ready.extend(done);
+                    }
+                    _ => inline_until = end,
+                }
             }
             let Some(d) = dabs.get_mut(i) else { break };
             let rect = self.ctx.dab_rect(d, false);
-            // A colour tip lays its own colour at each pixel: shape and colours in one pass
-            // where the tip allows it.
-            let mut tip_rgb = Vec::new();
-            let colored = match ready.pop_front().flatten() {
-                Some((cov, rgb)) => {
-                    self.scratch = cov;
-                    tip_rgb = rgb;
-                    true
-                }
-                None => self.per_dab_color && self.fmt.is_some() && self.ctx.rasterize_colored(d, rect, &mut self.scratch, &mut tip_rgb),
+            // A colour tip lays its own colour at each pixel (`tip_rgb`).
+            let (cov, tip_rgb) = match ready.pop_front() {
+                Some(done) => done,
+                None => raster_dab(&self.ctx, d, rect, want_color, std::mem::take(&mut self.scratch)),
             };
-            if !colored {
-                self.ctx.rasterize(d, false, rect, &mut self.scratch);
-            }
+            self.scratch = cov;
+            let colored = tip_rgb.is_some();
+            let tip_rgb = tip_rgb.unwrap_or_default();
             // A colour tip's dab colour: its mean (mixing and ribbons lay one colour a dab).
             if let Some([r, g, b]) = self.ctx.tip_mean_color(d).filter(|_| self.per_dab_color) {
                 d.color = [r, g, b, d.color[3]];
@@ -1372,7 +1410,7 @@ impl StrokeRenderer {
             };
             // Mixing dabs blend towards their own colour and alpha: they build up to full weight.
             let ceiling = if target_alpha.is_some() { 1.0 } else { d.opacity };
-            match self.fmt.filter(|_| colored || (self.per_dab_color && self.ctx.rasterize_tip_color(d, rect, &mut tip_rgb))) {
+            match self.fmt.filter(|_| colored) {
                 Some(f) => {
                     let nc = f.mode.color_channels().min(native.len());
                     let mut colors = vec![0.0; tip_rgb.len() * nc];
