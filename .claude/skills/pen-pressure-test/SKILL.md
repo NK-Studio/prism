@@ -130,7 +130,12 @@ CLIP STUDIO PAINT, as done on 2026-11-14 (`docs/pen-input-validation.md` › G-p
 7. **cua-driver pixel coordinates** are relative to that window's *most recent* screenshot. After
    a native-resolution capture (`max_image_dimension: 0`), take a scaled read again before
    clicking by pixels from a scaled image. A mismatched click selected a different tool once.
-8. **Restore.** Close the test canvas with Do Not Save, reselect the user's sub tool, set the tablet
+8. **No pressure input?** A brush without pressure dynamics (e.g. 가을낙엽_낙엽) can be compared with
+   CLIP STUDIO left on Wintab: strokes arrive as full-pressure mouse input and no preference changes.
+   Read big colour-tip brushes with `brush.get {"images": false}`; for offline renders of a local
+   material use the ignored test `local_csp_render_one` (`crates/engine/tests/csp_library_local.rs`).
+   Worked example: `docs/sut-analysis.md` › 가을낙엽_낙엽 against CLIP STUDIO PAINT.
+9. **Restore.** Close the test canvas with Do Not Save, reselect the user's sub tool, set the tablet
    service back.
 
 ## Cleanup

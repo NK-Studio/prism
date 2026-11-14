@@ -578,11 +578,12 @@ impl BrushContext {
                 let big = *w0.max(h0) as f32;
                 let display = 2.0 * r * ro.max(0.25);
                 let level = match csp_aa {
-                    // CSP: weak samples the original tip, medium the level at least as large as the
-                    // dab, strong the level at least half as large.
+                    // CSP: none and weak sample the original tip; medium and strong the level at
+                    // least twice as large as the dab, so the 2×2 samples half a pixel apart read
+                    // four different texels (measured against CLIP STUDIO PAINT with a 700 px
+                    // colour tip drawn 78 px across: docs/sut-analysis.md › Image tip anti-aliasing).
                     Some(0 | 1) => 0,
-                    Some(2) => m.level_for(display),
-                    Some(_) => m.level_for(display * 0.5),
+                    Some(_) => m.level_for(display * 2.0),
                     None => m.level_for(display),
                 };
                 (level, big / (2.0 * r), *w0 as f32, *h0 as f32)
@@ -845,7 +846,8 @@ pub struct CoverageMap {
     bounds: Rect,
     dirty: HashSet<(i32, i32)>,
     /// Each dab paints over the colour already stored (by its own tip value), even where the
-    /// coverage is full: CSP colour mixing lays every dab onto the layer in turn.
+    /// coverage is full: CSP lays every dab onto the layer in turn (colour mixing, colour tips
+    /// and the other per-dab colours of a CSP brush).
     pub(crate) paint_over: bool,
     /// CSP "Blend brush tips with Darken": a dab's colour only ever darkens the colour the
     /// stroke already holds at a pixel (per channel). Colour maps of additive modes only.
@@ -1094,7 +1096,11 @@ impl StrokeRenderer {
             ctx,
             generator: DabGenerator::new(brush, zoom),
             cov: CoverageMap {
-                paint_over: mixing.is_some(),
+                // CLIP STUDIO lays each dab onto the layer in turn, so a later dab covers an
+                // earlier one with its own colours (measured with overlapping colour tips,
+                // docs/sut-analysis.md › 가을낙엽): colour mixing, and every CSP brush whose dabs
+                // carry their own colour.
+                paint_over: mixing.is_some() || (brush.csp_correction && per_dab_color),
                 // Darken compares colour values: only where a larger value is lighter.
                 darken: brush.csp_darken_tips
                     && per_dab_color

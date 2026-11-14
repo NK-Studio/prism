@@ -525,7 +525,9 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
             let size = b.size;
             match &mut b.csp_spray {
                 Some(spray) if id == 1131 => {
-                    let mut px = spray.size;
+                    // A particle size synchronized with the brush size is shown as it paints.
+                    let synced = spray.size_ratio.filter(|k| k.is_finite() && *k > 0.0).map(|k| k * size);
+                    let mut px = synced.unwrap_or(spray.size);
                     if number(ui, label, &mut px, 0.5..=prism_engine::paint::MAX_BRUSH_SIZE, " px") {
                         spray.size = px.clamp(0.5, prism_engine::paint::MAX_BRUSH_SIZE);
                         // A particle size synchronized with the brush size keeps the new ratio.

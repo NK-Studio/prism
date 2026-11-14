@@ -2023,3 +2023,95 @@ fn csp_random_scales_each_dab_between_its_minimum_and_full_size() {
     assert!(radii.iter().any(|r| *r < 15.0) && radii.iter().any(|r| *r > 15.0), "random sizes, not one size");
     assert_eq!(serde_json::from_value::<Dynamic>(serde_json::to_value(&b.shape_dynamics.size).unwrap()).unwrap().csp_random, Some(0.5));
 }
+
+/// CLIP STUDIO PAINT with a 700 px colour tip drawn 78 px across (가을낙엽_낙엽): medium and
+/// strong anti-aliasing keep the tip's thin dark outline (docs/sut-analysis.md › Image tip
+/// anti-aliasing). They read the mip level at least twice the dab's size; a level at or below the
+/// dab's size washes a thin line out.
+#[test]
+fn csp_image_tip_anti_aliasing_keeps_a_thin_line() {
+    // A 512 px tip holding a ring 16 texels wide, drawn 64 px across: the ring is 2 px wide.
+    let ring = GrayTile::from_fn(512, 512, |x, y| {
+        let r = (x as f32 - 255.5).hypot(y as f32 - 255.5);
+        if (200.0..216.0).contains(&r) { 1.0 } else { 0.0 }
+    });
+    let peak = |level: u8| {
+        let b = BrushSettings { size: 64.0, pressure_size: false, csp_anti_alias: Some(level), tip: TipShape::Sampled(ring.clone()), ..brush() };
+        let s = paint(&b, &[StrokePoint::new(50.0, 50.0, 1.0)], 100, 100);
+        (0..100).map(|x| s.rgba(x, 50)[3]).fold(0.0, f32::max)
+    };
+    for level in 0..=3 {
+        assert!(peak(level) > 0.95, "level {level}: {}", peak(level));
+    }
+    // Medium and strong still smooth the edge: some pixels are partly covered.
+    let b = BrushSettings { size: 64.0, pressure_size: false, csp_anti_alias: Some(3), tip: TipShape::Sampled(ring.clone()), ..brush() };
+    let s = paint(&b, &[StrokePoint::new(50.0, 50.0, 1.0)], 100, 100);
+    assert!((0..100).any(|y| (0..100).any(|x| (0.05..0.95).contains(&s.rgba(x, y)[3]))));
+}
+
+/// CLIP STUDIO PAINT, 가을낙엽_낙엽 (docs/sut-analysis.md › 가을낙엽): a brush whose tip turns
+/// with the direction of the line lays nothing for a tap, and a stroke ends with its last spaced
+/// dab: the stabilizer's pen-up samples lay nothing in place.
+#[test]
+fn csp_line_following_brush_ignores_taps_and_does_not_pile_dabs_at_pen_up() {
+    let mut follows = BrushSettings {
+        size: 50.0,
+        spacing: 1.0,
+        pressure_size: false,
+        csp_correction: true,
+        csp_stabilizer: Some(crate::CspStabilizer { level: 5, ..Default::default() }),
+        ..brush()
+    };
+    follows.shape_dynamics.enabled = true;
+    follows.shape_dynamics.angle.control = Control::Direction;
+    assert!(follows.csp_follows_line());
+    let dabs = |b: &BrushSettings, pts: &[StrokePoint]| {
+        let mut g = crate::dynamics::DabGenerator::new(b, 1.0);
+        let (mut dabs, mut dual) = (Vec::new(), Vec::new());
+        g.push(pts, &mut dabs, &mut dual);
+        g.finish(&mut dabs, &mut dual);
+        dabs
+    };
+    let at = |x: f64, pressure: f32, time: f64| StrokePoint { time, ..StrokePoint::new(x, 100.0, pressure) };
+    // Taps: one sample, and a pen pressed harder in place.
+    assert!(dabs(&follows, &[at(100.0, 1.0, 0.0)]).is_empty());
+    let pressed: Vec<_> = (0..20).map(|i| at(100.0, 0.05 * f32::from(i as u8 + 1), f64::from(i) * 8.0)).collect();
+    assert!(dabs(&follows, &pressed).is_empty());
+    // A 500 px line: a dab every 50 px and nothing extra where the pen lifts.
+    let line: Vec<_> = (0..=125).map(|i| at(100.0 + f64::from(i) * 4.0, 1.0, f64::from(i) * 8.0)).collect();
+    let laid = dabs(&follows, &line);
+    assert!((10..=11).contains(&laid.len()), "{}", laid.len());
+    for pair in laid.windows(2) {
+        assert!((pair[1].center.x - pair[0].center.x) > 40.0, "{:?}", laid.iter().map(|d| d.center.x).collect::<Vec<_>>());
+    }
+    // The same brush without the direction input still draws its tap, and a Photoshop brush
+    // (no CSP correction) still lays a dab for a pressure change in place.
+    let mut fixed = follows.clone();
+    fixed.shape_dynamics.angle.control = Control::Off;
+    assert_eq!(dabs(&fixed, &[at(100.0, 1.0, 0.0)]).len(), 1);
+    let photoshop = BrushSettings { size: 50.0, spacing: 1.0, ..brush() };
+    assert!(dabs(&photoshop, &pressed).len() > 1);
+}
+
+/// CLIP STUDIO lays each dab onto the layer in turn (가을낙엽_낙엽: a later leaf covers an
+/// earlier one, docs/sut-analysis.md › 가을낙엽). A CSP brush whose dabs carry their own colour
+/// shows the last dab over a pixel; a Photoshop brush keeps its own build-up.
+#[test]
+fn csp_per_dab_colours_paint_over_earlier_dabs() {
+    let mut b = BrushSettings { size: 40.0, hardness: 1.0, spacing: 0.25, pressure_size: false, csp_correction: true, csp_anti_alias: Some(0), ..brush() };
+    b.color = [1.0, 0.0, 0.0, 1.0];
+    b.color_dynamics.enabled = true;
+    b.color_dynamics.per_tip = true;
+    b.color_dynamics.hue_jitter = 1.0;
+    // Dabs every 10 px from x = 50, 40 px across. Only the first dab reaches x = 35. At x = 65
+    // the first dab is the earliest of five and the dab at 80 the latest.
+    let pts = [StrokePoint::new(50.0, 50.0, 1.0), StrokePoint::new(150.0, 50.0, 1.0)];
+    let same = |a: [f32; 4], b: [f32; 4]| (0..3).all(|i| (a[i] - b[i]).abs() < 0.02);
+    let s = paint(&b, &pts, 200, 100);
+    let (first, later) = (s.rgba(35, 50), s.rgba(65, 50));
+    assert!(first[3] > 0.99 && later[3] > 0.99);
+    assert!(!same(first, later), "the first dab still shows at x = 65: {first:?} {later:?}");
+    b.csp_correction = false;
+    let s = paint(&b, &pts, 200, 100);
+    assert!(same(s.rgba(35, 50), s.rgba(65, 50)));
+}

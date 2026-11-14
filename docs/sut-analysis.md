@@ -1006,7 +1006,9 @@ texel at the pixel centre. There is no bilinear filtering at any level.
 Prism (`render.rs`, `csp_aa`): level 0 samples once at the pixel centre; other levels
 average 2×2 nearest samples at ±¼ pixel around the centre (the source starts its rows at
 the pixel corner, but CSP's own stroke edges are symmetric, so the offsets are taken as
-centred); sampled tips use mip level 0 / `level_for(d)` / `level_for(d/2)`. A soft computed
+centred); sampled tips use mip level 0 for none and weak and `level_for(2d)` for medium and
+strong (measured 2026-11-14, see Image tip anti-aliasing below; the earlier reading of the
+trace, `level_for(d)` / `level_for(d/2)`, drew a blurred tip). A soft computed
 round tip uses Prism's falloff. A hard computed round tip with anti-aliasing follows the
 measured CLIP STUDIO rule (2026-11-14, `docs/pen-input-validation.md` › G-pen comparison).
 Coverage is `clamp((R − d) / w)`: the edge stays at R and the ramp runs inward, with w =
@@ -1015,6 +1017,79 @@ centre. The earlier 1 px / 2 px box filter kept the nominal diameter, which CLIP
 not (a size-25 medium dab is 22.5 px across). `cspAntiAlias` is now a
 level 0..3; older presets stored a boolean (false = 0, true = 1). Grainy Pen (level 0)
 renders unchanged.
+
+## 가을낙엽_낙엽 against CLIP STUDIO PAINT (2026-11-14)
+
+The colour-tip spray brush 가을낙엽_낙엽 (nine 677×700 colour tips in random order, one particle
+a step on the circumference of the brush area, random particle angle) was drawn in CLIP STUDIO
+PAINT PRO 5.0.4 and in Prism with the same synthetic pen strokes
+(`docs/pen-input-validation.md` › Synthetic pen injection; CLIP STUDIO on Wintab, so the strokes
+arrive at full pressure; the brush has no pressure input). The sub tool as set in CLIP STUDIO:
+brush size 17, particle size 78.2 (synchronized with the brush size, ratio 4.60), anti-aliasing
+strong, gap Narrow. Screenshots at 100 % view against Prism's saved PNG. These are observations
+of output; nothing below is traced in code.
+
+**What already matched.** With gap Fixed (interval 100) both lay 16 leaves along 1200 px: the
+step is the *particle* size times the interval, not the brush size. Leaf sizes agree by kind
+(longest extent, px: ginkgo 46.0 / 45.3–46.8, red maple 47.4 / 46.6–47.5, large maple 67.1–68.1 /
+67.8, CLIP STUDIO / Prism). Gap Narrow at 0.04 × particle size gives the same band: ink per
+pixel of path 42.6–43.8 against 41.5–42.8, mean band height 55.0–55.7 against 52–55.6 px.
+
+**What differed, and is fixed.**
+
+- *Image tip anti-aliasing.* See the next section.
+- *A later dab covers an earlier one.* Where leaves overlap, CLIP STUDIO shows every later leaf
+  whole, with its outline. Prism kept the colour of the first dab to cover a pixel (its build-up
+  only coloured newly covered area), so leaves merged and outlines vanished: pixels darker than
+  luma 60 were 3.9 % of the ink against CLIP STUDIO's 13.7–14.2 %. A CSP brush whose dabs carry
+  their own colour (colour tips, sub colour, colour jitter) now paints each dab over the stroke
+  (`CoverageMap::paint_over`, as colour mixing already did): 12.0–12.9 %.
+- *No pile of dabs at pen-up.* Prism laid three or four extra leaves on the end of every stroke:
+  the stabilizer's pen-up samples repeat the last position while their pressure drains, and each
+  pressure change in place laid a dab. On a pen with pressure size they shrink to nothing; on a
+  brush without pressure input they are full size. CLIP STUDIO ends with the last spaced leaf.
+  The stabilizer's pen-up samples no longer lay dabs in place.
+- *A tap draws nothing.* A one-sample tap with this brush, and with 葉っぱブラシ (no spray; tip
+  angle from the line direction, `BrushRotationEffector` 195), draws nothing in CLIP STUDIO; the
+  G-pen (no direction input) draws its dab. Prism drew one leaf. A CSP brush whose tip or
+  particle angle follows the direction of the line (flag 0x40) now waits for the pen to move
+  before its first dab (`BrushSettings::csp_follows_line`, `PathWalker::wait_for_direction`).
+  Inference: the rule is taken to be the direction input; spray without it was not tried.
+- *Tool Property.* A particle size synchronized with the brush size showed its stored value (30)
+  instead of what it paints (78.2); it now shows the synchronized size, as CLIP STUDIO does.
+
+**Not the same, by design or unknown.**
+
+- The random streams are Prism's own: which leaf, its angle and its place differ dab by dab.
+- A sub tool Prism imported before the importer read the particle angle (`angleJitter`) keeps its
+  old settings until it is imported again. Imports read the material as downloaded, not the
+  edits made in CLIP STUDIO (here: size 17, gap Narrow), which have to be set in Prism too.
+- `BrushSizeUnit` / `BrushSpraySizeUnit` 2 on this material (stored 6.518 and 30): CLIP STUDIO's
+  own display of the unedited material was not captured, so the import default size is unverified.
+- Anti-aliasing weak on an image tip: CLIP STUDIO keeps more dark outline (11.3 % of ink below
+  luma 60) than Prism (7.7 %); not investigated.
+- Stroke-interior dark share is still a little lower in Prism (12.0–12.9 % against 13.7–14.2 %).
+
+## Image tip anti-aliasing (2026-11-14)
+
+Single leaves of 가을낙엽_낙엽 (a 700 px colour tip drawn 78 px across) at each anti-aliasing
+level, gap Fixed, measured as the share of partly covered pixels ("soft": distance from white
+8–128 over pixels above 128) and of outline pixels darker than luma 60, per ink pixel:
+
+| Level | CLIP STUDIO soft / dark | Prism before | Prism now |
+| --- | --- | --- | --- |
+| none | 0.041 / 0.158 | 0.041 / 0.174 | unchanged |
+| weak | 0.142 / 0.113 | 0.117 / 0.077 | unchanged |
+| medium | 0.156 / 0.058 | 0.191 / 0.028 | 0.138 / 0.057 |
+| strong | 0.127–0.150 / 0.051–0.063 (four rows) | 0.324 / 0.008 | 0.147 / 0.058 |
+
+Prism read the trace above as "medium: the level at least as large as the dab; strong: at least
+half as large", which upsamples a 44 px level at strong: a blurred leaf with a washed-out
+outline. CLIP STUDIO's medium and strong look alike and keep the outline. Sampling the level at
+least **twice** the dab's size for both (175 px here), still as the mean of 2×2 nearest texels
+half a pixel apart, reproduces both numbers; four times the size (0.122 / 0.073) and one times
+(0.191 / 0.028) do not. Whether medium and strong pick different levels at other sizes is not
+measured. Ribbon tips keep their previous level rule.
 
 ## Tip rotation controls (2026-10-16)
 

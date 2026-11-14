@@ -733,6 +733,14 @@ impl Default for BrushSettings {
 }
 
 impl BrushSettings {
+    /// A CSP brush whose tip (or spray particle) turns with the direction of the line
+    /// (`BrushRotationEffector` flag 0x40). Such a brush lays nothing until the pen has moved.
+    pub fn csp_follows_line(&self) -> bool {
+        let tip = self.shape_dynamics.enabled && self.shape_dynamics.angle.control == Control::Direction;
+        let particle = self.csp_spray.as_ref().is_some_and(|s| s.angle_input == crate::csp_spray::CspParticleAngle::Direction);
+        self.csp_correction && (tip || particle)
+    }
+
     /// Keep Photoshop's tool setting available for switching back without filtering CSP input.
     pub fn effective_smoothing(&self) -> Smoothing {
         if self.csp_correction { Smoothing::default() } else { self.smoothing.clone() }

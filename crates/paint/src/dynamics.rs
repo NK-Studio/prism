@@ -193,6 +193,12 @@ pub struct PathWalker {
     speed_acc: f64,
     /// Path length up to `last`.
     travelled: f64,
+    /// A pressure or pose change without movement lays a step in place (off while a CSP
+    /// stabilizer drains at pen-up: those samples are not input).
+    in_place: bool,
+    /// The first step waits for the path to move (a CSP tip turned by the line's direction):
+    /// a stroke that never moves lays nothing.
+    wait_for_direction: bool,
 }
 
 impl PathWalker {
@@ -209,7 +215,20 @@ impl PathWalker {
             speed: None,
             speed_acc: 0.0,
             travelled: 0.0,
+            in_place: true,
+            wait_for_direction: false,
         }
+    }
+
+    /// Lay the first step only once the path has moved; a stroke that never moves lays nothing.
+    pub fn wait_for_direction(mut self, on: bool) -> Self {
+        self.wait_for_direction = on;
+        self
+    }
+
+    /// Stop laying steps for pressure or pose changes without movement.
+    pub fn stop_in_place_steps(&mut self) {
+        self.in_place = false;
     }
 
     /// Space steps by stroke time instead of distance ([`SPEED_SPACING_MS`]): faster movement
@@ -240,6 +259,12 @@ impl PathWalker {
             if self.initial_dir.is_none() {
                 self.initial_dir = Some(self.dir);
             }
+        }
+        if self.wait_for_direction && self.pending_first.is_some() && len <= 1e-9 {
+            // Still in place: keep waiting, with the newest pressure and pose.
+            self.pending_first = Some(p);
+            self.last = Some(p);
+            return;
         }
         if let Some(f) = self.pending_first.take() {
             self.next_at = self.emit(f, self.travelled, out).max(0.25);
@@ -296,7 +321,7 @@ impl PathWalker {
                 }
             }
         }
-        if len <= 1e-9 && stylus_changed(&a, &p) && !emitted_endpoint {
+        if self.in_place && len <= 1e-9 && stylus_changed(&a, &p) && !emitted_endpoint {
             // Distance spacing cannot represent a pressure/pose change in place. Emit it once,
             // keeping unchanged stationary samples inert and avoiding a duplicate airbrush dab.
             self.next_at = self.emit(p, self.travelled + len, out).max(0.25);
@@ -306,7 +331,9 @@ impl PathWalker {
     }
 
     pub fn finish(&mut self, out: &mut impl FnMut(StepInput) -> f64) {
-        if let Some(f) = self.pending_first.take() {
+        if let Some(f) = self.pending_first.take()
+            && !self.wait_for_direction
+        {
             self.emit(f, self.travelled, out);
         }
     }
@@ -806,8 +833,12 @@ impl DabGenerator {
             zoom,
             stabilizer: crate::csp_stabilizer::Stabilizer::new(&brush.csp_stabilizer.clone().unwrap_or_default(), zoom),
             smoother: Smoother::new(&brush.effective_smoothing(), zoom),
-            walker: if brush.spacing_enabled { PathWalker::new(interval) } else { PathWalker::new(interval).speed_spacing(SPEED_SPACING_MS) },
-            dual_walker: dual_on.then(|| PathWalker::new(None)),
+            // A CSP tip turned by the direction of the line has no angle until the pen moves:
+            // CLIP STUDIO lays nothing for a tap with such a brush (measured,
+            // docs/sut-analysis.md › 가을낙엽).
+            walker: if brush.spacing_enabled { PathWalker::new(interval) } else { PathWalker::new(interval).speed_spacing(SPEED_SPACING_MS) }
+                .wait_for_direction(brush.csp_follows_line()),
+            dual_walker: dual_on.then(|| PathWalker::new(None).wait_for_direction(brush.csp_follows_line())),
             builder: DabBuilder::new(&brush),
             dual: dual_on.then(|| DualBuilder::new(&brush)),
             scratch: Vec::new(),
@@ -862,6 +893,16 @@ impl DabGenerator {
         let mut sm = Vec::new();
         let mut caught_up = Vec::new();
         self.stabilizer.finish(&mut caught_up);
+        // The stabilizer's pen-up samples repeat the last position while their pressure drains.
+        // They are not input: laid in place they pile dabs on the end of the stroke, which shows
+        // on a brush that ignores pressure (CLIP STUDIO ends such a stroke with its last spaced
+        // dab; measured, docs/sut-analysis.md › 가을낙엽).
+        if !caught_up.is_empty() {
+            self.walker.stop_in_place_steps();
+            if let Some(w) = self.dual_walker.as_mut() {
+                w.stop_in_place_steps();
+            }
+        }
         for p in caught_up {
             self.smoother.push(p, &mut sm);
         }
