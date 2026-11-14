@@ -249,3 +249,27 @@ Not done: a ribbon's colour tip is still read in five passes a dab (only the pas
 parallel); colour mixing brushes (NANAGOM PEN: 2.5 ms at 1000 px/s, 7.0 ms at 3000 px/s) are
 bound by the per-dab sampling under the dab, which stays in order; `cargo xtask perf` and the
 `fast` profile were not run.
+
+## Ribbon colour tips: shape and colours in one walk (2026-11-14)
+
+A ribbon slice of a colour tip was still walked five times (its shape, then the shape again and
+the three colour planes for its colours), locating every pixel in the slice's quadrilateral each
+time. `rasterize_ribbon` now takes the colour planes and reads them where it reads the shape, so
+`BrushContext::rasterize_colored` covers ribbon slices too (not aliased ribbons, whose
+thresholded shape keeps the tip's mean colour).
+
+Pixels are unchanged: the 茂み1 size 300 comparison render is identical byte for byte, and
+`csp_colour_tip_one_pass_equals_the_separate_passes` now also compares ribbon slices with the
+separate passes at every anti-aliasing level, with flips, on a turning path.
+
+`LiveStroke::push` per frame, release build, same machine (`local_csp_live_one`), 茂み1 at size
+300, mean / p95 ms over four rounds each:
+
+| Pen speed | Before | After |
+|---|---:|---:|
+| 1000 px/s | 3.58–3.63 / 4.87–5.01 | 1.90–1.93 / 2.43–2.56 |
+| 3000 px/s | 3.97–4.30 / 5.20–5.87 | 2.72–2.90 / 3.25–3.67 |
+
+The committed comparison render (four strokes with their fixed costs) went from 938 to 882 ms.
+Not done: each plane is still sampled with its own bilinear lookup (the weights are not shared);
+`cargo xtask perf` and the `fast` profile were not run.

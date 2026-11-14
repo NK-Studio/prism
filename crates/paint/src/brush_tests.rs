@@ -2160,8 +2160,44 @@ fn csp_colour_tip_one_pass_equals_the_separate_passes() {
             assert_eq!(colour, colour1, "level {level}");
         }
     }
+    // A ribbon's slices: the same, at every level, with flips and a turning path.
+    for level in [None, Some(0u8), Some(1), Some(2), Some(3)] {
+        let mut b = BrushSettings {
+            size: 48.0,
+            spacing: 0.2,
+            pressure_size: false,
+            csp_correction: true,
+            csp_anti_alias: level,
+            tip: TipShape::Sampled(tip.clone()),
+            csp_tip_colors: vec![Some(crate::CspTipColor { width: w, height: h, rgb: rgb.clone().into() })],
+            csp_ribbon: Some(crate::csp_ribbon::CspRibbon::from_rotation(0.0)),
+            ..brush()
+        };
+        b.shape_dynamics.enabled = true;
+        b.shape_dynamics.flip_x_jitter = true;
+        b.shape_dynamics.flip_y_jitter = true;
+        let ctx = BrushContext::new(&b);
+        let mut g = crate::dynamics::DabGenerator::new(&b, 1.0);
+        let (mut dabs, mut dual) = (Vec::new(), Vec::new());
+        let pts: Vec<StrokePoint> = (0..=30).map(|i| StrokePoint::new(60.3 + f64::from(i) * 8.0, 90.7 + (f64::from(i) * 0.4).sin() * 40.0, 1.0)).collect();
+        g.push(&pts, &mut dabs, &mut dual);
+        g.finish(&mut dabs, &mut dual);
+        let mut slices = 0;
+        for d in dabs.iter().filter(|d| d.ribbon.is_some()) {
+            let rect = ctx.dab_rect(d, false);
+            let (mut cov, mut colour) = (Vec::new(), Vec::new());
+            ctx.rasterize(d, false, rect, &mut cov);
+            assert!(ctx.rasterize_tip_color(d, rect, &mut colour));
+            let (mut cov1, mut colour1) = (Vec::new(), Vec::new());
+            assert!(ctx.rasterize_colored(d, rect, &mut cov1, &mut colour1), "ribbon level {level:?}");
+            assert_eq!(cov, cov1, "ribbon level {level:?}");
+            assert_eq!(colour, colour1, "ribbon level {level:?}");
+            slices += usize::from(cov.iter().any(|v| *v > 0.0));
+        }
+        assert!(slices > 8, "ribbon level {level:?}: {slices}");
+    }
     // A tip without colours, and Photoshop sampling, keep the separate passes.
-    let plain = BrushSettings { size: 30.0, csp_anti_alias: Some(2), tip: TipShape::Sampled(tip.clone()), ..brush() };
+    let plain =BrushSettings { size: 30.0, csp_anti_alias: Some(2), tip: TipShape::Sampled(tip.clone()), ..brush() };
     let ctx = BrushContext::new(&plain);
     let d = crate::dabs(&Stroke { brush: plain.clone(), points: vec![StrokePoint::new(20.0, 20.0, 1.0)] });
     let (mut cov, mut colour) = (Vec::new(), Vec::new());

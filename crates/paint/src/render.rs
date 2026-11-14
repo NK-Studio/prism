@@ -423,12 +423,12 @@ impl BrushContext {
             };
             let n = rect.width() as usize * rect.height() as usize;
             let mut alpha = vec![0.0; n];
-            self.rasterize_ribbon(d, &slice, shape, *k, rect, &mut alpha, (false, false, false));
+            self.rasterize_ribbon(d, &slice, shape, *k, rect, &mut alpha, (false, false, false), None);
             out.clear();
             out.resize(n, [0.0; 3]);
             for (c, m) in planes.iter().enumerate() {
                 let mut plane = vec![0.0; n];
-                self.rasterize_ribbon(d, &slice, m, *k, rect, &mut plane, (false, false, false));
+                self.rasterize_ribbon(d, &slice, m, *k, rect, &mut plane, (false, false, false), None);
                 for ((o, a), p) in out.iter_mut().zip(&alpha).zip(&plane) {
                     if *a > 1e-6 {
                         o[c] = (p / a).clamp(0.0, 1.0);
@@ -465,12 +465,33 @@ impl BrushContext {
 
     /// A CSP colour tip's dab in one pass: `cov` as [`Self::rasterize`] and `rgb` as
     /// [`Self::rasterize_tip_color`] give them, reading the shape and the three colour planes at
-    /// the same texels instead of walking the dab five times. `false` (nothing written) when the
-    /// dab is not a CSP-sampled colour tip (a ribbon, a computed tip, Photoshop sampling, a tip
-    /// that paints in the brush colour): the caller then uses the two separate calls.
+    /// the same texels instead of walking the dab five times; a ribbon slice of a colour tip
+    /// likewise. `false` (nothing written) when the dab is not one of those (a computed tip,
+    /// Photoshop sampling, an aliased ribbon, a tip that paints in the brush colour): the caller
+    /// then uses the two separate calls.
     pub fn rasterize_colored(&self, d: &Dab, rect: Rect, cov: &mut Vec<f32>, rgb: &mut Vec<[f32; 3]>) -> bool {
         let b = &self.brush;
-        let Some(aa) = b.csp_anti_alias.filter(|_| !b.aliased && d.ribbon.is_none()) else { return false };
+        if let Some(slice) = d.ribbon {
+            // A ribbon slice: the same, locating each pixel in the slice once.
+            let slot = slice.tip as usize % self.ribbon_tips.len().max(1);
+            let (Some((shape, k)), Some(Some(planes)), false) = (self.ribbon_tips.get(slot), self.ribbon_colors.get(slot), b.aliased) else {
+                return false;
+            };
+            // The planes are read at the shape's level and texel grid: they must match it.
+            let same = |p: &Mips| p.levels.len() == shape.levels.len() && p.levels.iter().zip(&shape.levels).all(|(a, b)| (a.0, a.1) == (b.0, b.1));
+            if !planes.iter().all(same) {
+                return false;
+            }
+            let n = (rect.width() as usize).saturating_mul(rect.height() as usize);
+            cov.clear();
+            cov.resize(n, 0.0);
+            rgb.clear();
+            rgb.resize(n, [0.0; 3]);
+            let effects = (b.noise, b.texture.enabled && b.texture.each_tip && self.texture.is_some(), b.wet_edges);
+            self.rasterize_ribbon(d, &slice, shape, *k, rect, cov, effects, Some((planes.as_ref(), rgb.as_mut_slice())));
+            return true;
+        }
+        let Some(aa) = b.csp_anti_alias.filter(|_| !b.aliased) else { return false };
         let slot = if self.sequence.is_empty() { 0 } else { self.tip_slot(d) };
         let shape = if self.sequence.is_empty() { self.tip.as_deref() } else { self.sequence.get(slot).map(Arc::as_ref) };
         let (Some(Some(planes)), Some(shape)) = (self.tip_colors.get(slot), shape) else { return false };
@@ -622,7 +643,7 @@ impl BrushContext {
         let tex_tip = !dual && b.texture.enabled && b.texture.each_tip && self.texture.is_some();
         if let Some(slice) = d.ribbon.filter(|_| !dual && plane.is_none()) {
             if let Some((m, k)) = self.ribbon_tips.get(slice.tip as usize % self.ribbon_tips.len().max(1)) {
-                self.rasterize_ribbon(d, &slice, m, *k, rect, out, (noise, tex_tip, wet));
+                self.rasterize_ribbon(d, &slice, m, *k, rect, out, (noise, tex_tip, wet), None);
             }
             return;
         }
@@ -889,6 +910,9 @@ impl BrushContext {
     /// Rasterise a CSP Ribbon slice: each pixel centre is located in the slice's quadrilateral
     /// and samples the tip there (bilinear on a mip level, nearest for CSP anti-aliasing off).
     /// Pixel centres belong to one slice each, so consecutive slices join without seams.
+    /// With `color` (the tip's colour planes, on the same texel grids as `m`, and a row-major
+    /// buffer as large as `out`), each covered pixel also gets its straight colour, read at the
+    /// same place as its shape: what [`Self::rasterize_tip_color`] finds in four more walks.
     #[allow(clippy::too_many_arguments)]
     fn rasterize_ribbon(
         &self,
@@ -899,6 +923,7 @@ impl BrushContext {
         rect: Rect,
         out: &mut [f32],
         effects: (bool, bool, bool),
+        color: Option<(&[Mips; 3], &mut [[f32; 3]])>,
     ) {
         let b = &self.brush;
         let w = rect.width() as usize;
@@ -911,7 +936,8 @@ impl BrushContext {
             _ => m.level_for(tw.max(th) / slice.texels_per_px(tw, th)),
         };
         let (lw, lh) = m.levels.get(if nearest { 0 } else { level }).map_or((1.0, 1.0), |(w, h, _)| ((*w).max(1) as f32, (*h).max(1) as f32));
-        let fill_row = |yy: usize, row: &mut [f32]| {
+        let (planes, rgb) = color.unzip();
+        let fill_row = |yy: usize, row: &mut [f32], mut rgb: Option<&mut [[f32; 3]]>| {
             let y = rect.y0.saturating_add(yy as i32);
             // Pixel centres within half a pixel of the outline's span on this row.
             let span = [0.0, 0.5, 1.0].into_iter().filter_map(|k| slice.row_span(f64::from(y) + k)).reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)));
@@ -941,13 +967,28 @@ impl BrushContext {
                 if val > 0.0 {
                     *o = self.shade(d, val, 1.0 - val, x, y, effects);
                 }
+                // The colour: each plane (premultiplied) over the shape, both as the separate
+                // passes hold them (times the dab's alpha).
+                let alpha = if val > 0.0 { val * d.alpha } else { 0.0 };
+                if alpha > 1e-6
+                    && let (Some(planes), Some(c)) = (planes, rgb.as_deref_mut().and_then(|r| r.get_mut(xx)))
+                {
+                    *c = planes.each_ref().map(|p| {
+                        let pv = if nearest { p.sample_nearest(0, u, v) } else { p.sample_clamped(level, u, v) };
+                        if pv > 0.0 { (pv * d.alpha / alpha).clamp(0.0, 1.0) } else { 0.0 }
+                    });
+                }
             }
         };
-        if out.len() >= ROW_PARALLEL_PIXELS {
-            use rayon::prelude::*;
-            out.par_chunks_exact_mut(w.max(1)).enumerate().for_each(|(yy, row)| fill_row(yy, row));
-        } else {
-            out.chunks_exact_mut(w.max(1)).enumerate().for_each(|(yy, row)| fill_row(yy, row));
+        let parallel = out.len() >= ROW_PARALLEL_PIXELS;
+        use rayon::prelude::*;
+        match rgb {
+            Some(rgb) if parallel => {
+                out.par_chunks_exact_mut(w.max(1)).zip(rgb.par_chunks_exact_mut(w.max(1))).enumerate().for_each(|(yy, (row, c))| fill_row(yy, row, Some(c)));
+            }
+            Some(rgb) => out.chunks_exact_mut(w.max(1)).zip(rgb.chunks_exact_mut(w.max(1))).enumerate().for_each(|(yy, (row, c))| fill_row(yy, row, Some(c))),
+            None if parallel => out.par_chunks_exact_mut(w.max(1)).enumerate().for_each(|(yy, row)| fill_row(yy, row, None)),
+            None => out.chunks_exact_mut(w.max(1)).enumerate().for_each(|(yy, row)| fill_row(yy, row, None)),
         }
     }
 
