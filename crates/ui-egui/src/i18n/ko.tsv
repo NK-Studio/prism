@@ -3553,6 +3553,11 @@ cspTool	Space evenly	균등 배치
 	New folder	새 폴더
 	At least 1 pixel	최소 1픽셀
 	Enable snapping	스냅 사용
+	Do not cross lines of reference layer	참조 레이어의 선을 넘지 않음
+	Anti-overflow	색 넘침 방지
+	Set a line art layer as a reference layer (Layer panel menu)	선화 레이어를 참조 레이어로 설정하세요 (레이어 패널 메뉴)
+	Set as Reference Layer	참조 레이어로 설정
+	Clear Reference Layer	참조 레이어 해제
 	Post correction level	후보정 강도
 	Smooths the line after the pen is lifted	펜을 뗀 뒤 선을 매끄럽게 다듬습니다
 	Blend brush tips with Darken	브러시 끝 모양을 어둡게 합성

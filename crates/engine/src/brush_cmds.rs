@@ -304,7 +304,8 @@ fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
         None => pts,
     };
     let dmg = s.edit(label, |doc, _| {
-        let sel = doc.selection.clone();
+        // A CSP brush that does not cross reference-layer lines paints through a narrower selection.
+        let sel = crate::reference_layer::constrain(doc, id, &brush, &pts, doc.selection.clone());
         let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
         let mut brush = brush;
         erase_locked(&mut brush, lock, bg);

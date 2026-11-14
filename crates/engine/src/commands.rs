@@ -1105,6 +1105,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::cutout_cmds::specs());
     v.extend(crate::symmetry_cmds::specs());
     v.extend(crate::special_ruler_cmds::specs());
+    v.extend(crate::reference_layer::specs());
     v.extend(crate::edit_cmds::specs());
     v.extend(crate::color_cmds::specs());
     v.extend(crate::brush_cmds::specs());

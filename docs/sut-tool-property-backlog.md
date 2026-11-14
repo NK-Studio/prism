@@ -102,7 +102,7 @@ should cover 1131, 1171, 1181, 1201 and 51000.
 
 | Pri | ID | Key | CSP label | Presets | Notes |
 |---|---|---|---|---|---|
-| P2 (named row, behaviour open) | 1250 | `BrushUseReferLayer` | Refer to other layers (draw beside reference lines) | 12 | needs a reference-layer concept; today warns only |
+| ~~P2~~ done 2026-11-14 | 1250 | `BrushUseReferLayer` | Do not cross lines of reference layer | 12 | Imported into `csp_refer_layer`. Layers can be set as reference layers (`layer.setReference`, Layers panel menu, saved in `.prism`); the committed stroke paints only in the areas its path enters, bounded by reference lines. Design and limits: [reference-layer.md](reference-layer.md). The live stroke is not clipped yet; CSP's Tolerance / Area scaling siblings are not read |
 | ~~P2~~ done 2026-11-14 | 1151 | `BrushRevision` (+`BrushUseRevision`) | Post correction | 6 | Imported into `csp_post_correction` (level 0–100, when the option is on). The committed stroke's path is smoothed after pen-up (`paint::csp_post_correction`, called from `engine::brush_cmds::stroke_with`): a windowed average along the path, ends fixed, pressure kept, window in screen pixels. Checkbox + level row. The smoothing is Prism's; CSP's curve fit and its Adjust by speed / Bezier curve children are not traced |
 | ~~P3~~ done 2026-11-04 | 1110 | `BrushRibbon` | Ribbon | 1 | rendered (`csp_ribbon`) but no control; add a checkbox (valid only with tip images and no spray) |
 | P3 (named row, behaviour open) | 1500 | `StampAdjustPosition` | Adjust position (copy stamp) | 1 | copy-stamp sub-tool; also 1510 `StampSetReferPointMode` |

@@ -74,7 +74,7 @@ const ITEMS: &[(u32, &str, &str, &str)] = &[
     (50, "Stickiness", "Stickness", "Correction"),
     (1151, "Post correction", "BrushRevision", "Correction"),
     (1230, "Enable snapping", "BrushEnableSnap", "Correction"),
-    (1250, "Refer to other layers", "BrushUseReferLayer", "Correction"),
+    (1250, "Do not cross lines of reference layer", "BrushUseReferLayer", "Anti-overflow"),
     (1241, "Vector magnet", "BrushVectorMagnetPower", "Correction"),
     (1500, "Adjust position", "StampAdjustPosition", "Copy stamp"),
 ];
@@ -414,7 +414,13 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
                 ui.small(tl!("Smooths the line after the pen is lifted"));
             }
         }
-        1250 | 1500 => {
+        1250 => {
+            ui.checkbox(&mut b.csp_refer_layer, tl!(label));
+            if b.csp_refer_layer {
+                ui.small(tl!("Set a line art layer as a reference layer (Layer panel menu)"));
+            }
+        }
+        1500 => {
             let on = source(m, key) != 0.0;
             let value = format!("{:.0}", source(m, key));
             unsupported(ui, label, value, false);
@@ -1102,7 +1108,7 @@ mod tests {
                 "Dual brush",
                 "Ribbon",
                 "Post correction",
-                "Refer to other layers",
+                "Do not cross lines of reference layer",
                 "Adjust position",
             ] {
                 assert!(h.query_all_by_label_contains(label).next().is_some(), "{label} (hostile={hostile})");

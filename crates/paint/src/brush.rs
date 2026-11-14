@@ -642,6 +642,11 @@ pub struct BrushSettings {
     /// ([`crate::csp_post_correction`]). `None`: off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csp_post_correction: Option<f32>,
+    /// Imported CSP "Do not cross lines of reference layer" (`BrushUseReferLayer`, property
+    /// 1250): the committed stroke paints only in the areas its path enters, bounded by the
+    /// lines of the document's reference layers.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_refer_layer: bool,
     /// Imported CSP "Enable snapping" (`BrushEnableSnap`, property 1230) switched off: strokes
     /// of this brush ignore the special rulers. Stored inverted so every other brush still snaps.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -715,6 +720,7 @@ impl Default for BrushSettings {
             csp_size_by_view: false,
             csp_at_least_1px: false,
             csp_post_correction: None,
+            csp_refer_layer: false,
             csp_no_snap: false,
             csp_darken_tips: false,
             csp_flow_by_spacing: false,

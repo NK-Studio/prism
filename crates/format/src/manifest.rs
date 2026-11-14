@@ -230,6 +230,9 @@ pub struct LayerM {
     /// CLIP STUDIO special rulers (missing in older files = none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub special_rulers: Option<prism_doc::SpecialRulers>,
+    /// CLIP STUDIO reference layer (missing in older files = no).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reference: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

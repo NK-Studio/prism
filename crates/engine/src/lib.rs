@@ -92,6 +92,7 @@ pub mod slice_cmds;
 pub mod smart_cmds;
 pub mod smartselect_cmds;
 pub mod snap;
+pub mod reference_layer;
 pub mod special_ruler_cmds;
 pub mod special_ruler_snap;
 pub mod stamp_cmds;

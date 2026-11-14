@@ -215,7 +215,7 @@ fn continuous_spraying_view_scale_and_unsupported_options() {
     assert!(b.build_up && b.csp_size_by_view && b.csp_at_least_1px);
     assert_eq!(b.csp_post_correction, Some(10.0));
     assert!(!imported.warnings.iter().any(|w| w.contains("post correction")));
-    assert!(imported.warnings.iter().any(|w| w.contains("reference-layer")));
+    assert!(b.csp_refer_layer && imported.warnings.is_empty(), "{:?}", imported.warnings);
     // Post correction's value alone (off) is silent; so is a plain brush.
     let plain = import(&[("BrushRevision", int(10))]);
     assert!(!plain.presets[0].brush.build_up && !plain.presets[0].brush.csp_size_by_view && !plain.presets[0].brush.csp_at_least_1px);

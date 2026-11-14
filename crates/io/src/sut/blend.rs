@@ -149,10 +149,10 @@ pub(super) fn color_jitter(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<St
 
 /// Map the smaller brush options: continuous spraying (`BrushContinuousPlot` 0x413) onto
 /// Build-up, size synchronized with the view scale (`BrushSizeSyncViewScale` 0x3ea), at least
-/// 1 pixel (`BrushAtLeast1Pixel` 0x3eb), post correction (`BrushUseRevision` 0x47e), and warn
-/// for drawing beside reference-layer lines (`BrushUseReferLayer` 0x4e2). The running-colour blur (`BrushBlur` 0x444) is part of colour
+/// 1 pixel (`BrushAtLeast1Pixel` 0x3eb), post correction (`BrushUseRevision` 0x47e) and
+/// not crossing reference-layer lines (`BrushUseReferLayer` 0x4e2). The running-colour blur (`BrushBlur` 0x444) is part of colour
 /// mixing type 1, which already warns.
-pub(super) fn options(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<String>) {
+pub(super) fn options(r: &Row, b: &mut BrushSettings) {
     if enabled(r, "BrushContinuousPlot") {
         b.build_up = true;
     }
@@ -168,9 +168,8 @@ pub(super) fn options(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<String>
     let level = num(r, "BrushRevision", 0.0);
     b.csp_post_correction =
         (enabled(r, "BrushUseRevision") && level.is_finite() && level > 0.0).then(|| level.min(prism_paint::csp_post_correction::MAX_LEVEL));
-    if enabled(r, "BrushUseReferLayer") {
-        warnings.push("SUT drawing beside reference-layer lines is not supported (Prism has no reference layer)".into());
-    }
+    // "Do not cross lines of reference layer" (1250).
+    b.csp_refer_layer = enabled(r, "BrushUseReferLayer");
 }
 
 #[cfg(test)]

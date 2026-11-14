@@ -323,7 +323,7 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
     rotation(r, &mut b, &mut warnings);
     blend::blend_mode(r, &mut b, &mut warnings);
     blend::color_jitter(r, &mut b, &mut warnings);
-    blend::options(r, &mut b, &mut warnings);
+    blend::options(r, &mut b);
     if enabled(r, "BrushUseSpray") {
         let count = num(r, "BrushSprayDensity", 8.0).round().max(1.0) as u32;
         let mut spray = CspSpray {
