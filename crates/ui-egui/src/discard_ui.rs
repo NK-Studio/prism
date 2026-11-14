@@ -143,6 +143,9 @@ fn advance(app: &mut PrismApp, ctx: &egui::Context) {
         p.docs.remove(0);
     }
     if !p.docs.is_empty() {
+        // The next document is asked about in a prompt of its own: it appears afresh, animated.
+        p.entry = Entry::default();
+        p.presented = false;
         return;
     }
     let Some(Prompt { id, mut params, target, .. }) = app.discard.take() else { return };
@@ -284,10 +287,14 @@ pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
         && !ctx.embed_viewports()
         && !p.entry.remeasured
     {
-        // Laid out again, hidden, and kept hidden until it is transparent: each prompt's window
-        // then fades in from nothing instead of flashing up first.
+        // Laid out again (and centred again, as its message changes), hidden, and kept hidden
+        // until it is transparent: each prompt's window then fades in from nothing instead of
+        // flashing up first.
         p.entry.remeasured = true;
-        ctx.data_mut(|m| m.remove::<egui::Vec2>(id.with("size")));
+        ctx.data_mut(|m| {
+            m.remove::<egui::Vec2>(id.with("size"));
+            m.remove::<egui::Pos2>(id.with("pos"));
+        });
         crate::floating_window::hold(ctx, id, can_prefade(app));
     }
     let Some(p) = &app.discard else { return };
@@ -751,6 +758,34 @@ mod tests {
         assert!(intercept(h.state_mut(), "file.close", &Value::Null));
         h.step();
         assert!(entry_progress(h.state_mut(), &ctx) < 0.5);
+    }
+
+    #[test]
+    fn each_document_asked_about_gets_a_prompt_that_eases_in_afresh() {
+        let mut app = app_with_docs(3);
+        for i in 0..3 {
+            make_dirty(&mut app, i);
+        }
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .with_step_dt(1.0 / 60.0)
+            .build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        assert!(intercept(h.state_mut(), EXIT, &Value::Null));
+        let ctx = h.ctx.clone();
+        for left in [3, 2, 1] {
+            h.step();
+            assert!(entry_progress(h.state_mut(), &ctx) < 0.5, "starts faint with {left} documents left");
+            for _ in 0..20 {
+                h.step();
+            }
+            assert_eq!(entry_progress(h.state_mut(), &ctx), 1.0);
+            assert_eq!(h.state().discard.as_ref().map(|p| p.docs.len()), Some(left));
+            // "No": move on to the next document.
+            h.key_press(Key::N);
+            h.step();
+        }
+        assert!(h.state().discard.is_none() && h.state().allow_close, "all answered: quitting");
     }
 
     /// Runs one frame of `fade_window` at `time`, with the window's inner size as the OS reports it.
