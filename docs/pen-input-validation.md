@@ -179,6 +179,49 @@ regression comparison on this Windows/RTX 3070 Ti machine; quick mode does not
 enforce full-document budgets. No baseline or scorecard performance claim was
 updated. Several general layout operations still exceed a 16 ms frame target.
 
+## Synthetic pen injection (2026-11-14)
+
+A physical tablet can't be used after every change. `prism-tablet` can now inject
+pen strokes with pressure, tilt, rotation and timing through
+`CreateSyntheticPointerDevice(PT_PEN)` + `InjectSyntheticPointerInput` (Windows 10
+1809+). These are OS-level Windows Ink packets. They take the same path as a
+physical pen: winit's emulated mouse/touch events, Prism's native history
+capture, `pen_input` and the brush. The same stroke can also drive another
+application to produce a comparison oracle. CLIP STUDIO PAINT must use
+**TabletPC** (Windows Ink) in its tablet preferences; Wintab mode does not see
+synthetic pens.
+
+```sh
+cargo run -p prism-tablet --example pen_inject -- --window Prism --list     # find the target
+cargo run -p prism-tablet --example pen_inject -- --window Prism            # 0→1→0 pressure ramp
+cargo run -p prism-tablet --example pen_inject -- --window "CLIP STUDIO" --ramp 200,300,600
+cargo run -p prism-tablet --example pen_inject -- --window Prism --file trace.json --origin X,Y --scale S
+```
+
+`--file` takes `ui.penTrace` output or `[x, y, pressure]` / `{x, y, pressure, time?,
+tiltX?, tiltY?, rotation?}` samples. Points are mapped to the target's client area as
+`origin + point * scale` (for a trace in document coordinates, use the canvas origin
+and zoom). `--hover N` sets the hover lead-in before contact, and `--dry-run` prints
+the frames. Injection moves the real cursor and focuses the target window, so don't
+use the mouse while it runs. It is a local measuring tool, not a CI test.
+
+The safe frame encoding and stroke validation (`synthetic_pen`) are unit-tested on
+every platform. On Windows the device boundary lives in `windows.rs` with the rest
+of the Windows `unsafe`.
+
+**Verified end to end** on this machine (3840×2088 client, 150 % DPI) against the
+running app (`--control`, `ui.penTrace`). A 2304 px ramp produced one `down`, 576
+`move` and one `up` event, all `source: windowsInk` with `pressureValid: true`.
+The pressures rose 0 → 0.99 → 0 in 4/1024 steps at about 8.5 ms per packet. The
+canvas showed the expected tapered line as one Brush Tool history step. Four more
+ramps with 1, 2, 3 and 8 hover frames each committed one stroke.
+
+Open observation: the very first injected stroke, sent right after Windows
+brought the previously background window forward, reached the trace without its
+`down` (moves and `up` only) and committed nothing. Later strokes, including those
+with a single 16 ms hover frame, all committed. Whether a physical pen touching
+just as the window activates loses its stroke the same way is not yet established.
+
 ## Remaining physical acceptance
 
 No physical tablet stroke has been driven or observed by this validation run.
