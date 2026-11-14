@@ -219,6 +219,36 @@ When a row lands, mark it done in its table and update this list.
   the key (`brush_patch_switches_stored_when_on_flags_off`).
 - Housekeeping (section 4) is done: the save_ui tests pass and workspace clippy is clean.
 
+## Remaining work after 2026-11-14
+
+Every ID the local library shows has a named row (`local_csp_unknown_parameter_scan`: 154
+brush-family presets, 0 unknown IDs). This list replaces "Remaining work, in the recommended
+order" above.
+
+Done on 2026-11-14: housekeeping; 1230, 1120, 1022, 1151, 1250 (with reference layers), 1500;
+1913 as a named read-only row; labels read from CSP's UI; length unit 2 measured (pixels: see
+[sut-experiment-materials.md](sut-experiment-materials.md) › 2, no conversion needed).
+
+Still open, in order:
+
+1. **CSP experiments not run.** Driving CSP by screen pixels worked for reading settings and
+   for one stroke, but strokes need the real pointer (the app must be in front) and the
+   materials below are not sub-tools in CSP's palettes, so they were not reached:
+   - Fade type 2 (`BrushInOutType` 2, 물번짐구름 브러쉬): start/end is still dropped with a warning.
+   - Colour mixing type 2 (NANAGOM PEN): still approximated by blending.
+   - Emphasize density (114): still +0.5 contrast.
+   Procedures: [sut-experiment-materials.md](sut-experiment-materials.md). First add the
+   material to a sub-tool palette in CSP by hand; then the strokes can be automated.
+2. **Pixel comparison with CSP** for the behaviours built from the label alone: 1003 at least
+   1 pixel, 1022 density by gap (Prism's `1 − (1 − flow)^spacing`), 1120 darken, 1151 post
+   correction (window per level), 1250 (line threshold, overlap onto the line).
+3. **1913 Apply RGB value**: needs the dual tip pipeline to carry colour, and the two brushes'
+   dual tip material.
+4. **Reference layers**: clip the live stroke too, mark reference layers in the Layers panel,
+   read Tolerance / Area scaling, PSD round trip ([reference-layer.md](reference-layer.md)).
+5. **1510 `StampSetReferPointMode`**: confirm its meaning in CSP, then map it.
+6. **Korean labels**: CSP's own Korean UI labels were not read; Prism's are its own wording.
+
 ## Re-measuring
 
 The counts come from importing every ready material with `brush.cspLibrary.list` /

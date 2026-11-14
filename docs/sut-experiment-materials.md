@@ -32,6 +32,17 @@ length 194.44 (not an integer) suggest a converted unit; how does it combine wit
 
 ## 2. CSP length units (`*Unit` = 2)
 
+**Result (2026-11-14, CSP PAINT PRO 5.0.4): unit 2 is pixels.** 茂み1 (`BrushSize` 100,
+`BrushSizeUnit` 2) drawn with one horizontal mouse stroke at 100 % zoom on 512 × 512 px
+documents: at 350 dpi the stroke is 75–90 px tall per column (the tip's silhouette), and at
+72 dpi its regular part is about 90–100 px tall. A physical unit would give 100 mm = 1378 px
+at 350 dpi. Lengths with unit 2 therefore do not depend on the resolution, and Prism reading
+them as pixels is right; no conversion is needed. Every non-zero unit in the local library is 2
+(`BrushSizeUnit` 16 presets, `BrushSpraySizeUnit` 20, `BrushWaterEdgeRadiusUnit` 8,
+`BrushInLengthUnit` 3). The 600 dpi run was skipped (350 dpi already separates pixels from
+mm/pt); the 72 dpi path was uneven because the real pointer moved during the drag. Captures:
+`target/sut-experiments/unit-72.png`, `unit-350.png` (local, ignored).
+
 Every non-pixel unit in the library is **2**. Its meaning is not traced (candidates: mm, a
 percentage of the brush size, or points). Prism uses the stored number as pixels.
 

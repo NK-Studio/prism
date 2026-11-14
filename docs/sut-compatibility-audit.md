@@ -97,7 +97,7 @@ implementation does not establish exact Photoshop fidelity for ABR brushes.
 
 | Gap | Materials with warning | Current effect / source |
 |---|---:|---|
-| Post correction | 22 | `BrushUseRevision`/`BrushRevision` ignored; `io/src/sut/blend.rs` |
+| Post correction | 22 | imported since 2026-11-14 (`csp_post_correction`: the committed path is smoothed; Prism's own smoothing, not CSP's fit); `io/src/sut/blend.rs` |
 | Constant sub-color blend | 11 | No random input -> amount becomes zero; `blend::jitter` |
 | Particle rotation input | 9 | 2026-11-04: inputs 0x10/0x20/0x40/0x100/0x200 and random 0x80 applied (`CspSpray.angleInput`); several inputs at once use the first |
 | Spray particle size units | 6 | Treats values as pixels; `mod.rs` |

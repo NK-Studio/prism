@@ -2030,3 +2030,34 @@ scaling, not CSP behaviour; see docs/brush-latency.md › Mouse lag.
 Post correction, spray size unit (`BrushSpraySizeUnit`, value semantics not traced), colour
 mixing type 2, dual input/random dynamics and rotation, size effector control 0x40, water
 edge units, emphasize texture density and start/end fade type 2 are unchanged.
+
+### UI labels and length unit 2 (2026-11-14)
+
+Observed in CLIP STUDIO PAINT PRO 5.0.4 (English UI), Advanced Tool Settings of 茂み1, driven
+by screen pixels (the palettes expose no accessibility tree). Captures are local
+(`target/sut-experiments`, ignored).
+
+Evidence (read from the UI): 1003 "At least 1 pixel" (Brush Size); 1022 "Adjust brush density
+by gap" (Brush tip, under Brush density); 1120 "Blend brush tips with Darken" (Stroke); 1230
+"Enable snapping" (Correction); 1913 "Apply RGB value" (2 - Brush shape, under Dual brush ›
+Mode); 1250 "Do not cross lines of reference layer" (Anti-overflow, beside Fill up to vector
+path, Tolerance, Area scaling, Scaling mode); 1151 "Post correction" (a checkbox with a
+five-step level; children Adjust by speed, Adjust by scale, Bezier curve). Spacing is "Gap"
+(Fixed / Wide / Normal / Narrow) and tip order is "Repeat method".
+
+Evidence (measured): a length with unit 2 is in pixels whatever the document resolution
+(茂み1, `BrushSize` 100, `BrushSizeUnit` 2: about 75–100 px tall at 72 and 350 dpi on
+512 × 512 px documents; docs/sut-experiment-materials.md › 2). Every non-zero unit in the
+local library is 2, so the pixel reading of brush size, spray size, water edge radius and
+start/end length stands.
+
+Inference (built from the labels, pixels not compared with CSP): 1022 as
+`1 − (1 − flow)^spacing`; 1120 as a per-channel darken of the stroke's stored colour; 1151 as a
+windowed average of the path (0.6 screen px per level each side); 1250 as a flood fill from
+the path bounded by reference pixels with alpha above 0.5.
+
+Unknown: fade type 2, colour mixing type 2, emphasize density, what 1230 snaps to besides
+rulers, 1510, and the Korean UI labels (the UI language was not changed).
+
+Post correction, snapping, darken, density by gap and reference-layer lines are no longer in
+the open list above; spray size and water edge units are settled as pixels.
