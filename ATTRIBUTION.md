@@ -91,3 +91,4 @@ next to the files:
 Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 
 | `assets/icons/annotation-arrow.svg` | Annotation arrow tool icon | NK Studio | Original geometric artwork | MIT OR Apache-2.0 (see `assets/icons/LICENSE-annotation-arrow.txt`) |
+| `assets/icons/tools/*.svg` (53 files) | Toolbar tool glyphs: one solid glyph per tool, drawn on a 24 px grid | NK Studio | Original artwork | MIT OR Apache-2.0, [`assets/icons/tools/LICENSE.txt`](assets/icons/tools/LICENSE.txt) |
