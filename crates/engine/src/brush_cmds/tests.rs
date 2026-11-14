@@ -928,3 +928,21 @@ fn csp_tip_scale_validation_preserves_state_and_paints() {
     assert_eq!(s.tools.brush.csp_tip_scale, Some([1.0, 2.4]));
     assert!(s.execute("paint.stroke", json!({"points":[[12,12],[32,24]]})).is_ok());
 }
+
+#[test]
+fn brush_get_without_images_reports_lengths_and_keeps_the_settings() {
+    let mut s = Session::new();
+    let tile = GrayTile::from_fn(300, 200, |x, y| ((x * 3 + y) % 5) as f32 / 4.0);
+    s.tools.brush = BrushSettings { size: 33.0, tip: TipShape::Sampled(tile), ..Default::default() };
+    let full = s.execute("brush.get", json!({})).unwrap();
+    let small = s.execute("brush.get", json!({"images": false})).unwrap();
+    assert_eq!(small["size"], json!(33.0));
+    assert!(small.to_string().len() < 20_000, "{}", small.to_string().len());
+    assert!(full.to_string().len() > small.to_string().len() * 2);
+    assert!(small["tip"].to_string().contains("omitted"), "{}", small["tip"]);
+    // Wrong types fall back to the full brush; nothing panics.
+    for bad in [json!({"images": 3}), json!({"images": null})] {
+        assert_eq!(s.execute("brush.get", bad).unwrap()["size"], json!(33.0));
+    }
+    assert!(s.execute("brush.get", json!([])).is_err());
+}

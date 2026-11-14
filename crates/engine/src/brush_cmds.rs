@@ -590,6 +590,33 @@ fn brush_json(b: &BrushSettings) -> Value {
     serde_json::to_value(b).unwrap_or(Value::Null)
 }
 
+/// `brush.get`: the active brush. `{"images": false}` replaces every image payload (tip pixels,
+/// full-colour tips, a texture pattern) by its length, so a brush with large image tips still
+/// fits in a control-channel response.
+fn brush_get(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut v = brush_json(&s.tools.brush);
+    if !flag(p, "images", true) {
+        strip_payloads(&mut v, 0);
+    }
+    Ok(v)
+}
+
+/// Payloads longer than this are replaced by their length.
+const PAYLOAD_LIMIT: usize = 1024;
+
+fn strip_payloads(v: &mut Value, depth: usize) {
+    if depth > 32 {
+        return;
+    }
+    match v {
+        Value::String(text) if text.len() > PAYLOAD_LIMIT => *v = json!({"omitted": "string", "length": text.len()}),
+        Value::Array(items) if items.len() > PAYLOAD_LIMIT => *v = json!({"omitted": "array", "length": items.len()}),
+        Value::Array(items) => items.iter_mut().for_each(|item| strip_payloads(item, depth + 1)),
+        Value::Object(map) => map.values_mut().for_each(|item| strip_payloads(item, depth + 1)),
+        _ => {}
+    }
+}
+
 fn presets_list(s: &mut Session, p: &Value) -> Result<Value> {
     let full = flag(p, "full", false);
     Ok(json!({
@@ -878,7 +905,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("brush.presets.save", "Save Brush Preset", r##"{"name":string,"brush":{…BrushSettings}?=current brush}"##, always, presets_save, true),
         spec!("brush.presets.delete", "Delete Brush Preset", r##"{"name":string}"##, always, presets_delete, true),
         spec!("brush.defineFromSelection", "Define Brush Preset…", r##"{"name":string}"##, has_selection_and_pixels, define_from_selection, true),
-        spec!("brush.get", "Get Brush", "{}", always, |s, _| Ok(brush_json(&s.tools.brush)), false),
+        spec!("brush.get", "Get Brush", r##"{"images":bool?=true (false: image payloads are replaced by their length)}"##, always, brush_get, false),
         spec!("tools.setBrush", "Set Brush", r##"{"preset":name?,"reset":bool?,…BrushSettings fields (camelCase, deep-merged)}"##, always, set_brush, true),
     ]
 }

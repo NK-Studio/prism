@@ -155,6 +155,9 @@ fn one_local_csp_material() {
         *tip = json!("…");
     }
     println!("brush: {}", serde_json::to_string(&b).unwrap());
+    if let Some(meta) = &preset.sut {
+        println!("parameters: {}", serde_json::to_string(&meta.parameters).unwrap());
+    }
     s.execute("file.new", json!({"width": 400, "height": 110, "depth": 8, "background": "white"})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     let variants: Vec<(&str, Value)> = vec![
@@ -294,4 +297,37 @@ fn local_csp_unknown_parameter_scan() {
     let out = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/csp-check"));
     std::fs::create_dir_all(&out).unwrap();
     std::fs::write(out.join("unknown-ids.json"), serde_json::to_vec_pretty(&json!({"presets": presets, "unknown": by_id})).unwrap()).unwrap();
+}
+
+/// One material by name (`PRISM_CSP_ONE`) drawn for a comparison with CLIP STUDIO: three
+/// 1200 px lines, a sine and five taps at full pressure on a 1600×900 white canvas, saved to
+/// `PRISM_CSP_OUT` (PNG). `PRISM_CSP_SIZE` sets the brush size and `PRISM_CSP_PATCH` is a JSON
+/// brush patch (as in `paint.stroke`'s `brush`).
+#[test]
+#[ignore = "reads the local CLIP STUDIO user data folder"]
+fn local_csp_render_one() {
+    let (Some(name), Some(out)) = (std::env::var_os("PRISM_CSP_ONE"), std::env::var_os("PRISM_CSP_OUT")) else { return };
+    let name = name.to_string_lossy().to_string();
+    let mut s = Session::new();
+    let listed = s.execute("brush.cspLibrary.list", json!({})).unwrap();
+    let m = listed["brushes"].as_array().unwrap().iter().find(|b| b["name"] == json!(name)).unwrap().clone();
+    s.execute("brush.cspLibrary.import", json!({"uuids": [m["uuid"]], "group": "one"})).unwrap();
+    let preset = s.tools.presets.iter().find(|p| p.group == "one").unwrap().name.clone();
+    s.execute("file.new", json!({"width": 1600, "height": 900, "depth": 8, "background": "white"})).unwrap();
+    let patch: Value = std::env::var("PRISM_CSP_PATCH").ok().map_or(json!({}), |p| serde_json::from_str(&p).unwrap());
+    let size: Option<f64> = std::env::var("PRISM_CSP_SIZE").ok().and_then(|v| v.parse().ok());
+    let point = |x: f64, y: f64, i: usize| json!([x, y, 1.0, 0.0, 0.0, 0.0, i as f64 * 8.0]);
+    let mut strokes: Vec<Vec<Value>> = [107.0, 247.0, 387.0].iter().map(|y| (0..=300).map(|i| point(200.0 + f64::from(i) * 4.0, *y, i as usize)).collect()).collect();
+    strokes.push((0..=300).map(|i| point(200.0 + f64::from(i) * 4.0, 620.0 + 120.0 * (f64::from(i) * 4.0 / 1200.0 * 2.0 * std::f64::consts::TAU).sin(), i as usize)).collect());
+    strokes.extend((0..5).map(|k| vec![point(200.0 + 300.0 * f64::from(k), 840.0, 0)]));
+    let started = Instant::now();
+    for (k, points) in strokes.into_iter().enumerate() {
+        let mut p = json!({"preset": preset, "points": points, "seed": 7 + k, "brush": patch});
+        if let Some(size) = size {
+            p["size"] = json!(size);
+        }
+        s.execute("paint.stroke", p).unwrap();
+    }
+    println!("painted in {:.0} ms", started.elapsed().as_secs_f64() * 1e3);
+    s.execute("file.saveACopy", json!({"path": out.to_string_lossy(), "layers": false})).unwrap();
 }
