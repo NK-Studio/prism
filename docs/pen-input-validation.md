@@ -314,6 +314,23 @@ synthetic pressure stroke through the rebuilt app:
 The mean |difference| over the stroke is 0.06 px. A single size-25 dab is 22.55 px in Prism and
 22.54 px in CLIP STUDIO. Line fits: CLIP STUDIO `0.998·size − 1.21`, Prism `1.005·size − 1.33`.
 
+**Performance.** `bench_brush` gained three CSP cases: hard computed tip, 8 % spacing, pressure
+size, a 500-point stroke on a 6016×6016 RGBA8 layer. Release build on this Windows / Ryzen
+(24 threads) / RTX 3070 Ti machine, three runs each, comparing `render.rs` before the fix
+(`3d2be2c~1`) with after:
+
+| Case | Before, total ms | After, total ms | Speed-up |
+| --- | ---: | ---: | ---: |
+| 25 px, AA medium (9 719 dabs) | 1 108 / 1 108 / 1 166 | 114 / 119 / 113 | ≈ 9.8× |
+| 200 px, AA medium (1 216 dabs) | 5 439 / 5 430 / 5 713 | 597 / 591 / 591 | ≈ 9.2× |
+| 200 px, AA strong (1 216 dabs) | 5 488 / 5 460 / 5 634 | 594 / 586 / 600 | ≈ 9.3× |
+
+The old path took 2×2 samples per pixel, each averaging a 4×4 box (64 shape tests). The new path
+evaluates one ramp per pixel. The worst 16-point chunk at 200 px fell from about 300 ms to
+32 ms. `cargo xtask perf --quick` completed (all quick benches ran). Its baseline is from an
+Apple M4 Pro machine class, so the regression comparison was skipped, and quick mode applies no
+budgets. No baseline or scorecard number was changed.
+
 Not covered: image (sampled) tips, elliptical tips (thickness < 100), and soft tips. CLIP STUDIO
 forces anti-aliasing off for a soft round tip wider than 25 px of falloff (`docs/sut-analysis.md`
 › Anti-aliasing levels).

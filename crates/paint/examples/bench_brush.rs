@@ -72,4 +72,14 @@ fn main() {
     run(rgba8.with_sample(SampleType::U16), "RGBA16 textured+scattered", &brush);
     run(PixelFormat::RGBA32F, "RGBA32F textured+scattered", &brush);
     run(PixelFormat::CMYKA8, "CMYKA8 textured+scattered", &brush);
+    // CLIP STUDIO-style hard computed tips with anti-aliasing (the inward ramp in `render.rs`):
+    // a G-pen at its imported 8 % spacing, small and large.
+    for (size, level, label) in [
+        (25.0, 2, "RGBA8 CSP hard 25px AA medium"),
+        (200.0, 2, "RGBA8 CSP hard 200px AA medium"),
+        (200.0, 3, "RGBA8 CSP hard 200px AA strong"),
+    ] {
+        let csp = BrushSettings { size, hardness: 1.0, spacing: 0.08, pressure_size: true, csp_anti_alias: Some(level), seed: 1, ..Default::default() };
+        run(rgba8, label, &csp);
+    }
 }
