@@ -249,3 +249,49 @@ fn local_csp_experiment_materials() {
     std::fs::write(out.join("experiment-materials.json"), serde_json::to_vec_pretty(&json!({"candidates": found, "mixingControls": mixing_controls})).unwrap()).unwrap();
     println!("{} candidates, {} colour-mixing controls (type 0/1, mixing on)", found.len(), mixing_controls.len());
 }
+
+/// The backlog scan (docs/sut-tool-property-backlog.md › Re-measuring): per brush-family preset,
+/// every ID its `VariantShowParam` shows that has no Tool Property key. Prints the count per ID
+/// and writes `target/csp-check/unknown-ids.json`.
+#[test]
+#[ignore = "reads the local CLIP STUDIO user data folder"]
+fn local_csp_unknown_parameter_scan() {
+    let mut s = Session::new();
+    let mut root = json!({});
+    if let Some(r) = std::env::var_os("PRISM_TEST_CSP_ROOT") {
+        root["root"] = json!(r.to_string_lossy());
+    }
+    let listed = s.execute("brush.cspLibrary.list", root.clone()).unwrap();
+    let mut by_id: std::collections::BTreeMap<u32, Vec<String>> = std::collections::BTreeMap::new();
+    let mut presets = 0;
+    for (i, m) in listed["brushes"].as_array().unwrap().iter().enumerate() {
+        if m["status"] != "ready" {
+            continue;
+        }
+        let mut p = root.clone();
+        p["uuids"] = json!([m["uuid"]]);
+        p["group"] = json!(format!("csp-scan-{i}"));
+        if s.execute("brush.cspLibrary.import", p).is_err() {
+            continue;
+        }
+        for preset in s.tools.presets.iter().filter(|p| p.group == format!("csp-scan-{i}")) {
+            let Some(meta) = &preset.sut else { continue };
+            if !meta.kind().is_brush() {
+                continue;
+            }
+            presets += 1;
+            for id in &meta.original.visible {
+                if !prism_engine::paint::sut::is_known_parameter(*id) {
+                    by_id.entry(*id).or_default().push(preset.name.clone());
+                }
+            }
+        }
+    }
+    for (id, names) in &by_id {
+        println!("{id:>6}  {:>3}  {}", names.len(), names.iter().take(4).cloned().collect::<Vec<_>>().join(", "));
+    }
+    println!("{presets} brush-family presets, {} unknown IDs", by_id.len());
+    let out = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/csp-check"));
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("unknown-ids.json"), serde_json::to_vec_pretty(&json!({"presets": presets, "unknown": by_id})).unwrap()).unwrap();
+}

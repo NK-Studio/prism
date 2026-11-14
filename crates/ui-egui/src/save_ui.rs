@@ -134,9 +134,13 @@ fn file_stem(path: &str) -> String {
     }
 }
 
-/// Whether two paths name the same file (the same path, or the same file on disk).
-fn same_file(a: &str, b: &str) -> bool {
-    a == b || std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b)
+/// Whether two paths name the same file (the same path, or the same file on disk). On Windows
+/// `\` and `/` are one separator and case doesn't matter, so `C:\Temp/a.png` is `c:/temp\A.png`
+/// even before the file exists.
+pub(crate) fn same_file(a: &str, b: &str) -> bool {
+    let alike = |x: char, y: char| x == y || (cfg!(windows) && (matches!((x, y), ('/' | '\\', '/' | '\\')) || x.to_lowercase().eq(y.to_lowercase())));
+    (a.chars().count() == b.chars().count() && a.chars().zip(b.chars()).all(|(x, y)| alike(x, y)))
+        || std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b)
 }
 
 fn join(dir: &str, name: &str) -> String {

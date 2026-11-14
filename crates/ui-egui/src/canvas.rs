@@ -3929,7 +3929,8 @@ pub(crate) fn finish_gesture(app: &mut PrismApp, d: Drag) {
             }
         }
         Tool::Gradient => {
-            if (end[0] - d.start[0]).abs() + (end[1] - d.start[1]).abs() >= 2.0 {
+            let dragged = (end[0] - d.start[0]).abs() + (end[1] - d.start[1]).abs();
+            if dragged >= 2.0 {
                 let o = app.ui.tool_options.clone();
                 let _ = app.run(
                     "paint.gradient",

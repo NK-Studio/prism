@@ -126,6 +126,8 @@ pub const RETAINED_KEYS: &[&str] = &[
     "DualSizeUnit",
     "DualSpraySizeUnit",
     "BrushWaterColor2",
+    "BrushUseRevision",
+    "StampSetReferPointMode",
 ];
 
 /// The largest imported setting value kept (see [`crate::sut_catalog::MAX_SETTING_VALUE`]).

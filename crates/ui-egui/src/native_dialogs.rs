@@ -177,7 +177,8 @@ pub fn show(app: &mut PrismApp, ctx: &Context) {
             }
             match outcome {
                 Some(true) => {
-                    if crate::dialogs::confirm(app, d.id).is_ok() {
+                    let confirmed = crate::dialogs::confirm(app, d.id).is_ok();
+                    if confirmed {
                         child.send_viewport_cmd_to(crate::doc_windows::viewport(app.ui.active_window), egui::ViewportCommand::Focus);
                     }
                 }
