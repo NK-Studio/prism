@@ -1,7 +1,7 @@
 //! Custom widgets for the Prism look: cards with pill tabs, thin sliders with round knobs,
 //! monospace value fields with dimmed units, toggle switches, primary/secondary buttons.
 
-use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
 use crate::theme::{self, Tokens};
 
@@ -146,6 +146,9 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> Response {
 /// line puts the digits about this much below the middle (measured at 6× on the field's render).
 const FIELD_LIFT: f32 = 1.75;
 
+/// Space between a [`value_field`]'s box and its number, on the left.
+const FIELD_PAD: f32 = 3.0;
+
 /// Monospace numeric field with a dimmed unit suffix, Photoshop style. Drag to scrub.
 pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
     value_field_in(ui, value, range, suffix, width, 0.0).0
@@ -172,22 +175,52 @@ fn value_field_in(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<
     let mut resp = {
         let ui = &mut child;
         {
-            ui.style_mut().visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-            ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-            ui.style_mut().visuals.widgets.inactive.bg_stroke = Stroke::NONE;
-            ui.style_mut().visuals.widgets.hovered.bg_stroke = Stroke::NONE;
-            ui.style_mut().visuals.widgets.hovered.weak_bg_fill = Color32::TRANSPARENT;
-            ui.style_mut().override_font_id = Some(theme::mono(12.0));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let layout = egui::Layout::centered_and_justified(ui.layout().main_dir());
-                ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine)).inner
-            })
-            .inner
+            // The box above is the field: the number inside it draws no box of its own, shown or
+            // being typed, and keeps the same margins in both states so it doesn't shift.
+            let style = ui.style_mut();
+            for w in [&mut style.visuals.widgets.inactive, &mut style.visuals.widgets.hovered, &mut style.visuals.widgets.active] {
+                w.bg_fill = Color32::TRANSPARENT;
+                w.weak_bg_fill = Color32::TRANSPARENT;
+                w.bg_stroke = Stroke::NONE;
+                w.expansion = 0.0;
+            }
+            // Only the width: the colour is also the selected text's.
+            style.visuals.selection.stroke.width = 0.0;
+            style.visuals.text_edit_bg_color = Some(Color32::TRANSPARENT);
+            style.spacing.button_padding.x = FIELD_PAD;
+            style.override_font_id = Some(theme::mono(12.0));
+            // The same font while typing: the edit box takes the drag value style, not the override.
+            style.text_styles.insert(egui::TextStyle::Monospace, theme::mono(12.0));
+            style.drag_value_text_style = egui::TextStyle::Monospace;
+            // Left-aligned, as in Photoshop: a number that gains a digit grows to the right
+            // instead of shifting sideways.
+            let layout = egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Min).with_main_justify(true);
+            ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine)).inner
         }
     };
     ui.data_mut(|d| d.insert_temp(slot.id, resp.id));
+    if resp.has_focus() {
+        ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.accent), StrokeKind::Inside);
+    }
     if !suffix.is_empty() {
-        ui.painter().text(pos2(rect.right() - 6.0 - trailing, rect.center().y), Align2::RIGHT_CENTER, suffix, theme::mono(11.0), t.text_faint);
+        // The unit follows the number as Photoshop writes it ("95%", "13 px"), not the box's edge.
+        let unit = ui.painter().layout_no_wrap(suffix.to_owned(), theme::mono(11.0), t.text_faint);
+        let slot_left = rect.right() - 6.0 - trailing - unit.size().x;
+        // Typed arithmetic can be any length: the unit waits at the edge until it's applied.
+        let typing = ui.data(|d| d.get_temp(resp.id.with("arithmetic"))).unwrap_or(false);
+        let left = if typing {
+            slot_left
+        } else {
+            // What the field shows: the text being typed while it still stands for the value
+            // ("5." for 5), otherwise the formatted value.
+            let typed = ui.data(|d| d.get_temp::<String>(resp.id.with("typed")));
+            let typed = typed.filter(|s| plain(s).is_some_and(|v| (v - f64::from(*value)).abs() < 1e-4));
+            let shown = typed.unwrap_or_else(|| if fine { fmt_num2(f64::from(*value)) } else { fmt_num(f64::from(*value)) });
+            let number = ui.painter().layout_no_wrap(shown, theme::mono(12.0), t.text).size().x;
+            let gap = if matches!(suffix, "%" | "°") { 1.0 } else { 4.0 };
+            (field.left() + FIELD_PAD + number + gap).min(slot_left)
+        };
+        ui.painter().galley(pos2(left, rect.center().y - unit.size().y / 2.0), unit, t.text_faint);
     }
     if step != 0.0 {
         // Round to the step before adding it, so whole-number fields drop decimals (55.4 + 1 = 56).
@@ -262,7 +295,7 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
         // The pointer moves the value as much as it would move the slider's knob.
         let track = POPUP_SLIDER_W - 14.0;
         let v = start + (pos.x - origin.x) / track * (hi - lo);
-        let v = if lo <= hi && v.is_finite() { v.clamp(lo, hi) } else { start };
+        let v = if lo <= hi && v.is_finite() { whole(v, lo, hi) } else { start };
         if v != *value {
             *value = v;
             out.changed = true;
@@ -282,10 +315,18 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
     if resp.hovered() || resp.dragged() || open {
         ui.painter().rect_filled(arrow, t.radius_sm, t.field_border.gamma_multiply(0.6));
     }
+    // Photoshop sets the ▾ apart from the number as a button of its own.
+    let x = arrow.left() - 1.0;
+    ui.painter().line_segment([pos2(x, rect.top() + 4.0), pos2(x, rect.bottom() - 4.0)], Stroke::new(1.0, t.field_border));
     chevron_icon(ui, arrow, ui.style().interact(&resp), open);
     popup.show(|ui| {
         ui.set_width(POPUP_SLIDER_W);
-        let s = slider(ui, value, range, None);
+        let before = *value;
+        let mut s = slider(ui, value, range, None);
+        if s.changed() && lo <= hi {
+            *value = whole(*value, lo, hi);
+            s.flags.set(egui::response::Flags::CHANGED, *value != before);
+        }
         s.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(*value), &name));
         let key = gesture(ui, s.drag_started());
         if s.changed() {
@@ -299,6 +340,13 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
     out
 }
 
+/// `v` within `lo..=hi` (`lo <= hi`), to the whole unit a drag moves in unless the range is a
+/// small one that works in hundredths (see [`value_field`]).
+fn whole(v: f32, lo: f32, hi: f32) -> f32 {
+    let v = if hi - lo <= 10.0 { v } else { v.round() };
+    v.clamp(lo, hi)
+}
+
 /// The number in a [`value_field`]. A typed number applies as it's typed; arithmetic waits for
 /// Enter, Tab or click-away, because per keystroke `5/2` would land first and a caller that
 /// rounds it would cut `5/2*2` short. `changed()` means a new value, not just a keystroke.
@@ -307,15 +355,23 @@ fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
     let held = id.with("arithmetic");
     let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(held, math));
+    // The text as typed, for the caller to set the unit after it; forgotten with the focus.
+    let typed = id.with("typed");
+    if !ui.memory(|m| m.has_focus(id)) {
+        ui.data_mut(|d| d.remove::<String>(typed));
+    }
     let before = *value;
     let mut resp = ui.add(
         egui::DragValue::new(value)
             .range(range)
             .speed(if fine { 0.01 } else { 0.5 })
+            // A drag moves a whole-number field in whole units (typing can still give 12.5).
+            .max_decimals_opt((!fine).then_some(0))
             .custom_formatter(move |v, _| if fine { fmt_num2(v) } else { fmt_num(v) })
             .update_while_editing(!math)
             // Focus is read when parsing, not above: Tab hands it on inside `ui.add`.
             .custom_parser(move |s| {
+                ctx.data_mut(|d| d.insert_temp(typed, s.to_owned()));
                 let v = parse_num(s);
                 if ctx.memory(|m| m.has_focus(id)) && plain(s).is_none() {
                     // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.

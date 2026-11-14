@@ -246,6 +246,13 @@ fn options_bar_harness(tool: crate::state::Tool) -> Harness<'static, PrismApp> {
     h
 }
 
+/// The options bar's text label `name`: a percentage's ▾ button carries the same name.
+fn text_label(h: &Harness<'static, PrismApp>, name: &str) -> egui::Rect {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut named = h.query_all_by_label(name);
+    named.find(|n| n.accesskit_node().role() == egui::accesskit::Role::Label).map(|n| n.rect()).unwrap_or(egui::Rect::NOTHING)
+}
+
 #[test]
 fn options_bar_edits_are_one_set_brush_per_gesture() {
     use egui_kittest::kittest::Queryable;
@@ -254,7 +261,7 @@ fn options_bar_edits_are_one_set_brush_per_gesture() {
     h.run_steps(3);
     assert_eq!(h.state().session.journal.len(), n, "showing the bar issues nothing");
     // Drag the Opacity field left: many frames, one journal entry.
-    let label = h.get_by_label("Opacity").rect();
+    let label = text_label(&h, "Opacity");
     let start = egui::pos2(label.right() + 40.0, label.center().y);
     h.hover_at(start);
     h.run();
@@ -348,9 +355,10 @@ fn airbrush_smoothing_options_and_symmetry_buttons_work() {
 fn mixer_brush_options_update_the_persisted_mixer_settings() {
     use egui_kittest::kittest::Queryable;
     let mut h = options_bar_harness(crate::state::Tool::MixerBrush);
-    for label in ["Wet", "Load", "Mix", "Flow", "Sample All Layers"] {
-        assert!(h.get_by_label(label).rect().is_positive(), "missing Mixer Brush option {label}");
+    for label in ["Wet", "Load", "Mix", "Flow"] {
+        assert!(text_label(&h, label).is_positive(), "missing Mixer Brush option {label}");
     }
+    assert!(h.get_by_label("Sample All Layers").rect().is_positive(), "missing Mixer Brush option Sample All Layers");
 
     let initial = h.state().session.journal.len();
     let at = h.get_by_label("Sample All Layers").rect().center();

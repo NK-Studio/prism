@@ -733,7 +733,6 @@ pub fn options_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
                         if crate::brush_picker::named(airbrush, tl!("Enable airbrush-style build-up effects")).clicked() {
                             b.build_up = !b.build_up;
                         }
-                        opt_label(ui, tl!("Smoothing"));
                         smoothing_field(ui, b, 58.0);
                         smoothing_options(ui, b);
                         widgets::vline(ui, 22.0);
@@ -759,7 +758,6 @@ pub fn options_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
                             b.mode = mode;
                         }
                         percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, if t.pro { 62.0 } else { 66.0 });
-                        opt_label(ui, tl!("Smoothing"));
                         smoothing_field(ui, b, if t.pro { 58.0 } else { 66.0 });
                         widgets::vline(ui, 22.0);
                         widgets::checkbox(ui, &mut app.ui.tool_options.pencil_auto_erase, tl!("Auto Erase"));
@@ -774,7 +772,6 @@ pub fn options_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
                         percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0);
                         percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0);
                         percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0);
-                        opt_label(ui, tl!("Smoothing"));
                         smoothing_field(ui, b, 66.0);
                         widgets::vline(ui, 22.0);
                         widgets::toggle(ui, &mut b.pressure_size, tl!("Pressure for Size"));
@@ -1181,16 +1178,63 @@ fn body_text_width(ui: &egui::Ui, s: &str) -> f32 {
 }
 
 /// Options-bar label: Photoshop writes "Size:" with a colon.
-fn opt_label(ui: &mut egui::Ui, s: &str) {
+fn opt_label(ui: &mut egui::Ui, s: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let text = if t.pro && !s.ends_with(':') { format!("{s}:") } else { s.to_string() };
-    ui.label(RichText::new(tl!(&text)).color(t.text_dim));
+    ui.label(RichText::new(tl!(&text)).color(t.text_dim))
+}
+
+/// How far a drag of `dx` points on a scrubby label moves its value: a unit per point, ten with
+/// Shift and a tenth with Alt, as Photoshop's scrubby sliders do.
+fn scrub_delta(dx: f32, shift: bool, alt: bool) -> f32 {
+    let dx = if dx.is_finite() { dx } else { 0.0 };
+    dx * if shift {
+        10.0
+    } else if alt {
+        0.1
+    } else {
+        1.0
+    }
+}
+
+/// An options-bar percentage as Photoshop draws it: a scrubby label (drag it sideways to change
+/// the value) and a number field whose ▾ opens a pop-up slider. `value` is in percent; returns
+/// whether it changed.
+fn scrubby_percent(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) -> bool {
+    let text = opt_label(ui, label);
+    let scrub = ui.interact(text.rect, text.id.with("scrub"), egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    let before = *value;
+    let (lo, hi) = (*range.start(), *range.end());
+    // The drag's own running value: the field moves in whole percents, and a slow (Alt) drag
+    // would never get anywhere if each frame's fraction were rounded away.
+    let run = scrub.id.with("value");
+    if scrub.drag_started() {
+        ui.data_mut(|d| d.insert_temp(run, *value));
+    }
+    if scrub.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        // Read outside `ui.input`: `drag_delta` takes the input lock itself.
+        let dx = scrub.drag_delta().x;
+        let v = ui.data(|d| d.get_temp::<f32>(run)).unwrap_or(*value) + ui.input(|i| scrub_delta(dx, i.modifiers.shift, i.modifiers.alt));
+        if lo <= hi && v.is_finite() {
+            let v = v.clamp(lo, hi);
+            ui.data_mut(|d| d.insert_temp(run, v));
+            // Rounded before the field below draws it, so no fraction shows mid-drag.
+            *value = v.round().clamp(lo, hi);
+        }
+    }
+    let field = widgets::popup_value_field(ui, label, value, range, "%", width + widgets::POPUP_ARROW_W).changed;
+    // Whole percents only, however the value was set (Photoshop's fields show no decimals).
+    if (field || scrub.dragged()) && lo <= hi && value.is_finite() {
+        *value = value.round().clamp(lo, hi);
+    }
+    *value != before
 }
 
 fn percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) {
-    opt_label(ui, label);
-    let mut percent = *value * 100.0;
-    if widgets::value_field(ui, &mut percent, range, "%", width).changed() {
+    // Shown in whole percents; a brush that came with 55.5% keeps it until the field is edited.
+    let mut percent = (*value * 100.0).round();
+    if scrubby_percent(ui, label, &mut percent, range, width) {
         *value = percent / 100.0;
     }
 }
@@ -2722,7 +2766,7 @@ fn brush_tip(p: &egui::Painter, c: egui::Pos2, rad: f32, hardness: f32, color: C
 /// Options-bar Smoothing % (the brush's stroke smoothing; the live stroke and the commit use it).
 fn smoothing_field(ui: &mut egui::Ui, b: &mut prism_engine::BrushSettings, width: f32) {
     let mut sm = (b.smoothing.amount * 100.0).round();
-    if widgets::value_field(ui, &mut sm, 0.0..=100.0, "%", width).changed() {
+    if scrubby_percent(ui, tl!("Smoothing"), &mut sm, 0.0..=100.0, width) {
         b.smoothing.amount = (sm / 100.0).clamp(0.0, 1.0);
     }
 }
@@ -3267,6 +3311,10 @@ mod history_transform_tests {
 #[cfg(test)]
 #[path = "layer_pct_slider_tests.rs"]
 mod layer_pct_slider_tests;
+
+#[cfg(test)]
+#[path = "options_pct_field_tests.rs"]
+mod options_pct_field_tests;
 
 #[cfg(test)]
 mod lock_tests {
