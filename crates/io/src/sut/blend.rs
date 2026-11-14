@@ -149,9 +149,8 @@ pub(super) fn color_jitter(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<St
 
 /// Map the smaller brush options: continuous spraying (`BrushContinuousPlot` 0x413) onto
 /// Build-up, size synchronized with the view scale (`BrushSizeSyncViewScale` 0x3ea), at least
-/// 1 pixel (`BrushAtLeast1Pixel` 0x3eb), and warn
-/// for post correction (`BrushUseRevision` 0x47e) and drawing beside reference-layer lines
-/// (`BrushUseReferLayer` 0x4e2). The running-colour blur (`BrushBlur` 0x444) is part of colour
+/// 1 pixel (`BrushAtLeast1Pixel` 0x3eb), post correction (`BrushUseRevision` 0x47e), and warn
+/// for drawing beside reference-layer lines (`BrushUseReferLayer` 0x4e2). The running-colour blur (`BrushBlur` 0x444) is part of colour
 /// mixing type 1, which already warns.
 pub(super) fn options(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<String>) {
     if enabled(r, "BrushContinuousPlot") {
@@ -165,9 +164,10 @@ pub(super) fn options(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<String>
     // "Blend brush tips with Darken" (1120) and "Adjust brush density by gap" (1022).
     b.csp_darken_tips = enabled(r, "BrushBlendPatternByDarken");
     b.csp_flow_by_spacing = enabled(r, "BrushAdjustFlowByInterval");
-    if enabled(r, "BrushUseRevision") && num(r, "BrushRevision", 0.0) > 0.0 {
-        warnings.push("SUT post correction is not supported; strokes are not smoothed after drawing".into());
-    }
+    // Post correction (1151): the level, when the option is on.
+    let level = num(r, "BrushRevision", 0.0);
+    b.csp_post_correction =
+        (enabled(r, "BrushUseRevision") && level.is_finite() && level > 0.0).then(|| level.min(prism_paint::csp_post_correction::MAX_LEVEL));
     if enabled(r, "BrushUseReferLayer") {
         warnings.push("SUT drawing beside reference-layer lines is not supported (Prism has no reference layer)".into());
     }

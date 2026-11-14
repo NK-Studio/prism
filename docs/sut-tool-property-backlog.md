@@ -103,7 +103,7 @@ should cover 1131, 1171, 1181, 1201 and 51000.
 | Pri | ID | Key | CSP label | Presets | Notes |
 |---|---|---|---|---|---|
 | P2 (named row, behaviour open) | 1250 | `BrushUseReferLayer` | Refer to other layers (draw beside reference lines) | 12 | needs a reference-layer concept; today warns only |
-| P2 (named row, behaviour open) | 1151 | `BrushRevision` (+`BrushUseRevision`) | Post correction | 6 | smoothing after the stroke; trace interaction with start/end |
+| ~~P2~~ done 2026-11-14 | 1151 | `BrushRevision` (+`BrushUseRevision`) | Post correction | 6 | Imported into `csp_post_correction` (level 0–100, when the option is on). The committed stroke's path is smoothed after pen-up (`paint::csp_post_correction`, called from `engine::brush_cmds::stroke_with`): a windowed average along the path, ends fixed, pressure kept, window in screen pixels. Checkbox + level row. The smoothing is Prism's; CSP's curve fit and its Adjust by speed / Bezier curve children are not traced |
 | ~~P3~~ done 2026-11-04 | 1110 | `BrushRibbon` | Ribbon | 1 | rendered (`csp_ribbon`) but no control; add a checkbox (valid only with tip images and no spray) |
 | P3 (named row, behaviour open) | 1500 | `StampAdjustPosition` | Adjust position (copy stamp) | 1 | copy-stamp sub-tool; also 1510 `StampSetReferPointMode` |
 | ~~P2~~ done 2026-11-04 (from D) | 1003 | `BrushAtLeast1Pixel` | At least 1 pixel (inferred) | 12 | Chainmail pens. Imported into `csp_at_least_1px`: a dab under 1 px is laid as a full-ink 1 px dab instead of fading with its area; checkbox row. Behaviour inferred from the key name, not yet compared with CSP |

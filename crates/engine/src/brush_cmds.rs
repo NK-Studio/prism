@@ -298,6 +298,11 @@ fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry_path.clone());
     let (id, brush, zoom) = stroke_target(s, p, brush)?;
+    // CSP post correction: the committed line is smoothed once more (the live stroke is not).
+    let pts = match brush.csp_post_correction {
+        Some(level) => prism_paint::csp_post_correction::apply(level, zoom, &pts),
+        None => pts,
+    };
     let dmg = s.edit(label, |doc, _| {
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;

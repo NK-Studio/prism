@@ -3553,6 +3553,8 @@ cspTool	Space evenly	균등 배치
 	New folder	새 폴더
 	At least 1 pixel	최소 1픽셀
 	Enable snapping	스냅 사용
+	Post correction level	후보정 강도
+	Smooths the line after the pen is lifted	펜을 뗀 뒤 선을 매끄럽게 다듬습니다
 	Blend brush tips with Darken	브러시 끝 모양을 어둡게 합성
 	Adjust brush density by gap	간격에 따라 브러시 농도 조정
 	Flip horizontal	좌우 반전

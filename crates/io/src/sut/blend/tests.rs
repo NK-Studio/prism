@@ -213,12 +213,19 @@ fn continuous_spraying_view_scale_and_unsupported_options() {
     ]);
     let b = &imported.presets[0].brush;
     assert!(b.build_up && b.csp_size_by_view && b.csp_at_least_1px);
-    assert!(imported.warnings.iter().any(|w| w.contains("post correction")));
+    assert_eq!(b.csp_post_correction, Some(10.0));
+    assert!(!imported.warnings.iter().any(|w| w.contains("post correction")));
     assert!(imported.warnings.iter().any(|w| w.contains("reference-layer")));
     // Post correction's value alone (off) is silent; so is a plain brush.
     let plain = import(&[("BrushRevision", int(10))]);
     assert!(!plain.presets[0].brush.build_up && !plain.presets[0].brush.csp_size_by_view && !plain.presets[0].brush.csp_at_least_1px);
     assert!(plain.warnings.is_empty(), "{:?}", plain.warnings);
+    assert_eq!(plain.presets[0].brush.csp_post_correction, None);
+    // Hostile levels are bounded or off.
+    for (level, want) in [(f64::INFINITY, None), (1e12, Some(100.0)), (f64::NAN, None), (-4.0, None), (0.0, None)] {
+        let b = import(&[("BrushUseRevision", int(1)), ("BrushRevision", Value::Number(level))]).presets.remove(0).brush;
+        assert_eq!(b.csp_post_correction, want, "{level}");
+    }
 }
 
 #[test]

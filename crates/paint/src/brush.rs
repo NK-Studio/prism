@@ -637,6 +637,11 @@ pub struct BrushSettings {
     /// 1 px is laid as a full 1 px dab instead of fading with its area.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub csp_at_least_1px: bool,
+    /// Imported CSP "Post correction" (`BrushUseRevision` on, `BrushRevision` the level 0..100):
+    /// the committed stroke's path is smoothed once more after pen-up
+    /// ([`crate::csp_post_correction`]). `None`: off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_post_correction: Option<f32>,
     /// Imported CSP "Enable snapping" (`BrushEnableSnap`, property 1230) switched off: strokes
     /// of this brush ignore the special rulers. Stored inverted so every other brush still snaps.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -709,6 +714,7 @@ impl Default for BrushSettings {
             csp_stroke: None,
             csp_size_by_view: false,
             csp_at_least_1px: false,
+            csp_post_correction: None,
             csp_no_snap: false,
             csp_darken_tips: false,
             csp_flow_by_spacing: false,

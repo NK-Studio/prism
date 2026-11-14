@@ -398,9 +398,25 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
                 ui.small(tl!("Ribbons need a tip image and no spray"));
             }
         }
-        1151 | 1250 | 1500 => {
-            let on = source(m, key) != 0.0 || (id == 1151 && source(m, "BrushUseRevision") != 0.0);
-            let value = if id == 1151 && source(m, "BrushUseRevision") == 0.0 { tl!("Off").to_string() } else { format!("{:.0}", source(m, key)) };
+        1151 => {
+            use prism_engine::paint::csp_post_correction::MAX_LEVEL;
+            let mut on = b.csp_post_correction.is_some();
+            if ui.checkbox(&mut on, tl!(label)).changed() {
+                // Switched on: the imported level, else CLIP STUDIO's stored default of 10.
+                let level = source(m, key);
+                b.csp_post_correction = on.then(|| if level > 0.0 { level.min(MAX_LEVEL) } else { 10.0 });
+            }
+            if let Some(level) = &mut b.csp_post_correction {
+                let mut v = if level.is_finite() { level.clamp(1.0, MAX_LEVEL) } else { 10.0 };
+                if number(ui, "Post correction level", &mut v, 1.0..=MAX_LEVEL, "") {
+                    *level = v;
+                }
+                ui.small(tl!("Smooths the line after the pen is lifted"));
+            }
+        }
+        1250 | 1500 => {
+            let on = source(m, key) != 0.0;
+            let value = format!("{:.0}", source(m, key));
             unsupported(ui, label, value, false);
             if on {
                 ui.small(tl!("The stroke is drawn without this CSP effect"));
@@ -1112,6 +1128,30 @@ mod tests {
         assert_eq!(h.state().session.journal.last().unwrap().0, "tools.setBrush");
         crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
             for label in ["At least 1 pixel", "Flip horizontal", "Flip vertical"] {
+                assert_ne!(tl!(label), label, "{label}");
+            }
+        });
+    }
+
+    #[test]
+    fn post_correction_row_switches_the_smoothing_on_with_the_imported_level() {
+        let mut h = harness();
+        {
+            let sut = h.state_mut().session.tools.presets.last_mut().unwrap().sut.as_mut().unwrap();
+            sut.original.visible = vec![1151];
+            sut.parameters.insert("BrushRevision".into(), 35.0);
+        }
+        h.run_steps(2);
+        assert!(h.query_by_label_contains("not supported").is_none());
+        h.get_by_label("Post correction").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.tools.brush.csp_post_correction, Some(35.0));
+        h.get_by_role_and_label(egui::accesskit::Role::Slider, "Post correction level");
+        // A hostile stored level only has to draw.
+        h.state_mut().session.tools.brush.csp_post_correction = Some(f32::NAN);
+        h.run_steps(2);
+        crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
+            for label in ["Post correction level", "Smooths the line after the pen is lifted"] {
                 assert_ne!(tl!(label), label, "{label}");
             }
         });

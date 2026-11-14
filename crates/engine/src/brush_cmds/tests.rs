@@ -330,6 +330,33 @@ fn brush_patch_removes_cleared_optional_settings_and_switches_enum_variants() {
     }
 }
 
+/// CSP post correction smooths the committed line; other brushes keep their input path.
+#[test]
+fn post_correction_smooths_the_committed_stroke_only_for_brushes_that_have_it() {
+    let pts: Vec<Value> = (0..=60).map(|i| json!([10 + i * 3, if i % 2 == 0 { 44 } else { 56 }, 1.0])).collect();
+    // Rows the zigzag reaches but a smoothed line through y = 50 does not.
+    let far = |s: &Session| (40..160).filter(|x| rgba(s, *x, 43)[3] > 0.2 || rgba(s, *x, 57)[3] > 0.2).count();
+    let brush = |extra: Value| {
+        let mut b = json!({"size": 3, "hardness": 1.0, "pressureSize": false, "spacing": 0.1, "smoothing": {"amount": 0}});
+        for (k, v) in extra.as_object().unwrap() {
+            b[k] = v.clone();
+        }
+        b
+    };
+    let mut plain = session(200, 100);
+    plain.execute("paint.stroke", json!({"points": pts, "brush": brush(json!({})), "seed": 1})).unwrap();
+    assert!(far(&plain) > 20, "{}", far(&plain));
+    let mut fixed = session(200, 100);
+    fixed.execute("paint.stroke", json!({"points": pts, "brush": brush(json!({"cspPostCorrection": 100})), "seed": 1})).unwrap();
+    assert_eq!(far(&fixed), 0);
+    assert!(rgba(&fixed, 100, 50)[3] > 0.5, "the smoothed line runs through the middle");
+    // Hostile levels and zooms never panic.
+    for (level, zoom) in [(json!(1e30), json!(1e-9)), (json!(-3), json!(0)), (json!(100), json!(1e9))] {
+        let mut s = session(200, 100);
+        let _ = s.execute("paint.stroke", json!({"points": pts, "brush": brush(json!({"cspPostCorrection": level})), "zoom": zoom}));
+    }
+}
+
 /// Flags stored only when on are switched off again by the panel's patch (a null).
 #[test]
 fn brush_patch_switches_stored_when_on_flags_off() {
