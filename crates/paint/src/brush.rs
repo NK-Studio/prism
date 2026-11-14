@@ -318,6 +318,18 @@ pub struct Texture {
     pub depth: f32,
     /// Depth jitter / control (per tip only); `minimum` is Minimum Depth.
     pub depth_jitter: Dynamic,
+    /// Imported CSP Emphasize density (`TextureStressDensity`, property 114), approximated by
+    /// extra contrast at render time ([`Texture::effective_contrast`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_emphasize: bool,
+}
+
+impl Texture {
+    /// The contrast the texture renders with: [`Self::contrast`], plus 0.5 with Emphasize density.
+    pub fn effective_contrast(&self) -> f32 {
+        let c = if self.contrast.is_finite() { self.contrast } else { 0.0 };
+        if self.csp_emphasize { (c + 0.5).clamp(-1.0, 2.0) } else { c }
+    }
 }
 
 impl Default for Texture {
@@ -334,6 +346,7 @@ impl Default for Texture {
             csp_mode: None,
             depth: 1.0,
             depth_jitter: Dynamic::default(),
+            csp_emphasize: false,
         }
     }
 }
@@ -579,7 +592,14 @@ pub struct BrushSettings {
     pub build_up: bool,
     /// Build-up rate in dabs per second.
     pub build_up_rate: f32,
+    /// Photoshop tool smoothing is retained across preset switches, but bypassed for CSP.
     pub smoothing: Smoothing,
+    /// Explicit CSP correction policy, including SUTs with stabilization disabled.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_correction: bool,
+    /// CSP's fixed sub-color contribution when no input effector is active (0..1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_sub_color: Option<f32>,
     /// Imported CSP color mixing (amount/density of paint, color stretch): picks up the colour
     /// under the brush as it moves.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -588,7 +608,7 @@ pub struct BrushSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csp_in_out: Option<crate::csp_in_out::CspInOut>,
     /// Imported CSP Stabilization / Adjust by speed: a moving average of the raw input samples,
-    /// applied before Smoothing.
+    /// Used with the CSP correction policy; legacy explicit stabilizers remain supported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csp_stabilizer: Option<crate::csp_stabilizer::CspStabilizer>,
     /// Imported CSP Ribbon: the sampled tip is laid continuously along the stroke instead of
@@ -613,6 +633,33 @@ pub struct BrushSettings {
     /// stroke at zoom `z` paints `size / z` image pixels.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub csp_size_by_view: bool,
+    /// Imported CSP "at least 1 pixel" (`BrushAtLeast1Pixel`, property 1003): a dab smaller than
+    /// 1 px is laid as a full 1 px dab instead of fading with its area.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_at_least_1px: bool,
+    /// Imported CSP "Post correction" (`BrushUseRevision` on, `BrushRevision` the level 0..100):
+    /// the committed stroke's path is smoothed once more after pen-up
+    /// ([`crate::csp_post_correction`]). `None`: off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_post_correction: Option<f32>,
+    /// Imported CSP "Do not cross lines of reference layer" (`BrushUseReferLayer`, property
+    /// 1250): the committed stroke paints only in the areas its path enters, bounded by the
+    /// lines of the document's reference layers.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_refer_layer: bool,
+    /// Imported CSP "Enable snapping" (`BrushEnableSnap`, property 1230) switched off: strokes
+    /// of this brush ignore the special rulers. Stored inverted so every other brush still snaps.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_no_snap: bool,
+    /// Imported CSP "Blend brush tips with Darken" (`BrushBlendPatternByDarken`, property 1120):
+    /// a dab never lightens the colour the stroke already holds at a pixel (per channel).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_darken_tips: bool,
+    /// Imported CSP "Adjust brush density by gap" (`BrushAdjustFlowByInterval`, property 1022):
+    /// each dab's density is reduced for the overlap its spacing gives, so the stroke's density
+    /// stays the brush density whatever the gap.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub csp_flow_by_spacing: bool,
     /// Keep the current texture (pattern + scale) when switching to another textured preset.
     pub protect_texture: bool,
     /// Sections whose settings stay when another preset is picked (tool state, like Photoshop's locks).
@@ -660,6 +707,8 @@ impl Default for BrushSettings {
             build_up: false,
             build_up_rate: 20.0,
             smoothing: Smoothing::default(),
+            csp_correction: false,
+            csp_sub_color: None,
             csp_stabilizer: None,
             csp_in_out: None,
             csp_mixing: None,
@@ -669,6 +718,12 @@ impl Default for BrushSettings {
             csp_erase: false,
             csp_stroke: None,
             csp_size_by_view: false,
+            csp_at_least_1px: false,
+            csp_post_correction: None,
+            csp_refer_layer: false,
+            csp_no_snap: false,
+            csp_darken_tips: false,
+            csp_flow_by_spacing: false,
             protect_texture: false,
             locks: SectionLocks::default(),
             mixer: MixerSettings::default(),
@@ -678,6 +733,11 @@ impl Default for BrushSettings {
 }
 
 impl BrushSettings {
+    /// Keep Photoshop's tool setting available for switching back without filtering CSP input.
+    pub fn effective_smoothing(&self) -> Smoothing {
+        if self.csp_correction { Smoothing::default() } else { self.smoothing.clone() }
+    }
+
     /// Copy the settings with the primary and dual diameters and Scatter amounts constrained for
     /// rasterization.
     ///
@@ -718,6 +778,7 @@ impl BrushSettings {
             spray.count = spray.count.clamp(1, crate::csp_spray::MAX_PARTICLES);
             spray.bias = if spray.bias.is_finite() { spray.bias.clamp(-1.0, 1.0) } else { 0.0 };
             spray.angle = if spray.angle.is_finite() { spray.angle.rem_euclid(360.0) } else { 0.0 };
+            spray.angle_jitter = if spray.angle_jitter.is_finite() { spray.angle_jitter.clamp(0.0, 2.0) } else { 0.0 };
         }
         if let Some(edge) = &mut brush.csp_water_edge {
             *edge = edge.bounded();

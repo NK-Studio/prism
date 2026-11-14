@@ -281,7 +281,8 @@ pub fn pointer(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) -> bool
             set_ruler(app, r);
         }
         (Tool::Ruler, ToolEvent::Up { .. }) => {
-            if app.ui.analysis.drag.take() == Some(Drag::RulerNew) && doc.measurement.ruler.is_some_and(|r| dist(r.start, r.end) < 0.5) {
+            let fresh = app.ui.analysis.drag.take() == Some(Drag::RulerNew);
+            if fresh && doc.measurement.ruler.is_some_and(|r| dist(r.start, r.end) < 0.5) {
                 let _ = app.run("image.analysis.rulerTool", json!({"clear": true}));
             }
         }
@@ -640,7 +641,8 @@ pub fn windows(app: &mut PrismApp, ctx: &egui::Context) {
                 }
             }
             Some((id, p)) => {
-                if app.run(id, p).is_ok() {
+                let ran = app.run(id, p).is_ok();
+                if ran {
                     app.ui.analysis.log_selected.clear();
                 }
             }

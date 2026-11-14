@@ -34,4 +34,8 @@ name = "monitor_macos"
 harness = false
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_UI_Controls", "Win32_UI_Input_Pointer", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_Pointer", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+# The pen_inject example reads stroke files (ui.penTrace output or plain point lists).
+[dev-dependencies]
+serde_json = { workspace = true }

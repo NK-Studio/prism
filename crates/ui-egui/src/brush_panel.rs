@@ -209,6 +209,19 @@ pub fn is_current(preset: &BrushSettings, brush: &BrushSettings) -> bool {
         } == *brush
 }
 
+/// The index of the preset the current brush was picked from: the session's selected preset
+/// (`ToolState::brush_preset`) while it is still listed, else the first preset whose settings
+/// match. Presets that differ only in size or colour (CLIP STUDIO's 茂み1–3 bushes) all pass
+/// [`is_current`], so the picked name decides which single one is highlighted.
+pub fn current_index(presets: &[paint::BrushPreset], picked: Option<&str>, brush: &BrushSettings) -> Option<usize> {
+    if let Some(found) = picked.and_then(|name| paint::presets::find(presets, name))
+        && let Some(i) = presets.iter().position(|p| std::ptr::eq(p, found))
+    {
+        return Some(i);
+    }
+    presets.iter().position(|p| is_current(&p.brush, brush))
+}
+
 /// A fresh "Brush N" name.
 pub(crate) fn new_preset_name(presets: &[paint::BrushPreset]) -> String {
     (1..).map(|n| format!("Brush {n}")).find(|n| !presets.iter().any(|p| &p.name == n)).unwrap_or_else(|| "Brush".into())

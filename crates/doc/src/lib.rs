@@ -605,6 +605,9 @@ pub struct Layer {
     pub video: Option<VideoData>,
     /// CLIP STUDIO special rulers attached to this layer (None = no rulers).
     pub special_rulers: Option<SpecialRulers>,
+    /// CLIP STUDIO "Set as reference layer": brushes that do not cross reference lines stop at
+    /// this layer's lines (`prism_engine::reference_layer`).
+    pub reference: bool,
 }
 
 impl Layer {
@@ -632,6 +635,7 @@ impl Layer {
             advanced: AdvancedBlending::default(),
             video: None,
             special_rulers: None,
+            reference: false,
         }
     }
     pub fn raster(name: impl Into<String>, format: PixelFormat) -> Self {

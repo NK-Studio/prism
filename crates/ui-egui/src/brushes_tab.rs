@@ -14,7 +14,7 @@ use prism_engine::paint::{BrushPreset, MAX_BRUSH_SIZE};
 use serde_json::json;
 
 use crate::brush_panel::{
-    BrushesPanelState, BrushesView, Renaming, UNGROUPED, WIDTH, commit_gesture, full_uv, grouped_presets, is_current, new_preset_name, run_or_status,
+    BrushesPanelState, BrushesView, Renaming, UNGROUPED, WIDTH, commit_gesture, current_index, full_uv, grouped_presets, new_preset_name, run_or_status,
 };
 use crate::brush_preview;
 use crate::theme::{self, Tokens};
@@ -117,8 +117,10 @@ pub fn apply(app: &mut PrismApp, acts: Vec<Action>) {
             Action::Select(name) => run_or_status(app, "tools.setBrush", json!({ "preset": name })),
             Action::Choose(name) => {
                 // The double-click's first click already picked it.
-                let picked =
-                    prism_engine::paint::presets::find(&app.session.tools.presets, &name).is_some_and(|p| is_current(&p.brush, &app.session.tools.brush));
+                let tools = &app.session.tools;
+                let picked = current_index(&tools.presets, tools.brush_preset.as_deref(), &tools.brush)
+                    .and_then(|i| tools.presets.get(i))
+                    .is_some_and(|p| p.name.eq_ignore_ascii_case(&name));
                 if !picked {
                     run_or_status(app, "tools.setBrush", json!({ "preset": name }));
                 }
@@ -350,13 +352,7 @@ fn rename_bar(ui: &mut egui::Ui, st: &mut BrushesPanelState, acts: &mut Vec<Acti
 /// The presets in their groups, filtered by `st.filter`, as rows or tip cells (`st.view`), with
 /// the rename bar above them while a rename is open. Group toggles and renames update `st`; the
 /// returned actions are commands for [`apply`].
-pub fn preset_list(
-    ui: &mut egui::Ui,
-    presets: &[BrushPreset],
-    brush: &prism_engine::BrushSettings,
-    st: &mut BrushesPanelState,
-    layout: ListLayout,
-) -> Vec<Action> {
+pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<usize>, st: &mut BrushesPanelState, layout: ListLayout) -> Vec<Action> {
     let mut acts = Vec::new();
     rename_bar(ui, st, &mut acts);
     let filter = st.filter.trim().to_lowercase();
@@ -365,8 +361,11 @@ pub fn preset_list(
     egui::ScrollArea::vertical().id_salt(layout.id).max_height(layout.max_height).auto_shrink([false, true]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
         for (label, items) in grouped_presets(presets) {
-            let items: Vec<&BrushPreset> =
-                items.into_iter().filter_map(|i| presets.get(i)).filter(|p| filter.is_empty() || p.name.to_lowercase().contains(&filter)).collect();
+            let items: Vec<(usize, &BrushPreset)> = items
+                .into_iter()
+                .filter_map(|i| presets.get(i).map(|p| (i, p)))
+                .filter(|(_, p)| filter.is_empty() || p.name.to_lowercase().contains(&filter))
+                .collect();
             if items.is_empty() {
                 continue;
             }
@@ -380,13 +379,13 @@ pub fn preset_list(
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
                     ui.add_space(layout.indent);
-                    for p in items {
-                        grid_cell(ui, p, is_current(&p.brush, brush), presets, layout.cell, &mut acts);
+                    for (i, p) in items {
+                        grid_cell(ui, p, current == Some(i), presets, layout.cell, &mut acts);
                     }
                 });
             } else {
-                for p in items {
-                    list_row(ui, p, is_current(&p.brush, brush), presets, &mut acts);
+                for (i, p) in items {
+                    list_row(ui, p, current == Some(i), presets, &mut acts);
                 }
             }
             ui.add_space(2.0);
@@ -458,7 +457,9 @@ pub fn show(app: &mut PrismApp, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(6.0);
-    let acts = preset_list(ui, &app.session.tools.presets, &app.session.tools.brush, &mut app.ui.brushes_panel, PANEL_LIST);
+    let tools = &app.session.tools;
+    let current = current_index(&tools.presets, tools.brush_preset.as_deref(), &tools.brush);
+    let acts = preset_list(ui, &app.session.tools.presets, current, &mut app.ui.brushes_panel, PANEL_LIST);
     apply(app, acts);
     ui.add_space(4.0);
     widgets::hairline(ui);
@@ -466,7 +467,8 @@ pub fn show(app: &mut PrismApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{} presets", app.session.tools.presets.len())).color(t.text_faint));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let current = app.session.tools.presets.iter().find(|p| is_current(&p.brush, &app.session.tools.brush)).map(|p| p.name.clone());
+            let tools = &app.session.tools;
+            let current = current_index(&tools.presets, tools.brush_preset.as_deref(), &tools.brush).and_then(|i| tools.presets.get(i)).map(|p| p.name.clone());
             if ui.add_enabled_ui(current.is_some(), |ui| icons::button(ui, "trash", 24.0, false, "Delete brush")).inner.clicked()
                 && let Some(name) = current
             {

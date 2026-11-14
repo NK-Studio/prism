@@ -8,6 +8,13 @@
 //! mode, fractions of the path length; when start and end together exceed the path they are
 //! scaled down to fit. The end needs the whole path, so it applies when the stroke is committed;
 //! while drawing only a pixel-length start is known.
+//!
+//! "Fade" (CLIP STUDIO's third way to specify, `BrushInOutType` 2) is different: only the
+//! Ending length is used, and it is measured from where the stroke starts. The targets fall from
+//! their full value to the minimum over that many pixels and stay there for the rest of the
+//! stroke, whatever its speed. Measured: 물번짐구름 브러쉬 (Brush density, ending 194) loses
+//! density over about 200 px and then stays level; the quarter-sine shape is carried over from
+//! the other modes, not fitted (docs/sut-analysis.md › Fade).
 use serde::{Deserialize, Serialize};
 
 use crate::StrokePoint;
@@ -24,6 +31,9 @@ pub enum CspInOutMode {
     Length,
     /// Fractions of the stroke's path length.
     Percent,
+    /// The targets fade from full to the minimum over `end` pixels from the stroke's start and
+    /// stay at the minimum; `start` and `by_speed` are not used.
+    Fade,
 }
 
 /// Parameters a start/end taper can scale (the source's effector targets that Prism renders).
@@ -62,7 +72,7 @@ pub struct CspInOut {
 impl CspInOut {
     pub fn bounded(&self) -> Self {
         let length = |v: Option<f64>| match self.mode {
-            CspInOutMode::Length => v.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(MAX_LENGTH)),
+            CspInOutMode::Length | CspInOutMode::Fade => v.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(MAX_LENGTH)),
             CspInOutMode::Percent => v.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(1.0)),
         };
         let mut targets: Vec<CspInOutTarget> = Vec::new();
@@ -71,7 +81,14 @@ impl CspInOut {
                 targets.push(CspInOutTarget { param: t.param, minimum: if t.minimum.is_finite() { t.minimum.clamp(0.0, 1.0) } else { 0.0 } });
             }
         }
-        Self { mode: self.mode, start: length(self.start), end: length(self.end), by_speed: self.by_speed, targets }
+        let fade = self.mode == CspInOutMode::Fade;
+        Self {
+            mode: self.mode,
+            start: length(self.start).filter(|_| !fade),
+            end: length(self.end),
+            by_speed: self.by_speed && !fade,
+            targets,
+        }
     }
 
     pub fn minimum(&self, param: CspInOutParam) -> Option<f32> {
@@ -93,6 +110,11 @@ impl InOutRuntime {
     /// While drawing: only a pixel-length start can be applied.
     pub fn live(cfg: &CspInOut) -> Option<Self> {
         let cfg = cfg.bounded();
+        // A fade is known from the first point on.
+        if cfg.mode == CspInOutMode::Fade {
+            let end = cfg.end.filter(|_| !cfg.targets.is_empty())?;
+            return Some(Self { cfg, start: 0.0, end, total: None });
+        }
         if cfg.targets.is_empty() || cfg.mode != CspInOutMode::Length || cfg.by_speed {
             return None;
         }
@@ -102,6 +124,10 @@ impl InOutRuntime {
 
     /// For a finished stroke whose walked path has these segment lengths.
     pub fn finished(cfg: &CspInOut, segments: &[f64]) -> Option<Self> {
+        if cfg.mode == CspInOutMode::Fade {
+            // The committed stroke fades exactly as the live one.
+            return Self::live(cfg);
+        }
         let cfg = cfg.bounded();
         if cfg.targets.is_empty() || (cfg.start.is_none() && cfg.end.is_none()) {
             return None;
@@ -136,6 +162,10 @@ impl InOutRuntime {
     /// Taper factor 0..1 at path distance `s`.
     pub fn factor(&self, s: f64) -> f32 {
         let ramp = |d: f64, len: f64| if len > 0.0 && d < len { (d.max(0.0) / len * std::f64::consts::FRAC_PI_2).sin() } else { 1.0 };
+        if self.cfg.mode == CspInOutMode::Fade {
+            // Full at the start, the minimum from `end` pixels on (a non-finite distance: faded).
+            return if s.is_finite() { ramp(self.end - s, self.end) as f32 } else { 0.0 };
+        }
         let mut f = ramp(s, self.start);
         if let Some(total) = self.total {
             f *= ramp(total - s, self.end);

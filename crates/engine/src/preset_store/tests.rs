@@ -1,6 +1,6 @@
 use super::*;
-use prism_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
 use prism_paint::csp_gradient::{CspGradient, CspGradientStop, CspStopColor};
+use prism_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -454,7 +454,7 @@ fn colour_tips_and_tip_order_are_stored_as_tip_files() {
     preset.brush.csp_tip_order = Some(CspTipOrder::Reverse);
     // Colours that do not fit their size are dropped, not saved as a broken tip.
     let mut broken = sampled("Broken colours", "CSP", tip8(4, 4, 9));
-    broken.brush.csp_tip_colors = vec![Some(CspTipColor { width: 4, height: 4, rgb: vec![1, 2, 3] })];
+    broken.brush.csp_tip_colors = vec![Some(CspTipColor { width: 4, height: 4, rgb: vec![1, 2, 3].into() })];
     s.tools.presets.extend([preset.clone(), broken]);
     s.brush_presets_changed();
     s.sync_preset_store();
@@ -515,7 +515,9 @@ fn sut_display_metadata_survives_store_restart_and_restore() {
     s.tools.presets.push(preset);
     s.execute("brush.sutDisplay.set", json!({"name":"SUT sample","parameter":10,"visible":false,"showCategories":true})).unwrap();
     s.sync_preset_store();
-    let expected = prism_paint::presets::find(&s.tools.presets, "SUT sample").unwrap().clone();
+    let mut expected = prism_paint::presets::find(&s.tools.presets, "SUT sample").unwrap().clone();
+    // Legacy SUT metadata identifies CSP even when the new field was never saved.
+    expected.brush.csp_correction = true;
     let (mut restored, warnings) = session(&dir);
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(prism_paint::presets::find(&restored.tools.presets, "SUT sample"), Some(&expected));
@@ -571,6 +573,11 @@ fn malformed_sut_metadata_keeps_valid_brush_and_bounds_presentation() {
     assert_eq!(g.stops[0].curve, vec![[0.0, 0.0], [1.0, 0.0]]);
     assert!(!warnings.is_empty());
     // A gradient with fewer than two stops is dropped.
-    let metadata = read_sut_metadata(Some(json!({"original":{"visible":[],"show_categories":false},"input_op":52,"output_op":52,"parameters":{},"texture_name":"","gradient":{"stops":[]}})), "One", &mut warnings).unwrap();
+    let metadata = read_sut_metadata(
+        Some(json!({"original":{"visible":[],"show_categories":false},"input_op":52,"output_op":52,"parameters":{},"texture_name":"","gradient":{"stops":[]}})),
+        "One",
+        &mut warnings,
+    )
+    .unwrap();
     assert!(metadata.gradient.is_none());
 }

@@ -99,7 +99,7 @@ fn tip(blob: &[u8], max_pixels: usize, warnings: &mut Vec<String>) -> Result<(Gr
     let density = |[g, a]: &[f32; 2]| if color { *a } else { (1.0 - g) * a };
     let data = px.iter().map(|p| (density(p) * 65535.0).round() as u16).collect();
     let tile = GrayTile { width, height, data };
-    let colors = rgb.map(|rgb| CspTipColor { width, height, rgb }).filter(|c| color && c.fits(&tile));
+    let colors = rgb.map(|rgb| CspTipColor { width, height, rgb: rgb.into() }).filter(|c| color && c.fits(&tile));
     if color && colors.is_none() {
         warnings.push("SUT colour brush tip colours could not be read; the tip paints in the brush colour".into());
     }
@@ -227,7 +227,12 @@ fn tool_patterns(rows: Vec<Row>) -> Vec<Row> {
 }
 /// Read the sub-tool database `bytes`. Its own `MaterialFile` table holds the referenced
 /// materials; without one, `fallback` (a container's material table) is used.
-fn read_database(bytes: &[u8], group: &str, ctl: &prism_raster::Interrupt, fallback: Option<&dyn Fn() -> Result<Vec<Row>, String>>) -> Result<AbrImport, String> {
+fn read_database(
+    bytes: &[u8],
+    group: &str,
+    ctl: &prism_raster::Interrupt,
+    fallback: Option<&dyn Fn() -> Result<Vec<Row>, String>>,
+) -> Result<AbrImport, String> {
     let db = Database::new(bytes)?;
     let nodes = db.table("Node")?;
     let node = nodes.iter().find(|r| r.get("NodeName").and_then(Value::text).is_some()).ok_or("SUT has no named sub-tool")?;
@@ -293,6 +298,7 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
     }
     b.spacing = spacing(r, &mut warnings);
     b.csp_stabilizer = stabilizer(r, &mut warnings);
+    b.csp_correction = true;
     b.csp_in_out = in_out(r, &mut warnings);
     // Ribbon (property 0x456) applies only to a brush with tip images and without spraying;
     // CSP snaps its tip to quarter turns of `BrushRotation`, whether rotation is on or not.
@@ -317,7 +323,7 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
     rotation(r, &mut b, &mut warnings);
     blend::blend_mode(r, &mut b, &mut warnings);
     blend::color_jitter(r, &mut b, &mut warnings);
-    blend::options(r, &mut b, &mut warnings);
+    blend::options(r, &mut b);
     if enabled(r, "BrushUseSpray") {
         let count = num(r, "BrushSprayDensity", 8.0).round().max(1.0) as u32;
         let mut spray = CspSpray {
@@ -349,10 +355,7 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
                 warnings.push(format!("SUT {key} is not supported; spray uses a fixed particle size in pixels"));
             }
         }
-        let angle_controls = num(r, "BrushRotationEffectorInSpray", 0.0) as u32;
-        if angle_controls & !3 != 0 {
-            warnings.push("SUT particle angle input controls are not supported; using the base particle angle".into());
-        }
+        particle_angle(r, &mut spray, &mut warnings);
         b.csp_spray = Some(spray);
     }
     // Observed in shipped brushes: the tip flag set with a NULL reference column and no
@@ -471,6 +474,33 @@ fn rotation(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<String>) {
     }
 }
 
+/// Map the spray particle angle controls (`BrushRotationEffectorInSpray`): 0x01 enables them;
+/// one input angle is added, in CSP's choice order 0x10 pen direction, 0x20 pen axis rotation,
+/// 0x40 line direction, 0x100 direction of the whole spray, 0x200 towards the centre; 0x80 adds
+/// a random turn of `(r − 0.5) · BrushRotationRandomInSpray% · 360°`. 0x02 is stored by local
+/// presets without visible effect. Evidence in docs/sut-analysis.md › Spray particle angle input.
+fn particle_angle(r: &Row, spray: &mut CspSpray, warnings: &mut Vec<String>) {
+    use prism_paint::csp_spray::{CspParticleAngle, PARTICLE_ANGLE_FLAGS};
+    let flags = num(r, "BrushRotationEffectorInSpray", 0.0) as u32;
+    if flags & !PARTICLE_ANGLE_FLAGS != 0 {
+        warnings.push(format!("SUT particle angle input controls ({:#x}) are not supported; they are ignored", flags & !PARTICLE_ANGLE_FLAGS));
+    }
+    if flags & 1 == 0 {
+        return;
+    }
+    if let Some(input) = CspParticleAngle::from_flags(flags) {
+        if (flags & 0x370).count_ones() > 1 {
+            warnings.push(format!("SUT particle angle uses several inputs ({:#x}); only the first ({input:?}) is applied", flags & 0x370));
+        }
+        spray.angle_input = input;
+    }
+    if flags & 0x80 != 0 {
+        // CSP's random scale s spreads ±180°·s, as for the tip rotation.
+        let scale = num(r, "BrushRotationRandomInSpray", 0.0) / 100.0;
+        spray.angle_jitter = if scale.is_finite() { scale.clamp(0.0, 2.0) } else { 0.0 };
+    }
+}
+
 /// Dab spacing as a fraction of the diameter. Fixed spacing (`BrushAutoIntervalType` 0) is
 /// `BrushInterval`; the automatic types scale a per-type base by hardness and thickness.
 /// Evidence in docs/sut-analysis.md.
@@ -507,22 +537,18 @@ fn spacing_of(r: &Row, k: TipKeys, warnings: &mut Vec<String>) -> f32 {
 }
 fn spacing_unchecked(r: &Row, k: TipKeys, warnings: &mut Vec<String>) -> f32 {
     let kind = num(r, k.auto_interval, 0.0) as i64;
-    let base = match kind {
-        0 => return (num(r, k.interval, 10.0) / 100.0).clamp(0.01, 10.0),
-        1 => 0.12,
-        3 => 0.04,
-        2 => 0.08,
-        _ => {
-            warnings.push(format!("SUT automatic spacing type {kind} is approximated by the normal spacing"));
-            0.08
-        }
+    if kind == 0 {
+        return (num(r, k.interval, 10.0) / 100.0).clamp(0.01, 10.0);
+    }
+    let kind = if (1..=3).contains(&kind) {
+        kind
+    } else {
+        warnings.push(format!("SUT automatic spacing type {kind} is approximated by the normal spacing"));
+        2
     };
-    // Image tips space as fully hard ones.
-    let hardness = if enabled(r, k.use_image) { 1.0 } else { num(r, k.hardness, 100.0) / 100.0 };
-    let hardness = if hardness >= 0.999_999_99 { 1.0 } else { hardness.max(0.2) };
-    let thickness = num(r, k.thickness, 100.0) / 100.0;
-    let thickness = if thickness < 1.0 { thickness.max(0.01) } else { 1.0 };
-    (base * (3.5 - 2.5 * hardness) * thickness).clamp(0.01, 10.0)
+    // Image tips space as fully hard ones (inside `auto_spacing`).
+    let (hardness, thickness) = (num(r, k.hardness, 100.0) / 100.0, num(r, k.thickness, 100.0) / 100.0);
+    prism_paint::sut::auto_spacing(kind, hardness, enabled(r, k.use_image), thickness).unwrap_or(0.08)
 }
 
 /// Map Color mixing (BrushUseWaterColor 0x43e; amount 0x439, density 0x43b, stretch 0x43d with
@@ -532,15 +558,19 @@ fn color_mixing(r: &Row, ribbon: bool, warnings: &mut Vec<String>) -> Option<Csp
     if !blend::mixing_on(r) {
         return None;
     }
+    // 0 Blend, 1 Running color, 2 Smear (CLIP STUDIO's names).
     let kind = num(r, "BrushWaterColor", 0.0) as i64;
+    // Smear mixes as Blend with the density of paint at 100 %: CLIP STUDIO disables the control
+    // and a stored density of 30 paints as 100 (measured, docs/sut-analysis.md › Smear).
+    let smear = kind == 2;
     // A ribbon brush mixes with type 0 where type 1 is set (the CSP settings builder resets it).
-    if kind != 0 && !(ribbon && kind == 1) {
+    if kind != 0 && !smear && !(ribbon && kind == 1) {
         warnings.push(format!("SUT color mixing type {kind} is approximated by blending"));
     }
     let percent = |k: &str| (num(r, k, 100.0) / 100.0).clamp(0.0, 1.0);
     let mut mixing = CspColorMixing {
         amount: percent("BrushMixColor"),
-        density: percent("BrushMixAlpha"),
+        density: if smear { 1.0 } else { percent("BrushMixAlpha") },
         stretch: (num(r, "BrushMixColorExtension", 0.0) / 100.0).clamp(0.0, 1.0),
         perceptual: enabled(r, "BrushColorMixingMode"),
         ..Default::default()
@@ -548,7 +578,7 @@ fn color_mixing(r: &Row, ribbon: bool, warnings: &mut Vec<String>) -> Option<Csp
     if let Some(dynamic) = pressure_effector(r, "BrushMixColorEffector", warnings) {
         mixing.amount_dynamic = dynamic;
     }
-    if let Some(dynamic) = pressure_effector(r, "BrushMixAlphaEffector", warnings) {
+    if let Some(dynamic) = pressure_effector(r, "BrushMixAlphaEffector", warnings).filter(|_| !smear) {
         mixing.density_dynamic = dynamic;
     }
     Some(mixing)
@@ -561,22 +591,29 @@ fn in_out(r: &Row, warnings: &mut Vec<String>) -> Option<CspInOut> {
     if !use_in && !use_out {
         return None;
     }
+    // "How to specify": 0 by length, 1 by percentage, 2 Fade (CLIP STUDIO's names).
     let mode = match num(r, "BrushInOutType", 0.0) as i64 {
         0 => CspInOutMode::Length,
         1 => CspInOutMode::Percent,
+        2 => CspInOutMode::Fade,
         other => {
-            warnings.push(format!("SUT start and end type {other} (fade) is not supported"));
+            warnings.push(format!("SUT start and end type {other} is not supported"));
             return None;
         }
     };
+    // Fade uses the Ending length alone, from the start of the stroke (the Starting control and
+    // "by speed" are disabled in CLIP STUDIO).
+    let use_in = use_in && mode != CspInOutMode::Fade;
+    // Lengths with unit 2 are pixels at any resolution (measured: docs/sut-experiment-materials.md).
     for key in ["BrushInLengthUnit", "BrushOutLengthUnit"] {
-        if mode == CspInOutMode::Length && enabled(r, key) {
-            warnings.push(format!("SUT {key} is not supported; the length is used in pixels"));
+        let unit = num(r, key, 0.0);
+        if mode != CspInOutMode::Percent && unit != 0.0 && unit != 2.0 {
+            warnings.push(format!("SUT {key} {unit} is not supported; the length is used in pixels"));
         }
     }
     let length = |used: bool, length_key: &str, ratio_key: &str| {
         used.then(|| match mode {
-            CspInOutMode::Length => f64::from(num(r, length_key, 0.0)),
+            CspInOutMode::Length | CspInOutMode::Fade => f64::from(num(r, length_key, 0.0)),
             CspInOutMode::Percent => f64::from(num(r, ratio_key, 0.0)) / 100.0,
         })
         .filter(|v| *v > 0.0)
@@ -698,7 +735,7 @@ fn texture(materials: &dyn Fn() -> Result<Vec<Row>, String>, r: &Row, refs: &[u8
     t.each_tip = enabled(r, "TextureForPlot");
     t.depth = (num(r, "TextureDensity", 100.0) / 100.0).clamp(0.0, 1.0);
     if enabled(r, "TextureStressDensity") {
-        t.contrast = (t.contrast + 0.5).clamp(-1.0, 2.0);
+        t.csp_emphasize = true;
         warnings.push("SUT emphasize texture density is approximated by extra contrast".into());
     }
     if let Some(dynamic) = pressure_effector(r, "TextureDensityEffector", warnings) {

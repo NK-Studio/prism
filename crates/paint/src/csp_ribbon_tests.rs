@@ -124,7 +124,10 @@ fn ribbons_follow_curves_and_keep_flow_and_colour_at_every_depth() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, depth, true));
         let b = BrushSettings { flow: 0.5, color: [1.0, 0.0, 0.0, 1.0], ..ribbon_brush(TipShape::Sampled(tip(16, 16, |_, _| true)), 16.0, 0) };
-        let arc: Vec<_> = (0..=60).map(|i| f64::from(i) * std::f64::consts::PI / 60.0).map(|a| StrokePoint::new(100.0 - 60.0 * a.cos(), 100.0 - 60.0 * a.sin(), 1.0)).collect();
+        let arc: Vec<_> = (0..=60)
+            .map(|i| f64::from(i) * std::f64::consts::PI / 60.0)
+            .map(|a| StrokePoint::new(100.0 - 60.0 * a.cos(), 100.0 - 60.0 * a.sin(), 1.0))
+            .collect();
         render_stroke(&mut s, &b, &arc, None, false, 1.0);
         for i in 3..58 {
             let a = f64::from(i) * std::f64::consts::PI / 60.0;
@@ -139,12 +142,12 @@ fn ribbons_follow_curves_and_keep_flow_and_colour_at_every_depth() {
 fn hostile_ribbons_never_panic() {
     let tips = [
         TipShape::Round,
-        TipShape::Sampled(GrayTile { width: 0, height: 0, data: Vec::new() }),
-        TipShape::Sampled(GrayTile { width: 3, height: 3, data: vec![1] }),
+        TipShape::Sampled(GrayTile { width: 0, height: 0, data: Vec::new().into() }),
+        TipShape::Sampled(GrayTile { width: 3, height: 3, data: vec![1].into() }),
         TipShape::Sampled(tip(1, 1, |_, _| true)),
         TipShape::Sampled(tip(400, 1, |_, _| true)),
         TipShape::Sequence(Vec::new()),
-        TipShape::Sequence(vec![tip(1, 300, |_, _| true), GrayTile { width: 2, height: 2, data: Vec::new() }]),
+        TipShape::Sequence(vec![tip(1, 300, |_, _| true), GrayTile { width: 2, height: 2, data: Vec::new().into() }]),
     ];
     let strokes = [
         line(10.0, 60.0),

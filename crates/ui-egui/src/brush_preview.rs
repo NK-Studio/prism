@@ -80,7 +80,22 @@ pub fn preview_sig(b: &BrushSettings) -> u64 {
     let mut h = DefaultHasher::new();
     js(&mut h, &(b.size, b.hardness, b.spacing, b.opacity, b.flow, b.pressure_size, b.pressure_opacity, b.erase, b.mode, b.angle, b.roundness));
     js(&mut h, &(b.flip_x, b.flip_y, b.aliased, b.noise, b.wet_edges, b.build_up, b.build_up_rate, b.protect_texture, b.seed));
-    js(&mut h, &(b.csp_anti_alias, b.csp_tip_scale, &b.csp_water_edge, &b.csp_stabilizer, &b.csp_in_out, &b.csp_mixing, b.csp_ribbon));
+    js(
+        &mut h,
+        &(
+            b.csp_anti_alias,
+            b.csp_tip_scale,
+            &b.csp_water_edge,
+            &b.csp_stabilizer,
+            &b.csp_in_out,
+            &b.csp_mixing,
+            b.csp_ribbon,
+            b.csp_correction,
+            b.csp_sub_color,
+        ),
+    );
+    js(&mut h, &(b.csp_darken_tips, b.csp_flow_by_spacing, b.csp_post_correction, b.csp_refer_layer));
+    js(&mut h, &(b.csp_at_least_1px, b.csp_size_by_view, &b.csp_tip_order, &b.csp_erase, &b.csp_stroke, &b.dual_brush.csp_add));
     js(&mut h, &(&b.shape_dynamics, &b.scattering, &b.csp_spray, &b.color_dynamics, &b.transfer, &b.pose, &b.smoothing));
     tip_shape_sig(&mut h, &b.tip);
     let d = &b.dual_brush;
@@ -327,6 +342,17 @@ mod tests {
     }
 
     #[test]
+    fn preview_cache_tracks_csp_correction_and_fixed_sub_color() {
+        let mut b = BrushSettings::default();
+        let original = preview_sig(&b);
+        b.csp_correction = true;
+        let csp = preview_sig(&b);
+        assert_ne!(csp, original);
+        b.csp_sub_color = Some(0.25);
+        assert_ne!(preview_sig(&b), csp);
+    }
+
+    #[test]
     fn tip_thumbnails_follow_shape_angle_and_roundness() {
         let n = 32;
         let at = |a: &[f32], x: u32, y: u32| a[(y * n + x) as usize];
@@ -344,7 +370,7 @@ mod tests {
         let s = tip_alpha(&TipShape::Sampled(bar), 1.0, 0.0, 1.0, (false, false), n);
         assert!(at(&s, 3, 16) > 0.9 && at(&s, 16, 2) < 0.01);
         // Degenerate input never panics.
-        let empty = paint::GrayTile { width: 0, height: 0, data: vec![] };
+        let empty = paint::GrayTile { width: 0, height: 0, data: Vec::new().into() };
         assert!(tip_alpha(&TipShape::Sampled(empty), 1.0, 0.0, 0.0, (true, true), 0).iter().all(|v| *v == 0.0));
     }
 }

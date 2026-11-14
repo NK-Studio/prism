@@ -10,7 +10,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub struct GrayTile {
     pub width: u32,
     pub height: u32,
-    pub data: Vec<u16>,
+    /// Shared between clones (a brush and its copies), copied on the first write.
+    pub data: crate::shared::Shared<u16>,
 }
 
 impl GrayTile {
@@ -22,7 +23,7 @@ impl GrayTile {
                 data.push(q16(f(x, y)));
             }
         }
-        Self { width, height, data }
+        Self { width, height, data: data.into() }
     }
     /// Build from 0..1 floats (`width × height`).
     pub fn from_f32(width: u32, height: u32, v: &[f32]) -> Self {
@@ -95,7 +96,7 @@ impl<'de> Deserialize<'de> for GrayTile {
         if n == 0 || data.len() != n {
             return Err(D::Error::custom(format!("tile data has {} samples, expected {}×{}", data.len(), t.width, t.height)));
         }
-        Ok(GrayTile { width: t.width, height: t.height, data })
+        Ok(GrayTile { width: t.width, height: t.height, data: data.into() })
     }
 }
 

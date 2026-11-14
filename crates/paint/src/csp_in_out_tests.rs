@@ -41,6 +41,34 @@ fn by_speed_limits_lengths_to_the_first_and_last_input_segments() {
 }
 
 #[test]
+fn fade_falls_to_the_minimum_from_the_start_of_the_stroke_and_stays_there() {
+    let mut c = cfg(CspInOutMode::Fade, Some(50.0), Some(200.0), true);
+    c.targets = vec![CspInOutTarget { param: CspInOutParam::Flow, minimum: 0.25 }];
+    // The same while drawing and when committed, whatever the path: start and speed are unused.
+    let live = InOutRuntime::live(&c).unwrap();
+    let done = InOutRuntime::finished(&c, &[30.0, 30.0, 900.0]).unwrap();
+    for s in [0.0, 1.0, 50.0, 100.0, 199.0, 200.0, 500.0, 1e9] {
+        assert_eq!(live.factor(s), done.factor(s), "{s}");
+    }
+    assert_eq!(live.factor(0.0), 1.0);
+    assert!((live.factor(100.0) - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
+    assert!(live.factor(150.0) < live.factor(100.0) && live.factor(100.0) < live.factor(50.0));
+    assert_eq!((live.factor(200.0), live.factor(5000.0)), (0.0, 0.0));
+    assert_eq!(live.multiplier(CspInOutParam::Flow, 0.0), 1.0);
+    assert_eq!(live.multiplier(CspInOutParam::Flow, 900.0), 0.25);
+    assert_eq!(live.multiplier(CspInOutParam::Size, 900.0), 1.0, "only targets fade");
+    // No ending length or no target: no fade. Hostile values stay finite.
+    assert!(InOutRuntime::live(&CspInOut { end: None, ..c.clone() }).is_none());
+    assert!(InOutRuntime::finished(&CspInOut { targets: Vec::new(), ..c.clone() }, &[10.0]).is_none());
+    for end in [f64::NAN, f64::INFINITY, -4.0, 0.0] {
+        assert!(InOutRuntime::live(&CspInOut { end: Some(end), ..c.clone() }).is_none_or(|r| r.factor(10.0).is_finite()), "{end}");
+    }
+    for s in [f64::NAN, f64::INFINITY, -1.0] {
+        assert!((0.0..=1.0).contains(&live.factor(s)), "{s}");
+    }
+}
+
+#[test]
 fn live_strokes_only_know_a_pixel_start() {
     assert!(InOutRuntime::live(&cfg(CspInOutMode::Length, Some(20.0), Some(10.0), false)).is_some_and(|t| t.end == 0.0 && t.factor(1e9) == 1.0));
     assert!(InOutRuntime::live(&cfg(CspInOutMode::Percent, Some(0.2), None, false)).is_none());

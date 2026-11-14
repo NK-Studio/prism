@@ -95,7 +95,17 @@ pub(super) fn color_jitter(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<St
         let hue = jitter(r, num(r, "BrushHueChange", 0.0) / 360.0, "BrushHueChangeEffector", "hue", warnings);
         let saturation = jitter(r, num(r, "BrushSaturationChange", 0.0) / 100.0, "BrushSaturationChangeEffector", "saturation", warnings);
         let value = jitter(r, num(r, "BrushValueChange", 0.0) / 100.0, "BrushValueChangeEffector", "luminosity", warnings);
-        let sub = jitter(r, num(r, "BrushSubColor", 0.0) / 100.0, "BrushSubColorEffector", "sub color blend", warnings);
+        let sub_amount = num(r, "BrushSubColor", 0.0) / 100.0;
+        let fixed_sub = match r.get("BrushSubColorEffector") {
+            None | Some(Value::Null) => true,
+            Some(value) => value.blob().is_some_and(|blob| matches!(effector::controls(blob), Ok((0, _)))),
+        };
+        let sub = if fixed_sub && sub_amount.is_finite() {
+            b.csp_sub_color = (sub_amount != 0.0).then_some(sub_amount.clamp(0.0, 1.0));
+            0.0
+        } else {
+            jitter(r, sub_amount, "BrushSubColorEffector", "sub color blend", warnings)
+        };
         // Prism's hue jitter j spreads ±180°·j.
         cd.hue_jitter = (hue * 2.0).clamp(0.0, 1.0);
         cd.saturation_jitter = saturation.clamp(0.0, 1.0);
@@ -115,7 +125,7 @@ pub(super) fn color_jitter(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<St
         ]
         .map(|v| if v.is_finite() { v.abs().clamp(0.0, 1.0) } else { 0.0 });
         if amounts.iter().any(|v| *v > 0.0) {
-            if any {
+            if any || b.csp_sub_color.is_some() {
                 warnings.push("SUT colour jitter per stroke and per brush tip together is not supported; the per-tip jitter is used".into());
             } else {
                 let [hue, saturation, value, sub] = amounts;
@@ -128,31 +138,38 @@ pub(super) fn color_jitter(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<St
             }
         }
     }
-    if !any {
+    if !any && b.csp_sub_color.is_none() {
         return;
     }
-    cd.enabled = true;
+    cd.enabled = any;
     if num(r, "BrushChangeColorTarget", 1.0) == 2.0 {
         warnings.push("SUT colour jitter of the sub color only is approximated by varying the drawing color".into());
     }
 }
 
 /// Map the smaller brush options: continuous spraying (`BrushContinuousPlot` 0x413) onto
-/// Build-up, size synchronized with the view scale (`BrushSizeSyncViewScale` 0x3ea), and warn
-/// for post correction (`BrushUseRevision` 0x47e) and drawing beside reference-layer lines
-/// (`BrushUseReferLayer` 0x4e2). The running-colour blur (`BrushBlur` 0x444) is part of colour
+/// Build-up, size synchronized with the view scale (`BrushSizeSyncViewScale` 0x3ea), at least
+/// 1 pixel (`BrushAtLeast1Pixel` 0x3eb), post correction (`BrushUseRevision` 0x47e) and
+/// not crossing reference-layer lines (`BrushUseReferLayer` 0x4e2). The running-colour blur (`BrushBlur` 0x444) is part of colour
 /// mixing type 1, which already warns.
-pub(super) fn options(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<String>) {
+pub(super) fn options(r: &Row, b: &mut BrushSettings) {
     if enabled(r, "BrushContinuousPlot") {
         b.build_up = true;
     }
     b.csp_size_by_view = enabled(r, "BrushSizeSyncViewScale");
-    if enabled(r, "BrushUseRevision") && num(r, "BrushRevision", 0.0) > 0.0 {
-        warnings.push("SUT post correction is not supported; strokes are not smoothed after drawing".into());
-    }
-    if enabled(r, "BrushUseReferLayer") {
-        warnings.push("SUT drawing beside reference-layer lines is not supported (Prism has no reference layer)".into());
-    }
+    // Property 1003 (key traced, behaviour inferred from the name: docs/sut-tool-property-backlog.md).
+    b.csp_at_least_1px = enabled(r, "BrushAtLeast1Pixel");
+    // "Enable snapping" (1230): only a stored 0 switches the special-ruler snap off.
+    b.csp_no_snap = r.contains_key("BrushEnableSnap") && !enabled(r, "BrushEnableSnap");
+    // "Blend brush tips with Darken" (1120) and "Adjust brush density by gap" (1022).
+    b.csp_darken_tips = enabled(r, "BrushBlendPatternByDarken");
+    b.csp_flow_by_spacing = enabled(r, "BrushAdjustFlowByInterval");
+    // Post correction (1151): the level, when the option is on.
+    let level = num(r, "BrushRevision", 0.0);
+    b.csp_post_correction =
+        (enabled(r, "BrushUseRevision") && level.is_finite() && level > 0.0).then(|| level.min(prism_paint::csp_post_correction::MAX_LEVEL));
+    // "Do not cross lines of reference layer" (1250).
+    b.csp_refer_layer = enabled(r, "BrushUseReferLayer");
 }
 
 #[cfg(test)]

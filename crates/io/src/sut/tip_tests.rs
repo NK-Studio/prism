@@ -48,7 +48,7 @@ fn tipped_with(fields: &[(&str, Value)], first: [[u8; 3]; 2]) -> AbrImport {
 fn colour_tips_keep_their_colours_unless_the_brush_changes_them() {
     let imported = tipped(&[]);
     let b = &imported.presets[0].brush;
-    let colors: Vec<_> = b.csp_tip_colors.iter().map(|c| c.as_ref().map(|c| c.rgb.clone())).collect();
+    let colors: Vec<_> = b.csp_tip_colors.iter().map(|c| c.as_ref().map(|c| c.rgb.to_vec())).collect();
     assert_eq!(colors, [Some(vec![255, 0, 0, 0, 0, 255]), Some(vec![255; 6])]);
     let TipShape::Sequence(tips) = &b.tip else { panic!("sequence expected") };
     assert_eq!(tips[0].data, [65535, 32896], "alpha is the shape");

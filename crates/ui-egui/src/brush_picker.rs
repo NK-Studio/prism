@@ -18,7 +18,7 @@ use prism_engine::BrushSettings;
 use prism_engine::paint::{BrushPreset, MAX_BRUSH_SIZE, TipShape};
 use serde_json::json;
 
-use crate::brush_panel::{BrushesPanelState, BrushesView, Renaming, is_current, new_preset_name, run_or_status};
+use crate::brush_panel::{BrushesPanelState, BrushesView, Renaming, current_index, new_preset_name, run_or_status};
 use crate::brushes_tab::{self, Action, ListLayout};
 use crate::theme::Tokens;
 use crate::{PrismApp, icons, widgets};
@@ -122,7 +122,9 @@ pub(crate) fn named(resp: egui::Response, label: &str) -> egui::Response {
 
 /// The picker's contents: Size, Hardness (round tips only: a sampled tip has none), a search
 /// field with the Brush Settings, New Preset and gear buttons, and the preset list.
-pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], st: &mut BrushesPanelState) -> Vec<Pick> {
+/// `picked`: the session's selected preset name (`ToolState::brush_preset`), which decides the
+/// highlighted preset when several match the brush.
+pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], picked: Option<&str>, st: &mut BrushesPanelState) -> Vec<Pick> {
     let t = Tokens::get(ui.ctx());
     let mut picks = Vec::new();
     ui.set_width(WIDTH);
@@ -154,7 +156,7 @@ pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], s
         ui.add_space(20.0);
         ui.add(egui::TextEdit::singleline(&mut st.filter).hint_text(tl!("Search Brushes")).desired_width(WIDTH - 118.0).id_salt("brush-picker-search"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            gear_menu(ui, b, presets, st, &mut picks);
+            gear_menu(ui, b, presets, picked, st, &mut picks);
             if named(icons::button(ui, "square-plus", 24.0, false, "Create new brush preset from the current settings"), "New Brush Preset").clicked() {
                 picks.push(Pick::NewPreset);
             }
@@ -165,13 +167,14 @@ pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], s
         });
     });
     ui.add_space(4.0);
-    picks.extend(brushes_tab::preset_list(ui, presets, b, st, LIST).into_iter().map(Pick::List));
+    let current = current_index(presets, picked, b);
+    picks.extend(brushes_tab::preset_list(ui, presets, current, st, LIST).into_iter().map(Pick::List));
     picks
 }
 
 /// The gear: Photoshop's picker menu. A new preset, rename or delete the current one, the list's
 /// view, and Import Brushes.
-fn gear_menu(ui: &mut egui::Ui, b: &BrushSettings, presets: &[BrushPreset], st: &mut BrushesPanelState, picks: &mut Vec<Pick>) {
+fn gear_menu(ui: &mut egui::Ui, b: &BrushSettings, presets: &[BrushPreset], picked: Option<&str>, st: &mut BrushesPanelState, picks: &mut Vec<Pick>) {
     let gear = named(icons::button(ui, "settings", 24.0, false, tl!("Brush Preset Options")), "Brush Preset Options");
     egui::Popup::menu(&gear).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         if ui.button(tl!("New Brush Preset…")).clicked() {
@@ -179,7 +182,7 @@ fn gear_menu(ui: &mut egui::Ui, b: &BrushSettings, presets: &[BrushPreset], st: 
             ui.close();
         }
         ui.separator();
-        let current = presets.iter().find(|p| is_current(&p.brush, b)).map(|p| p.name.clone());
+        let current = current_index(presets, picked, b).and_then(|i| presets.get(i)).map(|p| p.name.clone());
         ui.add_enabled_ui(current.is_some(), |ui| {
             if ui.button(tl!("Rename Brush…")).clicked()
                 && let Some(name) = current.clone()

@@ -59,6 +59,10 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
         if l.clipped { tl!("Release Clipping Mask") } else { tl!("Create Clipping Mask") },
         if l.clipped { "layer.releaseClippingMask" } else { "layer.createClippingMask" },
     )));
+    // CLIP STUDIO reference layers: brushes that do not cross reference lines stop at this layer.
+    if !multi {
+        v.push(Some((if l.reference { tl!("Clear Reference Layer") } else { tl!("Set as Reference Layer") }, "layer.setReference")));
+    }
     v.push(None);
     v.push(Some((tl!("Link Layers"), "layer.linkLayers")));
     v.push(Some((tl!("Select Linked Layers"), "layer.selectLinkedLayers")));
@@ -201,6 +205,22 @@ mod color_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reference_layer_item_toggles_with_the_layer() {
+        let mut l = Layer::raster("Lines", prism_color::PixelFormat::RGBA8);
+        let label = |l: &Layer| entries(l, false, false).into_iter().flatten().find(|(_, id)| *id == "layer.setReference").map(|(label, _)| label);
+        assert_eq!(label(&l), Some("Set as Reference Layer"));
+        l.reference = true;
+        assert_eq!(label(&l), Some("Clear Reference Layer"));
+        assert!(entries(&l, true, false).into_iter().flatten().all(|(_, id)| id != "layer.setReference"));
+        assert!(prism_engine::commands::find("layer.setReference").is_some());
+        crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
+            for label in ["Set as Reference Layer", "Clear Reference Layer", "Do not cross lines of reference layer"] {
+                assert_ne!(tl!(label), label, "{label}");
+            }
+        });
+    }
 
     #[test]
     fn smart_object_context_menu_edits_the_clicked_layer() {

@@ -14,6 +14,25 @@ fn import(fields: &[(&str, Value)]) -> AbrImport {
 fn int(v: i64) -> Value {
     Value::Integer(v)
 }
+
+#[test]
+fn constant_sub_color_is_imported_without_requiring_random_input() {
+    for controls in [None, Some(effector(0, -100))] {
+        let mut fields = vec![("BrushChangePatternColor", int(1)), ("BrushSubColor", int(25))];
+        if let Some(controls) = controls {
+            fields.push(("BrushSubColorEffector", controls));
+        }
+        let imported = import(&fields);
+        let b = &imported.presets[0].brush;
+        assert!(b.csp_correction);
+        assert_eq!(b.csp_sub_color, Some(0.25));
+        assert!(!imported.warnings.iter().any(|w| w.contains("sub color blend")));
+    }
+    let off = import(&[("BrushSubColor", int(25))]);
+    assert_eq!(off.presets[0].brush.csp_sub_color, None);
+    let erase = import(&[("CompositeMode", int(27)), ("BrushChangePatternColor", int(1)), ("BrushSubColor", int(25))]);
+    assert_eq!(erase.presets[0].brush.csp_sub_color, None);
+}
 /// An effector blob with the `active` controls and the random minimum `random_min` %.
 fn effector(active: u32, random_min: i32) -> Value {
     let mut blob = vec![0; 48];
@@ -58,8 +77,7 @@ fn approximated_and_csp_only_modes_warn() {
 
 #[test]
 fn csp_only_stroke_modes_run_without_warnings() {
-    for (code, mode) in
-        [(29, CspStrokeMode::Behind), (31, CspStrokeMode::ReplaceAlpha), (34, CspStrokeMode::CompareDensity), (35, CspStrokeMode::EraseCompare)]
+    for (code, mode) in [(29, CspStrokeMode::Behind), (31, CspStrokeMode::ReplaceAlpha), (34, CspStrokeMode::CompareDensity), (35, CspStrokeMode::EraseCompare)]
     {
         let imported = import(&[("CompositeMode", int(code))]);
         let b = &imported.presets[0].brush;
@@ -188,16 +206,38 @@ fn continuous_spraying_view_scale_and_unsupported_options() {
     let imported = import(&[
         ("BrushContinuousPlot", int(1)),
         ("BrushSizeSyncViewScale", int(1)),
+        ("BrushAtLeast1Pixel", int(1)),
         ("BrushUseRevision", int(1)),
         ("BrushRevision", int(10)),
         ("BrushUseReferLayer", int(1)),
     ]);
     let b = &imported.presets[0].brush;
-    assert!(b.build_up && b.csp_size_by_view);
-    assert!(imported.warnings.iter().any(|w| w.contains("post correction")));
-    assert!(imported.warnings.iter().any(|w| w.contains("reference-layer")));
+    assert!(b.build_up && b.csp_size_by_view && b.csp_at_least_1px);
+    assert_eq!(b.csp_post_correction, Some(10.0));
+    assert!(!imported.warnings.iter().any(|w| w.contains("post correction")));
+    assert!(b.csp_refer_layer && imported.warnings.is_empty(), "{:?}", imported.warnings);
     // Post correction's value alone (off) is silent; so is a plain brush.
     let plain = import(&[("BrushRevision", int(10))]);
-    assert!(!plain.presets[0].brush.build_up && !plain.presets[0].brush.csp_size_by_view);
+    assert!(!plain.presets[0].brush.build_up && !plain.presets[0].brush.csp_size_by_view && !plain.presets[0].brush.csp_at_least_1px);
     assert!(plain.warnings.is_empty(), "{:?}", plain.warnings);
+    assert_eq!(plain.presets[0].brush.csp_post_correction, None);
+    // Hostile levels are bounded or off.
+    for (level, want) in [(f64::INFINITY, None), (1e12, Some(100.0)), (f64::NAN, None), (-4.0, None), (0.0, None)] {
+        let b = import(&[("BrushUseRevision", int(1)), ("BrushRevision", Value::Number(level))]).presets.remove(0).brush;
+        assert_eq!(b.csp_post_correction, want, "{level}");
+    }
+}
+
+#[test]
+fn snapping_darken_and_density_by_gap_options() {
+    let plain = import(&[]);
+    let b = &plain.presets[0].brush;
+    assert!(!b.csp_no_snap && !b.csp_darken_tips && !b.csp_flow_by_spacing, "a sub-tool without the keys keeps the defaults");
+    let on = import(&[("BrushEnableSnap", int(1)), ("BrushBlendPatternByDarken", int(1)), ("BrushAdjustFlowByInterval", int(1))]);
+    let b = &on.presets[0].brush;
+    assert!(!b.csp_no_snap && b.csp_darken_tips && b.csp_flow_by_spacing);
+    // Only a stored 0 switches snapping off; hostile values never panic.
+    let off = import(&[("BrushEnableSnap", int(0)), ("BrushBlendPatternByDarken", Value::Number(f64::NAN)), ("BrushAdjustFlowByInterval", Value::Number(f64::INFINITY))]);
+    assert!(off.presets[0].brush.csp_no_snap);
+    assert!(on.warnings.is_empty() && off.warnings.is_empty(), "{:?} {:?}", on.warnings, off.warnings);
 }

@@ -1,5 +1,14 @@
 # Clip Studio Paint SUT investigation
 
+2026-11-03: [Current compatibility audit](sut-compatibility-audit.md) reconciles
+the 444-material library (154 brushes, 2 other sub-tools, 288 image/layer materials),
+reruns the local stroke check, and records the SUT/Photoshop smoothing coupling,
+active option gaps and fresh read-only REA/direct-Ghidra evidence.
+
+2026-11-03: [Brush response investigation](brush-latency.md) records the matched
+local bush-brush settings, CPU preparation/preview costs, original-app capture
+limits and the short mouse-gesture input regression separately from static REA.
+
 Investigation: 2026-10-15, on `codex/feature-sut-brush`. This continues the initial
 importer described in [sut-brushes.md](sut-brushes.md). Successful import is not
 evidence of matching Clip Studio rendering.
@@ -830,15 +839,26 @@ averaged, and missing or >1000 ms old samples repeat the oldest sample still use
   level 30 the plain ramp applies. A second flag (`param_5`) that would use half-sample
   steps is not mapped.
 
-**Pen-up** (`0x141afc580`, events 6/9) feeds the release sample again
-`floor(W) − P` times, so with stickiness 0 the line reaches the release point.
+**Pen-up** (`0x141afc580`, events 6/9) initially feeds the release sample again
+`floor(W) − P` times. This is not the whole gesture-finalization path.
 
-**Not established / not mapped.** The state machine `0x141afafe0` can end the stroke
-early while decelerating below a threshold (2 px, or a stickiness-dependent value)
-during catch-up; Prism always completes the repeats. The pressure of the release
-sample and device-type scaling are not modelled; Prism repeats the last input.
-Distances use document pixels × zoom as screen pixels. No matched CSP capture of a
-stabilized stroke has been made.
+**2026-11-03 follow-up.** The actual bush-brush flick comparison exposed a missing
+second phase: the existing direct-Ghidra `stab6/10/11.txt` outputs show the final
+gesture route also draining the release through `0x141afc1e0` until its state ends.
+Independent read-only PE constant checks on the same binary confirm the motion
+threshold 2, minimum 0.5, coefficient 0.04, pressure fall threshold 0.02 and
+negative pressure floor −0.2. Pressure reaching zero can interpolate the final
+position; otherwise decelerating motion can end below the threshold. These facts
+are recorded separately from the historical incomplete initial-repeat model;
+no proprietary code or pseudocode is copied into the implementation.
+
+Prism now independently adds a bounded release drain (at most 202 extra samples),
+pressure-zero interpolation and deceleration termination, keeping stationary dot
+pressure and making finish idempotent. The source's initial release-packet pressure
+and device-type scaling remain unverified; initial repeats still retain the last
+contact pressure. Threshold distances use document pixels × zoom in Prism, pending
+physical-pen comparison. The full live-preview policy is also not a CSP pixel oracle.
+See [matched settings, timings and capture limits](brush-latency.md).
 
 ## Start and end (2026-10-16)
 
@@ -986,10 +1006,13 @@ texel at the pixel centre. There is no bilinear filtering at any level.
 Prism (`render.rs`, `csp_aa`): level 0 samples once at the pixel centre; other levels
 average 2×2 nearest samples at ±¼ pixel around the centre (the source starts its rows at
 the pixel corner, but CSP's own stroke edges are symmetric, so the offsets are taken as
-centred); sampled tips use mip level 0 / `level_for(d)` / `level_for(d/2)`. A computed
-round tip is sampled as its exact shape (hard) or Prism's falloff (soft); medium and
-strong average a 1 px or 2 px box around each sample to stand in for the reduced levels
-of CSP's generated tip bitmap, whose resolution is not known. `cspAntiAlias` is now a
+centred); sampled tips use mip level 0 / `level_for(d)` / `level_for(d/2)`. A soft computed
+round tip uses Prism's falloff. A hard computed round tip with anti-aliasing follows the
+measured CLIP STUDIO rule (2026-11-14, `docs/pen-input-validation.md` › G-pen comparison).
+Coverage is `clamp((R − d) / w)`: the edge stays at R and the ramp runs inward, with w =
+1.5 / 2.5 / 3.5 px for weak / medium / strong, capped at R. It is evaluated once at each pixel
+centre. The earlier 1 px / 2 px box filter kept the nominal diameter, which CLIP STUDIO does
+not (a size-25 medium dab is 22.5 px across). `cspAntiAlias` is now a
 level 0..3; older presets stored a boolean (false = 0, true = 1). Grainy Pen (level 0)
 renders unchanged.
 
@@ -1967,3 +1990,95 @@ database, stores NULL for all three: CLIP STUDIO falls back to its default font.
 type when set is not observed; Prism reads SQLite text and UTF-8 blobs, keeps at most 256
 characters without control characters, and reports anything else as a warning.
 
+
+## Spray particle angle input and missing dual tips (2026-11-04)
+
+No new decompilation; this applies the evidence already recorded under *Tip rotation input*
+(the spray particle angle code tests 0x100, 0x40 and 0x200, and the resource choice list maps
+the inputs to 0x10, 0x20, 0x40, 0x100, 0x200 in order) and *Particle rotation is separate from
+the area rotation* (stored `BrushRotationEffectorInSpray=3` with Random 100 is inactive).
+
+### Spray particle angle input (`BrushRotationEffectorInSpray`)
+
+Prism (`CspSpray.angleInput`, `CspSpray.angleJitter`): with flag 0x01 set, one input angle is
+added to the base particle angle `BrushRotationInSpray`: 0x10 pen tilt direction, 0x20 barrel
+rotation, 0x40 line direction, 0x100 the whole spray's angle (the brush area's evaluated
+rotation), 0x200 the direction from the spray centre to the particle. 0x80 adds a random turn
+of `(r − 0.5) · BrushRotationRandomInSpray% · 360°` from Prism's own `stream::SPRAY_ANGLE`.
+Without 0x01 none of these apply (the stored-3 case above is unchanged). 0x02 is kept silent.
+Several input bits apply the first in choice order with a warning; other bits warn.
+
+Inferences, not traced: 0x10/0x20 for particles read the same pen fields as the tip rotation;
+0x01 gates the particle inputs as it does the tip rotation; 0x200 points outward (centre →
+particle) rather than inward; the random amount uses the tip rotation's scale. A matched CSP
+capture of a 0x200 and a 0x80 spray brush would settle them.
+
+### Missing dual brush tips
+
+A downloaded brush can reference dual tips its cache lacks (D/Kaminari, D/Raigeki in the
+2026-10-21 run). Before, any missing tip switched the whole dual brush off. Now the dual brush
+runs with the tips that are present, or with a round tip of `DualHardness` when none are, and a
+warning names how many are missing. Unreadable reference blobs and ambiguous material paths
+still leave it off (a broken file, not a missing asset). What CLIP STUDIO itself paints when a
+dual tip material is missing was not observed.
+
+### Input rate (2026-11-04)
+
+The stabilization window now spans the time of that many samples at 125 Hz when input is
+sparser (a frame-rate Windows mouse). This is Prism's substitute for the untraced device-type
+scaling, not CSP behaviour; see docs/brush-latency.md › Mouse lag.
+
+### Still open from the 2026-11-03 audit
+
+Post correction, spray size unit (`BrushSpraySizeUnit`, value semantics not traced), colour
+mixing type 2, dual input/random dynamics and rotation, size effector control 0x40, water
+edge units, emphasize texture density and start/end fade type 2 are unchanged.
+
+### UI labels and length unit 2 (2026-11-14)
+
+Observed in CLIP STUDIO PAINT PRO 5.0.4 (English UI), Advanced Tool Settings of 茂み1, driven
+by screen pixels (the palettes expose no accessibility tree). Captures are local
+(`target/sut-experiments`, ignored).
+
+Evidence (read from the UI): 1003 "At least 1 pixel" (Brush Size); 1022 "Adjust brush density
+by gap" (Brush tip, under Brush density); 1120 "Blend brush tips with Darken" (Stroke); 1230
+"Enable snapping" (Correction); 1913 "Apply RGB value" (2 - Brush shape, under Dual brush ›
+Mode); 1250 "Do not cross lines of reference layer" (Anti-overflow, beside Fill up to vector
+path, Tolerance, Area scaling, Scaling mode); 1151 "Post correction" (a checkbox with a
+five-step level; children Adjust by speed, Adjust by scale, Bezier curve). Spacing is "Gap"
+(Fixed / Wide / Normal / Narrow) and tip order is "Repeat method".
+
+Evidence (measured): a length with unit 2 is in pixels whatever the document resolution
+(茂み1, `BrushSize` 100, `BrushSizeUnit` 2: about 75–100 px tall at 72 and 350 dpi on
+512 × 512 px documents; docs/sut-experiment-materials.md › 2). Every non-zero unit in the
+local library is 2, so the pixel reading of brush size, spray size, water edge radius and
+start/end length stands.
+
+Inference (built from the labels, pixels not compared with CSP): 1022 as
+`1 − (1 − flow)^spacing`; 1120 as a per-channel darken of the stroke's stored colour; 1151 as a
+windowed average of the path (0.6 screen px per level each side); 1250 as a flood fill from
+the path bounded by reference pixels with alpha above 0.5.
+
+Unknown: fade type 2, colour mixing type 2, emphasize density, what 1230 snaps to besides
+rulers, 1510, and the Korean UI labels (the UI language was not changed).
+
+Post correction, snapping, darken, density by gap and reference-layer lines are no longer in
+the open list above; spray size and water edge units are settled as pixels.
+
+### Fade, Smear and texture labels (2026-11-14, second session)
+
+Evidence (UI): start/end "How to specify" is Specify length / percentage / **Fade** for
+`BrushInOutType` 0 / 1 / 2; in Fade the Starting row and "Starting and ending by speed" are
+disabled. Colour mixing is **Blend / Running color / Smear** for `BrushWaterColor` 0 / 1 / 2;
+Smear disables Density of paint and enables Blending mode. Texture rows are "Invert texture"
+(113), "Emphasize density" (114), "Texture mode" (102) and "Apply by each plot" (101); 1087 is
+"Mixing mode" (Standard / Perceptual) with a "Brightness correction" child.
+
+Evidence (measured, docs/sut-experiment-materials.md): Fade lowers the targets from full to
+their minimum over the Ending length from the start of the stroke, by distance, and holds the
+minimum; Smear paints as Blend with the density of paint at 100 % whatever is stored; Running
+color picked nothing up in the same setup.
+
+Inference: the fade's curve (the quarter sine of the other modes). Unknown: the amount of
+Emphasize density (CSP calls it emphasizing the texture's contrast; not measurable with a
+mouse), Running color, Brightness correction.

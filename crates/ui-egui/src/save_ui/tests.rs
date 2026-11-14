@@ -277,7 +277,7 @@ fn a_picked_file_sets_the_folder_name_and_format() {
     assert_eq!((s(&f, "dir", ""), s(&f, "name", ""), s(&f, "format", "")), ("/work", "notes", "png"));
     assert!(s(&f, "__error", "").contains(".txt"), "{f:?}");
     // A folder (chosen in the panel) keeps the name.
-    let dir = std::env::temp_dir().to_string_lossy().trim_end_matches('/').to_string();
+    let dir = std::env::temp_dir().to_string_lossy().trim_end_matches(['/', '\\']).to_string();
     let f = picked(&dir);
     assert_eq!((s(&f, "dir", ""), s(&f, "name", ""), s(&f, "format", "")), (dir.as_str(), "Untitled-1", "png"));
     // A file at the root and odd input never panic.
@@ -348,7 +348,7 @@ fn a_full_path_in_the_name_is_taken_as_the_location() {
     assert_eq!(target(&f), "/Users/me/Desktop/close.png");
     assert!(validate(&f).is_ok());
     // A folder keeps the name the window had.
-    let dir = std::env::temp_dir().to_string_lossy().trim_end_matches('/').to_string();
+    let dir = std::env::temp_dir().to_string_lossy().trim_end_matches(['/', '\\']).to_string();
     let (_, f) = typed(&format!("{dir}/"));
     assert_eq!((s(&f, "dir", ""), s(&f, "name", "")), (dir.as_str(), "Untitled-1"));
     let (_, f) = typed(&dir);
@@ -356,7 +356,8 @@ fn a_full_path_in_the_name_is_taken_as_the_location() {
     // ~ is the home folder; a Windows drive path works too.
     if let Some(h) = home() {
         let (_, f) = typed("~/art/x.jpg");
-        assert_eq!(target(&f), format!("{}/art/x.jpg", h.to_string_lossy()));
+        let want = format!("{}/art/x.jpg", h.to_string_lossy());
+        assert!(same_file(&target(&f), &want), "{} != {want}", target(&f));
     }
     assert!(typed("C:\\pics\\shot.jpg").0);
     // A plain name, or one with a relative slash, is left alone (the slash is still refused).

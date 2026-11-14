@@ -3043,6 +3043,51 @@ fontWeight	Italic	기울임
 	Weak	약하게
 	Speed adjustment type	속도 조정 방식
 	Pointer speed	포인터 속도
+	Spacing type	간격 종류
+	Brush density	브러시 농도
+	Particle size	입자 크기
+	Particle density	입자 밀도
+	Spray	스프레이
+	Specify by size on screen	화면 크기로 지정
+	Ribbon	리본
+	Continuous spraying	연속 살포
+	Change color per stroke	획마다 색 변경
+	Color mixing	혼색
+	Starting and ending: effect	입·출 영향 대상
+	Starting	입
+	Ending	출
+	Starting and ending	입·출
+	Dual brush	2중 브러시
+	Dual brush size	2중 브러시 크기
+	Stickiness	끈기
+	Post correction	후보정
+	Refer to other layers	다른 레이어 참조
+	Adjust position	위치 조정
+	Copy stamp	복사 도장
+	Sprays while the pen holds still; CSP's rate is not traced	펜을 멈춰도 계속 살포합니다. CSP의 살포 간격은 추적되지 않았습니다
+	Change brush tip color is on: the colour varies per tip	브러시 끝 색 변경이 켜져 있어 브러시 끝마다 색이 바뀝니다
+	Perceptual color mixing	지각 기반 혼색
+	CSP mixing type 2 is approximated by blending	CSP 혼색 type 2는 일반 혼합으로 근사합니다
+	Turn on Starting or Ending to choose what they affect	입 또는 출을 켜면 영향 대상을 고를 수 있습니다
+	Percent of stroke	획 길이 비율
+	Ribbons need a tip image and no spray	리본은 브러시 끝 이미지가 있고 살포가 꺼져 있어야 합니다
+	The stroke is drawn without this CSP effect	이 CSP 효과 없이 획을 그립니다
+	Change brush tip color	브러시 끝 색 변경
+	Color jitter	색 변화
+	Spray deviation	살포 편차
+	Spray effect	살포 효과
+	Direction of particle	입자 방향
+	Thickness direction	두께 방향
+	Tip order	브러시 끝 순서
+	Do not repeat	반복하지 않음
+	One tip	브러시 끝 1개
+	Colour tips keep their own colours	컬러 브러시 끝은 원래 색을 유지합니다
+	Turn on Change brush tip color to use it	브러시 끝 색 변경을 켜면 사용할 수 있습니다
+	Shown in pixels; the CSP size unit is not converted yet	픽셀로 표시합니다. CSP 크기 단위는 아직 변환하지 않습니다
+	Wide (automatic)	넓게
+	Normal (automatic)	보통
+	Narrow (automatic)	좁게
+	Set by the spacing type	간격 종류에 따라 자동으로 정해짐
 	Path speed and straightness	경로 속도와 직진성
 	Tool Sliders	도구 슬라이더
 	Tool Sliders menu	도구 슬라이더 메뉴
@@ -3506,3 +3551,39 @@ cspTool	Space evenly	균등 배치
 	Primitive	프리미티브
 	Hand model	손 모델
 	New folder	새 폴더
+	At least 1 pixel	최소 1픽셀
+	Enable snapping	스냅 사용
+	Apply by each plot	브러시 끝마다 적용
+	Texture mode	텍스처 모드
+	Invert texture	텍스처 반전
+	Mixing mode	혼색 모드
+	Not used by Fade	페이드에서는 쓰지 않습니다
+	Smear: mixes as Blend; the density of paint is not used	스미어: 혼색처럼 섞으며 물감 농도는 쓰지 않습니다
+	Not used by Smear	스미어에서는 쓰지 않습니다
+	Apply RGB value	RGB 값 적용
+	Change it with Aligned in the Clone Stamp options	복제 도장 옵션의 정렬에서 바꿀 수 있습니다
+	Do not cross lines of reference layer	참조 레이어의 선을 넘지 않음
+	Anti-overflow	색 넘침 방지
+	Set a line art layer as a reference layer (Layer panel menu)	선화 레이어를 참조 레이어로 설정하세요 (레이어 패널 메뉴)
+	Set as Reference Layer	참조 레이어로 설정
+	Clear Reference Layer	참조 레이어 해제
+	Post correction level	후보정 강도
+	Smooths the line after the pen is lifted	펜을 뗀 뒤 선을 매끄럽게 다듬습니다
+	Blend brush tips with Darken	브러시 끝 모양을 어둡게 합성
+	Adjust brush density by gap	간격에 따라 브러시 농도 조정
+	Flip horizontal	좌우 반전
+	Flip vertical	상하 반전
+	Color mixing method	혼색 방식
+	Dual brush blending mode	듀얼 브러시 합성 모드
+	Apply to each brush tip	브러시 끝마다 적용
+	Texture blending mode	텍스처 합성 모드
+	Reverse density	농도 반전
+	Emphasize density	농도 강조
+	Turn on Color mixing to use it	혼색을 켜면 사용할 수 있습니다
+	Approximated by extra contrast	대비를 높여 근사합니다
+	Add (Glow)	더하기(발광)
+	Color dodge	컬러 닷지
+	Color burn	컬러 번
+	Linear burn	선형 번
+	Hard mix	하드 혼합
+	Height (Linear)	높이(선형)

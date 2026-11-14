@@ -86,6 +86,12 @@ pub struct Stylus {
     pub(crate) stroke: Vec<[f32; 3]>,
     pub(crate) times: Vec<f64>,
     pub(crate) time: f64,
+    /// This frame's input time in milliseconds (egui's clock), for drags without pen packets.
+    pub(crate) frame_ms: f64,
+    /// A drag without pen packet times (a mouse) started at this `frame_ms`: its points are
+    /// timed by frame, so input-rate dependent brush behaviour (CSP stabilization) sees how
+    /// sparse the mouse moves are. Moves within one frame share a time.
+    mouse_start: Option<f64>,
     pub(crate) contact: Option<(egui::ViewportId, u64)>,
     pub(crate) contact_document: Option<prism_doc::DocId>,
     pub(crate) touch_packets: crate::pen_input::TouchPackets,
@@ -105,6 +111,8 @@ impl Default for Stylus {
             stroke: Vec::new(),
             times: Vec::new(),
             time: 0.0,
+            frame_ms: 0.0,
+            mouse_start: None,
             contact: None,
             contact_document: None,
             touch_packets: Default::default(),
@@ -185,6 +193,7 @@ impl Stylus {
     pub(crate) fn begin_stroke(&mut self) {
         self.stroke.clear();
         self.times.clear();
+        self.mouse_start = (self.contact.is_none() && self.time == 0.0 && self.frame_ms.is_finite()).then_some(self.frame_ms);
         self.record_point();
     }
 
@@ -192,7 +201,11 @@ impl Stylus {
     pub(crate) fn record_point(&mut self) {
         let s = self.sample().unwrap_or_default();
         self.stroke.push([s.tilt_x, s.tilt_y, s.rotation]);
-        self.times.push(self.time);
+        let time = match self.mouse_start {
+            Some(start) if self.contact.is_none() && self.time == 0.0 => (self.frame_ms - start).max(0.0),
+            _ => self.time,
+        };
+        self.times.push(time);
     }
 
     /// Stroke points for `paint.stroke`: `[x, y, pressure]`, extended with

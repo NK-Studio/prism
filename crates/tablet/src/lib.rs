@@ -9,6 +9,9 @@
 //! - **Windows** ([`windows_ink`], plus `windows::message_hook` on Windows): capture paired
 //!   coordinate/pressure history before winit dispatches, disable pen press-and-hold per window,
 //!   and cancel interrupted contacts. Only `windows.rs` contains the Windows `unsafe` boundary.
+//! - **Testing without a tablet** ([`synthetic_pen`], `windows::SyntheticPen` on Windows): inject
+//!   timed pressure/tilt pen strokes through Windows Ink, the same path a physical pen takes
+//!   (`examples/pen_inject.rs`; see `docs/pen-input-validation.md`).
 //!
 //! Platform glue hands raw values to pure mapping in [`appkit`] or [`windows_ink`], which
 //! normalises, clamps and tracks pen state and is tested on every platform.
@@ -19,6 +22,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod appkit;
+pub mod synthetic_pen;
 pub mod windows_ink;
 
 #[cfg(target_os = "windows")]

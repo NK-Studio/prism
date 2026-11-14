@@ -179,3 +179,119 @@ fn one_local_csp_material() {
         println!("{label}: coverage {:.1} {:?}", painted(&s, 0, 0), res.err());
     }
 }
+
+/// Experiment candidates for the open SUT behaviours (docs/sut-experiment-materials.md):
+/// start/end fade (`BrushInOutType` 2), non-pixel lengths (`*Unit` ≠ 0) and colour mixing type 2
+/// (`BrushWaterColor` 2). Prints a table and writes `target/csp-check/experiment-materials.json`.
+#[test]
+#[ignore = "reads the local CLIP STUDIO user data folder"]
+fn local_csp_experiment_materials() {
+    let mut s = Session::new();
+    let mut root = json!({});
+    if let Some(r) = std::env::var_os("PRISM_TEST_CSP_ROOT") {
+        root["root"] = json!(r.to_string_lossy());
+    }
+    let listed = s.execute("brush.cspLibrary.list", root.clone()).unwrap();
+    let keys = [
+        "BrushInOutType",
+        "BrushUseIn",
+        "BrushUseOut",
+        "BrushInLength",
+        "BrushOutLength",
+        "BrushInRatio",
+        "BrushOutRatio",
+        "BrushInLengthUnit",
+        "BrushOutLengthUnit",
+        "BrushSizeUnit",
+        "BrushSpraySizeUnit",
+        "BrushWaterEdgeRadiusUnit",
+        "DualSizeUnit",
+        "DualSpraySizeUnit",
+        "BrushWaterColor",
+        "BrushWaterColor2",
+        "BrushUseWaterColor",
+        "BrushRibbon",
+    ];
+    let mut found = Vec::new();
+    // Colour mixing on with type 0 or 1: the controls for type 2.
+    let mut mixing_controls = Vec::new();
+    for (i, m) in listed["brushes"].as_array().unwrap().iter().enumerate() {
+        if m["status"] != "ready" {
+            continue;
+        }
+        let mut p = root.clone();
+        p["uuids"] = json!([m["uuid"]]);
+        p["group"] = json!(format!("csp-exp-{i}"));
+        let Ok(r) = s.execute("brush.cspLibrary.import", p) else { continue };
+        for preset in s.tools.presets.iter().filter(|p| p.group == format!("csp-exp-{i}")) {
+            let Some(meta) = &preset.sut else { continue };
+            let v = |k: &str| meta.parameters.get(k).copied().unwrap_or(0.0);
+            let fade = v("BrushInOutType") == 2.0 && (v("BrushUseIn") != 0.0 || v("BrushUseOut") != 0.0);
+            let units: Vec<String> = keys.iter().filter(|k| k.ends_with("Unit") && v(k) != 0.0).map(|k| format!("{k}={}", v(k))).collect();
+            // CSP writes the mixing flag under two names; either enables it.
+            let mixing_on = v("BrushUseWaterColor") != 0.0 || v("BrushUseWaterColor2") != 0.0;
+            let mix2 = mixing_on && v("BrushWaterColor") == 2.0;
+            if mixing_on && v("BrushWaterColor") != 2.0 {
+                mixing_controls.push(json!({"name": preset.name, "catalog": m["catalog"], "type": v("BrushWaterColor")}));
+            }
+            if fade || !units.is_empty() || mix2 {
+                let values: serde_json::Map<String, Value> = keys.iter().filter(|k| meta.parameters.contains_key(**k)).map(|k| (k.to_string(), json!(v(k)))).collect();
+                println!("{:<28} {:<24} fade2={fade:<5} mix2={mix2:<5} units={units:?}", preset.name, m["catalog"].as_str().unwrap_or(""));
+                found.push(json!({
+                    "name": preset.name, "uuid": m["uuid"], "catalog": m["catalog"], "fadeType2": fade, "mixingType2": mix2,
+                    "units": units, "values": values, "warnings": r["warnings"],
+                }));
+            }
+        }
+    }
+    let out = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/csp-check"));
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("experiment-materials.json"), serde_json::to_vec_pretty(&json!({"candidates": found, "mixingControls": mixing_controls})).unwrap()).unwrap();
+    println!("{} candidates, {} colour-mixing controls (type 0/1, mixing on)", found.len(), mixing_controls.len());
+}
+
+/// The backlog scan (docs/sut-tool-property-backlog.md › Re-measuring): per brush-family preset,
+/// every ID its `VariantShowParam` shows that has no Tool Property key. Prints the count per ID
+/// and writes `target/csp-check/unknown-ids.json`.
+#[test]
+#[ignore = "reads the local CLIP STUDIO user data folder"]
+fn local_csp_unknown_parameter_scan() {
+    let mut s = Session::new();
+    let mut root = json!({});
+    if let Some(r) = std::env::var_os("PRISM_TEST_CSP_ROOT") {
+        root["root"] = json!(r.to_string_lossy());
+    }
+    let listed = s.execute("brush.cspLibrary.list", root.clone()).unwrap();
+    let mut by_id: std::collections::BTreeMap<u32, Vec<String>> = std::collections::BTreeMap::new();
+    let mut presets = 0;
+    for (i, m) in listed["brushes"].as_array().unwrap().iter().enumerate() {
+        if m["status"] != "ready" {
+            continue;
+        }
+        let mut p = root.clone();
+        p["uuids"] = json!([m["uuid"]]);
+        p["group"] = json!(format!("csp-scan-{i}"));
+        if s.execute("brush.cspLibrary.import", p).is_err() {
+            continue;
+        }
+        for preset in s.tools.presets.iter().filter(|p| p.group == format!("csp-scan-{i}")) {
+            let Some(meta) = &preset.sut else { continue };
+            if !meta.kind().is_brush() {
+                continue;
+            }
+            presets += 1;
+            for id in &meta.original.visible {
+                if !prism_engine::paint::sut::is_known_parameter(*id) {
+                    by_id.entry(*id).or_default().push(preset.name.clone());
+                }
+            }
+        }
+    }
+    for (id, names) in &by_id {
+        println!("{id:>6}  {:>3}  {}", names.len(), names.iter().take(4).cloned().collect::<Vec<_>>().join(", "));
+    }
+    println!("{presets} brush-family presets, {} unknown IDs", by_id.len());
+    let out = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/csp-check"));
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("unknown-ids.json"), serde_json::to_vec_pretty(&json!({"presets": presets, "unknown": by_id})).unwrap()).unwrap();
+}

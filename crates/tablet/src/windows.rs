@@ -310,9 +310,188 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Synthetic pen injection (test tooling): drives the real Windows Ink path without a tablet.
+
+/// A system-wide synthetic pen device (`CreateSyntheticPointerDevice(PT_PEN)`). Injected
+/// frames move the real cursor and reach whichever window is under it, exactly like a physical
+/// pen: Prism's native capture, or another application used as a comparison oracle.
+///
+/// Dropping the device lifts a pen left in contact and destroys it.
+pub struct SyntheticPen {
+    device: windows_sys::Win32::UI::Controls::HSYNTHETICPOINTERDEVICE,
+    last: Option<crate::synthetic_pen::PenFrame>,
+}
+
+impl SyntheticPen {
+    /// Create the device. Also makes this process per-monitor DPI aware ([`make_dpi_aware`]),
+    /// so injected frames and [`find_window`] geometry are both physical pixels.
+    pub fn new() -> Result<Self, Error> {
+        make_dpi_aware();
+        // SAFETY: plain value arguments; the returned handle is owned by this struct and
+        // destroyed exactly once in Drop.
+        let device =
+            unsafe { windows_sys::Win32::UI::Controls::CreateSyntheticPointerDevice(PT_PEN, 1, windows_sys::Win32::UI::Controls::POINTER_FEEDBACK_DEFAULT) };
+        if device.is_null() {
+            return Err(last_error("CreateSyntheticPointerDevice(PT_PEN) (needs Windows 10 1809 or later)"));
+        }
+        Ok(Self { device, last: None })
+    }
+
+    /// Inject one frame now (the caller paces frames with `delay_ms`).
+    pub fn inject(&mut self, frame: &crate::synthetic_pen::PenFrame) -> Result<(), Error> {
+        let (x, y) = frame.native_position();
+        let (tilt_x, tilt_y) = frame.native_tilt();
+        let mut info = windows_sys::Win32::UI::Controls::POINTER_TYPE_INFO { r#type: PT_PEN, ..Default::default() };
+        let pen = POINTER_PEN_INFO {
+            pointerInfo: POINTER_INFO {
+                pointerType: PT_PEN,
+                pointerFlags: frame.pointer_flags(),
+                ptPixelLocation: windows_sys::Win32::Foundation::POINT { x, y },
+                ..Default::default()
+            },
+            penFlags: frame.pen_flags(),
+            penMask: PEN_MASK_PRESSURE | PEN_MASK_ROTATION | PEN_MASK_TILT_X | PEN_MASK_TILT_Y,
+            pressure: frame.native_pressure(),
+            rotation: frame.native_rotation(),
+            tiltX: tilt_x,
+            tiltY: tilt_y,
+        };
+        info.Anonymous.penInfo = pen;
+        // SAFETY: `info` is one fully initialized POINTER_TYPE_INFO whose tag (PT_PEN) matches
+        // the written union member; count is 1 and the device handle is live.
+        if unsafe { InjectSyntheticPointerInput(self.device, &info, 1) } == 0 {
+            return Err(last_error("InjectSyntheticPointerInput"));
+        }
+        self.last = Some(*frame);
+        Ok(())
+    }
+
+    /// Inject a whole stroke, sleeping each frame's `delay_ms` first.
+    pub fn play(&mut self, stroke: &crate::synthetic_pen::Stroke) -> Result<(), Error> {
+        for frame in stroke.frames() {
+            if frame.delay_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(u64::from(frame.delay_ms)));
+            }
+            self.inject(frame)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for SyntheticPen {
+    fn drop(&mut self) {
+        use crate::synthetic_pen::{PenFrame, Phase};
+        if let Some(last) = self.last.filter(|f| matches!(f.phase, Phase::Down | Phase::Move)) {
+            let _ = self.inject(&PenFrame::new(Phase::Up, last.x, last.y, 0.0, 0));
+            let _ = self.inject(&PenFrame::new(Phase::Leave, last.x, last.y, 0.0, 0));
+        }
+        // SAFETY: the handle came from CreateSyntheticPointerDevice and is destroyed once.
+        unsafe { windows_sys::Win32::UI::Controls::DestroySyntheticPointerDevice(self.device) };
+    }
+}
+
+/// Make this process per-monitor DPI aware so window geometry and injected positions share
+/// physical pixels. Call before [`find_window`]; harmless if awareness is already set.
+pub fn make_dpi_aware() {
+    use windows_sys::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
+    // SAFETY: takes a predefined pseudo-handle constant. Failure only means awareness was
+    // already set (for example by a manifest), which is not an error here.
+    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+}
+
+/// A top-level window found by title, with its client area on screen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowTarget {
+    pub handle: usize,
+    pub title: String,
+    /// Client-area origin in screen pixels.
+    pub client_x: i32,
+    pub client_y: i32,
+    pub client_width: i32,
+    pub client_height: i32,
+}
+
+thread_local! {
+    static ENUMERATED: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+unsafe extern "system" fn collect_window(hwnd: HWND, _: LPARAM) -> windows_sys::core::BOOL {
+    ENUMERATED.with(|all| {
+        if let Ok(mut all) = all.try_borrow_mut()
+            && all.len() < 4096
+        {
+            all.push(hwnd as usize);
+        }
+    });
+    1
+}
+
+/// The visible, non-minimized top-level window titled `needle` (case-insensitive), else the first
+/// one whose title contains it. Windows with an empty client area are skipped: a minimized window
+/// reports 0×0 at (−32000, −32000), and injecting there lands off screen.
+pub fn find_window(needle: &str) -> Result<Option<WindowTarget>, Error> {
+    let needle = needle.to_lowercase();
+    let found = matching_windows(&needle)?;
+    Ok(crate::synthetic_pen::pick_window(found.iter().map(|t| (t.title.as_str(), t.client_width, t.client_height)), &needle)
+        .and_then(|i| found.into_iter().nth(i)))
+}
+
+fn matching_windows(needle: &str) -> Result<Vec<WindowTarget>, Error> {
+    let mut found = Vec::new();
+    ENUMERATED.with(|all| all.borrow_mut().clear());
+    // SAFETY: the callback has the exact WNDENUMPROC ABI and keeps no pointer; it records
+    // handles in a thread-local bounded list on this (the calling) thread.
+    if unsafe { EnumWindows(Some(collect_window), 0) } == 0 {
+        return Err(last_error("EnumWindows"));
+    }
+    let handles = ENUMERATED.with(|all| std::mem::take(&mut *all.borrow_mut()));
+    for key in handles {
+        let hwnd = key as HWND;
+        // SAFETY: Win32 validates handles; a window closed meanwhile simply fails the query.
+        if unsafe { IsWindowVisible(hwnd) } == 0 {
+            continue;
+        }
+        let mut text = [0u16; 512];
+        // SAFETY: the buffer length passed equals the array length.
+        let len = unsafe { GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32) };
+        let Some(title) = text.get(..len.max(0) as usize).map(String::from_utf16_lossy) else { continue };
+        if !title.to_lowercase().contains(needle) {
+            continue;
+        }
+        let mut rect = windows_sys::Win32::Foundation::RECT::default();
+        let mut origin = windows_sys::Win32::Foundation::POINT::default();
+        // SAFETY: both outputs are initialized stack storage of the documented types.
+        if unsafe { GetClientRect(hwnd, &mut rect) } == 0 || unsafe { windows_sys::Win32::Graphics::Gdi::ClientToScreen(hwnd, &mut origin) } == 0 {
+            continue;
+        }
+        found.push(WindowTarget {
+            handle: key,
+            title,
+            client_x: origin.x,
+            client_y: origin.y,
+            client_width: rect.right.saturating_sub(rect.left),
+            client_height: rect.bottom.saturating_sub(rect.top),
+        });
+    }
+    Ok(found)
+}
+
+/// Ask Windows to bring `target` to the foreground (may be refused by focus-stealing rules;
+/// then click the window once before injecting).
+pub fn bring_to_front(target: &WindowTarget) -> bool {
+    // SAFETY: Win32 validates the handle; a stale handle just returns failure.
+    unsafe { SetForegroundWindow(target.handle as HWND) != 0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_window_misses_cleanly() {
+        assert_eq!(find_window("no window is titled like this 7f3a9c").ok().flatten(), None);
+    }
 
     #[test]
     fn safe_hook_rejects_invalid_addresses_without_dereferencing() {

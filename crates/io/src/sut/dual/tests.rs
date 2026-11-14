@@ -108,13 +108,14 @@ fn unsupported_dual_settings_are_named_in_one_warning() {
             ("DualSize", Value::Number(500.0)),
             ("DualSprayDensity", int(400)),
             ("DualSprayBias", int(-100)),
+            ("ChangeRGBByDual", int(1)),
         ],
     );
     let d = &imported.presets[0].brush.dual_brush;
     assert!(d.enabled);
     assert_eq!((d.scatter, d.count), (MAX_SCATTER, MAX_COUNT));
     let warning = imported.warnings.iter().find(|w| w.contains("dual brush settings")).expect("one warning");
-    for part in ["flow", "ribbon", "texture", "tip rotation inputs", "spray deviation", "limited"] {
+    for part in ["flow", "ribbon", "texture", "tip rotation inputs", "spray deviation", "limited", "apply RGB value"] {
         assert!(warning.contains(part), "{part}: {warning}");
     }
 }
@@ -140,9 +141,33 @@ fn image_tips_are_read_and_broken_ones_keep_the_brush() {
         ("DualPatternImageArray", Value::Blob(reference_blob(&["a.layer"]))),
     ];
     assert!(matches!(import_with(&one, &materials).presets[0].brush.dual_brush.tip, TipShape::Sampled(_)));
+    // Missing tip materials (a download cache without them) keep the dual brush on.
     let missing = import_with(&one, &|| Ok(Vec::new()));
-    assert!(!missing.presets[0].brush.dual_brush.enabled);
-    assert!(missing.warnings.iter().any(|w| w.contains("dual brush tips could not be read")));
+    let d = &missing.presets[0].brush.dual_brush;
+    assert!(d.enabled);
+    assert_eq!(d.tip, TipShape::Round);
+    assert!(
+        missing.warnings.iter().any(|w| w.contains("1 of 1 referenced SUT dual brush tips are missing; the dual brush uses a round tip")),
+        "{:?}",
+        missing.warnings
+    );
+    let two = [
+        ("UseDualBrush", int(1)),
+        ("DualBrushCompositeMode", int(1)),
+        ("DualUsePatternImage", int(1)),
+        ("DualPatternImageArray", Value::Blob(reference_blob(&["a.layer", "gone.layer", "b.layer"]))),
+    ];
+    let partial = import_with(&two, &materials);
+    match &partial.presets[0].brush.dual_brush.tip {
+        TipShape::Sequence(tips) => assert_eq!(tips.len(), 2),
+        other => panic!("expected the two present tips, got {other:?}"),
+    }
+    assert!(partial.warnings.iter().any(|w| w.contains("1 of 3") && w.contains("remaining tips")), "{:?}", partial.warnings);
+    // Ambiguous paths are a broken file, not a missing asset: the dual brush stays off.
+    let twice = || Ok(vec![material("a.layer"), material("a.layer")]);
+    let ambiguous = import_with(&one, &twice);
+    assert!(!ambiguous.presets[0].brush.dual_brush.enabled);
+    assert!(ambiguous.warnings.iter().any(|w| w.contains("ambiguous")), "{:?}", ambiguous.warnings);
     let garbage =
         [("UseDualBrush", int(1)), ("DualBrushCompositeMode", int(1)), ("DualUsePatternImage", int(1)), ("DualPatternImageArray", Value::Blob(vec![1; 3]))];
     assert!(!import_with(&garbage, &materials).presets[0].brush.dual_brush.enabled);

@@ -24,7 +24,15 @@ fn sections_with_boxes_have_flags() {
 
 /// What each section's controls edit, set to non-default values.
 fn edit_section(i: usize, b: &mut BrushSettings) {
-    let dynamic = |jitter: f32, control: Control, minimum: f32| paint::Dynamic { jitter, control, fade_steps: 40, minimum, pressure_curve: None, csp_tilt: None, csp_random: None };
+    let dynamic = |jitter: f32, control: Control, minimum: f32| paint::Dynamic {
+        jitter,
+        control,
+        fade_steps: 40,
+        minimum,
+        pressure_curve: None,
+        csp_tilt: None,
+        csp_random: None,
+    };
     match i {
         0 => {
             b.size = 87.0;
@@ -753,4 +761,35 @@ fn csp_spray_preview_cache_tracks_particle_settings() {
     assert_ne!(unstretched, crate::brush_preview::preview_sig(&brush));
     let pixels = crate::brush_preview::preview_pixels(&brush, 180, 60, [1.0, 0.0, 0.0, 1.0]);
     assert!(pixels.chunks_exact(4).any(|p| p[3] > 0));
+}
+
+#[test]
+fn presets_that_differ_only_in_size_or_colour_highlight_the_picked_one() {
+    // CLIP STUDIO's 茂み1–3 bushes share every setting but size and colour: all pass
+    // `is_current`, so picking one used to highlight the others too.
+    let base = BrushSettings { hardness: 0.4, spacing: 0.3, ..BrushSettings::default() };
+    let preset = |name: &str, size: f32, color: [f32; 4]| paint::BrushPreset {
+        name: name.into(),
+        brush: BrushSettings { size, color, ..base.clone() },
+        builtin: false,
+        group: "CSP".into(),
+        sut: None,
+    };
+    let presets = vec![preset("茂み1", 30.0, [0.1, 0.5, 0.1, 1.0]), preset("茂み2", 40.0, [0.2, 0.6, 0.2, 1.0]), preset("茂み3", 50.0, [0.3, 0.7, 0.3, 1.0])];
+    let brush = BrushSettings { size: 40.0, ..base.clone() };
+    assert_eq!(presets.iter().filter(|p| is_current(&p.brush, &brush)).count(), 3);
+    assert_eq!(current_index(&presets, Some("茂み2"), &brush), Some(1));
+    assert_eq!(current_index(&presets, Some("茂み3"), &brush), Some(2));
+    // Without a picked name (or a stale one) the first matching preset is the current one.
+    assert_eq!(current_index(&presets, None, &brush), Some(0));
+    assert_eq!(current_index(&presets, Some("gone"), &brush), Some(0));
+    assert_eq!(current_index(&presets, None, &BrushSettings::default()), None);
+
+    // Through the session: picking 茂み2 leaves exactly one highlighted preset.
+    let mut app = app();
+    app.session.tools.presets.extend(presets);
+    app.run("tools.setBrush", serde_json::json!({ "preset": "茂み2" })).unwrap();
+    let tools = &app.session.tools;
+    let i = current_index(&tools.presets, tools.brush_preset.as_deref(), &tools.brush).unwrap();
+    assert_eq!(tools.presets[i].name, "茂み2");
 }

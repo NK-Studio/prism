@@ -458,7 +458,7 @@ fn alpha_channels_equal(a: &prism_doc::AlphaChannel, b: &prism_doc::AlphaChannel
 /// compared here: the caller walks into them, so an edit inside a group damages only the
 /// edited child's extent, not the whole group's. The destructure is exhaustive, so a new
 /// `Layer` field fails to compile until it is classified: compared, or explicitly ignored
-/// (name, locks, label, `psd_blocks`, `psd_id`, link group, special rulers — none of them
+/// (name, locks, label, `psd_blocks`, `psd_id`, link group, special rulers, the reference flag — none of them
 /// composite; video bails out earlier in the walk).
 fn layer_pixels_equal(a: &Layer, b: &Layer) -> bool {
     let Layer {
@@ -484,6 +484,7 @@ fn layer_pixels_equal(a: &Layer, b: &Layer) -> bool {
         advanced,
         video: _,
         special_rulers: _,
+        reference: _,
     } = a;
     *id == b.id
         && *visible == b.visible

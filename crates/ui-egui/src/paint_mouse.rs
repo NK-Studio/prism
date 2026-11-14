@@ -166,7 +166,8 @@ pub fn show_picker(app: &mut PrismApp, ctx: &egui::Context) {
         let before = app.session.tools.brush.clone();
         let mut b = before.clone();
         let list = &mut app.ui.brush_picker_list;
-        let picks = egui::Frame::popup(ui.style()).show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, list)).inner;
+        let picked = app.session.tools.brush_preset.as_deref();
+        let picks = egui::Frame::popup(ui.style()).show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, picked, list)).inner;
         crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &b);
         let closes = picks.iter().any(crate::brush_picker::Pick::closes);
         crate::brush_picker::apply(app, ui.ctx(), picks);
@@ -256,6 +257,42 @@ mod tests {
         let (a, b) = drag(&mut h, PointerButton::Primary);
         assert_eq!(strokes(&h).len(), 1);
         assert!(alpha_at(&h, a + (b - a) * 0.5) > 0.9);
+    }
+
+    #[test]
+    fn complete_stroke_between_frames_keeps_the_path() {
+        let mut h = harness(None);
+        let c = h.state().last_canvas_rect.center();
+        let a = c - vec2(80.0, 0.0);
+        let b = c + vec2(80.0, 0.0);
+        let undo = h.state().session.active().unwrap().history.past_len();
+        h.event(egui::Event::PointerMoved(a));
+        h.run_steps(1);
+        h.input_mut().events.push(egui::Event::PointerButton { pos: a, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        for i in 1..=16 {
+            h.input_mut().events.push(egui::Event::PointerMoved(a + (b - a) * (i as f32 / 16.0)));
+        }
+        h.input_mut().events.push(egui::Event::PointerButton { pos: b, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        assert_eq!(strokes(&h).len(), 1);
+        assert!(alpha_at(&h, c) > 0.9, "the path must survive a press, moves and release in one frame");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), undo + 1);
+        assert!(h.state().drag.is_none());
+    }
+
+    #[test]
+    fn press_frame_keeps_moves_below_the_drag_threshold() {
+        let mut h = harness(None);
+        let a = h.state().last_canvas_rect.center();
+        h.event(egui::Event::PointerMoved(a));
+        h.run_steps(1);
+        h.input_mut().events.push(egui::Event::PointerButton { pos: a, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.input_mut().events.push(egui::Event::PointerMoved(a + vec2(0.5, 0.0)));
+        h.input_mut().events.push(egui::Event::PointerMoved(a + vec2(1.0, 0.0)));
+        h.run_steps(1);
+        assert!(h.state().drag.as_ref().is_some_and(|d| d.points.len() >= 3), "subthreshold input is part of the stroke");
+        press(&mut h, a + vec2(1.0, 0.0), PointerButton::Primary, false);
+        assert_eq!(strokes(&h).len(), 1);
     }
 
     #[test]

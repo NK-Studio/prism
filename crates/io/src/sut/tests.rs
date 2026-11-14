@@ -331,7 +331,7 @@ fn maps_texture_material_and_settings() {
     let t = &imp.presets[0].brush.texture;
     assert!(t.enabled);
     // White, black, black, transparent (reads as white): luminance, not coverage.
-    assert_eq!(t.pattern, Pattern::Tile(GrayTile { width: 2, height: 2, data: vec![65535, 0, 0, 65535] }));
+    assert_eq!(t.pattern, Pattern::Tile(GrayTile { width: 2, height: 2, data: vec![65535, 0, 0, 65535].into() }));
     assert_eq!((t.scale, t.invert, t.each_tip, t.depth), (0.5, true, true, 0.4));
     assert_eq!(t.csp_mode, Some(CspTextureMode::Subtract));
     assert!(!imp.warnings.iter().any(|w| w.contains("texture could not be read")));
@@ -793,6 +793,41 @@ fn csp_spray_uses_native_fields_and_keeps_area_particle_size_count_bias_independ
 }
 
 #[test]
+fn csp_spray_particle_angle_inputs_map_from_their_flags() {
+    use prism_paint::csp_spray::CspParticleAngle as Input;
+    let spray = |flags: i64, random: f64| {
+        let fields = [
+            ("BrushUseSpray", Value::Integer(1)),
+            ("BrushRotationInSpray", number(10.0)),
+            ("BrushRotationEffectorInSpray", Value::Integer(flags)),
+            ("BrushRotationRandomInSpray", number(random)),
+        ];
+        let imported = read_sut(&variant_fields_fixture(&fields), "SUT", &prism_raster::Interrupt::NONE).unwrap();
+        (imported.presets[0].brush.csp_spray.clone().unwrap(), imported.warnings)
+    };
+    for (flags, input) in [(0x11, Input::PenTilt), (0x21, Input::Rotation), (0x41, Input::Direction), (0x101, Input::Spray), (0x201, Input::TowardCenter)] {
+        let (s, warnings) = spray(flags, 0.0);
+        assert_eq!((s.angle_input, s.angle_jitter, s.angle), (input, 0.0, -10.0), "{flags:#x}");
+        assert!(warnings.is_empty(), "{flags:#x}: {warnings:?}");
+    }
+    // Random 0x80 reads the stored amount (100 % spreads ±180°); without 0x01 nothing applies.
+    let (s, _) = spray(0x81, 50.0);
+    assert_eq!((s.angle_input, s.angle_jitter), (Input::Fixed, 0.5));
+    let (s, warnings) = spray(0xc0, 50.0);
+    assert_eq!((s.angle_input, s.angle_jitter), (Input::Fixed, 0.0));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    // Several inputs keep the first, with a warning; hostile amounts stay bounded.
+    let (s, warnings) = spray(0x61, f64::NAN);
+    assert_eq!((s.angle_input, s.angle_jitter), (Input::Rotation, 0.0));
+    assert!(warnings.iter().any(|w| w.contains("several inputs")), "{warnings:?}");
+    for random in [f64::INFINITY, -1e300, 1e300] {
+        let (s, _) = spray(0x81, random);
+        assert!(s.angle_jitter.is_finite() && (0.0..=2.0).contains(&s.angle_jitter), "{random}: {}", s.angle_jitter);
+    }
+    assert!(spray(i64::MIN, 0.0).1.iter().all(|w| !w.contains("several")));
+}
+
+#[test]
 fn csp_spray_pressure_effectors_do_not_replace_the_area_curve_or_each_other() {
     let area = [[0.0, 0.0], [1.0, 1.0]];
     let particle = [[0.0, 0.0], [0.5, 1.0], [1.0, 1.0]];
@@ -831,7 +866,7 @@ fn csp_spray_disabled_fields_stay_inactive_and_particle_budget_warns() {
             ("BrushUseSpray", Value::Integer(1)),
             ("BrushSprayDensity", Value::Integer(i64::MAX)),
             ("BrushSpraySizeUnit", Value::Integer(1)),
-            ("BrushRotationEffectorInSpray", Value::Integer(0x80)),
+            ("BrushRotationEffectorInSpray", Value::Integer(0x400)),
         ]),
         "SUT",
         &prism_raster::Interrupt::NONE,
@@ -886,8 +921,15 @@ fn csp_start_and_end_maps_lengths_percentages_and_targets() {
     assert_eq!((in_out.mode, in_out.start, in_out.end), (CspInOutMode::Percent, Some(0.3), Some(0.1)));
     let mut fade = base.clone();
     fade[6].1 = Value::Integer(2);
+    // Fade (type 2): the ending length alone, from the start of the stroke; no warning.
     let faded = read(&fade);
-    assert!(faded.presets[0].brush.csp_in_out.is_none() && faded.warnings.iter().any(|w| w.contains("fade")));
+    let f = faded.presets[0].brush.csp_in_out.clone().unwrap();
+    assert_eq!((f.mode, f.start, f.end, f.by_speed), (CspInOutMode::Fade, None, Some(7.0), false));
+    assert!(!faded.warnings.iter().any(|w| w.contains("start and end type")), "{:?}", faded.warnings);
+    let mut unknown = base.clone();
+    unknown[6].1 = Value::Integer(9);
+    let unknown = read(&unknown);
+    assert!(unknown.presets[0].brush.csp_in_out.is_none() && unknown.warnings.iter().any(|w| w.contains("start and end type 9")));
     let mut off = base.clone();
     off[0].1 = Value::Integer(0);
     off[3].1 = Value::Integer(0);
@@ -1015,6 +1057,15 @@ fn csp_color_mixing_maps_amount_density_stretch_and_effectors() {
     assert!(other.presets[0].brush.csp_mixing.as_ref().unwrap().perceptual, "BrushColorMixingMode 1 is perceptual mixing");
     assert!(other.warnings.iter().any(|w| w.contains("color mixing type 1")), "{:?}", other.warnings);
     assert!(!other.warnings.iter().any(|w| w.contains("perceptual") || w.contains("WaterColor2")), "{:?}", other.warnings);
+    // Smear (type 2) mixes as Blend with the density of paint at 100 %, whatever is stored.
+    let mut smear = base.to_vec();
+    smear[1].1 = Value::Integer(2);
+    smear.push(("BrushMixAlphaEffector", Value::Blob(curve_effector(&curve, 20))));
+    let smear = read(&smear);
+    let mixing = smear.presets[0].brush.csp_mixing.clone().unwrap();
+    assert_eq!((mixing.amount, mixing.density, mixing.stretch), (0.8, 1.0, 0.42));
+    assert_eq!(mixing.density_dynamic.control, Control::Off);
+    assert!(!smear.warnings.iter().any(|w| w.contains("color mixing type")), "{:?}", smear.warnings);
     // The duplicate flag alone (no BrushUseWaterColor field) also enables mixing.
     let mut mirrored = base[1..].to_vec();
     mirrored.push(("BrushUseWaterColor2", Value::Integer(1)));
@@ -1146,7 +1197,7 @@ fn colour_tips_paint_their_shape_in_their_own_colours() {
     let imported = read_sut(&bytes, "SUT", &prism_raster::Interrupt::NONE).unwrap();
     let TipShape::Sequence(tips) = &imported.presets[0].brush.tip else { panic!("sequence expected") };
     assert_eq!(tips[0].data, [65535, 32896, 65535, 0], "alpha is the density, not the white luminance");
-    let white = imported.presets[0].brush.csp_tip_colors.first().cloned().flatten().map(|c| c.rgb);
+    let white = imported.presets[0].brush.csp_tip_colors.first().cloned().flatten().map(|c| c.rgb.into_vec());
     assert_eq!(white, Some(vec![255; 12]));
     assert!(!imported.warnings.iter().any(|w| w == COLOUR_TIP), "{:?}", imported.warnings);
     assert!(!imported.warnings.iter().any(|w| w.contains("thumbnail")));

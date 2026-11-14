@@ -372,7 +372,8 @@ fn click(app: &mut PrismApp, layer: LayerId, grab: Grab) {
     match grab {
         Grab::Line(t) => {
             // The new stop is the selected one, as in Photoshop.
-            if app.run(cmds::STOP, json!({"layer": layer.0, "action": "add", "location": t})).is_ok() {
+            let added = app.run(cmds::STOP, json!({"layer": layer.0, "action": "add", "location": t})).is_ok();
+            if added {
                 app.gradient.selected = stop_near(app, t).map(|i| (layer, Grab::Stop(i)));
             }
         }

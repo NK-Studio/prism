@@ -99,6 +99,11 @@ fn merge(base: &mut Value, patch: &Value) {
             for (k, v) in p {
                 match b.get_mut(k) {
                     Some(bv) if bv.is_object() && v.is_object() => merge(bv, v),
+                    // null clears a setting back to its default: an optional section, or a flag
+                    // that is only stored when on (`cspNoSnap`, `cspAtLeast1px`…).
+                    _ if v.is_null() => {
+                        b.remove(k);
+                    }
                     _ => {
                         b.insert(k.clone(), v.clone());
                     }
@@ -188,7 +193,7 @@ pub(crate) fn validate_brush(brush: &BrushSettings, cmd: &str) -> Result<()> {
     }
     if let Some(in_out) = &brush.csp_in_out {
         let max = match in_out.mode {
-            prism_paint::CspInOutMode::Length => prism_paint::csp_in_out::MAX_LENGTH,
+            prism_paint::CspInOutMode::Length | prism_paint::CspInOutMode::Fade => prism_paint::csp_in_out::MAX_LENGTH,
             prism_paint::CspInOutMode::Percent => 1.0,
         };
         let length_ok = |v: Option<f64>| v.is_none_or(|v| v.is_finite() && v >= 0.0 && v <= max);
@@ -293,8 +298,14 @@ fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry_path.clone());
     let (id, brush, zoom) = stroke_target(s, p, brush)?;
+    // CSP post correction: the committed line is smoothed once more (the live stroke is not).
+    let pts = match brush.csp_post_correction {
+        Some(level) => prism_paint::csp_post_correction::apply(level, zoom, &pts),
+        None => pts,
+    };
     let dmg = s.edit(label, |doc, _| {
-        let sel = doc.selection.clone();
+        // A CSP brush that does not cross reference-layer lines paints through a narrower selection.
+        let sel = crate::reference_layer::constrain(doc, id, &brush, &pts, doc.selection.clone());
         let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
         let mut brush = brush;
         erase_locked(&mut brush, lock, bg);
@@ -738,6 +749,10 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
         s.tools.brush_preset = Some(find_preset(s, name, cmd)?.name.clone());
     }
     let before = std::mem::replace(&mut s.tools.brush, b);
+    if p.get("preset").and_then(Value::as_str).is_some() {
+        // Reuse the immutable prepared tips when the pen first touches the canvas.
+        prism_paint::BrushContext::prewarm(&s.tools.brush);
+    }
     // A coalesced gesture (one slider drag) journals as one call: remember the brush it started from.
     let key = p.get("coalesce").and_then(Value::as_str).filter(|_| p.get("preset").is_none() && p.get("reset").is_none());
     let continuing = |s: &Session, k: &str| {

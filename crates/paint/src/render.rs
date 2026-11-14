@@ -23,6 +23,9 @@ use crate::rng::hash2;
 use crate::tile::{GrayTile, Mips, PatternImage};
 use crate::{Dab, Falloff, StrokePoint};
 
+#[path = "prepared_brush_cache.rs"]
+mod prepared_cache;
+
 /// Edge of a stroke-buffer tile.
 pub const COV_TILE: i32 = 64;
 const NOISE_SALT: u64 = 0x006E_6F69_7365;
@@ -118,7 +121,8 @@ pub fn mask_combine(mode: MaskMode, v: f32, t: f32, d: f32) -> f32 {
 /// A stroke-ready brush: the settings plus prepared tip mips and texture.
 #[derive(Clone, Debug)]
 pub struct BrushContext {
-    pub brush: BrushSettings,
+    /// Immutable prepared settings, shared by live/tail previews along with their mip maps.
+    pub brush: Arc<BrushSettings>,
     tip: Option<Arc<Mips>>,
     sequence: Vec<Arc<Mips>>,
     dual_tip: Option<Arc<Mips>>,
@@ -178,7 +182,7 @@ fn prepare_pattern(b: &BrushSettings) -> (Option<Arc<PatternImage>>, f32) {
         }
         return (Some(Arc::new(img)), scale);
     }
-    let (br, ct) = (t.brightness.clamp(-1.0, 1.0), t.contrast.clamp(-1.0, 1.0));
+    let (br, ct) = (t.brightness.clamp(-1.0, 1.0), t.effective_contrast().clamp(-1.0, 1.0));
     for v in &mut img.data {
         let mut x = (*v - 0.5) * (1.0 + ct) + 0.5 + br;
         x = x.clamp(0.0, 1.0);
@@ -213,8 +217,41 @@ pub(crate) fn rect_around(d: &Dab, reach: f32) -> Rect {
 }
 
 impl BrushContext {
+    /// Prepare normal-sized sampled tips at preset selection, before the first pen-down.
+    /// Larger assets remain lazy so selection cannot introduce an unbounded preparation job.
+    pub fn prewarm(brush: &BrushSettings) {
+        let samples = |tip: &TipShape| match tip {
+            TipShape::Round => 0,
+            TipShape::Sampled(g) => g.data.len(),
+            TipShape::Sequence(v) => v.iter().fold(0usize, |n, g| n.saturating_add(g.data.len())),
+        };
+        let texture_samples = if brush.texture.enabled {
+            match &brush.texture.pattern {
+                Pattern::Tile(g) => g.data.len(),
+                Pattern::Procedural { size, .. } => (*size as usize).saturating_mul(*size as usize),
+            }
+        } else {
+            0
+        };
+        let n = samples(&brush.tip).saturating_add(samples(&brush.dual_brush.tip)).saturating_add(texture_samples);
+        let colors = brush.csp_tip_colors.iter().flatten().fold(0usize, |n, c| n.saturating_add(c.rgb.len()));
+        if n > 0 && n <= 4 << 20 && colors <= 12 << 20 {
+            drop(Self::new(brush));
+        }
+    }
+
     pub fn new(brush: &BrushSettings) -> Self {
         let brush = brush.bounded_for_render();
+        if let Some(mut context) = prepared_cache::get(&brush) {
+            context.brush = Arc::new(brush);
+            return context;
+        }
+        let context = Self::prepare(brush);
+        prepared_cache::insert(&context);
+        context
+    }
+
+    fn prepare(brush: BrushSettings) -> Self {
         let mips = |t: &TipShape| match t {
             TipShape::Sampled(g) if g.is_valid() => Some(Arc::new(Mips::new(g))),
             _ => None,
@@ -258,7 +295,7 @@ impl BrushContext {
             ribbon_tips,
             texture,
             texture_scale,
-            brush,
+            brush: Arc::new(brush),
         }
     }
 
@@ -284,7 +321,7 @@ impl BrushContext {
         };
         if texture.csp_mode.is_some() {
             // GrayTile stores luminance; CSP samples black/alpha coverage.
-            crate::csp_texture::luminance(1.0 - value, texture.invert, texture.brightness, texture.contrast)
+            crate::csp_texture::luminance(1.0 - value, texture.invert, texture.brightness, texture.effective_contrast())
         } else {
             value
         }
@@ -381,7 +418,9 @@ impl BrushContext {
         if let Some(slice) = d.ribbon {
             // Pencil-style thresholds would not divide back into colours: those keep the mean.
             let slot = slice.tip as usize % self.ribbon_tips.len().max(1);
-            let (Some((shape, k)), Some(Some(planes)), false) = (self.ribbon_tips.get(slot), self.ribbon_colors.get(slot), self.brush.aliased) else { return false };
+            let (Some((shape, k)), Some(Some(planes)), false) = (self.ribbon_tips.get(slot), self.ribbon_colors.get(slot), self.brush.aliased) else {
+                return false;
+            };
             let n = rect.width() as usize * rect.height() as usize;
             let mut alpha = vec![0.0; n];
             self.rasterize_ribbon(d, &slice, shape, *k, rect, &mut alpha, (false, false, false));
@@ -551,7 +590,8 @@ impl BrushContext {
             None => (0, 1.0, 1.0, 1.0),
         };
         // A CSP tip value at a pixel-space offset from the dab centre: the nearest texel of the
-        // chosen level (a computed tip is its exact shape, box-filtered for medium/strong).
+        // chosen level, or a computed tip's exact shape (binary when hard; an anti-aliased hard
+        // computed tip uses `csp_ramp` below instead).
         let csp_tip_value = |dx: f32, dy: f32| -> f32 {
             let (u, v) = to_tip(dx, dy);
             match mips {
@@ -559,28 +599,52 @@ impl BrushContext {
                     let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
                     m.sample_nearest(level, px / tw, py / th)
                 }
-                None => {
-                    let box_px = match csp_aa {
-                        Some(2) => 1.0,
-                        Some(3..) => 2.0,
-                        _ => 0.0,
-                    };
-                    if box_px <= 0.0 || !falloff.is_hard() {
-                        return if falloff.is_hard() { if (u * inv_major).powi(2) + (v * inv_minor).powi(2) <= 1.0 { 1.0 } else { 0.0 } } else { texel(u, v) };
+                None if falloff.is_hard() => {
+                    if (u * inv_major).powi(2) + (v * inv_minor).powi(2) <= 1.0 {
+                        1.0
+                    } else {
+                        0.0
                     }
-                    let mut sum = 0.0;
-                    for j in 0..4 {
-                        for i in 0..4 {
-                            let (ox, oy) = ((i as f32 + 0.5) / 4.0 - 0.5, (j as f32 + 0.5) / 4.0 - 0.5);
-                            let (su, sv) = to_tip(dx + ox * box_px, dy + oy * box_px);
-                            if (su * inv_major).powi(2) + (sv * inv_minor).powi(2) <= 1.0 {
-                                sum += 1.0 / 16.0;
-                            }
-                        }
-                    }
-                    sum
                 }
+                None => texel(u, v),
             }
+        };
+        // CSP's anti-aliased hard computed tip, measured against CLIP STUDIO PAINT
+        // (docs/pen-input-validation.md › G-pen comparison): the edge stays at the tip's outline
+        // and coverage ramps linearly *inside* it, `clamp(e / w)` for a pixel centre `e` pixels
+        // inside the outline, with `w` 1.5 / 2.5 / 3.5 px for weak / medium / strong, at most the
+        // tip's smaller radius. The outline distance is first order, (1 − q) / |∇q| (exact on a
+        // circle), with the gradient taken in pixels through the linear `to_tip` map.
+        let csp_ramp = match csp_aa {
+            Some(aa @ 1..) if mips.is_none() && falloff.is_hard() => {
+                let width = match aa {
+                    1 => 1.5_f32,
+                    2 => 2.5,
+                    _ => 3.5,
+                };
+                // Pixel offsets → relative-radius space (qu, qv): the columns of that linear map.
+                let (ux, vx) = to_tip(1.0, 0.0);
+                let (uy, vy) = to_tip(0.0, 1.0);
+                let (a, b, c, e) = (ux * inv_major, uy * inv_major, vx * inv_minor, vy * inv_minor);
+                // The smallest pixel radius is 1 / the largest singular value of [[a, b], [c, e]].
+                let (saa, sab, sbb) = (a * a + c * c, a * b + c * e, b * b + e * e);
+                let sigma_max = ((saa + sbb) / 2.0 + (((saa - sbb) / 2.0).powi(2) + sab * sab).sqrt()).max(0.0).sqrt();
+                let width = if sigma_max > 0.0 && sigma_max.is_finite() { width.min(1.0 / sigma_max) } else { width };
+                Some(move |dx: f32, dy: f32| -> f32 {
+                    let (qu, qv) = (a * dx + b * dy, c * dx + e * dy);
+                    let q = qu.hypot(qv);
+                    if q >= 1.0 {
+                        return 0.0;
+                    }
+                    let (gx, gy) = (qu * a + qv * c, qu * b + qv * e);
+                    let g = if q > 1e-6 { gx.hypot(gy) / q } else { 0.0 };
+                    if g <= 0.0 || width <= 0.0 {
+                        return 1.0;
+                    }
+                    ((1.0 - q) / g / width).clamp(0.0, 1.0)
+                })
+            }
+            _ => None,
         };
         for yy in 0..h {
             let y = rect.y0 + yy as i32;
@@ -590,9 +654,12 @@ impl BrushContext {
                 let dx = x as f32 + 0.5 - cx;
                 let (val, rn) = match (csp_aa, mips) {
                     // CSP: one sample at the pixel centre without anti-aliasing; otherwise the mean
-                    // of 2×2 samples half a pixel apart around it.
+                    // of 2×2 samples half a pixel apart around it (a hard computed tip uses the
+                    // measured inward ramp instead).
                     (Some(aa), _) => {
-                        let val = if aa == 0 {
+                        let val = if let Some(ramp) = &csp_ramp {
+                            ramp(dx, dy)
+                        } else if aa == 0 {
                             csp_tip_value(dx, dy)
                         } else {
                             let (x0, y0) = (dx - 0.25, dy - 0.25);
@@ -677,7 +744,16 @@ impl BrushContext {
     /// and samples the tip there (bilinear on a mip level, nearest for CSP anti-aliasing off).
     /// Pixel centres belong to one slice each, so consecutive slices join without seams.
     #[allow(clippy::too_many_arguments)]
-    fn rasterize_ribbon(&self, d: &Dab, slice: &crate::csp_ribbon::RibbonSlice, m: &Mips, k: [f32; 2], rect: Rect, out: &mut [f32], effects: (bool, bool, bool)) {
+    fn rasterize_ribbon(
+        &self,
+        d: &Dab,
+        slice: &crate::csp_ribbon::RibbonSlice,
+        m: &Mips,
+        k: [f32; 2],
+        rect: Rect,
+        out: &mut [f32],
+        effects: (bool, bool, bool),
+    ) {
         let b = &self.brush;
         let w = rect.width() as usize;
         let Some((w0, h0, _)) = m.levels.first() else { return };
@@ -771,6 +847,9 @@ pub struct CoverageMap {
     /// Each dab paints over the colour already stored (by its own tip value), even where the
     /// coverage is full: CSP colour mixing lays every dab onto the layer in turn.
     pub(crate) paint_over: bool,
+    /// CSP "Blend brush tips with Darken": a dab's colour only ever darkens the colour the
+    /// stroke already holds at a pixel (per channel). Colour maps of additive modes only.
+    pub(crate) darken: bool,
 }
 
 impl CoverageMap {
@@ -848,12 +927,25 @@ impl CoverageMap {
                         } else {
                             c
                         };
-                        if nv <= c && !self.paint_over {
+                        let darken = self.darken && want_col && c > 0.0;
+                        if nv <= c && !self.paint_over && !darken {
                             continue;
                         }
                         if let (true, Some((all, per_pixel))) = (want_col, color) {
                             let at = (row + (x - rect.x0) as usize) * nc;
                             let Some(col) = (if per_pixel { all.get(at..at + nc) } else { all.get(..nc) }) else { continue };
+                            if darken {
+                                // The stored colour is premultiplied by the coverage: darken the
+                                // straight colour by the dab's own weight, never lighten it.
+                                let (a, nv) = ((v * ceil).clamp(0.0, 1.0), nv.max(c));
+                                let p = &mut tile.col[ti * nc..(ti + 1) * nc];
+                                for i in 0..nc {
+                                    let old = p[i] / c;
+                                    p[i] = (old + a * (col[i] - old).min(0.0)) * nv;
+                                }
+                                tile.cov[ti] = nv;
+                                continue;
+                            }
                             let k = if self.paint_over {
                                 (v * ceil).clamp(0.0, 1.0)
                             } else if c < 1.0 {
@@ -984,7 +1076,7 @@ impl StrokeRenderer {
             }
             None => brush,
         };
-        let mixing =brush.csp_mixing.as_ref().filter(|_| !brush.erase && fmt.is_some()).map(|m| {
+        let mixing = brush.csp_mixing.as_ref().filter(|_| !brush.erase && fmt.is_some()).map(|m| {
             Box::new(MixState {
                 stretch: m.bounded().stretch,
                 perceptual: m.perceptual,
@@ -994,13 +1086,22 @@ impl StrokeRenderer {
             })
         });
         let ctx = BrushContext::new(brush);
-        let per_dab_color = (brush.color_dynamics.enabled || mixing.is_some() || ctx.has_tip_colors()) && !brush.erase && fmt.is_some();
+        let per_dab_color =
+            (brush.color_dynamics.enabled || brush.csp_sub_color.is_some() || mixing.is_some() || ctx.has_tip_colors()) && !brush.erase && fmt.is_some();
         // Color mixing also keeps each dab's target alpha after the colour channels.
         let nc = if per_dab_color { fmt.map_or(0, |f| f.mode.color_channels()) + usize::from(mixing.is_some()) } else { 0 };
         Self {
             ctx,
             generator: DabGenerator::new(brush, zoom),
-            cov: CoverageMap { paint_over: mixing.is_some(), ..CoverageMap::new(nc) },
+            cov: CoverageMap {
+                paint_over: mixing.is_some(),
+                // Darken compares colour values: only where a larger value is lighter.
+                darken: brush.csp_darken_tips
+                    && per_dab_color
+                    && mixing.is_none()
+                    && fmt.is_some_and(|f| matches!(f.mode, prism_color::ColorMode::Rgb | prism_color::ColorMode::Grayscale)),
+                ..CoverageMap::new(nc)
+            },
             dual: brush.dual_brush.enabled.then(|| CoverageMap::new(0)),
             fmt,
             per_dab_color,
@@ -1175,6 +1276,7 @@ impl StrokeRenderer {
             bounds: m.bounds,
             dirty: HashSet::new(),
             paint_over: m.paint_over,
+            darken: m.darken,
         };
         let mut t = StrokeRenderer {
             ctx: self.ctx.clone(),

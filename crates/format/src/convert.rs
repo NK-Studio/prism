@@ -200,6 +200,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         advanced: l.advanced,
         video: l.video.as_ref().map(|v| video_m(v, sink)),
         special_rulers: l.special_rulers.clone(),
+        reference: l.reference,
     }
 }
 
@@ -506,6 +507,7 @@ impl Loader<'_> {
                 }
                 None => None,
             },
+            reference: m.reference,
         })
     }
 

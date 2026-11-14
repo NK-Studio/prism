@@ -961,7 +961,8 @@ fn stats_lines(id: &str, ps: &[DabStat], prism: &[DabStat]) -> String {
     let mut t = format!(
         "\n### `{id}`\n\n| metric | PS n | PS mean | PS sd | PS p5 | PS p50 | PS p95 | Prism n | Prism mean | Prism sd | Prism p5 | Prism p50 | Prism p95 |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n"
     );
-    let metrics: [(&str, fn(&DabStat) -> f64); 5] =
+    type Metric = (&'static str, fn(&DabStat) -> f64);
+    let metrics: [Metric; 5] =
         [("diameter", |d| d.diameter), ("peak", |d| d.peak), ("angle", |d| d.angle), ("roundness", |d| d.roundness), ("offset", |d| d.offset)];
     for (name, f) in metrics {
         let (a, b) = (summary(ps.iter().map(f).collect()), summary(prism.iter().map(f).collect()));

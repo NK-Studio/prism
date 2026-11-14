@@ -179,6 +179,162 @@ regression comparison on this Windows/RTX 3070 Ti machine; quick mode does not
 enforce full-document budgets. No baseline or scorecard performance claim was
 updated. Several general layout operations still exceed a 16 ms frame target.
 
+## Synthetic pen injection (2026-11-14)
+
+A physical tablet can't be used after every change. `prism-tablet` can now inject
+pen strokes with pressure, tilt, rotation and timing through
+`CreateSyntheticPointerDevice(PT_PEN)` + `InjectSyntheticPointerInput` (Windows 10
+1809+). These are OS-level Windows Ink packets. They take the same path as a
+physical pen: winit's emulated mouse/touch events, Prism's native history
+capture, `pen_input` and the brush. The same stroke can also drive another
+application to produce a comparison oracle. CLIP STUDIO PAINT must use
+**TabletPC** (Windows Ink) in its tablet preferences; Wintab mode does not see
+synthetic pens.
+
+```sh
+cargo run -p prism-tablet --example pen_inject -- --window Prism --list     # find the target
+cargo run -p prism-tablet --example pen_inject -- --window Prism            # 0→1→0 pressure ramp
+cargo run -p prism-tablet --example pen_inject -- --window "CLIP STUDIO" --ramp 200,300,600
+cargo run -p prism-tablet --example pen_inject -- --window Prism --file trace.json --origin X,Y --scale S
+```
+
+`--file` takes `ui.penTrace` output or `[x, y, pressure]` / `{x, y, pressure, time?,
+tiltX?, tiltY?, rotation?}` samples. Points are mapped to the target's client area as
+`origin + point * scale` (for a trace in document coordinates, use the canvas origin
+and zoom). `--hover N` sets the hover lead-in before contact, and `--dry-run` prints
+the frames. Injection moves the real cursor and focuses the target window, so don't
+use the mouse while it runs. It is a local measuring tool, not a CI test.
+
+The safe frame encoding and stroke validation (`synthetic_pen`) are unit-tested on
+every platform. On Windows the device boundary lives in `windows.rs` with the rest
+of the Windows `unsafe`.
+
+**Verified end to end** on this machine (3840×2088 client, 150 % DPI) against the
+running app (`--control`, `ui.penTrace`). A 2304 px ramp produced one `down`, 576
+`move` and one `up` event, all `source: windowsInk` with `pressureValid: true`.
+The pressures rose 0 → 0.99 → 0 in 4/1024 steps at about 8.5 ms per packet. The
+canvas showed the expected tapered line as one Brush Tool history step. Four more
+ramps with 1, 2, 3 and 8 hover frames each committed one stroke.
+
+Open observation: the very first injected stroke, sent right after Windows
+brought the previously background window forward, reached the trace without its
+`down` (moves and `up` only) and committed nothing. Later strokes, including those
+with a single 16 ms hover frame, all committed. Whether a physical pen touching
+just as the window activates loses its stroke the same way is not yet established.
+
+## G-pen comparison with CLIP STUDIO PAINT (2026-11-14)
+
+The same synthetic stroke drove CLIP STUDIO PAINT PRO and Prism: document x 200 → 1400 at a fixed
+y, 301 samples 8 ms apart, pressure 0 → 1 → 0, no tilt. Both used a 1600×900 RGB canvas at the
+same physical scale (0.899 screen px per document px) and the G-pen sub tool: CLIP STUDIO's own,
+and Prism's from `ui.cspTool {"tool":"pen","subTool":"G펜"}`. Size was 25 in both (CLIP STUDIO's
+user setting; Prism's imported default is 10, so it was set to 25). Stabilization was 6 and
+"Adjust by speed" was on. CLIP STUDIO first used Wintab and drew the synthetic stroke at a
+constant width, as from a mouse. It was switched to Tablet PC for the run and back afterwards.
+
+Width is the coverage summed down each column (CLIP STUDIO measured at 100 % view, Prism from
+the saved PNG):
+
+| Pressure | 0.17 | 0.33 | 0.50 | 0.67 | 0.83 | 1.00 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CLIP STUDIO (rising / falling), px | 2.6 / 2.7 | 7.0 / 7.1 | 11.3 / 11.4 | 15.4 / 15.5 | 19.5 / 19.6 | 23.4 |
+| Prism, px | 4.4 | 8.9 | 13.2 | 17.2 | 21.3 | 25.2 |
+
+- **Pressure response matches.** Both are linear with a zero minimum: about 24.9 px per unit of
+  pressure in each. The peak sits at x 798 (CLIP STUDIO) and 802 (Prism), and the profile is
+  symmetric in both.
+- **Prism is a constant 1.6–1.9 px wider.** The gap does not depend on pressure. A CLIP STUDIO
+  G-pen stroke of size 25 without pressure also measures 23.7 px, so this is how wide a dab of
+  a given size is drawn (edge or anti-aliasing), not the pressure curve. The thin ends follow:
+  ink above half coverage spans x 225–1376 in CLIP STUDIO and 220–1380 in Prism.
+- Not measured: tilt, speed-dependent stabilization at other speeds, other sub tools, and opacity
+  or density pressure.
+
+**Cause of the width gap (same day).** The user's CLIP STUDIO G-pen and the installed default
+differ only in size: 25 against 10, with hardness 100, thickness 100, angle 0 and automatic spacing
+type 2 in both (read from copies of both `EditImageTool.todb`). So the gap comes from how each app
+renders, not from the settings. Measurements at 100 % view, with CLIP STUDIO on Wintab (synthetic
+pen = full-size mouse input):
+
+| G-pen, size 25 | CLIP STUDIO | Prism |
+| --- | ---: | ---: |
+| One dab: area → equivalent diameter | 399 px² → **22.5 px** | 491 px² → **25.0 px** |
+| One dab: centre column | 0.39, 0.79, 20 × 1, 0.79, 0.39 (22.4) | 0.13, 0.88, 23 × 1, 0.88, 0.13 (25.0) |
+| Constant line: cross-section | 0.79, 22 × 1, 0.79 (23.6) | 0.82, 24 × 1, 0.82 (25.6) |
+
+- **Overlapping dabs widen a line by a similar amount in both apps**: +1.1 px in CLIP STUDIO and
+  +0.6 px in Prism. Both build up the partly covered edge pixels as dabs overlap (Prism:
+  `CovMap::accumulate`, "over" unless wet edges).
+- **The single dab is the difference.** CLIP STUDIO's medium anti-aliased round tip of size 25 is
+  about 2.5 px smaller across than its nominal size. Prism draws the exact circle, and its test
+  `csp_anti_alias_levels_sample_like_csp_and_parse_legacy_flags` asserts that "coverage across the
+  dab stays its diameter". That assumption is the code-side cause.
+- Across the pressure ramp, line width against nominal size fits `0.998·size − 1.21` in CLIP STUDIO
+  and `1.006·size + 0.42` in Prism. The dab shrink therefore looks like a constant offset (about
+  −1.2 px of radius), not a scale. This is fitted from line widths only; single dabs were measured
+  at size 25 only.
+**The rule, measured (same day).** Single full-pressure G-pen dabs in CLIP STUDIO at every
+anti-aliasing level and five sizes (Wintab mouse input, 100 % view, area converted to an
+equivalent diameter, px):
+
+| AA level | 5 | 10 | 25 | 50 | 100 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| none | 5.05 | 10.09 | 25.03 | 50.16 | 100.12 |
+| weak | 3.55 | 8.58 | 23.50 | 48.53 | 98.51 |
+| medium | 2.86 | 7.65 | 22.54 | 47.53 | 97.52 |
+| strong | 2.86 | 6.83 | 21.59 | 46.55 | 96.53 |
+
+Radial profiles of the size-100 dabs show the mechanism. Coverage reaches 0 at exactly
+r = size / 2 at every level. The anti-aliasing is a linear ramp laid **inside** that edge
+(weak 48.5 → 50, medium 47.5 → 50, strong 46.5 → 50), not centred on it. All 20 dabs fit within
+0.16 px:
+
+    coverage = clamp((R − d) / w, 0, 1),  R = size / 2,  d = distance from the dab centre
+    to the pixel centre,  w = min(W, R),  W = 0 (none), 1.5 (weak), 2.5 (medium), 3.5 (strong)
+
+The cap w ≤ R explains why medium and strong are equal at size 5. Prism's computed round tip
+centres its anti-aliasing on R (2×2 samples, plus a box for medium and strong), so it keeps the
+nominal diameter at every level. That is the whole width gap: at medium, size 25 gives
+22.5 px in CLIP STUDIO and 25.0 px in Prism.
+
+**Fixed.** `prism-paint` now renders an anti-aliased hard computed CSP tip with this ramp,
+evaluated once at each pixel centre. The edge distance is first order, (1 − q) / |∇q|, taken
+through the linear tip map, so rotated and flattened tips follow the same rule. This replaces the
+2×2 samples and box filter. The unit test
+`csp_anti_aliased_round_dab_matches_measured_clip_studio_diameters` checks all 20 measured dabs
+at three sub-pixel phases (within 0.25 px; 0.6 px for the binary level 0). Re-running the same
+synthetic pressure stroke through the rebuilt app:
+
+| Pressure | 0.17 | 0.33 | 0.50 | 0.67 | 0.83 | 1.00 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CLIP STUDIO, px | 2.61 | 6.97 | 11.28 | 15.39 | 19.52 | 23.39 |
+| Prism before, px | 4.42 | 8.88 | 13.18 | 17.19 | 21.35 | 25.24 |
+| Prism after, px | 2.69 | 7.05 | 11.38 | 15.47 | 19.59 | 23.39 |
+
+The mean |difference| over the stroke is 0.06 px. A single size-25 dab is 22.55 px in Prism and
+22.54 px in CLIP STUDIO. Line fits: CLIP STUDIO `0.998·size − 1.21`, Prism `1.005·size − 1.33`.
+
+**Performance.** `bench_brush` gained three CSP cases: hard computed tip, 8 % spacing, pressure
+size, a 500-point stroke on a 6016×6016 RGBA8 layer. Release build on this Windows / Ryzen
+(24 threads) / RTX 3070 Ti machine, three runs each, comparing `render.rs` before the fix
+(`3d2be2c~1`) with after:
+
+| Case | Before, total ms | After, total ms | Speed-up |
+| --- | ---: | ---: | ---: |
+| 25 px, AA medium (9 719 dabs) | 1 108 / 1 108 / 1 166 | 114 / 119 / 113 | ≈ 9.8× |
+| 200 px, AA medium (1 216 dabs) | 5 439 / 5 430 / 5 713 | 597 / 591 / 591 | ≈ 9.2× |
+| 200 px, AA strong (1 216 dabs) | 5 488 / 5 460 / 5 634 | 594 / 586 / 600 | ≈ 9.3× |
+
+The old path took 2×2 samples per pixel, each averaging a 4×4 box (64 shape tests). The new path
+evaluates one ramp per pixel. The worst 16-point chunk at 200 px fell from about 300 ms to
+32 ms. `cargo xtask perf --quick` completed (all quick benches ran). Its baseline is from an
+Apple M4 Pro machine class, so the regression comparison was skipped, and quick mode applies no
+budgets. No baseline or scorecard number was changed.
+
+Not covered: image (sampled) tips, elliptical tips (thickness < 100), and soft tips. CLIP STUDIO
+forces anti-aliasing off for a soft round tip wider than 25 px of falloff (`docs/sut-analysis.md`
+› Anti-aliasing levels).
+
 ## Remaining physical acceptance
 
 No physical tablet stroke has been driven or observed by this validation run.

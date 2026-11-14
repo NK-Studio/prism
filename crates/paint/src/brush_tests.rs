@@ -1,5 +1,37 @@
 //! Brush-engine tests: tips, spacing, dynamics, masks, smoothing, determinism, formats.
 
+#[test]
+fn csp_correction_ignores_photoshop_smoothing_and_preserves_it_for_switching_back() {
+    let points: Vec<_> = (0..60)
+        .map(|i| StrokePoint { x: 10.0 + f64::from(i) * 2.0, y: 20.0 + (f64::from(i) * 0.7).sin() * 6.0, time: f64::from(i) * 8.0, ..Default::default() })
+        .collect();
+    for level in [0, 12] {
+        let csp = BrushSettings {
+            csp_correction: true,
+            csp_stabilizer: (level > 0).then_some(crate::CspStabilizer { level, ..Default::default() }),
+            size: 6.0,
+            ..brush()
+        };
+        let reference = dabs(&Stroke { brush: csp.clone(), points: points.clone() });
+        for amount in [0.0, 0.1, 1.0] {
+            let photoshop = BrushSettings { smoothing: Smoothing { amount, ..Default::default() }, ..brush() };
+            let selected = csp.clone().picked_over(&photoshop);
+            assert_eq!(dabs(&Stroke { brush: selected.clone(), points: points.clone() }), reference);
+            let mut live = StrokeRenderer::new(&selected, None, 1.0).record_dabs();
+            for chunk in points.chunks(7) {
+                live.push(chunk);
+            }
+            live.finish();
+            assert_eq!(live.dabs(), reference.as_slice());
+            assert_eq!(photoshop.clone().picked_over(&selected).smoothing, photoshop.smoothing);
+            let restored: BrushSettings = serde_json::from_value(serde_json::to_value(&selected).unwrap()).unwrap();
+            assert!(restored.csp_correction);
+            assert_eq!(dabs(&Stroke { brush: restored, points: points.clone() }), reference);
+        }
+    }
+    assert!(!serde_json::from_str::<BrushSettings>("{}").unwrap().csp_correction);
+}
+
 use prism_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use prism_geom::{Point, Rect};
 use prism_raster::Surface;
@@ -9,6 +41,56 @@ use crate::dynamics::{Smoother, smooth_points};
 use crate::render::{BrushContext, StrokeRenderer, mask_combine, render_stroke};
 use crate::tile::GrayTile;
 use crate::{Dab, PressureCurve, Stroke, StrokePoint, dabs};
+
+#[test]
+fn live_preview_clones_share_immutable_brush_pixels() {
+    use std::sync::Arc;
+    let mut source = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(128, 128, |_, _| 1.0)), ..brush() };
+    let context = BrushContext::new(&source);
+    let builder = crate::dynamics::DabBuilder::new(&source);
+    let dual = crate::dynamics::DualBuilder::new(&source);
+    assert!(Arc::ptr_eq(&context.brush, &context.clone().brush));
+    assert!(Arc::ptr_eq(&builder.brush, &builder.clone().brush));
+    assert!(Arc::ptr_eq(&dual.brush, &dual.clone().brush));
+    // Later tool edits cannot modify the immutable snapshot used by the live stroke.
+    source.size = 123.0;
+    if let TipShape::Sampled(tip) = &mut source.tip {
+        tip.data.fill(0);
+    }
+    assert_ne!(context.brush.size, source.size);
+    assert_eq!(context.brush.tip, builder.brush.tip);
+    assert_ne!(context.brush.tip, source.tip);
+}
+
+#[test]
+fn csp_fixed_sub_color_is_seed_independent_and_survives_serialization() {
+    let mut b = BrushSettings { color: [1.0, 0.0, 0.0, 1.0], background: [0.0, 0.0, 1.0, 1.0], csp_sub_color: Some(0.25), ..brush() };
+    let pts = vec![StrokePoint::new(10.0, 10.0, 1.0), StrokePoint::new(60.0, 10.0, 1.0)];
+    for seed in [0, 7, 99] {
+        b.seed = seed;
+        let restored = serde_json::from_value(serde_json::to_value(&b).unwrap()).unwrap();
+        let out = dabs(&Stroke { brush: restored, points: pts.clone() });
+        assert!(!out.is_empty());
+        for dab in out {
+            assert_eq!(dab.color, [0.75, 0.0, 0.25, 1.0]);
+        }
+    }
+    b.csp_sub_color = None;
+    assert!(dabs(&Stroke { brush: b, points: pts }).iter().all(|d| d.color == [1.0, 0.0, 0.0, 1.0]));
+}
+
+#[test]
+fn csp_fixed_sub_color_renders_at_every_depth() {
+    let b = BrushSettings { size: 10.0, color: [1.0, 0.0, 0.0, 1.0], background: [0.0, 0.0, 1.0, 1.0], csp_sub_color: Some(0.25), ..brush() };
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+        render_stroke(&mut surface, &b, &[StrokePoint::new(20.0, 20.0, 1.0)], None, false, 1.0);
+        let actual = surface.rgba(20, 20);
+        for (actual, expected) in actual.iter().zip([0.75, 0.0, 0.25, 1.0]) {
+            assert!((actual - expected).abs() < 0.005, "{sample:?}: {actual} vs {expected}");
+        }
+    }
+}
 
 fn brush() -> BrushSettings {
     BrushSettings { pressure_size: false, spacing: 0.25, ..Default::default() }
@@ -20,6 +102,88 @@ fn line(x0: f64, x1: f64, y: f64) -> Vec<StrokePoint> {
 
 fn dabs_of(b: &BrushSettings, pts: &[StrokePoint]) -> Vec<Dab> {
     dabs(&Stroke { brush: b.clone(), points: pts.to_vec() })
+}
+
+#[test]
+fn csp_emphasize_density_adds_contrast_only_at_render_time() {
+    let mut t = Texture { contrast: 0.2, ..Default::default() };
+    assert_eq!(t.effective_contrast(), 0.2);
+    t.csp_emphasize = true;
+    assert_eq!(t.effective_contrast(), 0.7);
+    assert_eq!(t.contrast, 0.2, "the stored contrast stays editable");
+    for c in [f32::NAN, f32::INFINITY, 5.0, -9.0] {
+        t.contrast = c;
+        assert!((-1.0..=2.0).contains(&t.effective_contrast()), "{c}");
+    }
+}
+
+#[test]
+fn csp_density_by_gap_keeps_the_stroke_density_across_spacings() {
+    // The density a stroke builds up to where `1 / spacing` dabs overlap.
+    let built = |spacing: f32, on: bool| {
+        let b = BrushSettings { size: 20.0, flow: 0.5, spacing, pressure_size: false, csp_flow_by_spacing: on, ..brush() };
+        let d = dabs_of(&b, &line(10.0, 200.0, 10.0));
+        let alpha = d.first().map_or(0.0, |d| d.alpha);
+        assert!(d.iter().all(|d| (d.alpha - alpha).abs() < 1e-6));
+        1.0 - (1.0 - alpha).powf(1.0 / spacing)
+    };
+    for spacing in [0.05, 0.1, 0.25, 0.5] {
+        // The brush density is quantized to 8-bit levels before it is used.
+        assert!((built(spacing, true) - 0.5).abs() < 5e-3,"{spacing}: {}", built(spacing, true));
+        assert!(built(spacing, false) > 0.7, "{spacing}: without the option the overlap builds up");
+    }
+    // A gap of the diameter or more, and hostile values, leave finite densities.
+    let wide = BrushSettings { flow: 0.5, spacing: 1.5, csp_flow_by_spacing: true, ..brush() };
+    assert!(dabs_of(&wide, &line(10.0, 200.0, 10.0)).iter().all(|d| (d.alpha - 0.5).abs() < 5e-3));
+    for (flow, spacing) in [(f32::NAN, 0.1), (0.5, f32::NAN), (f32::INFINITY, 0.0), (-2.0, -1.0)] {
+        let b = BrushSettings { flow, spacing, csp_flow_by_spacing: true, ..brush() };
+        assert!(dabs_of(&b, &line(10.0, 60.0, 10.0)).iter().all(|d| d.alpha.is_finite() && (0.0..=1.0).contains(&d.alpha)), "{flow} {spacing}");
+    }
+}
+
+#[test]
+fn csp_darken_tips_never_lighten_the_stroke_colour() {
+    use crate::render::CoverageMap;
+    let rect = Rect::new(0, 0, 1, 1);
+    let lay = |darken: bool, second: f32| {
+        let mut m = CoverageMap::new(3);
+        m.darken = darken;
+        m.accumulate(rect, &[1.0], 1.0, false, Some(&[0.2, 0.8, 0.5]));
+        m.accumulate(rect, &[second], 1.0, false, Some(&[0.6, 0.3, 0.5]));
+        (m.get(0, 0), m.color_at(0, 0).map(<[f32]>::to_vec).unwrap())
+    };
+    // Normal: a full pixel keeps the first dab's colour.
+    assert_eq!(lay(false, 1.0), (1.0, vec![0.2, 0.8, 0.5]));
+    // Darken: each channel takes the darker value; a half dab moves half way, only downwards.
+    let (c, col) = lay(true, 1.0);
+    assert!(c == 1.0 && (col[0] - 0.2).abs() < 1e-6 && (col[1] - 0.3).abs() < 1e-6 && (col[2] - 0.5).abs() < 1e-6, "{col:?}");
+    let (_, col) = lay(true, 0.5);
+    assert!((col[0] - 0.2).abs() < 1e-6 && (col[1] - 0.55).abs() < 1e-6, "{col:?}");
+    // Hostile values stay finite.
+    let mut m = CoverageMap::new(3);
+    m.darken = true;
+    m.accumulate(rect, &[1e-30], 1.0, false, Some(&[0.5, 0.5, 0.5]));
+    m.accumulate(rect, &[f32::NAN], f32::INFINITY, false, Some(&[f32::NAN, -1.0, 9.0]));
+    m.accumulate(rect, &[1.0], 1.0, false, Some(&[0.1, 0.1, 0.1]));
+    assert!(m.get(0, 0).is_finite());
+}
+
+#[test]
+fn csp_at_least_1px_lays_sub_pixel_dabs_as_full_1px_dabs() {
+    let tiny = BrushSettings { size: 0.5, ..brush() };
+    let faded = dabs_of(&tiny, &line(10.0, 20.0, 10.0));
+    assert!(!faded.is_empty() && faded.iter().all(|d| d.radius == 0.5 && (d.alpha - 0.25).abs() < 1e-6), "area-faded without the flag");
+    let floored = dabs_of(&BrushSettings { csp_at_least_1px: true, ..tiny.clone() }, &line(10.0, 20.0, 10.0));
+    assert!(floored.iter().all(|d| d.radius == 0.5 && (d.alpha - 1.0).abs() < 1e-6), "full ink with the flag");
+    // Dabs never step closer than MIN_DAB_STEP (1 px), so the count is unchanged.
+    assert_eq!(floored.len(), faded.len());
+    // Brushes of 1 px and more are unchanged; hostile sizes stay finite.
+    let big = BrushSettings { size: 8.0, ..brush() };
+    assert_eq!(dabs_of(&big, &line(10.0, 20.0, 10.0)), dabs_of(&BrushSettings { csp_at_least_1px: true, ..big.clone() }, &line(10.0, 20.0, 10.0)));
+    for size in [f32::NAN, f32::INFINITY, -3.0, 0.0] {
+        let d = dabs_of(&BrushSettings { size, csp_at_least_1px: true, ..brush() }, &line(10.0, 20.0, 10.0));
+        assert!(d.iter().all(|d| d.radius.is_finite() && d.alpha.is_finite()), "{size}");
+    }
 }
 
 #[test]
@@ -48,6 +212,53 @@ fn csp_spray_separates_area_particle_size_count_and_orientation() {
     let encoded = serde_json::to_vec(&b).unwrap();
     assert_eq!(serde_json::from_slice::<BrushSettings>(&encoded).unwrap(), b);
     assert!(serde_json::from_str::<BrushSettings>("{}").unwrap().csp_spray.is_none());
+}
+
+#[test]
+fn csp_spray_particle_angle_inputs_turn_particles_not_the_area() {
+    use crate::csp_spray::CspParticleAngle as Input;
+    let deg = |a: f32| a.to_degrees().rem_euclid(360.0);
+    let near = |a: f32, b: f32| ((a - b).rem_euclid(360.0) + 1e-3).rem_euclid(360.0) < 2e-3;
+    let with = |input: Input, jitter: f32| BrushSettings {
+        size: 30.0,
+        angle: 70.0,
+        csp_spray: Some(crate::CspSpray { size: 2.0, count: 8, bias: -1.0, angle: 15.0, angle_input: input, angle_jitter: jitter, ..Default::default() }),
+        ..brush()
+    };
+    let dot = [StrokePoint::new(40.0, 50.0, 1.0)];
+    // Fixed keeps the base particle angle (the area's 70° doesn't leak in).
+    assert!(dabs_of(&with(Input::Fixed, 0.0), &dot).iter().all(|d| near(deg(d.angle), 15.0)));
+    // The whole spray's direction adds the area angle.
+    assert!(dabs_of(&with(Input::Spray, 0.0), &dot).iter().all(|d| near(deg(d.angle), 85.0)));
+    // Toward the centre: each particle points along its own offset (CCW degrees, y down).
+    let toward = dabs_of(&with(Input::TowardCenter, 0.0), &dot);
+    for d in &toward {
+        let radial = (-(d.center.y - 50.0)).atan2(d.center.x - 40.0).to_degrees() as f32;
+        assert!(near(deg(d.angle), (radial + 15.0).rem_euclid(360.0)), "{} vs {}", deg(d.angle), radial);
+    }
+    assert!(toward.iter().any(|d| !near(deg(d.angle), deg(toward[0].angle))), "particles around the circle face different ways");
+    // The line direction: a vertical stroke turns particles a quarter from a horizontal one.
+    let across = dabs_of(&with(Input::Direction, 0.0), &line(0.0, 40.0, 50.0));
+    let down = dabs_of(&with(Input::Direction, 0.0), &[StrokePoint::new(40.0, 0.0, 1.0), StrokePoint::new(40.0, 40.0, 1.0)]);
+    let (a, b) = (deg(across.last().unwrap().angle), deg(down.last().unwrap().angle));
+    assert!(near((a - b).abs(), 90.0) || near((a - b).abs(), 270.0), "{a} {b}");
+    // Random turn: spread within ±jitter·180°, replayable.
+    let random = dabs_of(&with(Input::Fixed, 0.5), &dot);
+    assert_eq!(random, dabs_of(&with(Input::Fixed, 0.5), &dot));
+    for d in &random {
+        let off = (deg(d.angle) - 15.0 + 180.0).rem_euclid(360.0) - 180.0;
+        assert!(off.abs() <= 90.0 + 1e-3, "{off}");
+    }
+    assert!(random.iter().any(|d| !near(deg(d.angle), 15.0)));
+    // Positions don't change with the angle input (the same random streams place particles).
+    for (a, b) in dabs_of(&with(Input::Fixed, 0.0), &dot).iter().zip(&toward) {
+        assert_eq!(a.center, b.center);
+    }
+    // Hostile jitter stays finite; JSON round-trips the input.
+    let mut hostile = with(Input::TowardCenter, f32::NAN);
+    assert!(dabs_of(&hostile, &dot).iter().all(|d| d.angle.is_finite()));
+    hostile.csp_spray.as_mut().unwrap().angle_jitter = 0.25;
+    assert_eq!(serde_json::from_value::<BrushSettings>(serde_json::to_value(&hostile).unwrap()).unwrap(), hostile);
 }
 
 #[test]
@@ -946,8 +1157,8 @@ fn csp_anti_alias_levels_sample_like_csp_and_parse_legacy_flags() {
     let b = BrushSettings { csp_anti_alias: Some(3), ..brush() };
     assert_eq!(serde_json::from_str::<BrushSettings>(&serde_json::to_string(&b).unwrap()).unwrap(), b);
     assert_eq!(BrushSettings { csp_anti_alias: Some(9), ..brush() }.bounded_for_render().csp_anti_alias, Some(3));
-    // A hard round dab, 20 px across, centred on a pixel corner: level 0 is binary; weak
-    // averages 2×2 samples (values in quarters); medium and strong soften the edge further.
+    // A hard round dab, 20 px across, centred on a pixel corner: level 0 is binary; the others
+    // ramp inward from the outline, wider for each level.
     let edge = |level: u8| {
         let b = BrushSettings { size: 20.0, hardness: 1.0, pressure_size: false, csp_anti_alias: Some(level), ..brush() };
         let s = paint(&b, &[StrokePoint::new(30.0, 30.0, 1.0)], 60, 60);
@@ -956,14 +1167,12 @@ fn csp_anti_alias_levels_sample_like_csp_and_parse_legacy_flags() {
     let none = edge(0);
     assert!(none.iter().all(|a| *a == 0.0 || *a == 1.0), "{none:?}");
     assert_eq!(none.iter().filter(|a| **a == 1.0).count(), 20);
-    let weak = edge(1);
-    assert!(weak.iter().all(|a| (a * 4.0 - (a * 4.0).round()).abs() < 1e-3), "{weak:?}");
     let soft = |row: &[f32]| row.iter().filter(|a| **a > 0.0 && **a < 1.0).count();
-    let (medium, strong) = (edge(2), edge(3));
-    assert!(soft(&strong) >= soft(&medium) && soft(&medium) >= soft(&weak), "{weak:?} {medium:?} {strong:?}");
+    let (weak, medium, strong) = (edge(1), edge(2), edge(3));
+    assert!(soft(&strong) >= soft(&medium) && soft(&medium) >= soft(&weak) && soft(&weak) > 0, "{weak:?} {medium:?} {strong:?}");
+    // The outline stays at the radius: nothing is inked outside the level-0 dab.
     for row in [&weak, &medium, &strong] {
-        let total: f32 = row.iter().sum();
-        assert!((total - 20.0).abs() < 1.0, "coverage across the dab stays its diameter: {total}");
+        assert!(row.iter().zip(&none).all(|(a, n)| *n == 1.0 || *a == 0.0), "{row:?}");
     }
     // A sampled tip at strong reads a reduced level, so a one-texel checkerboard averages out.
     let checker = BrushSettings {
@@ -976,6 +1185,38 @@ fn csp_anti_alias_levels_sample_like_csp_and_parse_legacy_flags() {
     let s = paint(&checker, &[StrokePoint::new(20.0, 20.0, 1.0)], 40, 40);
     let a = s.rgba(20, 20)[3];
     assert!((a - 0.5).abs() < 0.05, "{a}");
+}
+
+/// Single hard round dabs measured in CLIP STUDIO PAINT 5 (G-pen, full pressure; area as an
+/// equivalent diameter, docs/pen-input-validation.md › G-pen comparison): anti-aliasing ramps
+/// inward from the outline, so a dab is narrower than its size by about the ramp width.
+#[test]
+fn csp_anti_aliased_round_dab_matches_measured_clip_studio_diameters() {
+    // (level, [size 5, 10, 25, 50, 100]) as measured.
+    let measured: [(u8, [f32; 5]); 4] = [
+        (0, [5.05, 10.09, 25.03, 50.16, 100.12]),
+        (1, [3.55, 8.58, 23.50, 48.53, 98.51]),
+        (2, [2.86, 7.65, 22.54, 47.53, 97.52]),
+        (3, [2.86, 6.83, 21.59, 46.55, 96.53]),
+    ];
+    let mut bad = Vec::new();
+    for (level, row) in measured {
+        for (size, want) in [5.0_f32, 10.0, 25.0, 50.0, 100.0].into_iter().zip(row) {
+            // Off the pixel grid too: the diameter must not depend on the sub-pixel phase.
+            for (cx, cy) in [(80.0, 80.0), (80.5, 80.0), (80.3, 80.7)] {
+                let b = BrushSettings { size, hardness: 1.0, pressure_size: false, csp_anti_alias: Some(level), ..brush() };
+                let s = paint(&b, &[StrokePoint::new(cx, cy, 1.0)], 160, 160);
+                let area = alpha_sum(&s, Rect::new(0, 0, 160, 160));
+                let got = 2.0 * (area / std::f32::consts::PI).sqrt();
+                // Level 0 is a binary disc: its pixel count depends on the sub-pixel phase.
+                let tolerance = if level == 0 { 0.6 } else { 0.25 };
+                if (got - want).abs() >= tolerance {
+                    bad.push(format!("level {level} size {size} at ({cx}, {cy}): {got:.3} px, CLIP STUDIO {want} px"));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
 #[test]
