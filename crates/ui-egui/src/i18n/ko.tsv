@@ -3553,6 +3553,9 @@ cspTool	Space evenly	균등 배치
 	New folder	새 폴더
 	At least 1 pixel	최소 1픽셀
 	Enable snapping	스냅 사용
+	Not used by Fade	페이드에서는 쓰지 않습니다
+	Smear: mixes as Blend; the density of paint is not used	스미어: 혼색처럼 섞으며 물감 농도는 쓰지 않습니다
+	Not used by Smear	스미어에서는 쓰지 않습니다
 	Apply RGB value	RGB 값 적용
 	Change it with Aligned in the Clone Stamp options	복제 도장 옵션의 정렬에서 바꿀 수 있습니다
 	Do not cross lines of reference layer	참조 레이어의 선을 넘지 않음

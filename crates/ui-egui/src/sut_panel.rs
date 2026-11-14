@@ -264,8 +264,8 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
                 if !details && !m.effective().visible.contains(&1087) {
                     ui.checkbox(&mut mixing.perceptual, tl!("Perceptual color mixing"));
                 }
-                if source(m, key) >= 2.0 {
-                    ui.small(tl!("CSP mixing type 2 is approximated by blending"));
+                if source(m, key) == 2.0 {
+                    ui.small(tl!("Smear: mixes as Blend; the density of paint is not used"));
                 }
             }
         }
@@ -605,6 +605,14 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
                 }
             }
         }
+        // Smear (`BrushWaterColor` 2) paints at full density: CLIP STUDIO disables the control.
+        1083 if b.csp_mixing.is_some() && source(m, "BrushWaterColor") == 2.0 => {
+            ui.add_enabled_ui(false, |ui| {
+                ui.label(tl!(label));
+                ui.label("100");
+            });
+            ui.small(tl!("Not used by Smear"));
+        }
         1081 | 1083 | 1085 => match &mut b.csp_mixing {
             Some(mixing) => {
                 let value = match id {
@@ -711,7 +719,7 @@ fn in_out_length(ui: &mut egui::Ui, id: u32, label: &str, m: &SutBrushMetadata, 
         let io =
             b.csp_in_out.get_or_insert_with(|| CspInOut { targets: vec![CspInOutTarget { param: CspInOutParam::Size, minimum: 0.0 }], ..Default::default() });
         let value = on.then(|| match io.mode {
-            CspInOutMode::Length => {
+            CspInOutMode::Length | CspInOutMode::Fade => {
                 let v = f64::from(source(m, if start { "BrushInLength" } else { "BrushOutLength" }));
                 if v > 0.0 { v.min(MAX_LENGTH) } else { 20.0 }
             }
@@ -728,21 +736,33 @@ fn in_out_length(ui: &mut egui::Ui, id: u32, label: &str, m: &SutBrushMetadata, 
         return;
     }
     let Some(io) = &mut b.csp_in_out else { return };
+    // Fade uses the ending length alone: the starting row has nothing to edit.
+    if start && io.mode == CspInOutMode::Fade {
+        ui.small(tl!("Not used by Fade"));
+        return;
+    }
     let mut mode = io.mode;
     ui.horizontal(|ui| {
         crate::widgets::dropdown(
             ui,
             if start { "sut-in-mode" } else { "sut-out-mode" },
             &mut mode,
-            &[(CspInOutMode::Length, "Length"), (CspInOutMode::Percent, "Percent of stroke")],
+            &[(CspInOutMode::Length, "Length"), (CspInOutMode::Percent, "Percent of stroke"), (CspInOutMode::Fade, "Fade")],
             ui.available_width().min(180.0),
         );
     });
     if mode != io.mode {
-        // Switching keeps a usable taper: 10 % of the stroke, or 20 px.
-        let reset = |v: Option<f64>| v.map(|_| if mode == CspInOutMode::Percent { 0.1 } else { 20.0 });
-        io.start = reset(io.start);
-        io.end = reset(io.end);
+        // Switching keeps a usable taper: 10 % of the stroke, 20 px, or a 200 px fade.
+        let reset = |v: Option<f64>| {
+            v.map(|_| match mode {
+                CspInOutMode::Percent => 0.1,
+                CspInOutMode::Length => 20.0,
+                CspInOutMode::Fade => 200.0,
+            })
+        };
+        io.start = reset(io.start).filter(|_| mode != CspInOutMode::Fade);
+        io.end = if mode == CspInOutMode::Fade { Some(reset(io.end).unwrap_or(200.0)) } else { reset(io.end) };
+        io.by_speed &= mode != CspInOutMode::Fade;
         io.mode = mode;
     }
     let value = if start { &mut io.start } else { &mut io.end };

@@ -558,15 +558,19 @@ fn color_mixing(r: &Row, ribbon: bool, warnings: &mut Vec<String>) -> Option<Csp
     if !blend::mixing_on(r) {
         return None;
     }
+    // 0 Blend, 1 Running color, 2 Smear (CLIP STUDIO's names).
     let kind = num(r, "BrushWaterColor", 0.0) as i64;
+    // Smear mixes as Blend with the density of paint at 100 %: CLIP STUDIO disables the control
+    // and a stored density of 30 paints as 100 (measured, docs/sut-analysis.md › Smear).
+    let smear = kind == 2;
     // A ribbon brush mixes with type 0 where type 1 is set (the CSP settings builder resets it).
-    if kind != 0 && !(ribbon && kind == 1) {
+    if kind != 0 && !smear && !(ribbon && kind == 1) {
         warnings.push(format!("SUT color mixing type {kind} is approximated by blending"));
     }
     let percent = |k: &str| (num(r, k, 100.0) / 100.0).clamp(0.0, 1.0);
     let mut mixing = CspColorMixing {
         amount: percent("BrushMixColor"),
-        density: percent("BrushMixAlpha"),
+        density: if smear { 1.0 } else { percent("BrushMixAlpha") },
         stretch: (num(r, "BrushMixColorExtension", 0.0) / 100.0).clamp(0.0, 1.0),
         perceptual: enabled(r, "BrushColorMixingMode"),
         ..Default::default()
@@ -574,7 +578,7 @@ fn color_mixing(r: &Row, ribbon: bool, warnings: &mut Vec<String>) -> Option<Csp
     if let Some(dynamic) = pressure_effector(r, "BrushMixColorEffector", warnings) {
         mixing.amount_dynamic = dynamic;
     }
-    if let Some(dynamic) = pressure_effector(r, "BrushMixAlphaEffector", warnings) {
+    if let Some(dynamic) = pressure_effector(r, "BrushMixAlphaEffector", warnings).filter(|_| !smear) {
         mixing.density_dynamic = dynamic;
     }
     Some(mixing)
@@ -587,22 +591,29 @@ fn in_out(r: &Row, warnings: &mut Vec<String>) -> Option<CspInOut> {
     if !use_in && !use_out {
         return None;
     }
+    // "How to specify": 0 by length, 1 by percentage, 2 Fade (CLIP STUDIO's names).
     let mode = match num(r, "BrushInOutType", 0.0) as i64 {
         0 => CspInOutMode::Length,
         1 => CspInOutMode::Percent,
+        2 => CspInOutMode::Fade,
         other => {
-            warnings.push(format!("SUT start and end type {other} (fade) is not supported"));
+            warnings.push(format!("SUT start and end type {other} is not supported"));
             return None;
         }
     };
+    // Fade uses the Ending length alone, from the start of the stroke (the Starting control and
+    // "by speed" are disabled in CLIP STUDIO).
+    let use_in = use_in && mode != CspInOutMode::Fade;
+    // Lengths with unit 2 are pixels at any resolution (measured: docs/sut-experiment-materials.md).
     for key in ["BrushInLengthUnit", "BrushOutLengthUnit"] {
-        if mode == CspInOutMode::Length && enabled(r, key) {
-            warnings.push(format!("SUT {key} is not supported; the length is used in pixels"));
+        let unit = num(r, key, 0.0);
+        if mode != CspInOutMode::Percent && unit != 0.0 && unit != 2.0 {
+            warnings.push(format!("SUT {key} {unit} is not supported; the length is used in pixels"));
         }
     }
     let length = |used: bool, length_key: &str, ratio_key: &str| {
         used.then(|| match mode {
-            CspInOutMode::Length => f64::from(num(r, length_key, 0.0)),
+            CspInOutMode::Length | CspInOutMode::Fade => f64::from(num(r, length_key, 0.0)),
             CspInOutMode::Percent => f64::from(num(r, ratio_key, 0.0)) / 100.0,
         })
         .filter(|v| *v > 0.0)

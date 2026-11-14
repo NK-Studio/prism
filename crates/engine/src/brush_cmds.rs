@@ -193,7 +193,7 @@ pub(crate) fn validate_brush(brush: &BrushSettings, cmd: &str) -> Result<()> {
     }
     if let Some(in_out) = &brush.csp_in_out {
         let max = match in_out.mode {
-            prism_paint::CspInOutMode::Length => prism_paint::csp_in_out::MAX_LENGTH,
+            prism_paint::CspInOutMode::Length | prism_paint::CspInOutMode::Fade => prism_paint::csp_in_out::MAX_LENGTH,
             prism_paint::CspInOutMode::Percent => 1.0,
         };
         let length_ok = |v: Option<f64>| v.is_none_or(|v| v.is_finite() && v >= 0.0 && v <= max);

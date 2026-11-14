@@ -18,6 +18,19 @@ mixing controls. Corrected 2026-11-04 after review: R4_FIRE 1 is not a mixing co
 
 ## 1. Start/end fade (`BrushInOutType` = 2)
 
+**Result (2026-11-14, CSP PAINT PRO 5.0.4).** The setting is "How to specify" = **Fade** (0 by
+length, 1 by percentage, 2 Fade). In Fade the Starting row and "Starting and ending by speed"
+are greyed out; only Ending (194 for 물번짐구름 브러쉬, target Brush density with minimum 37 %)
+is used. Measured with the brush at size 40, black, mouse strokes of 450 px on a 512 × 512 px
+document: the density is full at the start, falls to a lower level by about 200 px and stays
+there to the end of the stroke; fast (300 ms) and slow (1500 ms) strokes are the same, and every
+new stroke starts at full density again. So the targets fall from full to their minimum over
+the Ending length **measured from the start of the stroke**, by distance, and the stroke does
+not run out. Prism now imports this as `CspInOutMode::Fade` (live and committed strokes alike).
+The curve between is not fitted: it is level at first and drops late, which the quarter sine of
+the other modes also does. Captures: `target/sut-experiments/fade-2.png`,
+`labels/cloud-inout.png` (local, ignored).
+
 | Material | Collection | Values | Today in Prism |
 |---|---|---|---|
 | 물번짐구름 브러쉬 | (own) | in on, out on, `BrushInLength` 20, `BrushOutLength` 194.44 (unit 0 = px) | warns "type 2 (fade) is not supported"; start/end dropped entirely |
@@ -68,6 +81,26 @@ start/end on in CSP. Their end length 20 with unit 0 is the default stored by al
 in the library and is not a meaningful comparison.
 
 ## 3. Colour mixing type 2 (`BrushWaterColor` = 2)
+
+**Result (2026-11-14, CSP PAINT PRO 5.0.4).** The modes are Blend (0), Running color (1) and
+**Smear** (2). In Smear, Density of paint is greyed out and Blending mode is available; in
+Blend it is the other way round. Measured with NANAGOM PEN (size 25, amount of paint 78, colour
+stretch 88, perceptual mixing) drawing green (99,190,143) across a blue (39,34,153) and a red
+(191,100,100) band, fast mouse strokes, centre-line colours:
+
+| Mode | On blue | On red | Opaque |
+|---|---|---|---|
+| Smear | (91,176,145) | (110,182,140) | yes |
+| Blend, density 100 | the same within 1 level | the same | yes |
+| Blend, density 30 | thinned | thinned | no (over white 193,229,211 → 124,200,161) |
+| Smear with the stored density at 30 | as Smear at 100 | as Smear at 100 | yes |
+| Running color | pure green | pure green | yes |
+
+So Smear mixes exactly as Blend with the density of paint at 100 %, whatever value is stored.
+Prism now imports type 2 that way (no warning). Running color (type 1) picked nothing up in
+this setup and is still approximated by blending. Slow strokes were disturbed by the real
+pointer and are not used. Captures: `target/sut-experiments/mix-strokes.png`,
+`mix-density.png`, `labels/nanagom-ink.png` (local, ignored).
 
 Mixing is on when `BrushUseWaterColor` (or `BrushUseWaterColor2`) is set; the type is only
 meaningful then.

@@ -921,8 +921,15 @@ fn csp_start_and_end_maps_lengths_percentages_and_targets() {
     assert_eq!((in_out.mode, in_out.start, in_out.end), (CspInOutMode::Percent, Some(0.3), Some(0.1)));
     let mut fade = base.clone();
     fade[6].1 = Value::Integer(2);
+    // Fade (type 2): the ending length alone, from the start of the stroke; no warning.
     let faded = read(&fade);
-    assert!(faded.presets[0].brush.csp_in_out.is_none() && faded.warnings.iter().any(|w| w.contains("fade")));
+    let f = faded.presets[0].brush.csp_in_out.clone().unwrap();
+    assert_eq!((f.mode, f.start, f.end, f.by_speed), (CspInOutMode::Fade, None, Some(7.0), false));
+    assert!(!faded.warnings.iter().any(|w| w.contains("start and end type")), "{:?}", faded.warnings);
+    let mut unknown = base.clone();
+    unknown[6].1 = Value::Integer(9);
+    let unknown = read(&unknown);
+    assert!(unknown.presets[0].brush.csp_in_out.is_none() && unknown.warnings.iter().any(|w| w.contains("start and end type 9")));
     let mut off = base.clone();
     off[0].1 = Value::Integer(0);
     off[3].1 = Value::Integer(0);
@@ -1050,6 +1057,15 @@ fn csp_color_mixing_maps_amount_density_stretch_and_effectors() {
     assert!(other.presets[0].brush.csp_mixing.as_ref().unwrap().perceptual, "BrushColorMixingMode 1 is perceptual mixing");
     assert!(other.warnings.iter().any(|w| w.contains("color mixing type 1")), "{:?}", other.warnings);
     assert!(!other.warnings.iter().any(|w| w.contains("perceptual") || w.contains("WaterColor2")), "{:?}", other.warnings);
+    // Smear (type 2) mixes as Blend with the density of paint at 100 %, whatever is stored.
+    let mut smear = base.to_vec();
+    smear[1].1 = Value::Integer(2);
+    smear.push(("BrushMixAlphaEffector", Value::Blob(curve_effector(&curve, 20))));
+    let smear = read(&smear);
+    let mixing = smear.presets[0].brush.csp_mixing.clone().unwrap();
+    assert_eq!((mixing.amount, mixing.density, mixing.stretch), (0.8, 1.0, 0.42));
+    assert_eq!(mixing.density_dynamic.control, Control::Off);
+    assert!(!smear.warnings.iter().any(|w| w.contains("color mixing type")), "{:?}", smear.warnings);
     // The duplicate flag alone (no BrushUseWaterColor field) also enables mixing.
     let mut mirrored = base[1..].to_vec();
     mirrored.push(("BrushUseWaterColor2", Value::Integer(1)));
