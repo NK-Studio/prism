@@ -2148,6 +2148,12 @@ rulers, 1510, and the Korean UI labels (the UI language was not changed).
 Post correction, snapping, darken, density by gap and reference-layer lines are no longer in
 the open list above; spray size and water edge units are settled as pixels.
 
+**2026-11-15:** the importer now treats unit 0 and 2 alike as pixels without a warning for the
+spray particle size, watercolor edge radius/blur and dual size/particle size (it already did for
+start/end lengths); other unit codes still warn with their code. Seven local brushes lost a
+false warning (local library: 13 → 6 materials with warnings). Test:
+`length_unit_2_is_pixels_without_a_warning`.
+
 ### Fade, Smear and texture labels (2026-11-14, second session)
 
 Evidence (UI): start/end "How to specify" is Specify length / percentage / **Fade** for

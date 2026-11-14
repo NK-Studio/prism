@@ -96,7 +96,9 @@ changes the preview strip; save/reload of the preset keeps the edit.
 
 Spray, start/end and water-edge lengths are read as pixels; CLIP STUDIO units (mm, pt, %
 of canvas resolution) need the document resolution. One shared length-with-unit control
-should cover 1131, 1171, 1181, 1201 and 51000.
+should cover 1131, 1171, 1181, 1201 and 51000. Unit 2 is pixels at any resolution (measured
+2026-11-14) and, like 0, imports without a warning since 2026-11-15; every non-zero unit in the
+local library is 2, so the other codes are untested.
 
 ## C. Not read at all (behaviour missing)
 

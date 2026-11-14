@@ -24,6 +24,13 @@ fn num(r: &Row, k: &str, default: f64) -> f32 {
 fn enabled(r: &Row, k: &str) -> bool {
     num(r, k, 0.0) != 0.0
 }
+/// A length unit Prism reads correctly as pixels: 0 (unset) or 2, which is pixels at any
+/// document resolution (measured: docs/sut-experiment-materials.md › 2). The other codes are
+/// not traced; their lengths are still used in pixels, with a warning.
+fn pixel_unit(r: &Row, k: &str) -> bool {
+    let unit = num(r, k, 0.0);
+    unit == 0.0 || unit == 2.0
+}
 
 fn png(blob: &[u8]) -> Result<&[u8], String> {
     let start = blob.windows(8).rposition(|b| b == b"\x89PNG\r\n\x1a\n").ok_or("SUT material has no PNG tip")?;
@@ -350,10 +357,12 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
         if enabled(r, "BrushSpraySizeSyncBrushSize") && b.size > 0.0 {
             spray.size_ratio = Some(spray.size / b.size);
         }
-        for key in ["BrushSpraySizeUnit", "BrushSprayUseFixedPoint"] {
-            if enabled(r, key) {
-                warnings.push(format!("SUT {key} is not supported; spray uses a fixed particle size in pixels"));
-            }
+        if !pixel_unit(r, "BrushSpraySizeUnit") {
+            let unit = num(r, "BrushSpraySizeUnit", 0.0);
+            warnings.push(format!("SUT BrushSpraySizeUnit {unit} is not supported; the particle size is used in pixels"));
+        }
+        if enabled(r, "BrushSprayUseFixedPoint") {
+            warnings.push("SUT BrushSprayUseFixedPoint is not supported; spray uses a fixed particle size in pixels".into());
         }
         particle_angle(r, &mut spray, &mut warnings);
         b.csp_spray = Some(spray);
@@ -604,11 +613,9 @@ fn in_out(r: &Row, warnings: &mut Vec<String>) -> Option<CspInOut> {
     // Fade uses the Ending length alone, from the start of the stroke (the Starting control and
     // "by speed" are disabled in CLIP STUDIO).
     let use_in = use_in && mode != CspInOutMode::Fade;
-    // Lengths with unit 2 are pixels at any resolution (measured: docs/sut-experiment-materials.md).
     for key in ["BrushInLengthUnit", "BrushOutLengthUnit"] {
-        let unit = num(r, key, 0.0);
-        if mode != CspInOutMode::Percent && unit != 0.0 && unit != 2.0 {
-            warnings.push(format!("SUT {key} {unit} is not supported; the length is used in pixels"));
+        if mode != CspInOutMode::Percent && !pixel_unit(r, key) {
+            warnings.push(format!("SUT {key} {} is not supported; the length is used in pixels", num(r, key, 0.0)));
         }
     }
     let length = |used: bool, length_key: &str, ratio_key: &str| {
@@ -696,8 +703,8 @@ fn water_edge(r: &Row, warnings: &mut Vec<String>) -> CspWaterEdge {
     let radius = num(r, "BrushWaterEdgeRadius", 0.0).max(0.0);
     let blur = if after_drag { num(r, "BrushWaterEdgeBlur", 0.0).max(0.0) } else { 0.0 };
     for key in ["BrushWaterEdgeRadiusUnit", "BrushWaterEdgeBlurUnit"] {
-        if enabled(r, key) {
-            warnings.push(format!("SUT {key} is not supported; the value is used in pixels"));
+        if !pixel_unit(r, key) {
+            warnings.push(format!("SUT {key} {} is not supported; the value is used in pixels", num(r, key, 0.0)));
         }
     }
     if enabled(r, "BrushWaterEdgeStyle") {

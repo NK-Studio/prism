@@ -1141,6 +1141,38 @@ fn csp_water_edge_maps_native_fields_and_blur_needs_after_drag() {
     }
 }
 
+/// Unit 2 is pixels at any resolution (measured 2026-11-14), so a spray, watercolor edge or dual
+/// size in unit 2 is read correctly and must not warn (seven local brushes did: 가을낙엽_낙엽,
+/// 城シルエット 窓, 葉っぱブラシ, …). Untraced units still warn with their code.
+#[test]
+fn length_unit_2_is_pixels_without_a_warning() {
+    let unit_keys = ["BrushSpraySizeUnit", "BrushWaterEdgeRadiusUnit", "BrushWaterEdgeBlurUnit", "DualSizeUnit", "DualSpraySizeUnit"];
+    let read = |unit: i64| {
+        let mut fields = vec![
+            ("BrushUseSpray", Value::Integer(1)),
+            ("BrushSpraySize", number(12.0)),
+            ("BrushUseWaterEdge", Value::Integer(1)),
+            ("BrushWaterEdgeRadius", number(3.0)),
+            ("BrushWaterEdgeAfterDrag", Value::Integer(1)),
+            ("UseDualBrush", Value::Integer(1)),
+            ("DualBrushCompositeMode", Value::Integer(1)),
+            ("DualUseSpray", Value::Integer(1)),
+        ];
+        fields.extend(unit_keys.map(|k| (k, Value::Integer(unit))));
+        read_sut(&variant_fields_fixture(&fields), "SUT", &prism_raster::Interrupt::NONE).unwrap()
+    };
+    let pixels = read(2);
+    let b = &pixels.presets[0].brush;
+    assert_eq!(b.csp_spray.as_ref().unwrap().size, 12.0);
+    assert_eq!(b.csp_water_edge.as_ref().unwrap().radius, 3.0);
+    assert!(b.dual_brush.enabled);
+    assert!(!pixels.warnings.iter().any(|w| w.contains("Unit") || w.contains("units")), "{:?}", pixels.warnings);
+    let untraced = read(1);
+    for key in ["BrushSpraySizeUnit 1", "BrushWaterEdgeRadiusUnit 1", "BrushWaterEdgeBlurUnit 1", "size units", "particle size units"] {
+        assert!(untraced.warnings.iter().any(|w| w.contains(key)), "{key}: {:?}", untraced.warnings);
+    }
+}
+
 #[test]
 fn unsupported_original_material_falls_back_with_an_explicit_thumbnail_warning() {
     let mut bytes = fixture();

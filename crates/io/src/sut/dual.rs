@@ -2,7 +2,7 @@
 //! Prism's Dual Brush. Evidence and inferences: docs/sut-analysis.md › Blending modes, colour
 //! jitter and dual brush.
 use super::sqlite::Value;
-use super::{Row, TipKeys, effector, enabled, material, reference_paths, spacing_of, tip};
+use super::{Row, TipKeys, effector, enabled, material, pixel_unit, reference_paths, spacing_of, tip};
 use prism_paint::csp_blend::{CspDualMode, csp_dual_mode};
 use prism_paint::{BrushSettings, DualBrush, MAX_BRUSH_SIZE, MAX_SCATTER, TipShape};
 
@@ -107,7 +107,7 @@ pub(super) fn dual_brush(
         }
     }
     for (key, what) in [("DualSizeUnit", "size units"), ("DualSpraySizeUnit", "particle size units")] {
-        if enabled(r, key) {
+        if !pixel_unit(r, key) {
             unsupported.push(what);
         }
     }
