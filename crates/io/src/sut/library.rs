@@ -105,6 +105,8 @@ const ACTION_LIMIT: u64 = 8 << 20;
 pub const GRADIENT_KINDS: [&str; 2] = ["gradation", "gradation_set"];
 /// Largest gradient material file read.
 const GRADIENT_LIMIT: u64 = 8 << 20;
+/// The catalog's material kind of colour sets (`data/material_0.colorset`, a SQLite palette).
+pub const COLOR_SET_KINDS: [&str; 1] = ["color_set"];
 
 /// One downloaded sub-tool material.
 #[derive(Clone, Debug, PartialEq)]
@@ -179,6 +181,21 @@ pub struct LibraryGradient {
     pub favorite: bool,
 }
 
+/// One downloaded colour set: it imports into the Swatches panel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryColorSet {
+    pub uuid: String,
+    pub name: String,
+    /// The downloaded collection it belongs to (empty when unknown).
+    pub catalog: String,
+    pub status: Status,
+    pub thumbnail: Option<PathBuf>,
+    pub tags: Vec<String>,
+    /// As [`LibraryBrush::folders`].
+    pub folders: Vec<String>,
+    pub favorite: bool,
+}
+
 /// One downloaded collection (catalog) and its cover image (`thumbnail/catalogThumb.png`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Catalog {
@@ -199,6 +216,8 @@ pub struct Library {
     pub actions: Vec<LibraryAction>,
     /// Downloaded gradients and gradient sets, in catalog order.
     pub gradients: Vec<LibraryGradient>,
+    /// Downloaded colour sets, in catalog order.
+    pub color_sets: Vec<LibraryColorSet>,
     /// The collections the brushes and layer materials belong to, in catalog order.
     pub catalogs: Vec<Catalog>,
     /// Folder-wide notices (license terms, stale snapshot, missing PAINT data).
@@ -288,8 +307,23 @@ pub fn list(root: &Path) -> Result<Library> {
             favorite: e.favorite,
         })
         .collect();
+    let color_sets = snap
+        .color_set_entries
+        .iter()
+        .map(|e| LibraryColorSet {
+            uuid: e.uuid.clone(),
+            name: e.name.clone(),
+            catalog: e.catalog.clone(),
+            status: snap.color_set_status(e),
+            thumbnail: image(format!("{}:thumbnail:thumbnail.png", e.folder())),
+            tags: e.tags.clone(),
+            folders: e.folders.clone(),
+            favorite: e.favorite,
+        })
+        .collect();
     let mut catalogs: Vec<Catalog> = Vec::new();
-    for e in snap.entries.iter().chain(&snap.layer_entries).chain(&snap.action_entries).chain(&snap.gradient_entries).filter(|e| !e.catalog.is_empty()) {
+    let all = snap.entries.iter().chain(&snap.layer_entries).chain(&snap.action_entries).chain(&snap.gradient_entries).chain(&snap.color_set_entries);
+    for e in all.filter(|e| !e.catalog.is_empty()) {
         if !catalogs.iter().any(|c| c.name == e.catalog) {
             catalogs.push(Catalog {
                 name: e.catalog.clone(),
@@ -298,7 +332,7 @@ pub fn list(root: &Path) -> Result<Library> {
             });
         }
     }
-    Ok(Library { root: root.to_path_buf(), brushes, layers, actions, gradients, catalogs, notices: snap.notices })
+    Ok(Library { root: root.to_path_buf(), brushes, layers, actions, gradients, color_sets, catalogs, notices: snap.notices })
 }
 
 /// Largest preview image read by [`thumbnail_bytes`].
@@ -388,6 +422,20 @@ pub fn import_gradients(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) 
     Ok((entry.name.clone(), entry.catalog.clone(), material))
 }
 
+/// One downloaded colour set by material UUID: its name, its collection and its colours
+/// ([`super::color_set::read`]).
+pub fn import_color_set(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) -> Result<(String, String, super::color_set::ColorSet)> {
+    let snap = Snapshot::read(root)?;
+    let entry = snap.color_set_entries.iter().find(|e| e.uuid == uuid).ok_or_else(|| format!("no downloaded CLIP STUDIO colour set has the id {uuid}"))?;
+    let status = snap.color_set_status(entry);
+    if !matches!(status, Status::Ready(_)) {
+        return Err(format!("{}: {}", entry.name, status.guidance().unwrap_or("not ready")));
+    }
+    let path = snap.color_set_file(entry).ok_or("the downloaded colour set file is no longer available; refresh and try again")?;
+    let set = super::color_set::read(&read_limited(&path, GRADIENT_LIMIT)?, ctl).map_err(|e| format!("{}: {e}", entry.name))?;
+    Ok((entry.name.clone(), entry.catalog.clone(), set))
+}
+
 /// Read a layer material file (`data/material_0.layer`), or the material folder holding one.
 /// The material's `icedata/layerData.xml` beside `data/` is read when present.
 pub fn read_layer_file(path: &Path, ctl: &prism_raster::Interrupt) -> Result<(LayerMaterial, MaterialInfo)> {
@@ -434,6 +482,7 @@ struct Snapshot {
     layer_entries: Vec<Entry>,
     action_entries: Vec<Entry>,
     gradient_entries: Vec<Entry>,
+    color_set_entries: Vec<Entry>,
     caches: Vec<(CacheSource, Vec<Row>, Vec<Row>)>,
     notices: Vec<String>,
 }
@@ -497,6 +546,7 @@ impl Snapshot {
         let layer_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &LAYER_KINDS);
         let action_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &ACTION_KINDS);
         let gradient_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &GRADIENT_KINDS);
+        let color_set_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &COLOR_SET_KINDS);
 
         let mut caches = Vec::new();
         match paint_folder(root) {
@@ -526,7 +576,7 @@ impl Snapshot {
         if stale {
             notices.push("CLIP STUDIO appears to be running or has unsaved database changes; the newest downloads may be missing until it is closed".into());
         }
-        Ok(Self { materials: root.join(MATERIALS), entries, layer_entries, action_entries, gradient_entries, caches, notices })
+        Ok(Self { materials: root.join(MATERIALS), entries, layer_entries, action_entries, gradient_entries, color_set_entries, caches, notices })
     }
 
     fn tool(&self, source: CacheSource, uuid: &str) -> Option<(&Row, &Row)> {
@@ -577,6 +627,21 @@ impl Snapshot {
             return Status::Downloading;
         }
         self.gradient_file(e).map_or(Status::Missing, |_| Status::Ready(CacheSource::MaterialFile))
+    }
+
+    fn color_set_status(&self, e: &Entry) -> Status {
+        if !e.local {
+            return Status::UnsupportedLocation;
+        }
+        if e.pending {
+            return Status::Downloading;
+        }
+        self.color_set_file(e).map_or(Status::Missing, |_| Status::Ready(CacheSource::MaterialFile))
+    }
+
+    fn color_set_file(&self, e: &Entry) -> Option<PathBuf> {
+        let root = std::fs::canonicalize(&self.materials).ok()?;
+        resolve(&root, &format!("{}:data:material_0.colorset", e.folder())).ok()
     }
 
     fn gradient_file(&self, e: &Entry) -> Option<PathBuf> {

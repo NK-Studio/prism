@@ -1,6 +1,6 @@
 //! Swatches panel commands (`swatches.*`): add, delete, rename, reorder and group swatches, set
 //! the foreground or background colour from one, restore the defaults, and import or export
-//! Photoshop `.aco` and Adobe Swatch Exchange `.ase` files.
+//! Photoshop `.aco` and Adobe Swatch Exchange `.ase` files; CLIP STUDIO colour sets import too.
 //!
 //! The library is [`PresetState::swatches`](crate::presets::PresetState) (model and colour
 //! conversions in [`crate::presets::swatches`]); file parsing is `prism_psd::{aco, ase}`.
@@ -589,9 +589,16 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         None => "Imported Swatches".into(),
     };
     let (groups, warnings) = read_file(&bytes, format, &group).map_err(|e| bad(CMD, e))?;
+    let (names, count) = add_groups(s, groups, replace, CMD)?;
+    Ok(json!({"format": format.id(), "mode": mode, "groups": names, "count": count, "warnings": warnings}))
+}
+
+/// Add imported groups to the library (or replace it): group names and swatch names stay unique
+/// across the library. Returns the group names used and the number of swatches.
+fn add_groups(s: &mut Session, groups: Vec<Group<Swatch>>, replace: bool, cmd: &str) -> Result<(Vec<String>, usize)> {
     let base: Vec<Group<Swatch>> = if replace { Vec::new() } else { s.presets.swatches.clone() };
     if total(&base) + total(&groups) > MAX_SWATCHES || base.len() + groups.len() > MAX_GROUPS {
-        return Err(bad(CMD, format!("too many swatches: the panel holds at most {MAX_SWATCHES} in {MAX_GROUPS} groups")));
+        return Err(bad(cmd, format!("too many swatches: the panel holds at most {MAX_SWATCHES} in {MAX_GROUPS} groups")));
     }
     let mut lib = base;
     let count = total(&groups);
@@ -616,7 +623,54 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.presets.swatches = lib;
     s.presets_changed();
-    Ok(json!({"format": format.id(), "mode": mode, "groups": names, "count": count, "warnings": warnings}))
+    Ok((names, count))
+}
+
+/// A CLIP STUDIO colour set (Color Set palette material) as one swatch group: a downloaded
+/// material by `uuid` (named after it), or a `.colorset` file (`path`/`data`, named after the
+/// file). Unnamed colours are named by their hex value.
+fn import_csp(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "swatches.importCsp";
+    let ctl = prism_raster::Interrupt::NONE;
+    let (set, default_group) = match p.get("uuid") {
+        Some(v) => {
+            let uuid = v.as_str().map(str::trim).filter(|u| !u.is_empty()).ok_or_else(|| bad(CMD, "`uuid` must be a non-empty string"))?;
+            let root = crate::csp_library_cmds::root(CMD, p)?;
+            let (name, _, set) = prism_io::sut::library::import_color_set(&root, uuid, &ctl).map_err(crate::EngineError::Other)?;
+            (set, name)
+        }
+        None => {
+            if p.get("root").is_some() {
+                return Err(bad(CMD, "`root` goes with `uuid`"));
+            }
+            let (bytes, stem) = crate::preset_import_cmds::file_bytes(p, CMD, ".colorset file")?;
+            (prism_io::sut::color_set::read(&bytes, &ctl).map_err(|e| bad(CMD, e))?, stem)
+        }
+    };
+    let mode = str_param(p, "mode").unwrap_or("append");
+    let replace = match mode {
+        "append" => false,
+        "replace" => true,
+        m => return Err(bad(CMD, format!("unknown mode `{m}` (append|replace)"))),
+    };
+    let group = match name_param(p, "group", CMD)? {
+        Some(g) => g,
+        None if !default_group.trim().is_empty() => clip(default_group.trim()),
+        None => "CLIP STUDIO".into(),
+    };
+    let items = set
+        .colors
+        .iter()
+        .map(|c| Swatch::new(&if c.name.is_empty() { hex_of(c.rgb) } else { clip(&c.name) }, SwatchColor::Rgb(c.rgb)))
+        .collect();
+    let (names, count) = add_groups(s, vec![Group::new(&group, items)], replace, CMD)?;
+    Ok(json!({"mode": mode, "groups": names, "count": count, "warnings": set.warnings}))
+}
+
+/// `#rrggbb` of an RGB colour in 0..=1.
+fn hex_of(rgb: [f32; 3]) -> String {
+    let [r, g, b] = rgb.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 fn export(s: &mut Session, p: &Value) -> Result<Value> {
@@ -782,6 +836,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"path":".aco or .ase file"?,"data":base64 bytes?,"format":"aco|ase"? (detected),"mode":"append|replace"="append","group":str?=file name (the group for ungrouped colours)} → {format,mode,groups,count,warnings}"##,
             enabled: always,
             run: import,
+            journal: true,
+        },
+        CommandSpec {
+            id: "swatches.importCsp",
+            label: "Import CLIP STUDIO Color Set…",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"uuid":colour set id from brush.cspLibrary.list colorSets?,"root":CLIP STUDIO user data folder? (with uuid),"path":".colorset file"?,"data":base64 bytes?,"mode":"append|replace"="append","group":str?=the material or file name} → {mode,groups,count,warnings} (unnamed colours are named by their hex value; transparent ones are left out)"##,
+            enabled: always,
+            run: import_csp,
             journal: true,
         },
         CommandSpec {

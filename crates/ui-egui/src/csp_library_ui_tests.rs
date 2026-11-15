@@ -169,7 +169,7 @@ fn dropping_a_material_uses_it_where_it_lands() {
     // A layer material needs a document; nothing happens without one.
     let ctx = egui::Context::default();
     let mut a = app();
-    let ruler = MaterialDrag { uuid: "r".into(), name: "Isometric ruler".into(), layer: true, action: false, gradient: false };
+    let ruler = MaterialDrag { uuid: "r".into(), name: "Isometric ruler".into(), layer: true, action: false, gradient: false, color_set: false };
     use_material(&mut a, &ctx, &ruler, None);
     assert!(a.session.active().is_none());
     // With one, the import runs (the test folder has no CLIP STUDIO data, so it reports why).
@@ -178,7 +178,7 @@ fn dropping_a_material_uses_it_where_it_lands() {
     use_material(&mut a, &ctx, &ruler, None);
     assert_eq!(a.session.active().unwrap().doc.layers.len(), layers);
     // A brush goes to the brush import with this panel's folder.
-    let brush = MaterialDrag { uuid: "a".into(), name: "Ink pen".into(), layer: false, action: false, gradient: false };
+    let brush = MaterialDrag { uuid: "a".into(), name: "Ink pen".into(), layer: false, action: false, gradient: false, color_set: false };
     let presets = a.session.tools.presets.len();
     use_material(&mut a, &ctx, &brush, None);
     assert_eq!(a.session.tools.presets.len(), presets, "nothing to import from the test folder");
@@ -508,6 +508,70 @@ fn local_gradients_list_and_import() {
     assert!(imported > ids.len(), "{}", app.ui.status);
     for g in &app.session.presets.gradients {
         eprintln!("group {} ({})", g.name, g.items.len());
+    }
+    assert!(app.ui.csp_library.selected.is_empty());
+}
+
+#[test]
+fn colour_sets_have_their_own_filter_and_import_into_the_swatches_panel() {
+    let mut app = app();
+    let mut l = listing();
+    l["colorSets"] = json!([
+        {"uuid": "set", "name": "Retro palette", "kind": "color_set", "catalog": "Pack", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": ["ダウンロード:Pack-1:Brushes"]}
+    ]);
+    app.ui.csp_library.listing = Some(l.clone());
+    let mut h = harness(app);
+    assert!(h.query_by_label("Retro palette").is_some(), "All lists colour sets too");
+    h.state_mut().ui.csp_library.filter = KindFilter::ColorSets;
+    h.run_steps(2);
+    assert!(h.query_by_label("Ink pen").is_none() && h.query_by_label("Retro palette").is_some());
+    h.state_mut().ui.csp_library.filter = KindFilter::Brushes;
+    h.run_steps(2);
+    assert!(h.query_by_label("Retro palette").is_none());
+    assert!(!in_library(h.state(), &l["colorSets"][0]));
+
+    // Not readable from this folder: reported, nothing imported, still selected.
+    let mut a = super::tests::app();
+    let before = a.session.presets.swatches.clone();
+    a.ui.csp_library.listing = Some(l);
+    a.ui.csp_library.selected = vec!["set".into()];
+    import_selected(&mut a);
+    assert_eq!(a.session.presets.swatches, before);
+    assert!(a.ui.status_error);
+    assert_eq!(a.ui.csp_library.selected, ["set"]);
+}
+
+/// The Color sets tab over the local CLIP STUDIO folder, then every colour set imported:
+/// `PRISM_LOOK_OUT=<dir> cargo test -p prism-ui-egui --lib local_colour_sets -- --ignored`.
+#[test]
+#[ignore = "reads the local CLIP STUDIO folder and writes a PNG"]
+fn local_colour_sets_list_and_import() {
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/csp-colour-sets".into()));
+    std::fs::create_dir_all(&out).unwrap();
+    let root = std::env::var_os("PRISM_TEST_CSP_ROOT").map(|r| r.to_string_lossy().into_owned());
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+    app.ui.csp_library.root = root.clone();
+    refresh(&mut app);
+    let listing = app.ui.csp_library.listing.clone().unwrap();
+    let ids: Vec<String> = materials(&listing).filter(|b| is_color_set(b) && is_ready(b)).filter_map(|b| b["uuid"].as_str().map(str::to_string)).collect();
+    assert!(!ids.is_empty());
+    app.ui.csp_library.filter = KindFilter::ColorSets;
+    app.ui.csp_library.view = View::List;
+    let mut h = wide(app);
+    h.set_size(egui::vec2(520.0, 360.0));
+    h.run_steps(30);
+    h.render().unwrap().save(out.join("colour-sets-tab.png")).unwrap();
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+    app.ui.csp_library.root = root;
+    refresh(&mut app);
+    let groups = app.session.presets.swatches.len();
+    app.ui.csp_library.selected = ids.clone();
+    import_selected(&mut app);
+    eprintln!("status: {}", app.ui.status);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(app.session.presets.swatches.len(), groups + ids.len());
+    for g in &app.session.presets.swatches[groups..] {
+        eprintln!("group {} ({}): {:?}", g.name, g.items.len(), g.items.iter().take(3).map(|i| i.name.clone()).collect::<Vec<_>>());
     }
     assert!(app.ui.csp_library.selected.is_empty());
 }

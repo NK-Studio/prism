@@ -3595,3 +3595,7 @@ cspTool	Space evenly	균등 배치
 	Imported {n} gradients from CLIP STUDIO	CLIP STUDIO에서 그라데이션 {n}개를 가져왔습니다
 	Imports into the Gradients panel, for the Gradient tool and gradient maps	그라데이션 패널로 가져옵니다. 그라데이션 도구와 그라데이션 맵에서 쓸 수 있습니다
 	Pressure curve imported from CLIP STUDIO	CLIP STUDIO에서 가져온 필압 곡선
+	Color sets	컬러 세트
+	Color set	컬러 세트
+	Imported {n} colors from CLIP STUDIO	CLIP STUDIO에서 색 {n}개를 가져왔습니다
+	Imports into the Swatches panel as one group	색상 견본 패널에 그룹 하나로 가져옵니다

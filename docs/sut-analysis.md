@@ -2386,3 +2386,22 @@ synthetic data.
 - Local result: all 5 listed; the 4 on disk import (14 + 18 set gradients, 3 sub-tool
   gradients). Rendered beside CLIP STUDIO's thumbnails they show the same colour runs
   (metallic golds and silvers, the hue-shift blues, rainbow and warm tones, the ink plates).
+
+## Colour set materials (2026-11-15)
+
+Read-only inspection of the two `color_set` materials in the local download folder; no
+executable code was decompiled. Prism's reader is `crates/io/src/sut/color_set.rs`; its test uses
+a synthetic database.
+
+- `data/material_0.colorset` is a C2F container holding a **SQLite** database (unlike a gradient
+  set's `.colorset`, which holds typed value records). Its one table:
+  `colorsetmaterial(_PW_ID, colorsetitemname, colorsetitemred, colorsetitemgreen,
+  colorsetitemblue, colorsetitemtransparent)`. Rows are the palette in `_PW_ID` order; names were
+  empty in both sets.
+- Channels are 32-bit with the byte repeated (`0xDCDCDCDC` = 220), as CLIP STUDIO's other colours;
+  `colorsetitemtransparent` 1 marks the transparent colour (none locally; Prism swatches are opaque,
+  so it is left out with a warning).
+- Prism imports a set into the Swatches panel as one group named after the material
+  (`swatches.importCsp`); unnamed colours take their hex value as the name. Both local sets (Hue
+  Shifting Palette 15, Retro24 Pixel Art Palette 24) match their thumbnails colour for colour and
+  in order, and the first matches the user's CLIP STUDIO Color Set palette.

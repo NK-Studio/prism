@@ -515,3 +515,37 @@ fn a_gradient_sub_tool_reads_its_node_names_and_gradation_data() {
         assert!(read(&bytes, &prism_raster::Interrupt::NONE).is_err());
     }
 }
+
+#[test]
+fn a_colour_set_reads_its_colours_in_palette_order() {
+    use crate::sut::color_set::read;
+    const SQL: &str = "CREATE TABLE colorsetmaterial(_PW_ID INTEGER PRIMARY KEY AUTOINCREMENT, colorsetitemname TEXT DEFAULT NULL, colorsetitemred INTEGER DEFAULT NULL, colorsetitemgreen INTEGER DEFAULT NULL, colorsetitemblue INTEGER DEFAULT NULL, colorsetitemtransparent INTEGER DEFAULT NULL)";
+    let full = i64::from(u32::MAX);
+    let row = |id: i64, name: &str, rgb: [i64; 3], transparent: i64| vec![int(id), text(name), int(rgb[0]), int(rgb[1]), int(rgb[2]), int(transparent)];
+    let db = database(
+        &[(
+            "colorsetmaterial",
+            SQL,
+            vec![
+                row(2, "", [0, full, 0], 0),
+                row(1, "Sky", [0xDCDC_DCDC, 0, full], 0),
+                row(3, "", [0, 0, 0], 1),
+                row(4, "", [-5, 0, 0], 0),
+            ],
+        )],
+        false,
+    );
+    let set = read(&crate::csp_container::plain_fixture(&db), &prism_raster::Interrupt::NONE).unwrap();
+    assert_eq!(set.colors.len(), 2, "{set:?}");
+    assert_eq!(set.colors[0].name, "Sky", "palette order is _PW_ID");
+    assert!((set.colors[0].rgb[0] - 220.0 / 255.0).abs() < 1e-6);
+    assert_eq!(set.colors[1].rgb, [0.0, 1.0, 0.0]);
+    assert_eq!(set.transparent, 1);
+    assert_eq!(set.warnings.len(), 2, "transparent and unreadable entries are reported: {:?}", set.warnings);
+    assert_eq!(read(&db, &prism_raster::Interrupt::NONE).unwrap(), set, "plain SQLite reads too");
+    let empty = database(&[("colorsetmaterial", SQL, vec![row(1, "", [0, 0, 0], 1)])], false);
+    let other = database(&[("Material", "CREATE TABLE Material (MaterialName TEXT)", vec![vec![text("x")]])], false);
+    for bytes in [empty, other, db[..100].to_vec(), b"not a colour set".to_vec(), Vec::new()] {
+        assert!(read(&bytes, &prism_raster::Interrupt::NONE).is_err());
+    }
+}
