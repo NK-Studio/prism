@@ -1,16 +1,19 @@
 ---
 name: pen-pressure-test
-description: Test pen pressure, tilt and stroke timing in the real Prism app without a physical tablet, by injecting synthetic Windows Ink pen strokes (prism-tablet example `pen_inject`) and reading them back with `ui.penTrace`. Use whenever a change touches brushes, pressure curves, stabilizers, SUT/ABR brush import, pen input or stroke rendering and needs a pressure check ("필압 테스트", "펜 테스트", "pressure test", "check the stroke with pressure"), or to feed the same pressure stroke into CLIP STUDIO PAINT or Photoshop for comparison. Windows only.
+description: Test pen pressure, tilt and stroke timing in the real Prism app without a physical tablet, by injecting synthetic pen strokes (prism-tablet example `pen_inject`: Windows Ink on Windows, tablet Quartz events on macOS) and reading them back with `ui.penTrace`. Use whenever a change touches brushes, pressure curves, stabilizers, SUT/ABR brush import, pen input or stroke rendering and needs a pressure check ("필압 테스트", "펜 테스트", "pressure test", "check the stroke with pressure"), or to feed the same pressure stroke into CLIP STUDIO PAINT or Photoshop for comparison. Windows and macOS.
 ---
 
 # Pen pressure test (synthetic pen)
 
-Unit tests and `ui.pointer` replays skip the native pen path (Windows Ink packets, winit's
-emulated mouse/touch, per-frame delivery), so their results can differ from a real pen. The
-`pen_inject` example injects OS-level pen packets (`InjectSyntheticPointerInput`, PT_PEN) with
-pressure, tilt, rotation and timing. They take exactly the path a physical pen takes. Use it for
-every pressure check instead of assuming the user will test by hand. Background and the measured
-verification: `docs/pen-input-validation.md` › Synthetic pen injection.
+Unit tests and `ui.pointer` replays skip the native pen path (Windows Ink packets or AppKit
+tablet events, winit's emulated mouse/touch, per-frame delivery), so their results can differ
+from a real pen. The `pen_inject` example injects OS-level pen input with pressure, tilt,
+rotation and timing: on Windows Ink packets (`InjectSyntheticPointerInput`, PT_PEN), on macOS
+the proximity and tablet-point mouse events a tablet driver posts (`CGEventPost` at the HID
+level). They take exactly the path a physical pen takes. Use it for every pressure check instead
+of assuming the user will test by hand. Background and the measured verification:
+`docs/pen-input-validation.md` › Synthetic pen injection (Windows) and › Synthetic pen injection
+on macOS.
 
 Reply to the maintainer in Korean; commands, paths and ids stay as they are.
 
@@ -23,18 +26,41 @@ Reply to the maintainer in Korean; commands, paths and ids stay as they are.
 - Always check results from data (`ui.penTrace`, `document.inspect` history), then look at a
   screenshot. Never report "pressure works" from the injector's exit code alone.
 
+## macOS differences (read first on a Mac)
+
+- **Permission.** Posting events needs Accessibility access for the app that runs the tool
+  (Terminal, the IDE, the Claude app). Without it `pen_inject` asks macOS for the prompt and
+  stops with an error: ask the user to allow it in System Settings › Privacy & Security ›
+  Accessibility, then run it again. Don't try to change the setting yourself.
+- **Binary and port.** `target/agent-pen/fast/prism` (no `.exe`). The control port opens a moment
+  after the token file appears: wait for the port (`nc -z 127.0.0.1 7979`), not the file.
+- **Target by pid.** The user's own Prism may be open with the same name. Use `--list` (prints
+  every match with its pid) and pass `--pid <test instance>` to every injection.
+- **Coordinates are points** from the window frame's top-left. Prism's frame is its client area
+  (full-size content view). Read the canvas position from a screenshot divided by
+  `pixelsPerPoint` (`ui.inspect` › `window`). For a doc-coordinate `--file`, use
+  `--origin <canvas left,top in points> --scale <views[].zoom>`.
+- **Trace source** is `appKit`. Brush, Pencil and Eraser read paired packets (as on Windows):
+  expect every injected sample (250 moves for a 1000 pt ramp at 8 ms), each with its own
+  pressure and pose and the event's timestamp. Other tools follow the mouse events: one entry
+  per tool event, timed per egui frame. Pressure arrives in 1/255 steps (Quartz).
+- The first stroke right after activation did commit on macOS (2026-11-16); still check `down`.
+- CLIP STUDIO PAINT / Photoshop on macOS have not been driven with the synthetic pen yet: if you
+  do, record whether they read its pressure before comparing anything.
+
 ## 1. Start Prism with the control channel
 
 Build the app with your change (`cargo build --profile fast -p prism`, or `--release`). Then run it
 in the background:
 
 ```sh
-<target>/prism.exe --control 7979 --control-token-file "$S/control.token" \
+<target>/prism.exe --control 7979   # macOS: <target>/prism --control-token-file "$S/control.token" \
   --automation-read-root "$S" --automation-write-root "$S"
 ```
 
 `$S` is a scratchpad folder. Talk to it with a small JSON-lines client (auth first). For example,
-save this as `$S/ctl.py` and run it with `python -I "$S/ctl.py" '[[method, params], …]' [out.json]`:
+save this as `$S/ctl.py` and run it with `python -I "$S/ctl.py" '[[method, params], …]' [out.json]`
+(`python3` on macOS):
 
 ```python
 import json, socket, sys, pathlib
@@ -88,8 +114,8 @@ cargo run -p prism-tablet --example pen_inject -- --window Prism --file trace.js
 ## 4. Verify
 
 1. `[["ui.penTrace",{"enabled":false}]]` → save the result. Expect one `down`, the moves and one
-   `up` per stroke, `source: "windowsInk"`, `pressureValid: true`, and pressures that follow the
-   injected profile (ramp: 0 → ~1 → 0).
+   `up` per stroke, `source: "windowsInk"` (macOS: `"appKit"`), `pressureValid: true`, and
+   pressures that follow the injected profile (ramp: 0 → ~1 → 0).
 2. `[["engine.execute",{"command":"document.inspect","params":{}}]]` → one history step per stroke
    (e.g. "Brush Tool").
 3. `[["ui.screenshot",{"path":"shot.png"}]]` → crop or downscale and **look at it**: taper, width

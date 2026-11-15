@@ -9,7 +9,13 @@
 //! - `NSEventTypeTabletPoint` events carry the same fields without a mouse event.
 //! - `NSEventTypeTabletProximity` events (and mouse events with the proximity subtype) say a
 //!   tool entered or left proximity and which one (`pointingDeviceType`: pen, eraser, cursor).
+//!
+//! Besides the current sample, [`State::packet`] turns each left-button tablet mouse event into
+//! a paired packet (window, position, time, pressure, pose) for the same bounded transport
+//! Windows Ink uses ([`crate::windows_ink::PenQueue`]): every reading keeps its own pressure,
+//! however many arrive before the UI's next frame.
 
+use crate::windows_ink::{PenPhase, RawPenEvent};
 use crate::{Sample, Update};
 
 /// `NSEventType` values (AppKit headers; stable since 10.0/10.4).
@@ -64,7 +70,17 @@ pub struct RawEvent {
     pub device: usize,
     /// `isEnteringProximity` (proximity events only).
     pub entering: bool,
+    /// `windowNumber` of the window the event is for.
+    pub window: usize,
+    /// Position in that window's content area: points, top-left origin.
+    pub x: f64,
+    pub y: f64,
+    /// `timestamp` in milliseconds (wraps; the transport extends it per contact).
+    pub time_ms: u32,
 }
+
+/// The pen's id in packets: one pen at a time on macOS.
+pub const POINTER_ID: u32 = 1;
 
 /// The mask of event types [`State::handle`] maps (`NSEventMask` bits are `1 << type`).
 pub fn event_mask() -> u64 {
@@ -92,6 +108,8 @@ pub fn event_mask() -> u64 {
 pub struct State {
     /// The tool in proximity is the eraser end.
     pub eraser: bool,
+    /// The tip is down (a packet `Down` was produced and not yet ended).
+    pub contact: bool,
 }
 
 impl State {
@@ -122,6 +140,53 @@ impl State {
             return Update::Set(Some(self.sample(e)));
         }
         if mouse { Update::Set(None) } else { Update::Keep }
+    }
+
+    /// The paired packet for `e`, if it is a left-button tablet mouse event (tip down, drag, up,
+    /// hover) or the pen leaving range during a contact (a cancel). Call after [`State::handle`]
+    /// so the packet carries the end (tip or eraser) in proximity. Right/other buttons (barrel
+    /// switches) and plain mice produce none: they stay on the mouse path.
+    pub fn packet(&mut self, e: &RawEvent) -> Option<RawPenEvent> {
+        use event_type::*;
+        let proximity = e.kind == TABLET_PROXIMITY || (e.subtype == subtype::TABLET_PROXIMITY && e.kind != TABLET_POINT);
+        let base = |phase, pressure, s: Option<Sample>| RawPenEvent {
+            window: e.window,
+            pointer_id: POINTER_ID,
+            device_id: 1,
+            phase,
+            x: e.x as f32,
+            y: e.y as f32,
+            time_ms: e.time_ms,
+            pressure,
+            tilt_x: s.map(|s| s.tilt_x),
+            tilt_y: s.map(|s| s.tilt_y),
+            rotation: s.map(|s| s.rotation),
+            eraser: self.eraser,
+            barrel_button: false,
+        };
+        if proximity {
+            if !e.entering && std::mem::take(&mut self.contact) {
+                return Some(base(PenPhase::Cancel, None, None));
+            }
+            return None;
+        }
+        if e.subtype != subtype::TABLET_POINT {
+            return None;
+        }
+        let phase = match (e.kind, self.contact) {
+            // A drag whose press was never seen starts the contact rather than being lost.
+            (LEFT_MOUSE_DOWN, _) | (LEFT_MOUSE_DRAGGED, false) => PenPhase::Down,
+            (LEFT_MOUSE_DRAGGED, true) => PenPhase::Move,
+            (LEFT_MOUSE_UP, true) => PenPhase::Up,
+            (MOUSE_MOVED, false) => PenPhase::Hover,
+            // A hover while the tip is down means its release was lost: end the contact.
+            (MOUSE_MOVED, true) => PenPhase::Cancel,
+            _ => return None,
+        };
+        self.contact = matches!(phase, PenPhase::Down | PenPhase::Move);
+        let s = self.sample(e);
+        let pressure = matches!(phase, PenPhase::Down | PenPhase::Move).then_some(s.pressure);
+        Some(base(phase, pressure, Some(s)))
     }
 
     fn proximity(&mut self, e: &RawEvent) -> Update {
@@ -235,6 +300,67 @@ mod tests {
         assert_eq!(s, Sample { pressure: 1.0, tilt_x: 60.0, tilt_y: 60.0, rotation: 330.0, eraser: false });
         let s = set(st.handle(&pen(event_type::LEFT_MOUSE_DRAGGED, -1.0, (f64::MAX, f64::MIN), f32::MAX))).unwrap();
         assert!(s.pressure == 0.0 && s.tilt_x == 60.0 && s.tilt_y == 60.0 && (0.0..360.0).contains(&s.rotation));
+    }
+
+    /// Every left-button tablet event becomes a paired packet; a frame's worth of them keeps
+    /// each reading's own pressure through the shared transport.
+    #[test]
+    fn tablet_events_become_paired_packets() {
+        use crate::windows_ink::{PenPhase, PenQueue};
+        let mut st = State::default();
+        let queue = PenQueue::default();
+        let at = |kind, pressure: f32, x: f64, time_ms| RawEvent { window: 7, x, y: 20.0, time_ms, ..pen(kind, pressure, (0.5, 0.0), 10.0) };
+        let mut feed = |e: RawEvent| {
+            st.handle(&e);
+            if let Some(p) = st.packet(&e) {
+                queue.push(p);
+            }
+        };
+        feed(at(event_type::MOUSE_MOVED, 0.0, 1.0, 100));
+        feed(at(event_type::LEFT_MOUSE_DOWN, 0.1, 2.0, 108));
+        feed(at(event_type::LEFT_MOUSE_DRAGGED, 0.4, 3.0, 116));
+        feed(at(event_type::LEFT_MOUSE_DRAGGED, 0.9, 4.0, 124));
+        feed(at(event_type::LEFT_MOUSE_UP, 0.0, 4.0, 132));
+        let packets = queue.drain(7);
+        let phases: Vec<_> = packets.iter().map(|p| p.phase).collect();
+        assert_eq!(phases, [PenPhase::Hover, PenPhase::Down, PenPhase::Move, PenPhase::Move, PenPhase::Up]);
+        let pressures: Vec<_> = packets.iter().map(|p| p.pressure).collect();
+        assert_eq!(&pressures[1..], &[Some(0.1), Some(0.4), Some(0.9), Some(0.9)], "each move keeps its own; up keeps the last");
+        assert_eq!(packets.iter().map(|p| p.x).collect::<Vec<_>>(), [1.0, 2.0, 3.0, 4.0, 4.0]);
+        assert_eq!(packets[2].time_ms, 116);
+        assert!((packets[2].tilt_x - 30.0).abs() < 1e-4 && packets[2].rotation == 10.0);
+        assert!(!st.contact);
+    }
+
+    #[test]
+    fn mice_barrels_and_lost_releases_never_leave_a_contact_open() {
+        use crate::windows_ink::PenPhase;
+        let mut st = State::default();
+        // Plain mouse and right/other (barrel) buttons stay on the mouse path.
+        let mouse = RawEvent { kind: event_type::LEFT_MOUSE_DOWN, subtype: subtype::MOUSE, ..Default::default() };
+        assert_eq!(st.packet(&mouse), None);
+        for kind in [event_type::RIGHT_MOUSE_DOWN, event_type::OTHER_MOUSE_DRAGGED, event_type::TABLET_POINT] {
+            assert_eq!(st.packet(&pen(kind, 0.5, (0.0, 0.0), 0.0)), None, "type {kind}");
+        }
+        // An up without a contact is nothing; a drag without a press starts one.
+        assert_eq!(st.packet(&pen(event_type::LEFT_MOUSE_UP, 0.0, (0.0, 0.0), 0.0)), None);
+        assert_eq!(st.packet(&pen(event_type::LEFT_MOUSE_DRAGGED, 0.5, (0.0, 0.0), 0.0)).map(|p| p.phase), Some(PenPhase::Down));
+        // Leaving range mid-stroke cancels it, as does a hover that means the release was lost.
+        let leave = RawEvent { kind: event_type::TABLET_PROXIMITY, device: device::PEN, entering: false, ..Default::default() };
+        st.handle(&leave);
+        assert_eq!(st.packet(&leave).map(|p| p.phase), Some(PenPhase::Cancel));
+        assert_eq!(st.packet(&leave), None, "only once");
+        st.packet(&pen(event_type::LEFT_MOUSE_DOWN, 0.5, (0.0, 0.0), 0.0));
+        assert_eq!(st.packet(&pen(event_type::MOUSE_MOVED, 0.0, (0.0, 0.0), 0.0)).map(|p| p.phase), Some(PenPhase::Cancel));
+        assert!(!st.contact);
+        // Non-finite positions reach the transport, which rejects them (and cancels).
+        let queue = crate::windows_ink::PenQueue::default();
+        let mut bad = pen(event_type::LEFT_MOUSE_DOWN, 0.5, (0.0, 0.0), 0.0);
+        bad.x = f64::NAN;
+        if let Some(p) = st.packet(&bad) {
+            queue.push(p);
+        }
+        assert!(queue.drain(0).is_empty() && !queue.take_errors().is_empty());
     }
 
     #[test]

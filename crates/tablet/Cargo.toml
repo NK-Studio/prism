@@ -21,7 +21,11 @@ todo = "warn"
 objc2 = "=0.6.4"
 block2 = "=0.6.2"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSGeometry"] }
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "block2", "NSEvent"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "block2", "NSEvent", "NSRunningApplication", "NSResponder", "NSView", "NSWindow", "libc"] }
+# Synthetic pen injection (test tooling, `examples/pen_inject.rs`): posts tablet CGEvents and
+# finds target windows through the window list.
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "CFArray", "CFDictionary", "CFNumber", "CFString", "CFCGTypes"] }
+objc2-core-graphics = { version = "=0.3.2", default-features = false, features = ["std", "CGEvent", "CGEventTypes", "CGEventSource", "CGWindow"] }
 
 
 # Tests build real tablet NSEvents (from CGEvents) and read them through the monitor's path.

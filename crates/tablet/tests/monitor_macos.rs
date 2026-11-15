@@ -44,6 +44,27 @@ fn main() {
     drop(monitor);
     app.sendEvent(&event(CGEventType::LeftMouseDragged, 0.5, (0.0, 0.0), CGEventMouseSubtype::TabletPoint));
     assert_eq!(seen.borrow().len(), 2, "the monitor is gone after drop");
+
+    // With a packet queue: every left-button tablet event becomes a paired packet, and mouse
+    // coalescing is off while installed and restored afterwards.
+    use prism_tablet::windows_ink::{PenPhase, PenQueue};
+    let before = NSEvent::isMouseCoalescingEnabled();
+    let queue = PenQueue::default();
+    let monitor = Monitor::install_with_queue(|_| {}, queue.clone()).expect("install with queue");
+    assert!(!NSEvent::isMouseCoalescingEnabled(), "coalescing off while the monitor runs");
+    let tablet = CGEventMouseSubtype::TabletPoint;
+    app.sendEvent(&event(CGEventType::LeftMouseDown, 0.2, (0.0, 0.0), tablet));
+    app.sendEvent(&event(CGEventType::LeftMouseDragged, 0.6, (0.0, 0.0), tablet));
+    app.sendEvent(&event(CGEventType::LeftMouseDragged, 0.8, (0.0, 0.0), tablet));
+    app.sendEvent(&event(CGEventType::LeftMouseUp, 0.0, (0.0, 0.0), tablet));
+    let windows = queue.pending_windows();
+    let packets: Vec<_> = windows.iter().flat_map(|w| queue.drain(*w)).collect();
+    let phases: Vec<_> = packets.iter().map(|p| p.phase).collect();
+    assert_eq!(phases, [PenPhase::Down, PenPhase::Move, PenPhase::Move, PenPhase::Up], "{packets:?}");
+    let pressures: Vec<_> = packets.iter().filter_map(|p| p.pressure).map(|p| (p * 100.0).round() / 100.0).collect();
+    assert_eq!(pressures, [0.2, 0.6, 0.8, 0.8]);
+    drop(monitor);
+    assert_eq!(NSEvent::isMouseCoalescingEnabled(), before, "restored on drop");
     println!("monitor_macos: ok");
 }
 

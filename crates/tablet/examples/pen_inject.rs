@@ -1,8 +1,10 @@
-//! Inject a synthetic pen stroke (pressure, tilt, timing) into a window through Windows Ink.
+//! Inject a synthetic pen stroke (pressure, tilt, timing) into a window: through Windows Ink on
+//! Windows, as a tablet driver's Quartz events (HID level) on macOS.
 //!
 //! The stroke takes the same native path as a physical pen, so it tests Prism's real input
 //! pipeline and can drive another painting application with identical input to make a
-//! comparison oracle. The cursor really moves: don't touch the mouse while it runs.
+//! comparison oracle. The cursor really moves: don't touch the mouse while it runs. On macOS the
+//! app that runs this (Terminal, an IDE, the Claude app) needs Accessibility access.
 //!
 //! ```text
 //! cargo run -p prism-tablet --example pen_inject -- --window Prism                # pressure ramp
@@ -11,9 +13,12 @@
 //! ```
 //!
 //! Options:
-//! - `--window TITLE`: part of the target window's title (required unless `--list`).
-//! - `--ramp X,Y,LEN`: client-pixel start and length of the 0→1→0 pressure ramp (default:
-//!   centred, 60 % of the client width).
+//! - `--window TITLE`: part of the target window's title (required unless `--list`). On macOS
+//!   it also matches the application name (other apps' titles need Screen Recording access).
+//! - `--pid PID` (macOS): only windows of this process, to tell two Prism instances apart.
+//! - `--ramp X,Y,LEN`: client start and length of the 0→1→0 pressure ramp (default: centred,
+//!   60 % of the client width). Client coordinates are physical pixels on Windows and points on
+//!   macOS, from the window frame's top-left (Prism's frame is its client area there).
 //! - `--file PATH`: a stroke file instead of the ramp: `ui.penTrace` output (`{"events":[…]}`,
 //!   optionally wrapped in `result`), or an array of `[x, y, pressure]` / `{x, y, pressure,
 //!   time?, tiltX?, tiltY?, rotation?}` contact samples. Points are mapped to the client area as
@@ -22,7 +27,7 @@
 //!   that touches right after entering range, as in quick successive strokes).
 //! - `--wait MS`: pause after focusing the window (default 800).
 //! - `--dry-run`: print the frames, inject nothing.
-//! - `--list`: print visible window titles matching `--window` (or all) and exit.
+//! - `--list`: print the window matching `--window` (macOS: every match) and exit.
 
 use std::process::ExitCode;
 
@@ -47,6 +52,7 @@ struct Args {
     scale: f64,
     wait_ms: u64,
     hover: usize,
+    pid: Option<i32>,
     dry_run: bool,
     list: bool,
 }
@@ -77,6 +83,7 @@ fn parse_args() -> Result<Args, String> {
             "--scale" => args.scale = nums(value()?, 1)?[0],
             "--wait" => args.wait_ms = value()?.parse().map_err(|_| "--wait needs milliseconds".to_string())?,
             "--hover" => args.hover = value()?.parse().map_err(|_| "--hover needs a frame count".to_string())?,
+            "--pid" => args.pid = Some(value()?.parse().map_err(|_| "--pid needs a process id".to_string())?),
             "--dry-run" => args.dry_run = true,
             "--list" => args.list = true,
             other => return Err(format!("unknown option {other} (see the example's doc comment)")),
@@ -165,6 +172,9 @@ fn load_file(path: &str, origin: (f64, f64), scale: f64) -> Result<Stroke, Strin
 fn run() -> Result<(), String> {
     use prism_tablet::windows::{SyntheticPen, bring_to_front, find_window, make_dpi_aware};
     let args = parse_args()?;
+    if args.pid.is_some() {
+        return Err("--pid is macOS only; on Windows the frontmost exact title match is used".into());
+    }
     // Window geometry and injected frames must both be physical pixels.
     make_dpi_aware();
     let mut pen = if args.dry_run { None } else { Some(SyntheticPen::new().map_err(|e| e.to_string())?) };
@@ -203,13 +213,63 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn run() -> Result<(), String> {
+    use prism_tablet::macos::{SyntheticPen, bring_to_front, find_window, list_windows};
+    let args = parse_args()?;
+    let describe = |w: &prism_tablet::macos::WindowTarget| {
+        format!("{:?} ({}, pid {}, window {}): frame {}x{} pt at ({}, {})", w.title, w.owner, w.pid, w.window_id, w.width, w.height, w.x, w.y)
+    };
+    if args.list {
+        let needle = args.window.unwrap_or_default().to_lowercase();
+        let matches: Vec<_> = list_windows()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .filter(|w| args.pid.is_none_or(|p| w.pid == p))
+            .filter(|w| w.title.to_lowercase().contains(&needle) || w.owner.to_lowercase().contains(&needle))
+            .collect();
+        if matches.is_empty() {
+            println!("no on-screen window matches {needle:?}");
+        }
+        for w in &matches {
+            println!("{}", describe(w));
+        }
+        return Ok(());
+    }
+    let mut pen = if args.dry_run { None } else { Some(SyntheticPen::new().map_err(|e| e.to_string())?) };
+    let needle = args.window.ok_or("--window TITLE is required")?;
+    let target = find_window(&needle, args.pid).map_err(|e| e.to_string())?.ok_or(format!("no on-screen window or app matches {needle:?}"))?;
+    println!("target {}", describe(&target));
+    let stroke = match &args.file {
+        Some(path) => load_file(path, args.origin, args.scale)?,
+        None => {
+            let (x, y, len) = args.ramp.unwrap_or((target.width * 0.2, target.height * 0.5, target.width * 0.6));
+            pressure_ramp_with_hover(x, y, len, args.hover).map_err(|e| e.to_string())?
+        }
+    };
+    let stroke = stroke.offset(target.x, target.y).map_err(|e| e.to_string())?;
+    let Some(pen) = pen.as_mut() else {
+        for f in stroke.frames() {
+            println!("{:?}\t{:.1}\t{:.1}\tp={:.3}\t+{} ms", f.phase, f.x, f.y, f.pressure, f.delay_ms);
+        }
+        return Ok(());
+    };
+    if !bring_to_front(&target) {
+        eprintln!("warning: macOS declined to activate the app; the first stroke may only focus the window");
+    }
+    std::thread::sleep(std::time::Duration::from_millis(args.wait_ms));
+    pen.play(&stroke).map_err(|e| e.to_string())?;
+    println!("injected {} frames", stroke.frames().len());
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn run() -> Result<(), String> {
     let args = parse_args()?;
     if let Some(path) = &args.file {
         let stroke = load_file(path, args.origin, args.scale)?;
-        println!("parsed {} frames; injection needs Windows", stroke.frames().len());
+        println!("parsed {} frames; injection needs Windows or macOS", stroke.frames().len());
         return Ok(());
     }
-    Err("synthetic pen injection needs Windows (InjectSyntheticPointerInput)".into())
+    Err("synthetic pen injection needs Windows (InjectSyntheticPointerInput) or macOS (Quartz tablet events)".into())
 }
