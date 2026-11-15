@@ -160,13 +160,25 @@ fn thumbnail(ctx: &egui::Context, path: &str) -> Option<TextureHandle> {
     }
 }
 
+/// The file kind in the card's corner: Prism's own app mark on `.prism` documents, a "Ps" tag on
+/// Photoshop's.
 fn badge(ui: &egui::Ui, at: egui::Pos2, path: &str) {
-    let psd = !path.to_ascii_lowercase().ends_with(".prism");
-    let (text, fill) = if psd { ("Ps", Color32::from_rgb(0, 30, 54)) } else { ("Pr", Color32::from_rgb(60, 32, 110)) };
-    let ink = if psd { Color32::from_rgb(49, 168, 255) } else { Color32::from_rgb(196, 160, 255) };
+    let prism = path.to_ascii_lowercase().ends_with(".prism");
+    if prism && let Some(tex) = crate::panels::brand_texture(ui.ctx()) {
+        let r = Rect::from_min_size(at - vec2(0.0, 2.0), vec2(18.0, 18.0));
+        ui.painter().image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        return;
+    }
     let r = Rect::from_min_size(at, vec2(16.0, 14.0));
-    ui.painter().rect_filled(r, 2.5, fill);
-    ui.painter().text(r.center(), Align2::CENTER_CENTER, text, crate::theme::semibold(8.5), ink);
+    if prism {
+        // No app mark to draw: a neutral tag rather than another product's colours.
+        let t = Tokens::get(ui.ctx());
+        ui.painter().rect_filled(r, 2.5, t.dock);
+        ui.painter().text(r.center(), Align2::CENTER_CENTER, "P", crate::theme::semibold(8.5), t.text);
+        return;
+    }
+    ui.painter().rect_filled(r, 2.5, Color32::from_rgb(0, 30, 54));
+    ui.painter().text(r.center(), Align2::CENTER_CENTER, "Ps", crate::theme::semibold(8.5), Color32::from_rgb(49, 168, 255));
 }
 
 /// One recent file. Returns true when clicked.
@@ -245,6 +257,84 @@ fn sidebar(app: &mut PrismApp, ui: &mut egui::Ui) {
     ui.painter().text(pos2(row.left() + 36.0, row.center().y), Align2::LEFT_CENTER, tl!("Home"), crate::theme::semibold(13.0), t.text);
 }
 
+/// `sentence` split around its one `[link]`: (before, link, after). Without brackets the whole
+/// sentence is the link, so a translation that drops them still opens the dialog.
+fn split_link(sentence: &str) -> (&str, &str, &str) {
+    match sentence.split_once('[').and_then(|(before, rest)| rest.split_once(']').map(|(link, after)| (before, link, after))) {
+        Some(parts) => parts,
+        None => ("", sentence, ""),
+    }
+}
+
+/// The drop area's picture, drawn in `r`: a photo frame on a stack of two more, with an arrow
+/// coming down out of it.
+fn drop_picture(painter: &egui::Painter, r: Rect, ink: Color32) {
+    let s = Stroke::new(1.5, ink);
+    let frame = Rect::from_min_max(pos2(r.left(), r.top() + 18.0), pos2(r.right(), r.bottom() - 26.0));
+    // The stack behind: two shorter edges above the frame.
+    for (inset, y) in [(6.0, r.top() + 12.0), (12.0, r.top() + 6.0)] {
+        painter.line_segment([pos2(frame.left() + inset, y), pos2(frame.right() - inset, y)], s);
+    }
+    painter.rect_stroke(frame, 2.0, s, StrokeKind::Middle);
+    let (w, h) = (frame.width(), frame.height());
+    let at = |x: f32, y: f32| pos2(frame.left() + w * x, frame.top() + h * y);
+    // Two hills along the bottom and the sun.
+    painter.add(egui::Shape::line(vec![at(0.06, 0.94), at(0.36, 0.56), at(0.62, 0.86)], s));
+    painter.add(egui::Shape::line(vec![at(0.50, 0.74), at(0.72, 0.52), at(0.94, 0.80)], s));
+    painter.circle_stroke(at(0.80, 0.30), h * 0.10, s);
+    // The arrow down out of the frame.
+    let tip = pos2(frame.center().x, r.bottom() - 2.0);
+    painter.line_segment([pos2(tip.x, frame.bottom() - h * 0.08), tip], s);
+    painter.add(egui::Shape::line(vec![tip + vec2(-11.0, -11.0), tip, tip + vec2(11.0, -11.0)], s));
+}
+
+/// Height of the drop area.
+const DROP_H: f32 = 332.0;
+
+/// The Home screen before anything was opened, like Photoshop's: a dashed area to drop files on
+/// (dropping anywhere in the window opens them; the area lights up while files are dragged in),
+/// whose "select" link opens the Open dialog.
+fn drop_zone(app: &mut PrismApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), DROP_H), Sense::hover());
+    let dragging = ui.input(|i| !i.raw.hovered_files.is_empty());
+    let painter = ui.painter();
+    if dragging {
+        painter.rect_filled(r, t.radius, t.accent_soft);
+    }
+    let edge = if dragging { t.accent } else { t.text_faint };
+    let b = r.shrink(0.5);
+    for side in [[b.left_top(), b.right_top()], [b.right_top(), b.right_bottom()], [b.right_bottom(), b.left_bottom()], [b.left_bottom(), b.left_top()]] {
+        painter.add(egui::Shape::dashed_line(&side, Stroke::new(1.0, edge), 3.0, 2.0));
+    }
+    let ink = if dragging { t.accent } else { t.text_dim };
+    drop_picture(painter, Rect::from_center_size(pos2(r.center().x, r.top() + 136.0), vec2(106.0, 112.0)), ink);
+    painter.text(pos2(r.center().x, r.top() + 226.0), Align2::CENTER_CENTER, tl!("Drag and drop file"), crate::theme::semibold(17.0), t.text);
+    // "Or select from your computer to get started.", with "select" as a link.
+    let (before, link, after) = split_link(tl!("Or [select] from your computer to get started."));
+    let font = egui::FontId::proportional(13.0);
+    let layout = |s: &str, c: Color32| painter.layout_no_wrap(s.to_string(), font.clone(), c);
+    let (gb, gl, ga) = (layout(before, t.text_dim), layout(link, t.accent), layout(after, t.text_dim));
+    let line_h = gb.size().y.max(gl.size().y).max(ga.size().y);
+    let mut x = r.center().x - (gb.size().x + gl.size().x + ga.size().x) / 2.0;
+    let y = r.top() + 252.0 - line_h / 2.0;
+    let link_rect = Rect::from_min_size(pos2(x + gb.size().x, y), gl.size());
+    for g in [gb, gl, ga] {
+        let w = g.size().x;
+        painter.galley(pos2(x, y), g, t.text_dim);
+        x += w;
+    }
+    let resp = ui.interact(link_rect, ui.id().with("home-select"), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Link, true, link));
+    if resp.hovered() {
+        ui.painter().line_segment([link_rect.left_bottom(), link_rect.right_bottom()], Stroke::new(1.0, t.accent));
+    }
+    let open_tip = crate::shortcuts::command_label(app, "Open…", "file.open");
+    if resp.on_hover_text(open_tip).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+        let _ = app.open_dialog_file();
+    }
+}
+
 /// The recent grid's columns and its left edge, centred in `main` like Photoshop's.
 fn grid_layout(main: Rect) -> (usize, f32) {
     let columns = ((main.width() + GAP) / (CARD.x + GAP)).floor().clamp(1.0, MAX_COLUMNS as f32) as usize;
@@ -270,16 +360,16 @@ pub fn show(app: &mut PrismApp, ui: &mut egui::Ui) {
     let (columns, left) = grid_layout(main);
     let main = Rect::from_min_max(pos2(left, main.top()), pos2(main.right().max(left + CARD.x), main.bottom()));
     let recent = recent_documents(&app.ui.recent_files);
+    if recent.is_empty() {
+        // Nothing opened yet: Photoshop's drop area, as wide as the space beside the rail.
+        let wide = Rect::from_min_max(pos2(body.left() + SIDEBAR_W + 40.0, body.top() + 40.0), pos2((body.right() - 40.0).max(body.left() + SIDEBAR_W + 80.0), body.bottom()));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(wide), |ui| drop_zone(app, ui));
+        return;
+    }
     let mut open = None;
     ui.scope_builder(egui::UiBuilder::new().max_rect(main), |ui| {
         ui.label(RichText::new(tl!("Recent")).font(crate::theme::semibold(16.0)).color(t.text));
         ui.add_space(14.0);
-        if recent.is_empty() {
-            ui.label(RichText::new(tl!("Prism and Photoshop files you open appear here.")).color(t.text_dim));
-            ui.add_space(6.0);
-            ui.label(RichText::new(tl!("Drop an image or PSD anywhere to open it.")).color(t.text_faint));
-            return;
-        }
         egui::ScrollArea::vertical().id_salt("home-recent").auto_shrink([false, false]).show(ui, |ui| {
             for row in recent.chunks(columns) {
                 ui.horizontal(|ui| {
@@ -345,10 +435,37 @@ mod tests {
     #[test]
     fn new_file_opens_the_new_document_dialog() {
         let mut h = harness(Vec::new());
-        assert!(h.query_by_label("Prism and Photoshop files you open appear here.").is_some());
         h.get_by_label("New file").click();
         h.run_steps(2);
         assert_eq!(h.state().ui.dialogs.first().map(|d| d.kind), Some(crate::state::DialogKind::NewDocument));
+    }
+
+    #[test]
+    fn the_link_is_the_bracketed_word_in_any_language() {
+        assert_eq!(split_link("Or [select] from your computer."), ("Or ", "select", " from your computer."));
+        assert_eq!(split_link("또는 내 컴퓨터에서 [선택]해 시작하세요."), ("또는 내 컴퓨터에서 ", "선택", "해 시작하세요."));
+        assert_eq!(split_link("no brackets"), ("", "no brackets", ""), "the whole sentence opens the dialog");
+        assert_eq!(split_link("half [open"), ("", "half [open", ""));
+        assert_eq!(split_link(""), ("", "", ""));
+    }
+
+    #[test]
+    fn with_nothing_opened_yet_a_drop_area_and_its_link_open_files() {
+        let mut h = harness(Vec::new());
+        assert!(h.query_by_label("Recent").is_none(), "no empty Recent heading, like Photoshop");
+        // The drop area is painted text; the link is the one widget in it.
+        let (show, _asked) = crate::file_dialog::fake(vec![None]);
+        h.state_mut().services.file_dialog = Some(show);
+        h.get_by_label("select").click();
+        h.run_steps(2);
+        assert!(h.state().file_dialog.is_some(), "select asks for files to open");
+    }
+
+    #[test]
+    fn with_recent_files_the_grid_replaces_the_drop_area() {
+        let h = harness(vec!["/nowhere/Poster.psd".into()]);
+        assert!(h.query_by_label("Recent").is_some());
+        assert!(h.query_by_label("select").is_none());
     }
 
     /// The whole app window, with `docs` new documents.

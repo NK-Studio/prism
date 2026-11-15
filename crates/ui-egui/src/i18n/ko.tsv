@@ -960,7 +960,6 @@
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	클릭: 기준점 선택 · 드래그: 기준점, 핸들 또는 세그먼트 이동 · {shift}-클릭: 추가 · {alt}-클릭: 하위 패스 전체
 	Click: select a path component · {shift}-click: add · Drag: move · {alt}-drag: copy · {cmd}: Direct Selection	클릭: 패스 구성 요소 선택 · {shift}-클릭: 추가 · 드래그: 이동 · {alt}-드래그: 복사 · {cmd}: 직접 선택
 	Draw with the Pen tool (P) or make a work path from a selection.	펜 도구(P)로 그리거나 선택 영역에서 작업 패스를 만드세요.
-	Drop an image or PSD anywhere to open it.	이미지나 PSD를 아무 곳에나 놓아 여세요.
 	Duplicate Layers…	레이어 복제…
 	Duplicate style	스타일 복제
 	Edit Toolbar…	도구 모음 편집…
@@ -3655,7 +3654,6 @@ hand	Grip	꽉 쥐기
 	Documents you create appear here.	만든 문서가 여기에 표시됩니다.
 	Don't Color Manage	색상 관리 안 함
 	New file	새 파일
-	Prism and Photoshop files you open appear here.	연 프리즘 파일과 Photoshop 파일이 여기에 표시됩니다.
 	SAVE DOCUMENT PRESET	문서 사전 설정 저장
 	SAVED BLANK DOCUMENT PRESETS ({n})	저장된 빈 문서 사전 설정 ({n})
 	Save Document Preset	문서 사전 설정 저장
@@ -3699,3 +3697,5 @@ hand	Grip	꽉 쥐기
 	50% gray	50% 회색
 	black	검정
 	white	흰색
+	Drag and drop file	파일 드래그 앤 드롭
+	Or [select] from your computer to get started.	또는 내 컴퓨터에서 [선택]해 시작하세요.
