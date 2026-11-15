@@ -628,8 +628,7 @@ fn local_poses_render() {
 #[ignore = "writes PNGs to look at"]
 fn hand_shapes_render() {
     use prism_algo::figure3d::hand::{Closed, HandSetup, Side, set_hand};
-    use prism_algo::figure3d::{RenderOptions, frame, orbit, render};
-    use prism_doc::figure::{Figure, FigureScene, standing_figure};
+    use prism_doc::figure::standing_figure;
     let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/hand-shapes".into()));
     std::fs::create_dir_all(&out).unwrap();
     let shapes: Vec<(&str, [f64; 3], Closed)> = vec![
@@ -641,39 +640,80 @@ fn hand_shapes_render() {
         ("grip", [0.0, 0.0, 1.0], Closed::Grip),
         ("middle", [1.0, 1.0, 1.0], Closed::Fist),
     ];
-    let (w, h) = (300u32, 300u32);
     for (name, weights, closed) in shapes {
         let mut f = standing_figure();
         set_hand(&mut f, Side::Left, &HandSetup { weights, closed, locked: [false; 5] }).unwrap();
-        // The forearm and hand under a root that turns them fingers up (the mannequin draws no
-        // bone off the tree root).
-        let mut hand = f.root.find("lefthand_bb_").unwrap().clone();
-        hand.offset = [0.0, -4.0, 0.0];
-        let arm = prism_doc::figure::Joint { name: "leftforearm_bb_".into(), rotation: [1.0, 0.0, 0.0, 0.0], offset: [0.0; 3], children: vec![hand] };
-        let root = prism_doc::figure::Joint { name: "root_group_".into(), rotation: [0.0, 0.0, 0.0, 1.0], offset: [0.0; 3], children: vec![arm] };
-        let figure = Figure { name: name.into(), source: None, root };
-        let mut strip = vec![0u8; (w * 3 * h * 4) as usize];
-        for (k, yaw) in [0.0f64, 90.0, 45.0].into_iter().enumerate() {
-            let mut scene = FigureScene { figures: vec![figure.clone()], ..Default::default() };
-            frame(&mut scene, [150.0, 150.0], 260.0, false).unwrap();
-            orbit(&mut scene, yaw, 0.0);
-            frame(&mut scene, [150.0, 150.0], 260.0, false).unwrap();
-            let r = prism_geom::Rect::new(0, 0, w as i32, h as i32);
-            let s = render(&scene, prism_color::PixelFormat::RGBA8, r, RenderOptions::default(), &prism_raster::Interrupt::NONE).unwrap();
-            let px: Vec<u8> = s.read_region(r).iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
-            for y in 0..h as usize {
-                for x in 0..w as usize {
-                    let (src, dst) = ((y * w as usize + x) * 4, (y * 3 * w as usize + k * w as usize + x) * 4);
-                    // On white, so the outline reads like CLIP STUDIO's canvas.
-                    let a = f32::from(px[src + 3]) / 255.0;
-                    for c in 0..3 {
-                        strip[dst + c] = (f32::from(px[src + c]) * a + 255.0 * (1.0 - a)).round() as u8;
-                    }
-                    strip[dst + 3] = 255;
+        hand_strip(&f, "left", &out.join(format!("{name}.png")));
+    }
+}
+
+/// One hand of `f` (`side` "left" or "right"), fingers up, from three sides, as a PNG strip.
+fn hand_strip(f: &prism_doc::figure::Figure, side: &str, path: &std::path::Path) {
+    use prism_algo::figure3d::{RenderOptions, frame, orbit, render};
+    use prism_doc::figure::{Figure, FigureScene, Joint};
+    let (w, h) = (300u32, 300u32);
+    // The hand under a short forearm and a root that turns it fingers up (the mannequin draws no
+    // bone off the tree root).
+    let mut hand = f.root.find(&format!("{side}hand_bb_")).unwrap().clone();
+    hand.offset = [0.0, -4.0, 0.0];
+    let arm = Joint { name: format!("{side}forearm_bb_"), rotation: [1.0, 0.0, 0.0, 0.0], offset: [0.0; 3], children: vec![hand] };
+    let root = Joint { name: "root_group_".into(), rotation: [0.0, 0.0, 0.0, 1.0], offset: [0.0; 3], children: vec![arm] };
+    let figure = Figure { name: String::new(), source: None, root };
+    let mut strip = vec![0u8; (w * 3 * h * 4) as usize];
+    for (k, yaw) in [0.0f64, 90.0, 45.0].into_iter().enumerate() {
+        let mut scene = FigureScene { figures: vec![figure.clone()], ..Default::default() };
+        frame(&mut scene, [150.0, 150.0], 260.0, false).unwrap();
+        orbit(&mut scene, yaw, 0.0);
+        frame(&mut scene, [150.0, 150.0], 260.0, false).unwrap();
+        let r = prism_geom::Rect::new(0, 0, w as i32, h as i32);
+        let s = render(&scene, prism_color::PixelFormat::RGBA8, r, RenderOptions::default(), &prism_raster::Interrupt::NONE).unwrap();
+        let px: Vec<u8> = s.read_region(r).iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let (src, dst) = ((y * w as usize + x) * 4, (y * 3 * w as usize + k * w as usize + x) * 4);
+                // On white, so the outline reads like CLIP STUDIO's canvas.
+                let a = f32::from(px[src + 3]) / 255.0;
+                for c in 0..3 {
+                    strip[dst + c] = (f32::from(px[src + c]) * a + 255.0 * (1.0 - a)).round() as u8;
                 }
+                strip[dst + 3] = 255;
             }
         }
-        let im = prism_codecs::Image::from_raw(w * 3, h, prism_codecs::ChannelLayout::Rgba, prism_codecs::SampleType::U8, strip).unwrap();
-        std::fs::write(out.join(format!("{name}.png")), prism_codecs::encode(&im, prism_codecs::Format::Png, &prism_codecs::EncodeOptions::default()).unwrap()).unwrap();
     }
+    let im = prism_codecs::Image::from_raw(w * 3, h, prism_codecs::ChannelLayout::Rgba, prism_codecs::SampleType::U8, strip).unwrap();
+    std::fs::write(path, prism_codecs::encode(&im, prism_codecs::Format::Png, &prism_codecs::EncodeOptions::default()).unwrap()).unwrap();
+}
+
+/// Local look at CLIP STUDIO's own hand poses (its installed `handsetup_*.pep`, read in place and
+/// never copied) put on Prism's standing figure: each on both hands, as strips in
+/// `$PRISM_LOOK_OUT` (default `target/csp-hand-poses`). Set `PRISM_TEST_CSP_PAINT_3D` to the
+/// folder holding them when CLIP STUDIO is installed elsewhere.
+#[test]
+#[ignore = "reads CLIP STUDIO's installed hand poses and writes PNGs to look at"]
+fn local_hand_poses_render() {
+    use prism_algo::figure3d::hand::{Side, apply_hand_pose};
+    use prism_doc::figure::standing_figure;
+    let dir = std::env::var_os("PRISM_TEST_CSP_PAINT_3D").map(std::path::PathBuf::from).unwrap_or_else(|| r"C:\Program Files\CELSYS\CLIP STUDIO 1.5\CLIP STUDIO PAINT\Settings\PAINT\3D".into());
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/csp-hand-poses".into()));
+    std::fs::create_dir_all(&out).unwrap();
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        let path = entry.path();
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        if !stem.starts_with("handsetup_") {
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let super::super::pose::Pose::Hand(h) = super::super::pose::read_any(&bytes, &stem, &prism_raster::Interrupt::NONE).unwrap() else { panic!("{stem}: not a hand pose") };
+        let from = if h.left { Side::Left } else { Side::Right };
+        let mut f = standing_figure();
+        for side in [Side::Left, Side::Right] {
+            apply_hand_pose(&mut f, side, &h.hand, from, [false; 5]).unwrap();
+        }
+        hand_strip(&f, "left", &out.join(format!("{stem}_left.png")));
+        hand_strip(&f, "right", &out.join(format!("{stem}_right.png")));
+        eprintln!("{stem}: {} hand, {} fingers", if h.left { "left" } else { "right" }, h.hand.children.len());
+        seen += 1;
+    }
+    assert!(seen > 0, "no handsetup_*.pep in {}", dir.display());
 }

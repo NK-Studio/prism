@@ -15,9 +15,36 @@ type Result<T> = std::result::Result<T, String>;
 /// Largest `.pep` read (a 67-joint pose is about 17 KB).
 const PEP_LIMIT: usize = 1 << 20;
 
-/// Read a pose material (`.pose`, plain SQLite or in its C2F envelope) or a bare `.pep` XML file.
-/// `fallback_name` names the figure when the file carries no name.
+/// A pose file's content: a whole figure, or one hand's fingers.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pose {
+    Body(Figure),
+    Hand(HandPose),
+}
+
+/// A hand pose (CLIP STUDIO's hand pose materials and its own `handsetup_*.pep`): the finger
+/// chains of one hand, nested under that hand's joint (`lefthand_bb_` / `righthand_bb_`, made up
+/// when the file starts at the fingers). It poses the fingers of a figure's hand; its bone
+/// lengths only tell which way the fingers lie.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HandPose {
+    pub name: String,
+    /// The hand it was made for.
+    pub left: bool,
+    pub hand: Joint,
+}
+
+/// Read a pose material that holds a whole figure ([`read_any`] reads hand poses too).
 pub fn read(bytes: &[u8], fallback_name: &str, ctl: &prism_raster::Interrupt) -> Result<Figure> {
+    match read_any(bytes, fallback_name, ctl)? {
+        Pose::Body(f) => Ok(f),
+        Pose::Hand(_) => Err("this is a hand pose: apply it to a 3D figure's hands (layer.figure.applyHandPose)".into()),
+    }
+}
+
+/// Read a pose material (`.pose`, plain SQLite or in its C2F envelope) or a bare `.pep` XML file:
+/// a whole figure or a hand. `fallback_name` names it when the file carries no name.
+pub fn read_any(bytes: &[u8], fallback_name: &str, ctl: &prism_raster::Interrupt) -> Result<Pose> {
     ctl.check().map_err(|e| e.to_string())?;
     if bytes.len() > 64 << 20 {
         return Err("CLIP STUDIO pose exceeds 64 MiB".into());
@@ -38,10 +65,14 @@ pub fn read(bytes: &[u8], fallback_name: &str, ctl: &prism_raster::Interrupt) ->
     } else {
         (plain.to_vec(), None)
     };
-    let mut figure = read_pep(&xml)?;
-    figure.name = clean(name.as_deref().unwrap_or(""), fallback_name);
+    let mut pose = read_pep_any(&xml)?;
+    let name = clean(name.as_deref().unwrap_or(""), fallback_name);
+    match &mut pose {
+        Pose::Body(f) => f.name = name,
+        Pose::Hand(h) => h.name = name,
+    }
     ctl.check().map_err(|e| e.to_string())?;
-    Ok(figure)
+    Ok(pose)
 }
 
 fn clean(s: &str, fallback: &str) -> String {
@@ -63,22 +94,60 @@ fn numbers<const N: usize>(node: roxmltree::Node, attr: &str) -> Result<[f64; N]
     Ok(out)
 }
 
-/// A `.pep` document: its `<pose>` element's single top `<node>` tree.
+/// A `.pep` document holding a whole figure: its `<pose>` element's single top `<node>` tree.
 pub fn read_pep(bytes: &[u8]) -> Result<Figure> {
+    match read_pep_any(bytes)? {
+        Pose::Body(f) => Ok(f),
+        Pose::Hand(_) => Err("this is a hand pose, not a whole figure".into()),
+    }
+}
+
+/// `Some(left)` when `name` is a joint of one hand: the hand itself or one of its fingers.
+fn hand_joint(name: &str) -> Option<bool> {
+    let n = name.to_ascii_lowercase();
+    let (left, rest) = if let Some(r) = n.strip_prefix("lefthand") { (true, r.to_string()) } else { (false, n.strip_prefix("righthand")?.to_string()) };
+    (rest == "_bb_" || ["thumb", "index", "middle", "ring", "pinky"].iter().any(|d| rest.starts_with(d))).then_some(left)
+}
+
+/// A `.pep` document: one top `<node>` tree (a figure), or the top nodes of one hand (a hand pose:
+/// its finger chains, or the hand joint itself).
+pub fn read_pep_any(bytes: &[u8]) -> Result<Pose> {
     if bytes.len() > PEP_LIMIT {
         return Err("CLIP STUDIO pose data exceeds 1 MiB".into());
     }
     let text = std::str::from_utf8(bytes).map_err(|_| "CLIP STUDIO pose data is not UTF-8 text")?;
     let doc = roxmltree::Document::parse(text).map_err(|e| format!("CLIP STUDIO pose data is not readable XML ({e})"))?;
     let pose = doc.descendants().find(|n| n.has_tag_name("pose")).ok_or("CLIP STUDIO pose data has no <pose>")?;
-    let mut tops = pose.children().filter(|n| n.has_tag_name("node"));
-    let top = tops.next().ok_or("CLIP STUDIO pose has no joints")?;
-    if tops.next().is_some() {
-        return Err("CLIP STUDIO pose has more than one root joint".into());
+    let tops: Vec<roxmltree::Node> = pose.children().filter(|n| n.has_tag_name("node")).collect();
+    if tops.is_empty() {
+        return Err("CLIP STUDIO pose has no joints".into());
     }
     let mut count = 0usize;
-    let root = joint(top, 0, &mut count)?;
-    Ok(Figure { name: String::new(), source: None, root })
+    let sides: Vec<Option<bool>> = tops.iter().map(|n| hand_joint(n.attribute("name").unwrap_or(""))).collect();
+    let hand = match sides.first() {
+        Some(Some(left)) if sides.iter().all(|s| *s == Some(*left)) => Some(*left),
+        _ => None,
+    };
+    let Some(left) = hand else {
+        let [top] = tops.as_slice() else { return Err("CLIP STUDIO pose has more than one root joint".into()) };
+        let root = joint(*top, 0, &mut count)?;
+        return Ok(Pose::Body(Figure { name: String::new(), source: None, root }));
+    };
+    let name = format!("{}hand_bb_", if left { "left" } else { "right" });
+    let mut hand = Joint { name: name.clone(), rotation: [1.0, 0.0, 0.0, 0.0], offset: [0.0; 3], children: Vec::new() };
+    for top in tops {
+        let j = joint(top, 1, &mut count)?;
+        if j.name.eq_ignore_ascii_case(&name) {
+            // The hand joint itself: its fingers join the others (its own turn is the wrist's).
+            hand.children.extend(j.children);
+        } else {
+            hand.children.push(j);
+        }
+    }
+    if hand.children.is_empty() {
+        return Err("CLIP STUDIO hand pose has no fingers".into());
+    }
+    Ok(Pose::Hand(HandPose { name: String::new(), left, hand }))
 }
 
 /// A right-side joint hanging off another right-side joint (everything of the right arm and leg
@@ -170,6 +239,30 @@ mod tests {
         }
     }
 
+    /// The layout of CLIP STUDIO's hand poses (its `handsetup_*.pep`; synthetic numbers): the
+    /// fingers' chains are the top nodes.
+    #[test]
+    fn hand_poses_read_as_one_hand() {
+        let xml = r#"<celsysdocument><pose alias_name="Grip" search_tags="hand_pose" version="1.0.0">
+            <node id="-1" name="righthandmiddle1_bb_" rotquat="0.7 0 0 -0.7" trans="-6.6 0 0"><node id="-1" name="righthandmiddle2_bb_" rotquat="0.6 0 0 -0.8" trans="-3.8 0 0"/></node>
+            <node id="-1" name="righthandthumb1_bb_" rotquat="1 0 0 0" trans="-1.3 -1.1 1.9"/>
+        </pose></celsysdocument>"#;
+        let Pose::Hand(h) = read_any(xml.as_bytes(), "Grip pose", &prism_raster::Interrupt::NONE).unwrap() else { panic!("not a hand pose") };
+        assert!(!h.left);
+        assert_eq!(h.name, "Grip pose");
+        assert_eq!(h.hand.name, "righthand_bb_");
+        assert_eq!(h.hand.children.len(), 2);
+        // Right-side offsets come back unmirrored, as in whole figures.
+        assert_eq!(h.hand.find("righthandthumb1_bb_").unwrap().offset, [-1.3, 1.1, -1.9]);
+        assert!(read(xml.as_bytes(), "x", &prism_raster::Interrupt::NONE).is_err(), "not a whole figure");
+        assert!(read_pep(xml.as_bytes()).is_err());
+        // The hand joint itself as the top node.
+        let with_hand = r#"<pose><node name="lefthand_bb_" rotquat="0.9 0.1 0 0" trans="20 0 0"><node name="lefthandindex1_bb_" rotquat="1 0 0 0" trans="6 0 1"/></node></pose>"#;
+        let Pose::Hand(h) = read_pep_any(with_hand.as_bytes()).unwrap() else { panic!("not a hand pose") };
+        assert!(h.left && h.hand.rotation == [1.0, 0.0, 0.0, 0.0] && h.hand.children.len() == 1);
+        assert!(matches!(read_pep_any(PEP.as_bytes()).unwrap(), Pose::Body(_)));
+    }
+
     #[test]
     fn malformed_poses_are_errors_never_panics() {
         let bad = [
@@ -181,6 +274,10 @@ mod tests {
             r#"<pose><node name="a" rotquat="1 0 0 0" trans="0 0 1e400"/></pose>"#,
             r#"<pose><node name="a" rotquat="1 0 0 0 5" trans="0 0 0"/></pose>"#,
             r#"<pose><node name="a" rotquat="1 0 0 0" trans="0 0 0"/><node name="b" rotquat="1 0 0 0" trans="0 0 0"/></pose>"#,
+            // Two hands at once, a hand and something else, or a hand without fingers.
+            r#"<pose><node name="lefthandindex1_bb_" rotquat="1 0 0 0" trans="0 0 0"/><node name="righthandindex1_bb_" rotquat="1 0 0 0" trans="0 0 0"/></pose>"#,
+            r#"<pose><node name="lefthandindex1_bb_" rotquat="1 0 0 0" trans="0 0 0"/><node name="head_bb_" rotquat="1 0 0 0" trans="0 0 0"/></pose>"#,
+            r#"<pose><node name="lefthand_bb_" rotquat="1 0 0 0" trans="0 0 0"/></pose>"#,
         ];
         for b in bad {
             assert!(read_pep(b.as_bytes()).is_err(), "{b}");

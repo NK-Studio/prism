@@ -191,3 +191,61 @@ fn hand_poses_close_and_open_the_hands_in_one_step() {
     s.execute(NEW, json!({"data": prism_paint::tile::b64_encode(PEP.as_bytes())})).unwrap();
     assert!(s.execute(HAND, json!({"weights": [1, 0, 0]})).is_err());
 }
+
+/// A CLIP STUDIO-style left hand pose (its `handsetup_*.pep` layout; synthetic numbers): the
+/// fingers' chains as top nodes, curled about −Z.
+const HAND_PEP: &str = r#"<celsysdocument><pose alias_name="Fist" search_tags="hand_pose" version="1.0.0">
+<node name="lefthandthumb1_bb_" rotquat="0.9 0.3 0 0" trans="1.3 -1.1 1.9"><node name="lefthandthumb2_bb_" rotquat="0.9 0 0 -0.4" trans="3.4 0 0"/></node>
+<node name="lefthandindex1_bb_" rotquat="0.7 0 0 -0.7" trans="6.6 0 1.5"><node name="lefthandindex2_bb_" rotquat="0.6 0 0 -0.8" trans="3.3 0 0"><node name="lefthandindex3_bb_" rotquat="0.7 0 0 -0.7" trans="2.0 0 0"/></node></node>
+<node name="lefthandmiddle1_bb_" rotquat="0.7 0 0 -0.7" trans="6.6 0 0"><node name="lefthandmiddle2_bb_" rotquat="0.6 0 0 -0.8" trans="3.8 0 0"/></node>
+<node name="lefthandring1_bb_" rotquat="0.7 0 0 -0.7" trans="6.3 0 -1.5"/>
+<node name="lefthandpinky1_bb_" rotquat="0.7 0 0 -0.7" trans="5.8 -0.4 -2.8"/>
+</pose></celsysdocument>"#;
+
+#[test]
+fn hand_poses_pose_the_hands_of_a_figure_layer() {
+    let mut s = session(200, 300);
+    let id = LayerId(s.execute(NEW, json!({})).unwrap()["layer"].as_u64().unwrap());
+    let rot = |s: &Session, id: LayerId, n: &str| layer(s, id).figure.unwrap().figures[0].root.find(n).unwrap().rotation;
+    let data = prism_paint::tile::b64_encode(HAND_PEP.as_bytes());
+    let steps = s.active().unwrap().history.entries().len();
+    s.execute(HAND_POSE, json!({"data": data})).unwrap();
+    assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+    for side in ["left", "right"] {
+        assert!(rot(&s, id, &format!("{side}handmiddle2_bb_"))[0] < 0.9, "{side} hand closed, mirrored for the right");
+    }
+    assert_eq!(rot(&s, id, "lefthandring2_bb_"), [1.0, 0.0, 0.0, 0.0], "joints the pose lacks stay");
+    // One hand only; locked fingers stay.
+    s.execute(HAND, json!({"weights": [1, 0, 0]})).unwrap();
+    s.execute(HAND_POSE, json!({"data": data, "side": "right", "locked": ["index"]})).unwrap();
+    assert!(rot(&s, id, "lefthandmiddle2_bb_")[0] > 0.99, "the left hand stays open");
+    assert!(rot(&s, id, "righthandmiddle2_bb_")[0] < 0.9);
+    assert!(rot(&s, id, "righthandindex2_bb_")[0] > 0.99, "the index is locked");
+    // A hand pose alone makes Prism's standing figure with those hands.
+    let hands = LayerId(s.execute(NEW, json!({"data": data})).unwrap()["layer"].as_u64().unwrap());
+    assert!(rot(&s, hands, "righthandmiddle2_bb_")[0] < 0.9);
+    // Where it is no hand pose, or the params are wrong.
+    let body = prism_paint::tile::b64_encode(PEP.as_bytes());
+    for bad in [
+        json!({}),
+        json!({"data": body}),
+        json!({"data": data, "side": "middle"}),
+        json!({"data": data, "figure": 4}),
+        json!({"data": data, "locked": "thumb"}),
+        json!({"data": data, "at": [1, "x"]}),
+        json!({"data": "%%%"}),
+    ] {
+        assert!(s.execute(HAND_POSE, bad.clone()).is_err(), "{bad}");
+    }
+    assert!(s.execute(ADD, json!({"data": data})).is_err(), "a hand pose adds no figure");
+    // A figure without hands.
+    s.execute(NEW, json!({"data": body})).unwrap();
+    assert!(s.execute(HAND_POSE, json!({"data": data})).is_err());
+    // Dropped at a point: the figure nearest it.
+    s.execute(NEW, json!({})).unwrap();
+    let pair = active(&s);
+    s.execute(ADD, json!({"data": body})).unwrap();
+    let head = joint(&s, pair, "head_bb_");
+    s.execute(HAND_POSE, json!({"data": data, "at": head})).unwrap();
+    assert!(rot(&s, pair, "lefthandmiddle2_bb_")[0] < 0.9, "the standing figure, nearest the point");
+}

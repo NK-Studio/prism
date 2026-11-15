@@ -3637,3 +3637,7 @@ hand	Cat Paw	고양이 손
 hand	Tube	통 쥐기
 hand	Grip	꽉 쥐기
 	Lock Fingers	손가락 잠금
+	Hand pose	손 포즈
+	Posed the hands; refine fingers with the Move tool	손 포즈를 적용했습니다. 손가락은 이동 도구로 다듬을 수 있습니다
+	Added a 3D figure layer with this hand pose	이 손 포즈로 3D 인형 레이어를 추가했습니다
+	Poses the hands of the active 3D figure layer; without one, adds a 3D figure with these hands	활성 3D 인형 레이어의 손에 적용합니다. 없으면 이 손 모양으로 3D 인형을 추가합니다

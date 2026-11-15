@@ -607,3 +607,31 @@ fn poses_have_their_own_filter_and_need_a_document() {
     assert!(a.ui.status_error);
     assert_eq!(a.ui.csp_library.selected.len(), 2);
 }
+
+#[test]
+fn hand_poses_go_onto_the_active_figure_layer() {
+    let mut l = listing();
+    l["poses"] = json!([
+        {"uuid": "h1", "name": "Peace sign", "kind": "pose", "hand": "right", "catalog": "Hands", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": []},
+        {"uuid": "p1", "name": "Standing", "kind": "pose", "hand": null, "catalog": "Body", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": []}
+    ]);
+    assert!(is_hand_pose(&l["poses"][0]) && !is_hand_pose(&l["poses"][1]) && is_pose(&l["poses"][0]));
+    let mut app = app();
+    app.ui.csp_library.listing = Some(l.clone());
+    app.ui.csp_library.filter = KindFilter::Poses;
+    let h = harness(app);
+    assert!(h.query_by_label("Peace sign").is_some(), "hand poses list with the poses");
+    // With a 3D figure layer active the hand pose goes to it (an unreadable CLIP STUDIO folder is
+    // reported and nothing is added); the selection stays for another try.
+    let mut a = super::tests::app();
+    a.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    a.run("layer.figure.new", json!({})).unwrap();
+    a.ui.csp_library.listing = Some(l);
+    a.ui.csp_library.root = Some(std::env::temp_dir().join("prism-no-such-csp-folder").display().to_string());
+    a.ui.csp_library.selected = vec!["h1".into()];
+    let layers = a.session.active().unwrap().doc.layers.len();
+    import_selected(&mut a);
+    assert!(a.ui.status_error, "{}", a.ui.status);
+    assert_eq!(a.session.active().unwrap().doc.layers.len(), layers, "no new layer for a hand pose");
+    assert_eq!(a.ui.csp_library.selected, vec!["h1".to_string()]);
+}

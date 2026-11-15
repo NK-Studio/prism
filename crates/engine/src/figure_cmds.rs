@@ -7,6 +7,7 @@ use crate::commands::{CommandSpec, layer_param};
 use crate::{EngineError, Result, Session};
 use prism_algo::figure3d::{self, RenderOptions};
 use prism_doc::figure::{Figure, FigureScene, MAX_FIGURES, standing_figure};
+use prism_io::sut::pose::{HandPose, Pose};
 use prism_doc::{Document, Layer, LayerContent, LayerId};
 use prism_geom::Rect;
 use serde_json::{Value, json};
@@ -20,6 +21,7 @@ const JOINT: &str = "layer.figure.setJoint";
 const REACH: &str = "layer.figure.reachTo";
 const RESET: &str = "layer.figure.resetPose";
 const HAND: &str = "layer.figure.setHand";
+const HAND_POSE: &str = "layer.figure.applyHandPose";
 const LOOK: &str = "layer.figure.setLook";
 const RASTERIZE: &str = "layer.rasterize.figure";
 /// Largest `.pose` / `.pep` file read.
@@ -83,6 +85,17 @@ fn text<'a>(p: &'a Value, key: &str, cmd: &str) -> Result<Option<&'a str>> {
 /// The figures a command's params name: CLIP STUDIO poses by material id (`uuid`/`uuids`, with
 /// `root`), a `.pose`/`.pep` file (`path`/`data`), or none.
 fn figures_from(p: &Value, cmd: &str) -> Result<Vec<Figure>> {
+    poses_from(p, cmd)?
+        .into_iter()
+        .map(|pose| match pose {
+            Pose::Body(f) => Ok(f),
+            Pose::Hand(h) => Err(bad(cmd, format!("{} is a hand pose: apply it with {HAND_POSE}", h.name))),
+        })
+        .collect()
+}
+
+/// Whole figures and hand poses from pose ids, a file or base64 data (see [`figures_from`]).
+fn poses_from(p: &Value, cmd: &str) -> Result<Vec<Pose>> {
     let ctl = prism_raster::Interrupt::NONE;
     let mut ids: Vec<&str> = Vec::new();
     if let Some(u) = text(p, "uuid", cmd)? {
@@ -99,7 +112,7 @@ fn figures_from(p: &Value, cmd: &str) -> Result<Vec<Figure>> {
             return Err(bad(cmd, "pass pose ids or a file, not both"));
         }
         let root = crate::csp_library_cmds::root(cmd, p)?;
-        return ids.into_iter().map(|id| prism_io::sut::library::import_pose(&root, id, &ctl).map(|(_, f)| f).map_err(EngineError::Other)).collect();
+        return ids.into_iter().map(|id| prism_io::sut::library::import_pose_any(&root, id, &ctl).map(|(_, f)| f).map_err(EngineError::Other)).collect();
     }
     if p.get("path").is_some() || p.get("data").is_some() {
         if p.get("root").is_some() {
@@ -107,9 +120,11 @@ fn figures_from(p: &Value, cmd: &str) -> Result<Vec<Figure>> {
         }
         let (bytes, stem) = crate::preset_import_cmds::file_bytes_with_limit(p, cmd, ".pose or .pep file", POSE_LIMIT)?;
         let name = if stem.trim().is_empty() { "Pose" } else { stem.trim() };
-        let mut f = prism_io::sut::pose::read(&bytes, name, &ctl).map_err(|e| bad(cmd, e))?;
-        f.source = Some(name.to_string());
-        return Ok(vec![f]);
+        let mut pose = prism_io::sut::pose::read_any(&bytes, name, &ctl).map_err(|e| bad(cmd, e))?;
+        if let Pose::Body(f) = &mut pose {
+            f.source = Some(name.to_string());
+        }
+        return Ok(vec![pose]);
     }
     Ok(Vec::new())
 }
@@ -123,11 +138,15 @@ fn new_layer(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let name = text(p, "name", NEW)?.map(str::to_string);
     let at = numbers::<2>(p, "at", NEW, 1e7)?;
-    let mut figures = figures_from(p, NEW)?;
+    let (mut figures, hands): (Vec<Figure>, Vec<HandPose>) = split_poses(poses_from(p, NEW)?);
     // A single pose names the layer; Prism's own figure gets "3D Figure N".
     let first = if figures.len() == 1 { figures.first().map(|f| f.name.clone()).unwrap_or_default() } else { String::new() };
     if figures.is_empty() {
         figures.push(standing_figure());
+    }
+    // Hand poses alone: Prism's standing figure with those hands.
+    for f in &mut figures {
+        apply_hands(f, &hands, None, [false; 5]).map_err(|e| bad(NEW, e))?;
     }
     let count = figures.len();
     let mut scene = FigureScene { figures, ..Default::default() };
@@ -340,9 +359,122 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+fn split_poses(poses: Vec<Pose>) -> (Vec<Figure>, Vec<HandPose>) {
+    let mut figures = Vec::new();
+    let mut hands = Vec::new();
+    for pose in poses {
+        match pose {
+            Pose::Body(f) => figures.push(f),
+            Pose::Hand(h) => hands.push(h),
+        }
+    }
+    (figures, hands)
+}
+
+/// Put hand poses on figure `f`, as CLIP STUDIO does with the whole figure selected: a left and a
+/// right pose each go to their own hand; otherwise the (last) pose goes to both hands, mirrored
+/// for the other one. `side` puts the last pose on that hand only.
+fn apply_hands(f: &mut Figure, hands: &[HandPose], side: Option<figure3d::hand::Side>, locked: [bool; 5]) -> std::result::Result<(), String> {
+    use figure3d::hand::{Side, apply_hand_pose};
+    let side_of = |h: &HandPose| if h.left { Side::Left } else { Side::Right };
+    let Some(last) = hands.last() else { return Ok(()) };
+    let mut plan: Vec<(Side, &HandPose)> = Vec::new();
+    match side {
+        Some(s) => plan.push((s, last)),
+        None => {
+            let left = hands.iter().rev().find(|h| h.left);
+            let right = hands.iter().rev().find(|h| !h.left);
+            match (left, right) {
+                (Some(l), Some(r)) => plan.extend([(Side::Left, l), (Side::Right, r)]),
+                _ => plan.extend([(Side::Left, last), (Side::Right, last)]),
+            }
+        }
+    }
+    let mut posed = 0;
+    let mut last_err = None;
+    for (target, h) in plan {
+        match apply_hand_pose(f, target, &h.hand, side_of(h), locked) {
+            Ok(()) => posed += 1,
+            Err(e) => last_err = Some(e),
+        }
+    }
+    match (posed, last_err) {
+        (0, Some(e)) => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// The finger names in `locked` (thumb first), as [`set_hand`] reads them.
+fn locked_fingers(p: &Value, cmd: &str) -> Result<[bool; 5]> {
+    use figure3d::hand::DIGITS;
+    let mut locked = [false; 5];
+    match p.get("locked") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(list)) => {
+            for v in list {
+                let name = v.as_str().ok_or_else(|| bad(cmd, "`locked` lists finger names"))?;
+                let i = DIGITS.iter().position(|d| d.eq_ignore_ascii_case(name)).ok_or_else(|| bad(cmd, format!("unknown finger {name:?} (thumb, index, middle, ring, pinky)")))?;
+                if let Some(l) = locked.get_mut(i) {
+                    *l = true;
+                }
+            }
+        }
+        Some(_) => return Err(bad(cmd, "`locked` lists finger names")),
+    }
+    Ok(locked)
+}
+
+/// CLIP STUDIO's hand pose materials: pose the hands of a figure layer's figures.
+fn apply_hand_pose_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    use figure3d::hand::Side;
+    let n = scene_len(s, p)?;
+    let at = numbers::<2>(p, "at", HAND_POSE, 1e7)?;
+    let only = match (p.get("figure"), at) {
+        (Some(_), _) => Some(figure_index(p, n, HAND_POSE)?),
+        // Dropped on the canvas: the figure with a joint nearest the drop point.
+        (None, Some(pt)) => {
+            let id = layer_param(s, p)?;
+            let st = s.active().ok_or(EngineError::NoDocument)?;
+            joints(&st.doc, id).into_iter().map(|j| (j.figure, (j.doc[0] - pt[0]).hypot(j.doc[1] - pt[1]))).filter(|(_, d)| d.is_finite()).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(f, _)| f)
+        }
+        (None, None) => None,
+    };
+    let side = match text(p, "side", HAND_POSE)?.unwrap_or("both") {
+        "both" => None,
+        "left" => Some(Side::Left),
+        "right" => Some(Side::Right),
+        other => return Err(bad(HAND_POSE, format!("`side` must be \"left\", \"right\" or \"both\", not {other:?}"))),
+    };
+    let locked = locked_fingers(p, HAND_POSE)?;
+    let (bodies, hands) = split_poses(poses_from(p, HAND_POSE)?);
+    if let Some(b) = bodies.first() {
+        return Err(bad(HAND_POSE, format!("{} is a whole-figure pose, not a hand pose", b.name)));
+    }
+    if hands.is_empty() {
+        return Err(bad(HAND_POSE, "pass a hand pose: `uuid`, `uuids`, `path` or `data`"));
+    }
+    edit_scene(s, p, HAND_POSE, "Hand Pose", |scene| {
+        let mut posed = 0;
+        let mut last_err = None;
+        for (k, f) in scene.figures.iter_mut().enumerate() {
+            if only.is_some_and(|i| i != k) {
+                continue;
+            }
+            match apply_hands(f, &hands, side, locked) {
+                Ok(()) => posed += 1,
+                Err(e) => last_err = Some(e),
+            }
+        }
+        if posed == 0 {
+            return Err(bad(HAND_POSE, last_err.unwrap_or_else(|| "no figure to pose".into())));
+        }
+        Ok(())
+    })
+}
+
 /// CLIP STUDIO's hand setup: blend a hand between the flat, spread and closed shapes.
 fn set_hand(s: &mut Session, p: &Value) -> Result<Value> {
-    use figure3d::hand::{Closed, DIGITS, HandSetup, Side};
+    use figure3d::hand::{Closed, HandSetup, Side};
     let n = scene_len(s, p)?;
     let only = p.get("figure").map(|_| figure_index(p, n, HAND)).transpose()?;
     let sides: &[Side] = match text(p, "side", HAND)?.unwrap_or("both") {
@@ -356,20 +488,7 @@ fn set_hand(s: &mut Session, p: &Value) -> Result<Value> {
         None => Closed::Fist,
         Some(id) => Closed::from_id(id).ok_or_else(|| bad(HAND, format!("`closed` must be one of fist, catPaw, tube, grip, not {id:?}")))?,
     };
-    let mut locked = [false; 5];
-    match p.get("locked") {
-        None | Some(Value::Null) => {}
-        Some(Value::Array(list)) => {
-            for v in list {
-                let name = v.as_str().ok_or_else(|| bad(HAND, "`locked` lists finger names"))?;
-                let i = DIGITS.iter().position(|d| d.eq_ignore_ascii_case(name)).ok_or_else(|| bad(HAND, format!("unknown finger {name:?} (thumb, index, middle, ring, pinky)")))?;
-                if let Some(l) = locked.get_mut(i) {
-                    *l = true;
-                }
-            }
-        }
-        Some(_) => return Err(bad(HAND, "`locked` lists finger names")),
-    }
+    let locked = locked_fingers(p, HAND)?;
     let setup = HandSetup { weights, closed, locked };
     edit_scene(s, p, HAND, "Hand Pose", |scene| {
         let mut posed = 0;
@@ -469,7 +588,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             NEW,
             "New 3D Figure Layer",
-            r#"{"name":str?,"uuid":pose id from brush.cspLibrary.list poses?|"uuids":[pose id]? (several figures in one layer),"root":CLIP STUDIO user data folder? (with uuid),"path":".pose or .pep file"?,"data":base64?,"at":[x,y]? (centre, default the canvas centre)} → {layer, figures} (no pose: Prism's standing figure; the camera faces the figures and they fill 80% of the canvas height)"#,
+            r#"{"name":str?,"uuid":pose id from brush.cspLibrary.list poses?|"uuids":[pose id]? (several figures in one layer),"root":CLIP STUDIO user data folder? (with uuid),"path":".pose or .pep file"?,"data":base64?,"at":[x,y]? (centre, default the canvas centre)} → {layer, figures} (no pose: Prism's standing figure; hand poses only: the standing figure with those hands; the camera faces the figures and they fill 80% of the canvas height)"#,
             has_doc,
             new_layer
         ),
@@ -503,6 +622,13 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"layer":id?,"figure":index? (default every figure),"side":"both"|"left"|"right"="both","weights":[flat,spread,closed] (≥0, blended by ratio: CLIP STUDIO's hand setup triangle),"closed":"fist"|"catPaw"|"tube"|"grip"="fist","locked":["thumb","index","middle","ring","pinky"]? (fingers left as they are),"draft":bool=false}"#,
             has_figure,
             set_hand
+        ),
+        spec!(
+            HAND_POSE,
+            "Apply Hand Pose",
+            r#"{"layer":id?,"uuid":hand pose id from brush.cspLibrary.list poses (hand set)?|"uuids":[id]?|"path":".pose or .pep"?|"data":base64?,"root"?,"figure":index? (default every figure)|"at":[x,y] document px? (the figure nearest),"side":"both"|"left"|"right"="both","locked":[finger]?,"draft":bool=false} (CLIP STUDIO hand pose materials: the fingers turn as in the pose, mirrored for the other hand; a left and a right pose each go to their own hand)"#,
+            has_figure,
+            apply_hand_pose_cmd
         ),
         spec!(RESET, "Reset Pose", r#"{"layer":id?,"figure":index? (default every figure)} (Prism's standing pose where the figure stands)"#, has_figure, reset),
         spec!(LOOK, "3D Figure Look", r##"{"layer":id?,"color":"#rrggbb"|[r,g,b]?,"outline":bool?,"outlineWidth":0..64?}"##, has_figure, set_look),

@@ -142,3 +142,77 @@ fn bad_setups_are_errors() {
     assert_eq!(Closed::from_id("paw"), None);
     assert!(tip_direction(&f, Side::Left, "index").is_some());
 }
+
+/// A copy of one hand of `f` as a hand pose source.
+fn hand_of(f: &Figure, side: Side) -> Joint {
+    f.root.find(&format!("{}hand_bb_", side.prefix())).unwrap().clone()
+}
+
+#[test]
+fn a_hand_pose_carries_onto_the_same_hand_unchanged() {
+    let mut posed = standing_figure();
+    set_hand(&mut posed, Side::Left, &setup([0.1, 0.3, 0.6], Closed::Tube)).unwrap();
+    let mut f = standing_figure();
+    apply_hand_pose(&mut f, Side::Left, &hand_of(&posed, Side::Left), Side::Left, [false; 5]).unwrap();
+    for d in DIGITS {
+        for k in 1..=3 {
+            let n = format!("lefthand{d}{k}_bb_");
+            let (a, b) = (posed.root.find(&n).unwrap().rotation, f.root.find(&n).unwrap().rotation);
+            assert!(a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9), "{n}: {a:?} vs {b:?}");
+        }
+    }
+}
+
+#[test]
+fn a_left_hand_pose_mirrors_onto_the_right_hand() {
+    let mut posed = standing_figure();
+    set_hand(&mut posed, Side::Left, &setup([0.0, 0.2, 0.8], Closed::CatPaw)).unwrap();
+    let mut f = standing_figure();
+    apply_hand_pose(&mut f, Side::Right, &hand_of(&posed, Side::Left), Side::Left, [false; 5]).unwrap();
+    for d in DIGITS {
+        for k in 1..=4 {
+            let (l, r) = (at(&posed, &format!("lefthand{d}{k}_bb_")), at(&f, &format!("righthand{d}{k}_bb_")));
+            assert!((l[0] + r[0]).abs() < 1e-6 && (l[1] - r[1]).abs() < 1e-6 && (l[2] - r[2]).abs() < 1e-6, "{d}{k}: {l:?} vs {r:?}");
+        }
+    }
+}
+
+/// A CLIP STUDIO-style left hand pose (fingers along local +X, the thumb's base on −Y, curled
+/// about −Z as its own hand poses are; synthetic numbers) closes Prism's hands, whose fingers lie
+/// along −Y: left and right alike.
+#[test]
+fn a_csp_hand_pose_closes_prisms_hands() {
+    let curl = |deg: f64| axis_angle([0.0, 0.0, -1.0], deg.to_radians());
+    let j = |name: &str, offset: V3, rotation: Q, children: Vec<Joint>| Joint { name: name.into(), rotation, offset, children };
+    let finger = |d: &str, base: V3| {
+        j(&format!("lefthand{d}1_bb_"), base, curl(85.0), vec![j(&format!("lefthand{d}2_bb_"), [3.5, 0.0, 0.0], curl(100.0), vec![j(&format!("lefthand{d}3_bb_"), [2.2, 0.0, 0.0], curl(60.0), vec![j(&format!("lefthand{d}4_bb_"), [2.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], vec![])])])])
+    };
+    let source = j(
+        "lefthand_bb_",
+        [0.0; 3],
+        [1.0, 0.0, 0.0, 0.0],
+        vec![finger("thumb", [1.3, -1.1, 1.9]), finger("index", [6.6, 0.0, 1.5]), finger("middle", [6.6, 0.0, 0.0]), finger("ring", [6.3, 0.0, -1.5]), finger("pinky", [5.8, -0.4, -2.8])],
+    );
+    let mut f = standing_figure();
+    for side in [Side::Left, Side::Right] {
+        apply_hand_pose(&mut f, side, &source, Side::Left, [false; 5]).unwrap();
+        for digit in ["index", "middle", "ring", "pinky"] {
+            let (towards_palm, along) = closing(&f, side, digit);
+            assert!(towards_palm > 1.0 && along < 0.0, "{side:?} {digit}: {towards_palm} {along}");
+        }
+    }
+    for d in DIGITS {
+        for k in 1..=4 {
+            let (l, r) = (at(&f, &format!("lefthand{d}{k}_bb_")), at(&f, &format!("righthand{d}{k}_bb_")));
+            assert!((l[0] + r[0]).abs() < 1e-6 && (l[1] - r[1]).abs() < 1e-6 && (l[2] - r[2]).abs() < 1e-6, "mirrored {d}{k}");
+        }
+    }
+    // Locked fingers stay; a source without finger bases or a figure without hands is an error.
+    let mut g = standing_figure();
+    apply_hand_pose(&mut g, Side::Left, &source, Side::Left, [true, true, false, false, false]).unwrap();
+    assert_eq!(g.root.find("lefthandindex2_bb_").unwrap().rotation, [1.0, 0.0, 0.0, 0.0]);
+    assert_ne!(g.root.find("lefthandmiddle2_bb_").unwrap().rotation, [1.0, 0.0, 0.0, 0.0]);
+    let bare = j("lefthand_bb_", [0.0; 3], [1.0, 0.0, 0.0, 0.0], vec![]);
+    assert!(apply_hand_pose(&mut g, Side::Left, &bare, Side::Left, [false; 5]).is_err());
+    assert!(apply_hand_pose(&mut Figure::default(), Side::Left, &source, Side::Left, [false; 5]).is_err());
+}

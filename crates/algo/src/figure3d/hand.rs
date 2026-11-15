@@ -9,7 +9,7 @@
 //! and spreads about the palm normal. That fits CLIP STUDIO's skeleton (fingers along local ±X,
 //! curling about local −Z on both hands, as its own hand setup poses show) and Prism's standing
 //! figure alike. Evidence: docs/sut-analysis.md › Pose materials › Hand setup.
-use super::math::{Q, V3, axis_angle, cross, dot, len, normalize_or, qmul, qnorm, sub};
+use super::math::{Q, V3, add, axis_angle, cross, dot, len, normalize_or, qmul, qnorm, scale, sub};
 use prism_doc::figure::{Figure, Joint};
 
 /// The digits, thumb first, as they appear in joint names (`lefthandindex1_bb_`).
@@ -136,8 +136,24 @@ fn offset_of(root: &Joint, name: &Option<String>) -> Option<V3> {
 /// The rest frame of one hand, in the hand joint's local coordinates: its long direction, the
 /// direction across the knuckles towards the little finger, and the palm normal.
 struct Palm {
+    /// Wrist to the knuckles.
+    along: V3,
+    /// Across the knuckles towards the little finger, square to `along`.
     across: V3,
+    /// Out of the palm.
     normal: V3,
+}
+
+impl Palm {
+    /// +1 when (along, across, normal) is right-handed, −1 when it is a mirror image (one hand
+    /// of a mirrored pair).
+    fn handedness(&self) -> f64 {
+        if dot(self.along, cross(self.across, self.normal)) >= 0.0 { 1.0 } else { -1.0 }
+    }
+
+    fn basis(&self) -> [V3; 3] {
+        [self.along, self.across, self.normal]
+    }
 }
 
 fn palm(root: &Joint, side: Side) -> Option<Palm> {
@@ -146,8 +162,9 @@ fn palm(root: &Joint, side: Side) -> Option<Palm> {
     let index = base("index").or_else(|| base("middle"))?;
     let little = base("pinky").or_else(|| base("ring"))?;
     let long = base("middle").or_else(|| base("index")).or_else(|| base("ring"))?;
-    let across = normalize_or(sub(little, index), [0.0, 0.0, 0.0]);
     let along = normalize_or(long, [0.0, 0.0, 0.0]);
+    let raw = sub(little, index);
+    let across = normalize_or(sub(raw, scale(along, dot(raw, along))), [0.0, 0.0, 0.0]);
     let n = cross(across, along);
     if len(across) < 0.5 || len(along) < 0.5 || len(n) < 1e-6 {
         return None;
@@ -159,7 +176,7 @@ fn palm(root: &Joint, side: Side) -> Option<Palm> {
     {
         normal = [-normal[0], -normal[1], -normal[2]];
     }
-    Some(Palm { across, normal })
+    Some(Palm { along, across, normal })
 }
 
 /// The rest direction of the bone that starts at joint `name` (its first child's offset).
@@ -228,6 +245,42 @@ pub fn set_hand(figure: &mut Figure, side: Side, setup: &HandSetup) -> Result<()
                 edits.push((n.clone(), deg(h, angle)));
             }
         }
+    }
+    for (name, q) in edits {
+        set(&mut figure.root, &name, q);
+    }
+    Ok(())
+}
+
+/// Pose the fingers of `side`'s hand of `figure` like `source`, a hand pose's hand joint made
+/// for the `source_side` hand (CLIP STUDIO's hand pose materials). Every finger rotation is
+/// carried from the source hand's rest frame (wrist to knuckles, across the knuckles, out of the
+/// palm) to the target's: mirrored when the sides differ, re-aimed when the two skeletons lay
+/// their fingers along different axes (CLIP STUDIO's along local X, Prism's along −Y). Bone
+/// lengths stay the target's; `locked` fingers (thumb first) stay as they are.
+pub fn apply_hand_pose(figure: &mut Figure, side: Side, source: &Joint, source_side: Side, locked: [bool; 5]) -> Result<(), String> {
+    let from = palm(source, source_side).ok_or("the hand pose has no finger bases to place its palm by")?;
+    let to = palm(&figure.root, side).ok_or_else(|| format!("the figure has no {} hand fingers", side.prefix()))?;
+    let (bs, bt) = (from.basis(), to.basis());
+    let det = from.handedness() * to.handedness();
+    // T = B_to · B_fromᵀ; a rotation's axis is an axial vector, so it also flips with a mirror.
+    let carry = |v: V3| -> V3 { bs.iter().zip(bt).fold([0.0; 3], |acc, (s, t)| add(acc, scale(t, dot(*s, v) * det))) };
+    let (src, dst) = (format!("{}hand", source_side.prefix()), format!("{}hand", side.prefix()));
+    let mut edits: Vec<(String, Q)> = Vec::new();
+    for (_, j) in source.walk() {
+        let n = j.name.to_ascii_lowercase();
+        let Some(rest) = n.strip_prefix(&src) else { continue };
+        let Some(di) = DIGITS.iter().position(|d| rest.starts_with(d)) else { continue };
+        if locked.get(di).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some(target) = joint_name(&figure.root, &format!("{dst}{rest}")) else { continue };
+        let q = qnorm(j.rotation);
+        let v = carry([q[1], q[2], q[3]]);
+        edits.push((target, [q[0], v[0], v[1], v[2]]));
+    }
+    if edits.is_empty() && !locked.iter().all(|l| *l) {
+        return Err("the hand pose has none of the figure's finger joints".into());
     }
     for (name, q) in edits {
         set(&mut figure.root, &name, q);

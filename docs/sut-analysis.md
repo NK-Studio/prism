@@ -2663,3 +2663,25 @@ Prism's hand shapes are its own angles (`crates/algo/src/figure3d/hand.rs`).
   the side the thumb's base is on), which yields CLIP STUDIO's −Z on its skeleton and the right
   axes on Prism's standing figure.
 - Not verified: whether CLIP STUDIO blends linearly inside the triangle; Prism does.
+
+### Hand pose materials (2026-11-15)
+
+- Observed: CLIP STUDIO's own hand poses (`handsetup_*.pep`, "tool=Celsys PoseStudio", tags such
+  as `hand_pose` or `左手`) hold no figure: the `<pose>` element's top nodes are one hand's finger
+  chains (`lefthandmiddle1_bb_` with 2–4 nested, the thumb, index, ring, pinky), each `trans` in
+  the hand's frame. CLIP STUDIO's manual: with the whole figure selected a hand-only pose goes on
+  both hands, with one hand selected on that hand only, and a pose registered from either hand
+  works on both.
+- Inferred, not verified: downloaded hand pose materials are `pose` kind materials whose `.pep`
+  has that layout (no hand pose material is downloaded here to check), so Prism tells them apart
+  by content, not by kind or tag: `brush.cspLibrary.list` reads each pose file (up to 256) and
+  reports `hand: "left" | "right"`.
+- Prism: `prism_io::sut::pose::read_any` gives `Pose::Hand` (the chains under a made-up hand
+  joint); `layer.figure.applyHandPose` carries each finger rotation from the pose's palm frame
+  to the target hand's (mirrored for the other hand, re-aimed for Prism's figure whose fingers
+  lie along −Y), keeping the target's bone lengths. A left and a right pose together go to their
+  own hands, one pose to both. CLIP STUDIO's six installed hand poses, put on Prism's standing
+  figure this way, match its fist, cat paw, tube, grip, flat and spread hands
+  (`local_hand_poses_render`, ignored; reads them in place).
+- Observed in passing: `handsetup_pa00` ("パー") keeps the fingers almost parallel and
+  `handsetup_pa01` ("平手") fans them, the reverse of what their names suggest.

@@ -107,8 +107,11 @@ pub const GRADIENT_KINDS: [&str; 2] = ["gradation", "gradation_set"];
 const GRADIENT_LIMIT: u64 = 8 << 20;
 /// The catalog's material kind of colour sets (`data/material_0.colorset`, a SQLite palette).
 pub const COLOR_SET_KINDS: [&str; 1] = ["color_set"];
-/// The catalog's material kind of 3D figure poses (`data/material_0.pose`).
+/// The catalog's material kind of 3D figure poses (`data/material_0.pose`), whole figures and
+/// hands alike.
 pub const POSE_KINDS: [&str; 1] = ["pose"];
+/// Listing reads each pose file to tell hand poses apart, up to this many poses.
+pub const HAND_PEEK_LIMIT: usize = 256;
 
 /// One downloaded sub-tool material.
 #[derive(Clone, Debug, PartialEq)]
@@ -198,11 +201,15 @@ pub struct LibraryColorSet {
     pub favorite: bool,
 }
 
-/// One downloaded 3D figure pose: it becomes a figure in a 3D figure layer.
+/// One downloaded 3D figure pose: a whole figure becomes a figure in a 3D figure layer, a hand
+/// pose poses a figure's hands.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LibraryPose {
     pub uuid: String,
     pub name: String,
+    /// `Some(left)` for a hand pose and the hand it was made for (read from the file when the
+    /// library lists at most [`HAND_PEEK_LIMIT`] poses; `None` otherwise or for whole figures).
+    pub hand: Option<bool>,
     /// The downloaded collection it belongs to (empty when unknown).
     pub catalog: String,
     pub status: Status,
@@ -340,12 +347,14 @@ pub fn list(root: &Path) -> Result<Library> {
             favorite: e.favorite,
         })
         .collect();
+    let peek = snap.pose_entries.len() <= HAND_PEEK_LIMIT;
     let poses = snap
         .pose_entries
         .iter()
         .map(|e| LibraryPose {
             uuid: e.uuid.clone(),
             name: e.name.clone(),
+            hand: if peek { snap.pose_file(e).and_then(|p| read_limited(&p, GRADIENT_LIMIT).ok()).and_then(|b| hand_side(&b)) } else { None },
             catalog: e.catalog.clone(),
             status: snap.pose_status(e),
             thumbnail: image(format!("{}:thumbnail:thumbnail.png", e.folder())),
@@ -469,9 +478,26 @@ pub fn import_color_set(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) 
     Ok((entry.name.clone(), entry.catalog.clone(), set))
 }
 
+/// `Some(left)` when pose file `bytes` holds a hand pose.
+fn hand_side(bytes: &[u8]) -> Option<bool> {
+    match super::pose::read_any(bytes, "", &prism_raster::Interrupt::NONE).ok()? {
+        super::pose::Pose::Hand(h) => Some(h.left),
+        super::pose::Pose::Body(_) => None,
+    }
+}
+
 /// One downloaded 3D figure pose by material UUID: its collection and the posed figure (named
-/// after the material; [`super::pose::read`]).
+/// after the material; [`super::pose::read`]). Hand poses are refused: see [`import_pose_any`].
 pub fn import_pose(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) -> Result<(String, prism_doc::figure::Figure)> {
+    match import_pose_any(root, uuid, ctl)? {
+        (catalog, super::pose::Pose::Body(f)) => Ok((catalog, f)),
+        (_, super::pose::Pose::Hand(h)) => Err(format!("{}: a hand pose; apply it to a 3D figure's hands", h.name)),
+    }
+}
+
+/// One downloaded pose by material UUID, a whole figure or a hand: its collection and content,
+/// named after the material.
+pub fn import_pose_any(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) -> Result<(String, super::pose::Pose)> {
     let snap = Snapshot::read(root)?;
     let entry = snap.pose_entries.iter().find(|e| e.uuid == uuid).ok_or_else(|| format!("no downloaded CLIP STUDIO pose has the id {uuid}"))?;
     let status = snap.pose_status(entry);
@@ -479,13 +505,23 @@ pub fn import_pose(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) -> Re
         return Err(format!("{}: {}", entry.name, status.guidance().unwrap_or("not ready")));
     }
     let path = snap.pose_file(entry).ok_or("the downloaded pose file is no longer available; refresh and try again")?;
-    let mut figure = super::pose::read(&read_limited(&path, GRADIENT_LIMIT)?, &entry.name, ctl).map_err(|e| format!("{}: {e}", entry.name))?;
+    let mut pose = super::pose::read_any(&read_limited(&path, GRADIENT_LIMIT)?, &entry.name, ctl).map_err(|e| format!("{}: {e}", entry.name))?;
     // The catalog's name is what the Material palette shows (the file's own is often "新規ポーズ_0").
-    if !entry.name.trim().is_empty() {
-        figure.name = entry.name.chars().take(prism_doc::figure::MAX_NAME).collect();
+    let catalog_name: Option<String> = (!entry.name.trim().is_empty()).then(|| entry.name.chars().take(prism_doc::figure::MAX_NAME).collect());
+    match &mut pose {
+        super::pose::Pose::Body(figure) => {
+            if let Some(n) = catalog_name {
+                figure.name = n;
+            }
+            figure.source = Some(format!("CLIP STUDIO: {}", figure.name));
+        }
+        super::pose::Pose::Hand(hand) => {
+            if let Some(n) = catalog_name {
+                hand.name = n;
+            }
+        }
     }
-    figure.source = Some(format!("CLIP STUDIO: {}", figure.name));
-    Ok((entry.catalog.clone(), figure))
+    Ok((entry.catalog.clone(), pose))
 }
 
 /// Read a layer material file (`data/material_0.layer`), or the material folder holding one.

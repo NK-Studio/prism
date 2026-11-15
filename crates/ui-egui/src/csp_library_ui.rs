@@ -193,6 +193,11 @@ fn is_pose(b: &Value) -> bool {
     b["kind"] == "pose"
 }
 
+/// A hand pose: it poses the hands of a 3D figure.
+fn is_hand_pose(b: &Value) -> bool {
+    is_pose(b) && b["hand"].is_string()
+}
+
 fn is_ruler(b: &Value) -> bool {
     is_layer(b) && b["ruler"] == true
 }
@@ -308,14 +313,16 @@ pub fn imported(app: &mut PrismApp, v: &Value) {
     app.ui.csp_library.selected.clear();
 }
 
+/// The listed materials `keep` accepts, by id.
+fn ids_of(app: &PrismApp, keep: fn(&Value) -> bool) -> Vec<String> {
+    app.ui.csp_library.listing.as_ref().map(|l| materials(l).filter(|b| keep(b)).filter_map(|b| b["uuid"].as_str().map(str::to_string)).collect()).unwrap_or_default()
+}
+
 fn import_selected(app: &mut PrismApp) {
     let selected = app.ui.csp_library.selected.clone();
     if selected.is_empty() {
         return;
     }
-    let ids_of = |app: &PrismApp, keep: fn(&Value) -> bool| -> Vec<String> {
-        app.ui.csp_library.listing.as_ref().map(|l| materials(l).filter(|b| keep(b)).filter_map(|b| b["uuid"].as_str().map(str::to_string)).collect()).unwrap_or_default()
-    };
     let (layer_ids, action_ids, gradient_ids, color_set_ids) = (ids_of(app, is_layer), ids_of(app, is_action), ids_of(app, is_gradient), ids_of(app, is_color_set));
     let pose_ids = ids_of(app, is_pose);
     let (poses, selected): (Vec<String>, Vec<String>) = selected.into_iter().partition(|id| pose_ids.contains(id));
@@ -467,17 +474,27 @@ fn add_layers(app: &mut PrismApp, uuids: &[String]) {
 }
 
 /// Add poses to the document as 3D figure layers: poses of one collection together become one
-/// layer (CLIP STUDIO's paired poses keep their places), centred on `at` or the canvas.
+/// layer (CLIP STUDIO's paired poses keep their places), centred on `at` or the canvas. Hand
+/// poses pose the hands of the active 3D figure layer (the figure nearest `at` when dropped),
+/// as in CLIP STUDIO; without one they add Prism's figure with those hands.
 fn add_poses(app: &mut PrismApp, uuids: &[String], at: Option<[f64; 2]>) {
     if app.session.active().is_none() {
         notices::error(app, tl!("Open or create a document first: poses are added to it as 3D figure layers").to_string());
+        return;
+    }
+    let hand_ids = ids_of(app, is_hand_pose);
+    let (hands, uuids): (Vec<String>, Vec<String>) = uuids.iter().cloned().partition(|id| hand_ids.contains(id));
+    if !hands.is_empty() {
+        apply_hand_poses(app, &hands, at);
+    }
+    if uuids.is_empty() {
         return;
     }
     let catalog_of = |app: &PrismApp, id: &str| -> String {
         app.ui.csp_library.listing.as_ref().and_then(|l| materials(l).find(|b| b["uuid"] == id).map(|b| group_of(b).to_string())).unwrap_or_default()
     };
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
-    for id in uuids {
+    for id in &uuids {
         let c = catalog_of(app, id);
         match groups.iter_mut().find(|(g, _)| *g == c) {
             Some((_, v)) => v.push(id.clone()),
@@ -506,6 +523,27 @@ fn add_poses(app: &mut PrismApp, uuids: &[String], at: Option<[f64; 2]>) {
     app.ui.status_error = layers == 0;
     notices::io_warnings(app, tl!("Imported from CLIP STUDIO"), &warnings);
     app.ui.csp_library.selected.retain(|id| !done.contains(id));
+}
+
+/// Hand poses onto the active 3D figure layer, or a new one with Prism's figure.
+fn apply_hand_poses(app: &mut PrismApp, uuids: &[String], at: Option<[f64; 2]>) {
+    let on_figure = app.session.active().and_then(|st| st.active_layer.and_then(|l| crate::figure_ui::figure_layer(&st.doc, l))).is_some();
+    let mut p = json!({ "uuids": uuids });
+    if let Some(root) = &app.ui.csp_library.root {
+        p["root"] = json!(root);
+    }
+    if let Some(at) = at {
+        p["at"] = json!(at);
+    }
+    let cmd = if on_figure { "layer.figure.applyHandPose" } else { "layer.figure.new" };
+    match app.run(cmd, p) {
+        Ok(_) => {
+            app.ui.status = if on_figure { tl!("Posed the hands; refine fingers with the Move tool").to_string() } else { tl!("Added a 3D figure layer with this hand pose").to_string() };
+            app.ui.status_error = false;
+            app.ui.csp_library.selected.retain(|id| !uuids.contains(id));
+        }
+        Err(e) => notices::error(app, format!("{}: {e}", tl!("Not added"))),
+    }
 }
 
 /// Import colour sets into the Swatches panel, one group each, and show it.
@@ -1172,6 +1210,8 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
         ("blend", tl!("Gradient"))
     } else if is_color_set(b) {
         ("swatch-book", tl!("Color set"))
+    } else if is_hand_pose(b) {
+        ("figure", tl!("Hand pose"))
     } else if is_pose(b) {
         ("figure", tl!("Pose"))
     } else {
@@ -1240,6 +1280,8 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
             ui.label(tl!("Imports into the Gradients panel, for the Gradient tool and gradient maps"));
         } else if is_color_set(b) {
             ui.label(tl!("Imports into the Swatches panel as one group"));
+        } else if is_hand_pose(b) {
+            ui.label(tl!("Poses the hands of the active 3D figure layer; without one, adds a 3D figure with these hands"));
         } else if is_pose(b) {
             ui.label(tl!("Adds a 3D figure layer in this pose; poses of one collection selected together share a layer"));
         }
