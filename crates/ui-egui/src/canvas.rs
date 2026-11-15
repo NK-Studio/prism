@@ -133,8 +133,8 @@ pub struct Drag {
     /// every Move-tool drag with a selection does (`move_ui::moves_selected_pixels`).
     pub sel_move: Option<bool>,
     pub lasso: Option<crate::lasso_ui::Lasso>,
-    /// A pen stroke with a CLIP STUDIO brush: a tap is drawn at no pressure (see
-    /// `finish_gesture`).
+    /// A pen stroke with a CLIP STUDIO brush: it starts with the pen-down at no pressure (see
+    /// `csp_pen_down`).
     pub csp_pen: bool,
 }
 
@@ -470,12 +470,35 @@ fn begin_live_stroke(app: &PrismApp) -> Option<LiveStroke> {
         p["target"] = paint_target(app);
         EngineStroke::Retouch(prism_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?)
     } else {
-        let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
+        let p = stroke_params(app, d, &csp_pen_down(d, app.stylus.stroke_points(&d.points), false));
         EngineStroke::Brush(Box::new(prism_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(d.tool), &p).ok()?))
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
     Some(LiveStroke { stroke, doc: st.doc.id, revision: st.revision, key: (1 << 44) | (n << 20), damage, fed: d.points.len() })
+}
+
+/// A CLIP STUDIO brush's pen stroke starts with the pen-down sample at pressure 0, at the first
+/// point's place and time, before the pen's own first sample: CLIP STUDIO reads the pen-down at no
+/// pressure. Unstabilized, the next dab covers it; stabilized, the 0 is averaged into the first
+/// outputs (a fast stroke starts thin); a tap (`finished` and never moved) keeps only that
+/// sample, so it lays the dot of a tap at no pressure (measured, docs/sut-analysis.md › Effector
+/// velocity input › Pen-down pressure).
+fn csp_pen_down(d: &Drag, mut pts: Vec<Vec<f64>>, finished: bool) -> Vec<Vec<f64>> {
+    let Some(first) = pts.first().cloned().filter(|_| d.csp_pen) else { return pts };
+    let tap = finished && d.points.iter().all(|p| p[0] == d.start[0] && p[1] == d.start[1]);
+    let mut down = first;
+    if let Some(pressure) = down.get_mut(2) {
+        *pressure = 0.0;
+    }
+    if tap {
+        if let Some(p) = pts.first_mut() {
+            *p = down;
+        }
+    } else {
+        pts.insert(0, down);
+    }
+    pts
 }
 
 /// Render the drag points the live stroke hasn't seen yet, with the pen pressure, tilt and
@@ -3898,17 +3921,7 @@ pub(crate) fn finish_gesture(app: &mut PrismApp, d: Drag) {
         Tool::Type | Tool::VerticalType => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
         Tool::Brush | Tool::Pencil | Tool::Eraser => {
             let live = app.live_stroke.take();
-            let mut points = d.points.clone();
-            // CLIP STUDIO draws a pen tap at no pressure: a tap at full pressure lays exactly the
-            // dot a tap at 0.02 lays (measured, docs/sut-analysis.md › Effector velocity input ›
-            // Pen-down pressure). Only a tap: on a moving stroke its start is not that thin.
-            if d.csp_pen
-                && points.iter().all(|p| p[0] == d.start[0] && p[1] == d.start[1])
-                && let Some(first) = points.first_mut()
-            {
-                first[2] = 0.0;
-            }
-            let mut p = stroke_params(app, &d, &app.stylus.stroke_points(&points));
+            let mut p = stroke_params(app, &d, &csp_pen_down(&d, app.stylus.stroke_points(&d.points), true));
             if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
                 p["seed"] = json!(seed);
             }
@@ -4626,6 +4639,16 @@ mod tests {
         assert!(light < full * 0.5, "a CSP pen tap is the small dot: {light} vs {full}");
         assert!((tap(true, false, false) - full).abs() < 1.0, "a mouse click keeps its pressure");
         assert!(tap(true, true, true) > full * 0.9, "a stroke that moved keeps its first pressure");
+        // A moving stroke starts with the pen-down at no pressure, then the pen's own samples.
+        let mut d = Drag::new(Tool::Brush, [1.0, 2.0], vec![[1.0, 2.0, 0.8], [5.0, 2.0, 0.9]], egui::Modifiers::NONE, false);
+        d.csp_pen = true;
+        let pts = vec![vec![1.0, 2.0, 0.8, 0.0, 0.0, 0.0, 3.0], vec![5.0, 2.0, 0.9, 0.0, 0.0, 0.0, 11.0]];
+        let moving = csp_pen_down(&d, pts.clone(), true);
+        assert_eq!(moving.len(), 3);
+        assert_eq!(moving[0], vec![1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 3.0], "same place and time, no pressure");
+        assert_eq!(&moving[1..], &pts[..]);
+        d.csp_pen = false;
+        assert_eq!(csp_pen_down(&d, pts.clone(), true), pts, "a mouse or a Photoshop brush is unchanged");
     }
 
     #[test]

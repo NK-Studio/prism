@@ -1107,15 +1107,43 @@ CLIP STUDIO brush at pressure 0. Taps then matched, but moving strokes did not:
 | 6 stabilized pressure-only starts (x 372–468) | 0.175 | 0.383 |
 | 5 stabilized 밀리펜 starts (x 372–560) | 0.396 | 0.228 |
 
-Prism carries the 0 along the whole first segment (pressure is interpolated between samples,
-and the stabilizer's padding repeats the first sample), so an 8 px/ms stroke starts at 7.9 px
+Prism carried the 0 along the whole first segment (pressure is interpolated between samples,
+and the stabilizer's padding repeats the first sample), so an 8 px/ms stroke started at 7.9 px
 where CLIP STUDIO starts at 9.4; stabilized, CLIP STUDIO is back to full pressure about two
-samples after pen-down where Prism's window needs four. Shipped instead: only a pen tap (a
+samples after pen-down where Prism's window needed four. Shipped first: only a pen tap (a
 stroke that never moves) is drawn at no pressure, the canvas zeroing its single sample's pressure
 before the commit (`Drag::csp_pen`, set at pen-down for a CLIP STUDIO brush and a pen; a mouse
 click and a ⇧-click line keep theirs). In the app a tap at pressure 1 now covers 25.43 units
-(CLIP STUDIO 25.73, Prism before 45.89). How CLIP STUDIO weighs the pen-down sample in a moving
-stroke is open.
+(CLIP STUDIO 25.73, Prism before 45.89).
+
+**In a moving stroke (measured the same day).** A copy of 밀리펜 with pressure alone on the size
+and no stabilization (deleted afterwards): strokes at 2, 4 and 8 px/ms, 8 px/ms with 16 ms
+samples, and 8 px/ms after a 40 ms rest, plus taps at pressure 1 and 0.5.
+
+- Unstabilized, every stroke starts at full width from its second column on (8.71–8.92 px of
+  coverage from x 360, like the middle of the line): the pen-down's 0 leaves no trace on a
+  moving stroke. The tap at pressure 1 again covers 25.73. The second tap of each run reads 55.06
+  (here at pressure 0.5, earlier at 0.02): its patch shows a ring around the dot, a mark of the
+  second injection rather than of pressure, so it is left out.
+- Replayed against the stabilized pressure-only strokes, the pen-down's 0 fits when it is a
+  sample of its own before the pen's first sample (same place and time), not a replacement of
+  it: mean size difference over x 364–516 0.197 → 0.120 px (six long strokes) and 0.228 → 0.123
+  (five earlier strokes), the stroke starting back at full pressure after two to three samples as
+  CLIP STUDIO does. Unstabilized it changes nothing (0.094 both): the next dab covers it.
+- Prism: `csp_pen_down` (ui-egui canvas) puts that sample in front of a CLIP STUDIO brush's pen
+  stroke, for the live stroke and the commit; a tap keeps only it, so taps are unchanged.
+
+In the app, mean size difference from CLIP STUDIO at the start of each stroke:
+
+| Strokes | Before | After |
+| --- | ---: | ---: |
+| 6 long stabilized pressure-only (x 364–516) | 0.179 | 0.116 |
+| 5 stabilized pressure-only (x 364–516) | 0.213 | 0.123 |
+| 5 stabilized 밀리펜 (x 372–560) | 0.396 | 0.334 |
+| 7 unstabilized 밀리펜 (x 366–500) | 0.290 | 0.293 |
+| 5 unstabilized pressure-only (x 364–516) | not drawn | 0.074 |
+
+A pen tap still covers 25.43 (CLIP STUDIO 25.73).
 
 ## Effector tilt response (2026-10-16)
 
