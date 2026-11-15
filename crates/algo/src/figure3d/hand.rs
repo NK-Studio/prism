@@ -129,10 +129,6 @@ fn joint_name(root: &Joint, name: &str) -> Option<String> {
     root.walk().into_iter().map(|(_, j)| j).find(|j| j.name.eq_ignore_ascii_case(name)).map(|j| j.name.clone())
 }
 
-fn offset_of(root: &Joint, name: &Option<String>) -> Option<V3> {
-    name.as_ref().and_then(|n| root.find(n)).map(|j| j.offset)
-}
-
 /// The rest frame of one hand, in the hand joint's local coordinates: its long direction, the
 /// direction across the knuckles towards the little finger, and the palm normal.
 struct Palm {
@@ -156,9 +152,25 @@ impl Palm {
     }
 }
 
+/// Where joint `name` sits in `hand`'s frame with every joint below the hand at rest (offsets
+/// added up along the path: a CLIP STUDIO 5.0 knuckle hangs off a palm bone).
+fn rest_position(hand: &Joint, name: &str) -> Option<V3> {
+    // The path's names, the hand first.
+    let path = hand.path_to(name)?;
+    let mut at = [0.0; 3];
+    let mut j = hand;
+    for n in path.iter().skip(1) {
+        j = j.children.iter().find(|c| &c.name == n)?;
+        at = add(at, j.offset);
+    }
+    Some(at)
+}
+
 fn palm(root: &Joint, side: Side) -> Option<Palm> {
-    let name = |digit: &str, k: u32| joint_name(root, &format!("{}hand{digit}{k}_bb_", side.prefix()));
-    let base = |digit: &str| offset_of(root, &name(digit, 1));
+    let hand_name = joint_name(root, &format!("{}hand_bb_", side.prefix()))?;
+    let hand = root.find(&hand_name)?;
+    let name = |digit: &str, k: u32| joint_name(hand, &format!("{}hand{digit}{k}_bb_", side.prefix()));
+    let base = |digit: &str| name(digit, 1).and_then(|n| rest_position(hand, &n));
     let index = base("index").or_else(|| base("middle"))?;
     let little = base("pinky").or_else(|| base("ring"))?;
     let long = base("middle").or_else(|| base("index")).or_else(|| base("ring"))?;
@@ -275,7 +287,16 @@ pub fn apply_hand_pose(figure: &mut Figure, side: Side, source: &Joint, source_s
             continue;
         }
         let Some(target) = joint_name(&figure.root, &format!("{dst}{rest}")) else { continue };
-        let q = qnorm(j.rotation);
+        let mut q = qnorm(j.rotation);
+        // A palm bone (CLIP STUDIO 5.0's `…0_bb_`) the target lacks: its turn goes into the knuckle
+        // (both frames lie along the hand at rest, so the turns compose).
+        if let Some(digit) = DIGITS.get(di)
+            && rest == format!("{digit}1_bb_")
+            && joint_name(&figure.root, &format!("{dst}{digit}0_bb_")).is_none()
+            && let Some(palm_bone) = joint_name(source, &format!("{src}{digit}0_bb_")).and_then(|b| source.find(&b))
+        {
+            q = qnorm(qmul(qnorm(palm_bone.rotation), q));
+        }
         let v = carry([q[1], q[2], q[3]]);
         edits.push((target, [q[0], v[0], v[1], v[2]]));
     }

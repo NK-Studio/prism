@@ -144,10 +144,57 @@ pub fn read_pep_any(bytes: &[u8]) -> Result<Pose> {
             hand.children.push(j);
         }
     }
+    hand.children = chain_fingers(std::mem::take(&mut hand.children));
     if hand.children.is_empty() {
         return Err("CLIP STUDIO hand pose has no fingers".into());
     }
     Ok(Pose::Hand(HandPose { name: String::new(), left, hand }))
+}
+
+/// `(digit, segment)` of a finger joint name (`lefthandindex2_bb_` → `("index", 2)`).
+fn finger_segment(name: &str) -> Option<(&'static str, u32)> {
+    let n = name.to_ascii_lowercase();
+    let rest = n.strip_prefix("lefthand").or_else(|| n.strip_prefix("righthand"))?.strip_suffix("_bb_")?;
+    let digit = ["thumb", "index", "middle", "ring", "pinky"].into_iter().find(|d| rest.starts_with(d))?;
+    let k = rest.get(digit.len()..)?.parse::<u32>().ok().filter(|k| *k <= 9)?;
+    Some((digit, k))
+}
+
+/// CLIP STUDIO 5.0's hand poses list every finger joint flat, each `trans` in the frame of the
+/// segment before it (`index0` the palm bone, then `index1` … `index3`). Hang each joint off the
+/// previous segment of its finger when that one is in the list too; already nested chains (the
+/// older layout) stay as they are.
+fn chain_fingers(tops: Vec<Joint>) -> Vec<Joint> {
+    let mut out: Vec<Joint> = Vec::new();
+    let mut fingers: Vec<(&'static str, Vec<(u32, Joint)>)> = Vec::new();
+    for j in tops {
+        match finger_segment(&j.name) {
+            Some((digit, k)) => match fingers.iter_mut().find(|(d, _)| *d == digit) {
+                Some((_, v)) => v.push((k, j)),
+                None => fingers.push((digit, vec![(k, j)])),
+            },
+            None => out.push(j),
+        }
+    }
+    for (_, mut segments) in fingers {
+        segments.sort_by_key(|(k, _)| *k);
+        // From the tip down: each joint goes under the one right before it when present.
+        let mut carried: Option<(u32, Joint)> = None;
+        while let Some((k, mut j)) = segments.pop() {
+            if let Some((ck, c)) = carried.take() {
+                if ck == k + 1 {
+                    j.children.push(c);
+                } else {
+                    out.push(c);
+                }
+            }
+            carried = Some((k, j));
+        }
+        if let Some((_, c)) = carried {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// A right-side joint hanging off another right-side joint (everything of the right arm and leg
@@ -237,6 +284,31 @@ mod tests {
             let (l, r) = (at(&format!("left{j}")), at(&format!("right{j}")));
             assert!((l[0] + r[0]).abs() < 1e-9 && (l[1] - r[1]).abs() < 1e-9 && (l[2] - r[2]).abs() < 1e-9, "{j}: {l:?} vs {r:?}");
         }
+    }
+
+    /// CLIP STUDIO 5.0's downloaded hand poses (synthetic numbers): every joint a top node, palm
+    /// bones (`…0_bb_`) first, each offset in the previous segment's frame.
+    #[test]
+    fn flat_hand_poses_become_finger_chains() {
+        let xml = r#"<pose>
+            <node name="lefthandmiddle2_bb_" rotquat="0.98 0 0 -0.2" trans="4.2 0 0"/>
+            <node name="lefthandmiddle0_bb_" rotquat="1 0 0 0" trans="2.2 0.9 0.4"/>
+            <node name="lefthandmiddle3_bb_" rotquat="1 0 0 0" trans="2.3 0 0"/>
+            <node name="lefthandmiddle1_bb_" rotquat="0.97 0 0 -0.2" trans="5.7 0 0"/>
+            <node name="lefthandthumb1_bb_" rotquat="0.75 0.5 -0.4 0.08" trans="1.5 -0.7 2.3"/>
+            <node name="lefthandthumb3_bb_" rotquat="1 0 0 0" trans="2.9 0 0"/>
+        </pose>"#;
+        let Pose::Hand(h) = read_pep_any(xml.as_bytes()).unwrap() else { panic!("not a hand pose") };
+        let names = |j: &Joint| j.children.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+        let mut top = names(&h.hand);
+        top.sort();
+        assert_eq!(top, ["lefthandmiddle0_bb_", "lefthandthumb1_bb_", "lefthandthumb3_bb_"], "thumb2 is missing, so thumb3 stays on the hand");
+        let m0 = h.hand.find("lefthandmiddle0_bb_").unwrap();
+        assert_eq!(names(m0), ["lefthandmiddle1_bb_"]);
+        assert_eq!(names(m0.find("lefthandmiddle1_bb_").unwrap()), ["lefthandmiddle2_bb_"]);
+        assert_eq!(names(m0.find("lefthandmiddle2_bb_").unwrap()), ["lefthandmiddle3_bb_"]);
+        assert_eq!(finger_segment("RightHandPinky0_bb_"), Some(("pinky", 0)));
+        assert_eq!(finger_segment("lefthand_bb_"), None);
     }
 
     /// The layout of CLIP STUDIO's hand poses (its `handsetup_*.pep`; synthetic numbers): the

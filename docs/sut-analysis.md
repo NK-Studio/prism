@@ -2720,10 +2720,21 @@ Prism's hand shapes are its own angles (`crates/algo/src/figure3d/hand.rs`).
   the hand's frame. CLIP STUDIO's manual: with the whole figure selected a hand-only pose goes on
   both hands, with one hand selected on that hand only, and a pose registered from either hand
   works on both.
-- Inferred, not verified: downloaded hand pose materials are `pose` kind materials whose `.pep`
-  has that layout (no hand pose material is downloaded here to check), so Prism tells them apart
-  by content, not by kind or tag: `brush.cspLibrary.list` reads each pose file (up to 256) and
-  reports `hand: "left" | "right"`.
+- Verified (2026-11-15) on a free ASSETS collection, "Common Hand Poses [5.0 Version]"
+  (content 2257326, 26 poses, downloaded through CLIP STUDIO for this check and kept local):
+  every hand pose is a `pose` kind material (`MaterialKind` "pose", like whole figures), so
+  Prism tells them apart by content: `brush.cspLibrary.list` reads each pose file (up to 256)
+  and reports `hand: "left" | "right"`; all 26 list as left hands.
+- Observed, CLIP STUDIO 5.0 layout: those poses list every joint as a top node, flat, each
+  `trans` in the frame of the segment before it, and add palm bones `<side>hand<digit>0_bb_`
+  (index, middle, ring, pinky; offsets from the hand) before the knuckles; there is no tip (`4`)
+  joint. Prism rebuilds the chains by name (`hand → 0 → 1 → 2 → 3`), places the palm by the
+  knuckles' rest positions (offsets added along the chain), and on a figure without palm bones
+  folds each palm bone's turn into its knuckle (both frames lie along the hand at rest).
+- Compared with CLIP STUDIO on its own base left hand model: "Thumbs Up: Upright", "Finger Count:
+  3" and "Point at something" give the same finger shapes in Prism (raised and folded fingers,
+  thumb direction and bend); applied by id through `layer.figure.applyHandPose` in the app they
+  land on the chosen hand.
 - Prism: `prism_io::sut::pose::read_any` gives `Pose::Hand` (the chains under a made-up hand
   joint); `layer.figure.applyHandPose` carries each finger rotation from the pose's palm frame
   to the target hand's (mirrored for the other hand, re-aimed for Prism's figure whose fingers

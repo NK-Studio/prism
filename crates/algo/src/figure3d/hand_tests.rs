@@ -1,5 +1,5 @@
 use super::*;
-use crate::figure3d::math::{qconj, rotate};
+use crate::figure3d::math::{add, qconj, rotate};
 use crate::figure3d::skeleton::pose;
 use prism_doc::figure::standing_figure;
 
@@ -215,4 +215,58 @@ fn a_csp_hand_pose_closes_prisms_hands() {
     let bare = j("lefthand_bb_", [0.0; 3], [1.0, 0.0, 0.0, 0.0], vec![]);
     assert!(apply_hand_pose(&mut g, Side::Left, &bare, Side::Left, [false; 5]).is_err());
     assert!(apply_hand_pose(&mut Figure::default(), Side::Left, &source, Side::Left, [false; 5]).is_err());
+}
+
+/// CLIP STUDIO 5.0's hand poses add palm bones (`…0_bb_`) before the knuckles. On a figure
+/// without them, a palm bone's turn goes into its knuckle: the same as a pose without palm bones
+/// whose knuckles turn by both.
+#[test]
+fn palm_bones_fold_into_the_knuckles() {
+    let j = |name: &str, offset: V3, rotation: Q, children: Vec<Joint>| Joint { name: name.into(), rotation, offset, children };
+    let q0 = axis_angle(normalize_or([0.2, 0.5, -0.8], [0.0; 3]), 0.3);
+    let q1 = axis_angle([0.0, 0.0, -1.0], 1.2);
+    let id = [1.0, 0.0, 0.0, 0.0];
+    let chain = |d: &str, k1: Q| j(&format!("lefthand{d}1_bb_"), [5.7, 0.0, 0.0], k1, vec![j(&format!("lefthand{d}2_bb_"), [3.5, 0.0, 0.0], q1, vec![])]);
+    let base = |d: &str| -> V3 {
+        match d {
+            "thumb" => [1.5, -0.7, 2.3],
+            "index" => [2.2, 0.4, 1.5],
+            "middle" => [2.2, 0.9, 0.4],
+            "ring" => [2.4, 0.9, -1.1],
+            _ => [1.8, 0.6, -2.5],
+        }
+    };
+    // With palm bones: hand → d0 (turned q0) → d1 (q1) → d2.
+    let with = j(
+        "lefthand_bb_",
+        [0.0; 3],
+        id,
+        ["index", "middle", "ring", "pinky"].iter().map(|d| j(&format!("lefthand{d}0_bb_"), base(d), q0, vec![chain(d, q1)])).chain([j("lefthandthumb1_bb_", base("thumb"), id, vec![])]).collect(),
+    );
+    // Without: the knuckle sits where the palm bone ends and turns by q0·q1.
+    let without = j(
+        "lefthand_bb_",
+        [0.0; 3],
+        id,
+        ["index", "middle", "ring", "pinky"]
+            .iter()
+            .map(|d| {
+                let mut c = chain(d, qmul(q0, q1));
+                c.offset = add(base(d), [5.7, 0.0, 0.0]);
+                c
+            })
+            .chain([j("lefthandthumb1_bb_", base("thumb"), id, vec![])])
+            .collect(),
+    );
+    let (mut a, mut b) = (standing_figure(), standing_figure());
+    apply_hand_pose(&mut a, Side::Right, &with, Side::Left, [false; 5]).unwrap();
+    apply_hand_pose(&mut b, Side::Right, &without, Side::Left, [false; 5]).unwrap();
+    for d in ["index", "middle", "ring", "pinky"] {
+        for k in 1..=3 {
+            let n = format!("righthand{d}{k}_bb_");
+            let (x, y) = (a.root.find(&n).unwrap().rotation, b.root.find(&n).unwrap().rotation);
+            assert!(x.iter().zip(y).all(|(p, q)| (p - q).abs() < 1e-9), "{n}: {x:?} vs {y:?}");
+        }
+    }
+    assert_ne!(a.root.find("righthandindex1_bb_").unwrap().rotation, id);
 }

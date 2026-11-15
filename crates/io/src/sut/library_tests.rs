@@ -717,3 +717,44 @@ fn local_hand_poses_render() {
     }
     assert!(seen > 0, "no handsetup_*.pep in {}", dir.display());
 }
+
+/// Local check of downloaded hand pose materials: every listed pose with its hand flag, and each
+/// hand pose put on Prism's standing figure (both hands), as strips in `$PRISM_LOOK_OUT`
+/// (default `target/csp-hand-materials`).
+#[test]
+#[ignore = "reads the local CLIP STUDIO folder and writes PNGs to look at"]
+fn local_hand_pose_materials() {
+    use prism_algo::figure3d::hand::{Side, apply_hand_pose};
+    use prism_doc::figure::standing_figure;
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/csp-hand-materials".into()));
+    std::fs::create_dir_all(&out).unwrap();
+    let root = std::env::var_os("PRISM_TEST_CSP_ROOT").map(std::path::PathBuf::from).or_else(default_root).unwrap();
+    let lib = list(&root).unwrap();
+    let mut hands = 0;
+    for (i, p) in lib.poses.iter().enumerate() {
+        let (catalog, pose) = import_pose_any(&root, &p.uuid, &prism_raster::Interrupt::NONE).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+        match pose {
+            super::super::pose::Pose::Body(f) => eprintln!("{i:2} body  {} [{catalog}] listed hand={:?} joints={}", p.name, p.hand, f.root.walk().len()),
+            super::super::pose::Pose::Hand(h) => {
+                hands += 1;
+                let names: Vec<String> = h.hand.walk().into_iter().map(|(_, j)| j.name.clone()).collect();
+                eprintln!("{i:2} hand  {} [{catalog}] listed hand={:?} left={} joints={} first={:?}", p.name, p.hand, h.left, names.len(), names.get(1));
+                if std::env::var_os("PRISM_DUMP_HANDS").is_some() {
+                    for (d, j) in h.hand.walk() {
+                        let a = 2.0 * j.rotation[0].clamp(-1.0, 1.0).acos().to_degrees();
+                        eprintln!("    {}{} rot {:?} ({a:.1} deg) off {:?}", "  ".repeat(d), j.name, j.rotation.map(|v| (v * 1000.0).round() / 1000.0), j.offset.map(|v| (v * 100.0).round() / 100.0));
+                    }
+                }
+                assert_eq!(p.hand, Some(h.left), "{}: the listing tells hand poses apart", p.name);
+                let from = if h.left { Side::Left } else { Side::Right };
+                let mut f = standing_figure();
+                for side in [Side::Left, Side::Right] {
+                    apply_hand_pose(&mut f, side, &h.hand, from, [false; 5]).unwrap();
+                }
+                let side = if h.left { "left" } else { "right" };
+                hand_strip(&f, side, &out.join(format!("hand{i:02}.png")));
+            }
+        }
+    }
+    eprintln!("{hands} hand poses of {}", lib.poses.len());
+}

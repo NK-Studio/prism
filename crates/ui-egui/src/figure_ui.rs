@@ -141,13 +141,14 @@ fn click(app: &mut PrismApp, layer: LayerId, grabbed: Option<(usize, String)>) {
 }
 
 /// `Some((hand, segment))` for a finger joint such as `lefthandindex3_bb_`: the hand joint's name
-/// (`lefthand_bb_`) and the segment number (1 at the knuckle, 4 at the tip).
+/// (`lefthand_bb_`) and the segment number (0 for CLIP STUDIO 5.0's palm bones, 1 at the
+/// knuckle, 4 at the tip).
 fn finger_joint(name: &str) -> Option<(String, u32)> {
     let n = name.to_ascii_lowercase();
     let at = n.find("hand")?;
     let rest = n.get(at + 4..)?.strip_suffix("_bb_")?;
     let digit = DIGITS.iter().find(|d| rest.starts_with(**d))?;
-    let segment = rest.get(digit.len()..)?.parse::<u32>().ok().filter(|s| (1..=9).contains(s))?;
+    let segment = rest.get(digit.len()..)?.parse::<u32>().ok().filter(|s| *s <= 9)?;
     Some((format!("{}hand_bb_", n.get(..at)?), segment))
 }
 
