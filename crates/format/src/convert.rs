@@ -200,6 +200,11 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         advanced: l.advanced,
         video: l.video.as_ref().map(|v| video_m(v, sink)),
         special_rulers: l.special_rulers.clone(),
+        figure: l.figure.clone(),
+        figure_models: match &l.figure {
+            Some(f) if f.figures.iter().any(|f| f.model.is_some()) => f.figures.iter().map(|f| f.model.as_ref().map(|m| sink.blob(&m.bytes))).collect(),
+            _ => Vec::new(),
+        },
         reference: l.reference,
     }
 }
@@ -504,6 +509,25 @@ impl Loader<'_> {
                 Some(r) => {
                     r.validate().map_err(|e| FormatError::corrupt(format!("layer {:?}: {e}", m.name)))?;
                     Some(r.clone())
+                }
+                None => None,
+            },
+            figure: match &m.figure {
+                Some(f) => {
+                    let mut f = f.clone();
+                    // Bytes of each character model, from their blobs.
+                    for (fig, hash) in f.figures.iter_mut().zip(&m.figure_models) {
+                        match (fig.model.as_mut(), hash) {
+                            (Some(model), Some(h)) => model.bytes = self.fetch.blob(h)?,
+                            (Some(_), None) => fig.model = None,
+                            _ => {}
+                        }
+                    }
+                    for fig in f.figures.iter_mut().skip(m.figure_models.len()) {
+                        fig.model = None;
+                    }
+                    f.validate().map_err(|e| FormatError::corrupt(format!("layer {:?}: {e}", m.name)))?;
+                    Some(f)
                 }
                 None => None,
             },

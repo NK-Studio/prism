@@ -122,10 +122,8 @@ pub(crate) fn interact(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport:
             egui::CursorIcon::Grab
         } else if !zoom_tool {
             egui::CursorIcon::Crosshair
-        } else if modifiers.alt {
-            egui::CursorIcon::ZoomOut
         } else {
-            egui::CursorIcon::ZoomIn
+            crate::tool_cursor::zoom(ui.painter(), at, modifiers.alt)
         });
     }
     let capture_id = response.id.with("zoom-capture");

@@ -168,6 +168,15 @@ pub(crate) fn preflight(list: &[Action], root: &Action, from: usize) -> std::res
                 return Err("action preflight exceeds 100000 steps".into());
             }
             budget -= 1;
+            if step.id == crate::laf_import_cmds::UNSUPPORTED {
+                return Err(format!(
+                    "{} step {}: unsupported CLIP STUDIO step {}: {}. Disable or replace this step before playback.",
+                    action.name,
+                    index + 1,
+                    step.params.get("kind").and_then(Value::as_str).unwrap_or(""),
+                    step.params.get("reason").and_then(Value::as_str).unwrap_or("unsupported")
+                ));
+            }
             if step.id == UNSUPPORTED {
                 return Err(format!(
                     "{} step {}: unsupported Photoshop command {}: {}. Disable or replace this step before playback.",

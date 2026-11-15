@@ -1,7 +1,13 @@
 //! Bounded reader for observed CLIP STUDIO auto-action value records.
 //! Unknown value types fail explicitly; parsing never executes an action.
+//!
+//! Value tags (docs/sut-analysis.md › Auto-action value types): 6 UTF-8 string, 7 bytes,
+//! 17 unsigned and 19/20 signed integers (19 ≥ 0, 20 < 0 storing the magnitude), 21 an f64,
+//! 72 array and 73 object.
 use serde_json::{Map, Value};
 type Result<T> = std::result::Result<T, String>;
+/// The key of the one-entry object a bytes value (tag 7) becomes: `{"$bytes": "<hex>"}`.
+pub const BYTES_KEY: &str = "$bytes";
 fn invalid() -> String {
     "invalid or unsupported CLIP STUDIO auto-action data".into()
 }
@@ -69,7 +75,34 @@ impl<'a> Reader<'a> {
         }
         match self.byte()? {
             6 => Ok(Value::String(self.string()?)),
-            17 => Ok(Value::from(self.integer()?)),
+            // 17 is unsigned and 19 a signed integer that is not negative; both store the
+            // magnitude with a byte-length prefix.
+            17 | 19 => Ok(Value::from(self.integer()?)),
+            // A negative signed integer stores its magnitude (saturation −100 is 20 01 64; the
+            // all-ones colour channel −1 is 20 01 01).
+            20 => {
+                let magnitude = self.integer()?;
+                let value = 0i64.checked_sub_unsigned(magnitude).ok_or_else(invalid)?;
+                Ok(Value::from(value))
+            }
+            21 => {
+                if self.byte()? != 8 {
+                    return Err(invalid());
+                }
+                let v = f64::from_be_bytes(self.take(8)?.try_into().map_err(|_| invalid())?);
+                if !v.is_finite() {
+                    return Err(invalid());
+                }
+                Ok(Value::from(v))
+            }
+            // Opaque bytes (gradients, colour types), kept as hex so nothing is lost.
+            7 => {
+                let n = self.count()?;
+                let hex: String = self.take(n)?.iter().map(|b| format!("{b:02x}")).collect();
+                let mut m = Map::new();
+                m.insert(BYTES_KEY.into(), Value::String(hex));
+                Ok(Value::Object(m))
+            }
             tag @ (72 | 73) => {
                 let n = u32::from_be_bytes(self.take(4)?.try_into().map_err(|_| invalid())?) as usize;
                 let mut sub = Reader { bytes: self.take(n)?, at: 0, values: self.values };
@@ -96,11 +129,12 @@ impl<'a> Reader<'a> {
         }
     }
 }
-/// Parse an exported LAF or its downloaded C2F envelope, retaining original command names.
-pub fn read_laf(bytes: &[u8], ctl: &prism_raster::Interrupt) -> Result<Value> {
+/// Parse one typed value record (an object at the root), plain or in its C2F envelope. Auto
+/// actions (`.laf`) and gradient sets (`.colorset`) share this encoding.
+pub fn read_values(bytes: &[u8], ctl: &prism_raster::Interrupt) -> Result<Value> {
     ctl.check().map_err(|e| e.to_string())?;
     if bytes.len() > 8 << 20 {
-        return Err("CLIP STUDIO auto-action exceeds 8 MiB".into());
+        return Err("CLIP STUDIO value data exceeds 8 MiB".into());
     }
     let decoded;
     let bytes = if bytes.starts_with(crate::csp_container::MAGIC) {
@@ -111,10 +145,19 @@ pub fn read_laf(bytes: &[u8], ctl: &prism_raster::Interrupt) -> Result<Value> {
     };
     let mut r = Reader { bytes, at: 0, values: 0 };
     let value = r.object(0)?;
-    if r.at != bytes.len() || value.get("typename").and_then(Value::as_str) != Some("typeActionSet") {
+    if r.at != bytes.len() {
         return Err(invalid());
     }
     ctl.check().map_err(|e| e.to_string())?;
+    Ok(value)
+}
+
+/// Parse an exported LAF or its downloaded C2F envelope, retaining original command names.
+pub fn read_laf(bytes: &[u8], ctl: &prism_raster::Interrupt) -> Result<Value> {
+    let value = read_values(bytes, ctl)?;
+    if value.get("typename").and_then(Value::as_str) != Some("typeActionSet") {
+        return Err(invalid());
+    }
     Ok(value)
 }
 
@@ -144,6 +187,57 @@ mod tests {
             b[i] = 255;
             let _ = read_laf(&b, &prism_raster::Interrupt::NONE);
         }
+    }
+    /// An action set whose one field `v` holds `value` (tag and payload bytes).
+    fn with_value(value: &[u8]) -> Vec<u8> {
+        [vec![1, 1], string("typename"), vec![6], string("typeActionSet"), vec![1, 1], string("v"), value.to_vec()].concat()
+    }
+    #[test]
+    fn signed_float_and_byte_values() {
+        let read = |value: &[u8]| read_laf(&with_value(value), &prism_raster::Interrupt::NONE).map(|v| v["v"].clone());
+        // Signed integers: 19 is the value, 20 the negative of its magnitude.
+        assert_eq!(read(&[19, 0]).unwrap(), 0);
+        assert_eq!(read(&[19, 1, 14]).unwrap(), 14);
+        assert_eq!(read(&[19, 4, 0xff, 0xff, 0xff, 0xff]).unwrap(), 4_294_967_295u64);
+        assert_eq!(read(&[20, 1, 100]).unwrap(), -100);
+        assert_eq!(read(&[20, 1, 1]).unwrap(), -1);
+        assert_eq!(read(&[20, 8, 0x80, 0, 0, 0, 0, 0, 0, 0]).unwrap(), i64::MIN);
+        assert!(read(&[20, 8, 0x80, 0, 0, 0, 0, 0, 0, 1]).is_err(), "below i64::MIN");
+        // f64, big-endian, always eight bytes.
+        assert_eq!(read(&[21, 8, 0x40, 0x59, 0, 0, 0, 0, 0, 0]).unwrap(), 100.0);
+        assert_eq!(read(&[21, 8, 0xbf, 0xe0, 0, 0, 0, 0, 0, 0]).unwrap(), -0.5);
+        assert!(read(&[21, 4, 0x40, 0x59, 0, 0]).is_err());
+        assert!(read(&[21, 8, 0x7f, 0xf0, 0, 0, 0, 0, 0, 0]).is_err(), "infinity");
+        assert!(read(&[21, 8, 0x7f, 0xf8, 0, 0, 0, 0, 0, 0]).is_err(), "NaN");
+        // Bytes, kept as hex.
+        assert_eq!(read(&[7, 1, 3, 0, 0xab, 1]).unwrap(), serde_json::json!({BYTES_KEY: "00ab01"}));
+        assert_eq!(read(&[7, 0]).unwrap(), serde_json::json!({BYTES_KEY: ""}));
+        assert!(read(&[7, 1, 4, 0, 1]).is_err(), "truncated");
+        assert!(read(&[7, 2, 0x10, 0x01]).is_err(), "over the 4096-byte bound");
+        for tag in [0u8, 1, 5, 8, 18, 22, 71, 74, 255] {
+            assert!(read(&[tag, 0]).is_err(), "tag {tag}");
+        }
+    }
+    #[test]
+    #[ignore = "reads the local CLIP STUDIO material folder (PRISM_TEST_CSP_ROOT or the platform's)"]
+    fn every_local_downloaded_laf_parses() {
+        let root = std::env::var_os("PRISM_TEST_CSP_ROOT").map(std::path::PathBuf::from).or_else(crate::sut::library::default_root).unwrap();
+        let mut stack = vec![root.join("CLIPStudioCommon").join("Material")];
+        let mut count = 0;
+        while let Some(dir) = stack.pop() {
+            for e in std::fs::read_dir(&dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().is_some_and(|x| x == "laf") {
+                    let v = read_laf(&std::fs::read(&p).unwrap(), &prism_raster::Interrupt::NONE).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+                    assert!(v["actionArray"].is_array(), "{}", p.display());
+                    count += 1;
+                }
+            }
+        }
+        eprintln!("{count} LAF files parsed");
+        assert!(count > 0);
     }
     #[test]
     #[ignore = "reads PRISM_TEST_LAF, a local material never bundled in the repository"]

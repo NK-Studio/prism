@@ -379,6 +379,29 @@ fn effector_blob(supported: u32, active: u32) -> Vec<u8> {
     blob
 }
 #[test]
+fn spacing_and_thickness_effectors_import_their_pressure_response() {
+    let mut pressure = effector_blob(0x1f0, 0x10);
+    pressure[12..16].copy_from_slice(&40u32.to_be_bytes());
+    let fields = [
+        ("BrushIntervalEffector", Value::Blob(pressure.clone())),
+        ("BrushThicknessEffector", Value::Blob(pressure)),
+        ("BrushVerticalThicknes", Value::Integer(1)),
+    ];
+    let imported = read_sut(&variant_fields_fixture(&fields), "SUT", &prism_raster::Interrupt::NONE).unwrap();
+    let b = &imported.presets[0].brush;
+    let spacing = b.csp_spacing_dynamic.as_ref().expect("spacing response");
+    assert_eq!(spacing.control, prism_paint::Control::PenPressure);
+    assert!((spacing.minimum - 0.4).abs() < 1e-6);
+    let thickness = b.csp_thickness_dynamic.as_ref().expect("thickness response");
+    assert!(thickness.vertical && (thickness.dynamic.minimum - 0.4).abs() < 1e-6);
+    assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+    // An effector with no input stays off.
+    let off = [("BrushIntervalEffector", Value::Blob(effector_blob(0x1f0, 0))), ("BrushThicknessEffector", Value::Blob(effector_blob(0x1f0, 0)))];
+    let b = read_sut(&variant_fields_fixture(&off), "SUT", &prism_raster::Interrupt::NONE).unwrap().presets.remove(0).brush;
+    assert_eq!((b.csp_spacing_dynamic, b.csp_thickness_dynamic), (None, None));
+}
+
+#[test]
 fn pressure_effectors_require_supported_and_active_flags() {
     for (supported, active, expected) in [(0x1f0, 0, false), (0x1f0, 0x10, true), (0x1e0, 0x10, false), (0x1f0, 0x20, false)] {
         let blob = Value::Blob(effector_blob(supported, active));
@@ -500,9 +523,51 @@ fn tilt_effector_control_maps_to_an_independent_csp_tilt_response() {
     assert!(warnings.iter().any(|w| w.contains("tilt response could not be read")), "{warnings:?}");
     let (dynamics, _) = size(tilt_effector(0x30, Some(&pressure), None, 40, 100));
     assert!(dynamics.size.csp_tilt.is_none());
-    // Speed and random controls still warn.
-    let (_, warnings) = size(tilt_effector(0x70, Some(&pressure), Some(&tilt), 40, 100));
-    assert!(warnings.iter().any(|w| w.contains("additional input controls (0x40)")), "{warnings:?}");
+    // Velocity without its curve block is skipped like tilt, without a warning.
+    let (dynamics, warnings) = size(tilt_effector(0x70, Some(&pressure), Some(&tilt), 40, 100));
+    assert!(dynamics.size.csp_speed.is_none());
+    assert!(!warnings.iter().any(|w| w.contains("additional input controls")), "{warnings:?}");
+}
+
+/// A 48-byte-header effector with a pressure block and a velocity (third) block.
+fn speed_effector(active: u32, minimum: u32, speed: &[[f64; 2]]) -> Vec<u8> {
+    let mut blob = effector_blob(0x1f0, active);
+    blob[12..16].copy_from_slice(&80u32.to_be_bytes());
+    blob[20..24].copy_from_slice(&minimum.to_be_bytes());
+    let (p, v) = (curve_block(&[[0.0, 0.0], [1.0, 1.0]]), curve_block(speed));
+    blob[32..36].copy_from_slice(&(p.len() as u32).to_be_bytes());
+    blob[44..48].copy_from_slice(&(v.len() as u32).to_be_bytes());
+    blob.extend(p);
+    blob.extend(v);
+    blob
+}
+
+#[test]
+fn velocity_effector_control_maps_to_a_csp_speed_response() {
+    let falling = [[0.0, 1.0], [1.0, 0.0]];
+    let size = |blob: Vec<u8>| {
+        let bytes = fixture_with_effectors(true, Value::Blob(texture_refs("second.layer", 1)), Value::Blob(blob), Value::Null);
+        let imported = read_sut(&bytes, "SUT", &prism_raster::Interrupt::NONE).unwrap();
+        (imported.presets[0].brush.shape_dynamics.clone(), imported.warnings)
+    };
+    // 밀리펜's size: pressure (minimum 80 %) and velocity (minimum 60 %, falling curve).
+    let (dynamics, warnings) = size(speed_effector(0x50, 60, &falling));
+    assert!(dynamics.enabled && dynamics.size.control == Control::PenPressure);
+    let speed = dynamics.size.csp_speed.clone().expect("velocity response");
+    assert!((speed.minimum - 0.6).abs() < 1e-6);
+    assert!((speed.multiplier(0.0) - 1.0).abs() < 1e-6, "at rest");
+    let half = prism_paint::brush::CSP_SPEED_FULL / 2.0;
+    assert!((speed.multiplier(half) - 0.8).abs() < 1e-6, "half of full speed");
+    assert!((speed.multiplier(100.0) - 0.6).abs() < 1e-6, "past full speed");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    // Velocity alone is a dynamic without pen pressure.
+    let (dynamics, _) = size(speed_effector(0x40, 30, &falling));
+    assert_eq!(dynamics.size.control, Control::Off);
+    assert!(dynamics.size.csp_speed.is_some());
+    // An out-of-range minimum warns and drops only the velocity response.
+    let (dynamics, warnings) = size(speed_effector(0x50, 900, &falling));
+    assert!(dynamics.size.csp_speed.is_none() && dynamics.size.control == Control::PenPressure);
+    assert!(warnings.iter().any(|w| w.contains("velocity response could not be read")), "{warnings:?}");
 }
 
 #[test]
@@ -1141,6 +1206,38 @@ fn csp_water_edge_maps_native_fields_and_blur_needs_after_drag() {
     }
 }
 
+/// Unit 2 is pixels at any resolution (measured 2026-11-14), so a spray, watercolor edge or dual
+/// size in unit 2 is read correctly and must not warn (seven local brushes did: 가을낙엽_낙엽,
+/// 城シルエット 窓, 葉っぱブラシ, …). Untraced units still warn with their code.
+#[test]
+fn length_unit_2_is_pixels_without_a_warning() {
+    let unit_keys = ["BrushSpraySizeUnit", "BrushWaterEdgeRadiusUnit", "BrushWaterEdgeBlurUnit", "DualSizeUnit", "DualSpraySizeUnit"];
+    let read = |unit: i64| {
+        let mut fields = vec![
+            ("BrushUseSpray", Value::Integer(1)),
+            ("BrushSpraySize", number(12.0)),
+            ("BrushUseWaterEdge", Value::Integer(1)),
+            ("BrushWaterEdgeRadius", number(3.0)),
+            ("BrushWaterEdgeAfterDrag", Value::Integer(1)),
+            ("UseDualBrush", Value::Integer(1)),
+            ("DualBrushCompositeMode", Value::Integer(1)),
+            ("DualUseSpray", Value::Integer(1)),
+        ];
+        fields.extend(unit_keys.map(|k| (k, Value::Integer(unit))));
+        read_sut(&variant_fields_fixture(&fields), "SUT", &prism_raster::Interrupt::NONE).unwrap()
+    };
+    let pixels = read(2);
+    let b = &pixels.presets[0].brush;
+    assert_eq!(b.csp_spray.as_ref().unwrap().size, 12.0);
+    assert_eq!(b.csp_water_edge.as_ref().unwrap().radius, 3.0);
+    assert!(b.dual_brush.enabled);
+    assert!(!pixels.warnings.iter().any(|w| w.contains("Unit") || w.contains("units")), "{:?}", pixels.warnings);
+    let untraced = read(1);
+    for key in ["BrushSpraySizeUnit 1", "BrushWaterEdgeRadiusUnit 1", "BrushWaterEdgeBlurUnit 1", "size units", "particle size units"] {
+        assert!(untraced.warnings.iter().any(|w| w.contains(key)), "{key}: {:?}", untraced.warnings);
+    }
+}
+
 #[test]
 fn unsupported_original_material_falls_back_with_an_explicit_thumbnail_warning() {
     let mut bytes = fixture();
@@ -1201,6 +1298,33 @@ fn colour_tips_paint_their_shape_in_their_own_colours() {
     assert_eq!(white, Some(vec![255; 12]));
     assert!(!imported.warnings.iter().any(|w| w == COLOUR_TIP), "{:?}", imported.warnings);
     assert!(!imported.warnings.iter().any(|w| w.contains("thumbnail")));
+}
+
+#[test]
+fn gray_tips_keep_their_alpha_and_their_gray_for_the_sub_colour() {
+    use super::material::tests::{c2f, database_sized, tar, tile_fixture_planes};
+    let package = |gray: [u8; 4]| tar(&c2f(&database_sized(1, 1024, tile_fixture_planes(2, 2, &[255, 255, 255, 0], Some(&gray)))));
+    let import = |gray: [u8; 4]| {
+        let mut bytes = fixture();
+        let rows: Vec<_> = ["first.layer", "second.layer"].iter().map(|p| vec![text(p), Value::Blob(package(gray))]).collect();
+        leaf(&mut bytes, 4, &rows);
+        read_sut(&bytes, "SUT", &prism_raster::Interrupt::NONE).unwrap()
+    };
+    // Opaque gray (Chainmail's arc ends): coverage is the alpha, the gray rides in the colours.
+    let imported = import([0, 128, 255, 0]);
+    let b = &imported.presets[0].brush;
+    let TipShape::Sequence(tips) = &b.tip else { panic!("sequence expected") };
+    assert_eq!(tips[0].data, [65535, 65535, 65535, 0]);
+    let gray = b.csp_tip_colors.first().cloned().flatten().map(|c| c.rgb.into_vec());
+    assert_eq!(gray, Some(vec![0, 0, 0, 128, 128, 128, 255, 255, 255, 0, 0, 0]));
+    assert_eq!(b.csp_tip_grays, [true, true]);
+    assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+    // A gray material without visible gray stays a plain density tip.
+    let black = import([0, 0, 0, 0]);
+    let b = &black.presets[0].brush;
+    assert!(b.csp_tip_colors.is_empty() && b.csp_tip_grays.is_empty());
+    let TipShape::Sequence(tips) = &b.tip else { panic!("sequence expected") };
+    assert_eq!(tips[0].data, [65535, 65535, 65535, 0]);
 }
 
 #[test]

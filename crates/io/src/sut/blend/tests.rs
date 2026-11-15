@@ -33,6 +33,30 @@ fn constant_sub_color_is_imported_without_requiring_random_input() {
     let erase = import(&[("CompositeMode", int(27)), ("BrushChangePatternColor", int(1)), ("BrushSubColor", int(25))]);
     assert_eq!(erase.presets[0].brush.csp_sub_color, None);
 }
+#[test]
+fn pressure_driven_sub_color_is_imported_as_a_dynamic_blend() {
+    let mut pressure = effector(0x10, 0);
+    if let Value::Blob(blob) = &mut pressure {
+        blob[12..16].copy_from_slice(&20u32.to_be_bytes());
+    }
+    let imported = import(&[("BrushChangePatternColor", int(1)), ("BrushSubColor", int(50)), ("BrushSubColorEffector", pressure.clone())]);
+    let b = &imported.presets[0].brush;
+    assert_eq!(b.csp_sub_color, Some(0.5));
+    let dynamic = b.csp_sub_color_dynamic.as_ref().expect("pressure response");
+    assert_eq!(dynamic.control, prism_paint::Control::PenPressure);
+    assert!((dynamic.minimum - 0.2).abs() < 1e-6);
+    assert!(!b.color_dynamics.enabled);
+    assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+    // No amount: nothing to scale.
+    let none = import(&[("BrushChangePatternColor", int(1)), ("BrushSubColor", int(0)), ("BrushSubColorEffector", pressure)]);
+    assert_eq!((none.presets[0].brush.csp_sub_color, none.presets[0].brush.csp_sub_color_dynamic.is_some()), (None, false));
+    // With the random input it stays a jitter.
+    let random = import(&[("BrushChangePatternColor", int(1)), ("BrushSubColor", int(50)), ("BrushSubColorEffector", effector(0x90, -100))]);
+    let b = &random.presets[0].brush;
+    assert_eq!((b.csp_sub_color, b.csp_sub_color_dynamic.is_some()), (None, false));
+    assert!(b.color_dynamics.fg_bg.jitter > 0.0);
+}
+
 /// An effector blob with the `active` controls and the random minimum `random_min` %.
 fn effector(active: u32, random_min: i32) -> Value {
     let mut blob = vec![0; 48];

@@ -14,6 +14,7 @@ pub mod analysis;
 pub mod blend_if;
 pub mod comps;
 pub mod effects;
+pub mod figure;
 pub mod mode;
 pub mod pattern;
 pub mod slices;
@@ -37,6 +38,7 @@ pub use effects::{
     GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
 };
 pub use mode::{ColorTable, Duotone, DuotoneInk, StackMode};
+pub use figure::{Figure, FigureCamera, FigureLook, FigureModel, FigureScene, Joint};
 pub use pattern::Pattern;
 pub use special_ruler::{PerspectiveRuler, RulerKind, RulerRange, SpecialRuler, SpecialRulers, VanishTarget, VanishingPoint};
 pub use prism_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
@@ -605,6 +607,9 @@ pub struct Layer {
     pub video: Option<VideoData>,
     /// CLIP STUDIO special rulers attached to this layer (None = no rulers).
     pub special_rulers: Option<SpecialRulers>,
+    /// 3D figure layer: the posed figures its raster content was rendered from (None for any
+    /// other layer). Pixel edits are refused while it is set (see [`Document::effective_locks`]).
+    pub figure: Option<FigureScene>,
     /// CLIP STUDIO "Set as reference layer": brushes that do not cross reference lines stop at
     /// this layer's lines (`prism_engine::reference_layer`).
     pub reference: bool,
@@ -635,6 +640,7 @@ impl Layer {
             advanced: AdvancedBlending::default(),
             video: None,
             special_rulers: None,
+            figure: None,
             reference: false,
         }
     }
@@ -927,8 +933,12 @@ impl Document {
 
     /// The locks in force on the layer at `path`: its own and those of every group around it,
     /// since locking a group locks its contents.
+    /// A 3D figure layer's pixels count as locked: they are its render, re-made from the scene.
     pub fn locks_at(&self, path: &[usize]) -> Locks {
-        (1..=path.len()).filter_map(|n| self.layer_at(path.get(..n)?)).fold(Locks::default(), |a, l| a.union(l.locks))
+        (1..=path.len()).filter_map(|n| self.layer_at(path.get(..n)?)).fold(Locks::default(), |a, l| {
+            let own = if l.figure.is_some() { Locks { pixels: true, ..l.locks } } else { l.locks };
+            a.union(own)
+        })
     }
 
     /// [`Self::locks_at`] for the layer `id`.

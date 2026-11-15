@@ -173,6 +173,36 @@ fn image_tips_are_read_and_broken_ones_keep_the_brush() {
     assert!(!import_with(&garbage, &materials).presets[0].brush.dual_brush.enabled);
 }
 
+/// D/Kaminari and D/Raigeki: an adding (Normal) dual brush whose only tip material is missing
+/// painted its round stand-in as solid `DualSize` discs over the stroke.
+#[test]
+fn adding_dual_brush_without_any_tip_is_left_off() {
+    for (code, add) in [(0, CspDualAdd::Normal), (2, CspDualAdd::Add), (5, CspDualAdd::Lighten), (6, CspDualAdd::Screen)] {
+        let fields = [
+            ("UseDualBrush", int(1)),
+            ("DualBrushCompositeMode", int(code)),
+            ("DualUsePatternImage", int(1)),
+            ("DualPatternImageArray", Value::Blob(reference_blob(&["gone.layer"]))),
+            ("DualSize", Value::Number(746.0)),
+            ("DualRibbon", int(1)),
+        ];
+        let imported = import_with(&fields, &|| Ok(Vec::new()));
+        let b = &imported.presets[0].brush;
+        assert!(!b.dual_brush.enabled, "{code}");
+        assert_eq!(b.dual_brush.csp_add, None, "{code}");
+        assert!(
+            imported.warnings.iter().any(|w| w.contains("1 of 1 referenced SUT dual brush tips are missing; the adding dual brush is not applied")),
+            "{code}: {:?}",
+            imported.warnings
+        );
+        // Settings of a dual brush that is not applied are not reported as ignored.
+        assert!(!imported.warnings.iter().any(|w| w.contains("ribbon")), "{code}: {:?}", imported.warnings);
+        // With its tip present the same brush adds as before.
+        let present = import_with(&fields, &|| Ok(vec![material("gone.layer")]));
+        assert_eq!(present.presets[0].brush.dual_brush.csp_add, Some(add), "{code}");
+    }
+}
+
 #[test]
 fn hostile_dual_values_stay_bounded() {
     for value in [Value::Number(f64::NAN), Value::Number(-1e300), Value::Number(1e300), int(i64::MIN), Value::Text("x".into())] {

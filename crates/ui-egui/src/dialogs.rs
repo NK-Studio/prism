@@ -161,7 +161,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 ui.set_min_width(w.min(460.0));
             }
             if d.kind == DialogKind::NewDocument {
-                ui.set_min_width(800.0);
+                ui.set_min_width(crate::new_doc_ui::WIDTH);
             }
             // A single studio-branded About card, constrained to the window.
             let about_overview = about_card;
@@ -172,10 +172,12 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 ui.style_mut().visuals.override_text_color = Some(crate::about_ui::palette().text);
             }
             ui.set_max_width(wide.unwrap_or(if d.kind == DialogKind::NewDocument {
-                800.0
+                crate::new_doc_ui::WIDTH
             } else if about_overview {
                 crate::about_ui::width(ctx)
-            } else if d.kind == DialogKind::LayerStyle || d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
+            } else if d.kind == DialogKind::LayerStyle {
+                crate::layer_style::WIDTH
+            } else if d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
                 600.0
             } else {
                 440.0
@@ -251,12 +253,13 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 DialogKind::Command if fields.contains_key("__actions") => crate::actions::body(ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__form") => crate::view_cmds::form_body(ui, &mut fields),
                 DialogKind::Command => {}
-                DialogKind::LayerStyle => crate::layer_style::body(app, ui, &mut fields),
+                // Photoshop puts OK / Cancel in the dialog's own right-hand column.
+                DialogKind::LayerStyle => outcome = crate::layer_style::body(app, ui, &mut fields),
                 DialogKind::Error => {
                     ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
                 }
             }
-            if crate::color_picker_ui::owns(&fields) {
+            if crate::color_picker_ui::owns(&fields) || d.kind == DialogKind::LayerStyle {
                 if outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     outcome = Some(true);
                 }
@@ -299,7 +302,9 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                                 .or_else(|| crate::first_run_ui::owns(&fields).then(|| crate::first_run_ui::ok_label(&fields)))
                                 .unwrap_or(tl!("OK"))
                         };
-                        let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0);
+                        // An empty Saved tab in File › New has nothing to create.
+                        let ok_enabled = d.kind != DialogKind::NewDocument || crate::new_doc_ui::can_create(&fields);
+                        let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(ok_enabled);
                         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
                         let reset = ui.input(|i| i.modifiers.alt) && crate::adjust_dialog::resets(&fields);
                         let cancel_label = if reset {
@@ -323,7 +328,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                         }
                         // The setup's two steps: Next and Back move between them in this window.
                         let setup_step = crate::first_run_ui::owns(&fields).then(|| crate::first_run_ui::step(&fields));
-                        let enter = clicked.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let enter = clicked.is_none() && ok_enabled && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         match (setup_step, clicked) {
                             (Some(0), Some(ButtonRole::Default)) => {
                                 fields.insert("step".into(), Value::from(1));
@@ -485,7 +490,16 @@ fn confirm_inner(app: &mut PrismApp, id: u64) -> Result<Value, String> {
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
+            if !crate::new_doc_ui::can_create(&d.fields) {
+                return Err("choose a preset to create".into());
+            }
             let r = app.run("file.new", crate::new_doc_ui::command_params(&d.fields));
+            if r.is_ok() {
+                // File › New › Recent shows it next time. A refused snapshot (say, an unusual
+                // background) never stops the document itself.
+                let recent = json!({"name": crate::new_doc_ui::recent_name(&d.fields), "settings": crate::new_doc_ui::settings_params(&d.fields)});
+                let _ = app.run("document.recent.add", recent);
+            }
             if let Some(i) = app.session.active_index() {
                 app.update_view(i, |v| v.fit_pending = true);
             }

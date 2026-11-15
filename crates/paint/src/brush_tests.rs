@@ -80,6 +80,217 @@ fn csp_fixed_sub_color_is_seed_independent_and_survives_serialization() {
 }
 
 #[test]
+fn csp_sub_color_follows_pen_pressure() {
+    let pressure = Dynamic { minimum: 0.2, ..Dynamic::controlled(Control::PenPressure) };
+    let b = BrushSettings {
+        color: [1.0, 0.0, 0.0, 1.0],
+        background: [0.0, 0.0, 1.0, 1.0],
+        csp_sub_color: Some(0.5),
+        csp_sub_color_dynamic: Some(pressure),
+        ..brush()
+    };
+    let restored: BrushSettings = serde_json::from_value(serde_json::to_value(&b).unwrap()).unwrap();
+    assert_eq!(restored, b);
+    // The blend is 0.5 × (0.2 + 0.8 × pressure): 0.1 at no pressure, 0.5 at full pressure.
+    for (p, t) in [(0.0, 0.1), (0.5, 0.3), (1.0, 0.5)] {
+        let out = dabs_of(&restored, &[StrokePoint::new(10.0, 10.0, p), StrokePoint::new(30.0, 10.0, p)]);
+        assert!(!out.is_empty());
+        for dab in out {
+            for (actual, expected) in dab.color.iter().zip([1.0 - t, 0.0, t, 1.0]) {
+                assert!((actual - expected).abs() < 1e-5, "pressure {p}: {:?}", dab.color);
+            }
+        }
+    }
+    // A rising stroke moves from the main colour towards the sub colour.
+    let out = dabs_of(&b, &[StrokePoint::new(10.0, 10.0, 0.0), StrokePoint::new(60.0, 10.0, 1.0)]);
+    let blue: Vec<f32> = out.iter().map(|d| d.color[2]).collect();
+    assert!(blue.windows(2).all(|w| w[1] >= w[0] - 1e-6) && blue.last() > blue.first(), "{blue:?}");
+}
+
+#[test]
+fn csp_speed_scales_by_on_screen_speed() {
+    use crate::brush::CspSpeed;
+    let falling = PressureCurve::new(vec![[0.0, 1.0], [1.0, 0.0]]).unwrap();
+    let v = CspSpeed { minimum: 0.6, curve: Some(falling) };
+    let full = crate::brush::CSP_SPEED_FULL;
+    for (speed, expected) in [(0.0, 1.0), (0.2 * full, 0.92), (0.5 * full, 0.8), (full, 0.6), (50.0, 0.6), (-3.0, 1.0)] {
+        assert!((v.multiplier(speed) - expected).abs() < 1e-6, "{speed}: {}", v.multiplier(speed));
+    }
+    // Hostile values stay within 0..1.
+    for speed in [f32::NAN, f32::INFINITY] {
+        assert!((v.multiplier(speed) - 1.0).abs() < 1e-6);
+    }
+    let hostile = CspSpeed { minimum: f32::NAN, curve: None };
+    assert!((0.0..=1.0).contains(&hostile.multiplier(3.0)));
+    // A stroke: the dab diameter shrinks with the on-screen speed (document speed × zoom).
+    let mut b = BrushSettings { size: 20.0, spacing: 0.25, ..brush() };
+    b.shape_dynamics.enabled = true;
+    b.shape_dynamics.size.csp_speed = Some(v);
+    let diameter = |doc_px_per_ms: f64, zoom: f32| {
+        let pts: Vec<_> = (0..40).map(|i| StrokePoint { time: f64::from(i) * 8.0, ..StrokePoint::new(10.0 + f64::from(i) * 8.0 * doc_px_per_ms, 50.0, 1.0) }).collect();
+        let mut g = crate::dynamics::DabGenerator::new(&b, zoom);
+        let (mut dabs, mut dual) = (Vec::new(), Vec::new());
+        g.push(&pts, &mut dabs, &mut dual);
+        g.finish(&mut dabs, &mut dual);
+        dabs.get(dabs.len() / 2).map(|d| 2.0 * d.radius).unwrap()
+    };
+    assert!((diameter(0.0, 1.0) - 20.0).abs() < 0.1, "{}", diameter(0.0, 1.0));
+    let half = f64::from(full) / 2.0;
+    assert!((diameter(half, 1.0) - 16.0).abs() < 0.1, "{}", diameter(half, 1.0));
+    assert!((diameter(half, 2.0) - 12.0).abs() < 0.1, "twice the zoom, twice the on-screen speed: {}", diameter(half, 2.0));
+}
+
+/// CLIP STUDIO's velocity input at an input point is the mean speed of the two segments before
+/// it, and steps between points interpolate it (measured with 밀리펜, docs/sut-analysis.md ›
+/// Effector velocity input).
+#[test]
+fn stabilized_velocity_holds_its_width_through_the_pen_up_catch_up() {
+    // Velocity alone on the size, stabilization 15: CLIP STUDIO keeps one width from the lift
+    // to the end of the line (docs/sut-analysis.md › Effector velocity input › Stabilized
+    // velocity).
+    let mut b = BrushSettings { size: 10.0, spacing: 0.1, csp_correction: true, ..brush() };
+    b.csp_stabilizer = Some(crate::CspStabilizer { level: 15, ..Default::default() });
+    b.shape_dynamics.enabled = true;
+    b.shape_dynamics.size.csp_speed = Some(CspSpeed { minimum: 0.6, curve: Some(PressureCurve::new(vec![[0.0, 1.0], [1.0, 0.0]]).unwrap()) });
+    let mut x = 0.0;
+    let pts: Vec<_> = (0..70)
+        .map(|i| {
+            if i > 0 {
+                x += if i <= 60 { 4.0 } else { 64.0 };
+            }
+            StrokePoint { time: f64::from(i) * 8.0, ..StrokePoint::new(x, 50.0, 1.0) }
+        })
+        .collect();
+    let mut g = crate::dynamics::DabGenerator::new(&b, 1.0);
+    let (mut live, mut dual) = (Vec::new(), Vec::new());
+    g.push(&pts, &mut live, &mut dual);
+    let lifted = live.last().unwrap().radius;
+    let mut tail = Vec::new();
+    g.finish(&mut tail, &mut dual);
+    assert!(tail.len() > 10, "the catch-up lays dabs: {}", tail.len());
+    assert!(tail.iter().all(|d| (d.radius - lifted).abs() < 0.05), "{lifted} then {:?}", tail.iter().map(|d| d.radius).collect::<Vec<_>>());
+    assert!(lifted < 4.6, "thinned by the input before the lift: {lifted}");
+}
+
+#[test]
+fn reads_speed_finds_a_velocity_input_on_any_dynamic() {
+    let speed = Some(CspSpeed { minimum: 0.5, curve: None });
+    let mut b = BrushSettings::default();
+    assert!(!b.reads_speed());
+    b.transfer.flow.csp_speed = speed.clone();
+    assert!(b.reads_speed());
+    let b = BrushSettings {
+        csp_thickness_dynamic: Some(crate::CspThickness { dynamic: Dynamic { csp_speed: speed, ..Dynamic::default() }, vertical: false }),
+        ..Default::default()
+    };
+    assert!(b.reads_speed());
+}
+
+#[test]
+fn csp_speed_is_averaged_over_two_segments_and_interpolated() {
+    use crate::dynamics::{PathWalker, StepInput};
+    let mut walker = PathWalker::new(None).with_zoom(1.0);
+    let mut seen: Vec<(f64, f32)> = Vec::new();
+    let mut out = |s: StepInput| {
+        seen.push((s.point.x, s.speed));
+        16.0
+    };
+    // 0.5 px/ms for four 8 ms samples, then 8 px/ms.
+    let mut x = 0.0;
+    for i in 0..=4 {
+        walker.push(StrokePoint { time: f64::from(i) * 8.0, ..StrokePoint::new(x, 0.0, 1.0) }, &mut out);
+        x += 4.0;
+    }
+    x -= 4.0;
+    for i in 5..=7 {
+        x += 64.0;
+        walker.push(StrokePoint { time: f64::from(i) * 8.0, ..StrokePoint::new(x, 0.0, 1.0) }, &mut out);
+    }
+    let at = |x: f64| seen.iter().find(|(px, _)| (px - x).abs() < 1e-6).map(|(_, v)| *v).unwrap();
+    // Stroke start: nothing before the first segment counts as rest.
+    assert!((at(0.0) - 0.0).abs() < 1e-6);
+    assert!((at(16.0) - 0.5).abs() < 1e-6, "{seen:?}");
+    // The first fast point averages the slow segment with the fast one; the next reaches 8.
+    assert!((at(80.0) - 4.25).abs() < 1e-6, "{seen:?}");
+    assert!((at(144.0) - 8.0).abs() < 1e-6, "{seen:?}");
+    // Halfway along the first fast segment: halfway between the two ends.
+    assert!((at(48.0) - (0.5 + 4.25) / 2.0).abs() < 1e-6, "{seen:?}");
+}
+
+#[test]
+fn csp_speed_is_distance_over_time_with_an_8_ms_rest_before_the_stroke() {
+    use crate::dynamics::{PathWalker, StepInput};
+    // The velocity input of the step laid at `x` (steps every 4 px).
+    let speed_at = |pts: &[(f64, f64)], x: f64| {
+        let mut walker = PathWalker::new(None).with_zoom(1.0);
+        let mut seen: Vec<(f64, f32)> = Vec::new();
+        for &(px, time) in pts {
+            walker.push(StrokePoint { time, ..StrokePoint::new(px, 0.0, 1.0) }, &mut |s: StepInput| {
+                seen.push((s.point.x, s.speed));
+                4.0
+            });
+        }
+        seen.iter().find(|(px, _)| (*px - x).abs() < 1e-6).map(|(_, s)| *s).unwrap()
+    };
+    // 128 px in 16 ms from rest: 128 / (16 + 8) at the first point, then 8 px/ms.
+    let fast = [(0.0, 0.0), (128.0, 16.0), (256.0, 32.0)];
+    assert!((speed_at(&fast, 128.0) - 128.0 / 24.0).abs() < 1e-4);
+    assert!((speed_at(&fast, 256.0) - 8.0).abs() < 1e-4);
+    // A pen resting 16 ms first: its samples are segments at speed 0.
+    let rested = [(0.0, 0.0), (0.0, 8.0), (0.0, 16.0), (64.0, 24.0), (128.0, 32.0)];
+    assert!((speed_at(&rested, 64.0) - 4.0).abs() < 1e-4);
+    assert!((speed_at(&rested, 128.0) - 8.0).abs() < 1e-4);
+    // Unequal intervals: distance over time, not the mean of the two speeds (0.5 and 8 px/ms).
+    let uneven = [(0.0, 0.0), (4.0, 8.0), (8.0, 16.0), (136.0, 32.0)];
+    assert!((speed_at(&uneven, 136.0) - 132.0 / 24.0).abs() < 1e-4);
+}
+
+#[test]
+fn csp_spacing_follows_pen_pressure() {
+    // Spacing 10 % at full pressure, down to 40 % of it with no pressure (Chainmail 2-C).
+    let b = BrushSettings {
+        size: 20.0,
+        spacing: 0.1,
+        csp_spacing_dynamic: Some(Dynamic { minimum: 0.4, ..Dynamic::controlled(Control::PenPressure) }),
+        ..brush()
+    };
+    let count = |p: f32| dabs_of(&b, &[StrokePoint::new(0.0, 10.0, p), StrokePoint::new(400.0, 10.0, p)]).len() as f32;
+    let (full, light) = (count(1.0), count(0.3));
+    // 400 px at 2 px a dab, and at 2 × (0.4 + 0.6 × 0.3) = 1.16 px.
+    assert!((full - 201.0).abs() <= 2.0, "{full}");
+    assert!((light / full - 1.0 / 0.58).abs() < 0.05, "{light} / {full}");
+    // Hostile minimums and pressures keep a positive step.
+    let hostile = BrushSettings { csp_spacing_dynamic: Some(Dynamic { minimum: f32::NAN, ..Dynamic::controlled(Control::PenPressure) }), ..b };
+    let n = dabs_of(&hostile, &[StrokePoint::new(0.0, 10.0, f32::NAN), StrokePoint::new(40.0, 10.0, -3.0)]).len();
+    assert!(n > 0 && n < 10_000, "{n}");
+}
+
+#[test]
+fn csp_thickness_follows_pen_pressure_on_its_axis() {
+    let solid = TipShape::Sampled(GrayTile::from_fn(40, 40, |_, _| 1.0));
+    let width_height = |vertical: bool, p: f32| {
+        let b = BrushSettings {
+            size: 40.0,
+            tip: solid.clone(),
+            csp_tip_scale: Some([1.0, 1.0]),
+            csp_thickness_dynamic: Some(crate::CspThickness { dynamic: Dynamic::controlled(Control::PenPressure), vertical }),
+            ..brush()
+        };
+        let mut s = Surface::new(PixelFormat::RGBA32F);
+        render_stroke(&mut s, &b, &[StrokePoint::new(50.0, 50.0, p)], None, false, 1.0);
+        let inked = |x: i32, y: i32| s.rgba(x, y)[3] > 0.5;
+        ((0..100).filter(|x| inked(*x, 50)).count(), (0..100).filter(|y| inked(50, *y)).count())
+    };
+    let (w, h) = width_height(false, 1.0);
+    assert!((38..=42).contains(&w) && (38..=42).contains(&h), "{w}×{h}");
+    // A quarter of the pressure: a quarter of the width, the height unchanged; and the reverse.
+    let (w, h) = width_height(false, 0.25);
+    assert!((9..=11).contains(&w) && (38..=42).contains(&h), "{w}×{h}");
+    let (w, h) = width_height(true, 0.25);
+    assert!((38..=42).contains(&w) && (9..=11).contains(&h), "{w}×{h}");
+}
+
+#[test]
 fn csp_fixed_sub_color_renders_at_every_depth() {
     let b = BrushSettings { size: 10.0, color: [1.0, 0.0, 0.0, 1.0], background: [0.0, 0.0, 1.0, 1.0], csp_sub_color: Some(0.25), ..brush() };
     for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
@@ -2022,4 +2233,231 @@ fn csp_random_scales_each_dab_between_its_minimum_and_full_size() {
     assert!(radii.iter().all(|r| (10.0 - 1e-3..=20.0 + 1e-3).contains(r)), "{radii:?}");
     assert!(radii.iter().any(|r| *r < 15.0) && radii.iter().any(|r| *r > 15.0), "random sizes, not one size");
     assert_eq!(serde_json::from_value::<Dynamic>(serde_json::to_value(&b.shape_dynamics.size).unwrap()).unwrap().csp_random, Some(0.5));
+}
+
+/// CLIP STUDIO PAINT with a 700 px colour tip drawn 78 px across (가을낙엽_낙엽): medium and
+/// strong anti-aliasing keep the tip's thin dark outline (docs/sut-analysis.md › Image tip
+/// anti-aliasing). They read the mip level at least twice the dab's size; a level at or below the
+/// dab's size washes a thin line out.
+#[test]
+fn csp_image_tip_anti_aliasing_keeps_a_thin_line() {
+    // A 512 px tip holding a ring 16 texels wide, drawn 64 px across: the ring is 2 px wide.
+    let ring = GrayTile::from_fn(512, 512, |x, y| {
+        let r = (x as f32 - 255.5).hypot(y as f32 - 255.5);
+        if (200.0..216.0).contains(&r) { 1.0 } else { 0.0 }
+    });
+    let peak = |level: u8| {
+        let b = BrushSettings { size: 64.0, pressure_size: false, csp_anti_alias: Some(level), tip: TipShape::Sampled(ring.clone()), ..brush() };
+        let s = paint(&b, &[StrokePoint::new(50.0, 50.0, 1.0)], 100, 100);
+        (0..100).map(|x| s.rgba(x, 50)[3]).fold(0.0, f32::max)
+    };
+    for level in 0..=3 {
+        assert!(peak(level) > 0.95, "level {level}: {}", peak(level));
+    }
+    // Medium and strong still smooth the edge: some pixels are partly covered.
+    let b = BrushSettings { size: 64.0, pressure_size: false, csp_anti_alias: Some(3), tip: TipShape::Sampled(ring.clone()), ..brush() };
+    let s = paint(&b, &[StrokePoint::new(50.0, 50.0, 1.0)], 100, 100);
+    assert!((0..100).any(|y| (0..100).any(|x| (0.05..0.95).contains(&s.rgba(x, y)[3]))));
+}
+
+/// CLIP STUDIO PAINT, 가을낙엽_낙엽 (docs/sut-analysis.md › 가을낙엽): a brush whose tip turns
+/// with the direction of the line lays nothing for a tap, and a stroke ends with its last spaced
+/// dab: the stabilizer's pen-up samples lay nothing in place.
+#[test]
+fn csp_line_following_brush_ignores_taps_and_does_not_pile_dabs_at_pen_up() {
+    let mut follows = BrushSettings {
+        size: 50.0,
+        spacing: 1.0,
+        pressure_size: false,
+        csp_correction: true,
+        csp_stabilizer: Some(crate::CspStabilizer { level: 5, ..Default::default() }),
+        ..brush()
+    };
+    follows.shape_dynamics.enabled = true;
+    follows.shape_dynamics.angle.control = Control::Direction;
+    assert!(follows.csp_follows_line());
+    let dabs = |b: &BrushSettings, pts: &[StrokePoint]| {
+        let mut g = crate::dynamics::DabGenerator::new(b, 1.0);
+        let (mut dabs, mut dual) = (Vec::new(), Vec::new());
+        g.push(pts, &mut dabs, &mut dual);
+        g.finish(&mut dabs, &mut dual);
+        dabs
+    };
+    let at = |x: f64, pressure: f32, time: f64| StrokePoint { time, ..StrokePoint::new(x, 100.0, pressure) };
+    // Taps: one sample, and a pen pressed harder in place.
+    assert!(dabs(&follows, &[at(100.0, 1.0, 0.0)]).is_empty());
+    let pressed: Vec<_> = (0..20).map(|i| at(100.0, 0.05 * f32::from(i as u8 + 1), f64::from(i) * 8.0)).collect();
+    assert!(dabs(&follows, &pressed).is_empty());
+    // A 500 px line: a dab every 50 px and nothing extra where the pen lifts.
+    let line: Vec<_> = (0..=125).map(|i| at(100.0 + f64::from(i) * 4.0, 1.0, f64::from(i) * 8.0)).collect();
+    let laid = dabs(&follows, &line);
+    assert!((10..=11).contains(&laid.len()), "{}", laid.len());
+    for pair in laid.windows(2) {
+        assert!((pair[1].center.x - pair[0].center.x) > 40.0, "{:?}", laid.iter().map(|d| d.center.x).collect::<Vec<_>>());
+    }
+    // The same brush without the direction input still draws its tap, and a Photoshop brush
+    // (no CSP correction) still lays a dab for a pressure change in place.
+    let mut fixed = follows.clone();
+    fixed.shape_dynamics.angle.control = Control::Off;
+    assert_eq!(dabs(&fixed, &[at(100.0, 1.0, 0.0)]).len(), 1);
+    // With post correction CLIP STUDIO draws the tap too (Chainmail 1 and 2 2-C, measured).
+    let corrected = BrushSettings { csp_post_correction: Some(10.0), ..follows.clone() };
+    assert!(!corrected.csp_follows_line());
+    assert_eq!(dabs(&corrected, &[at(100.0, 1.0, 0.0)]).len(), 1);
+    let photoshop = BrushSettings { size: 50.0, spacing: 1.0, ..brush() };
+    assert!(dabs(&photoshop, &pressed).len() > 1);
+}
+
+/// CLIP STUDIO lays each dab onto the layer in turn (가을낙엽_낙엽: a later leaf covers an
+/// earlier one, docs/sut-analysis.md › 가을낙엽). A CSP brush whose dabs carry their own colour
+/// shows the last dab over a pixel; a Photoshop brush keeps its own build-up.
+#[test]
+fn csp_per_dab_colours_paint_over_earlier_dabs() {
+    let mut b = BrushSettings { size: 40.0, hardness: 1.0, spacing: 0.25, pressure_size: false, csp_correction: true, csp_anti_alias: Some(0), ..brush() };
+    b.color = [1.0, 0.0, 0.0, 1.0];
+    b.color_dynamics.enabled = true;
+    b.color_dynamics.per_tip = true;
+    b.color_dynamics.hue_jitter = 1.0;
+    // Dabs every 10 px from x = 50, 40 px across. Only the first dab reaches x = 35. At x = 65
+    // the first dab is the earliest of five and the dab at 80 the latest.
+    let pts = [StrokePoint::new(50.0, 50.0, 1.0), StrokePoint::new(150.0, 50.0, 1.0)];
+    let same = |a: [f32; 4], b: [f32; 4]| (0..3).all(|i| (a[i] - b[i]).abs() < 0.02);
+    let s = paint(&b, &pts, 200, 100);
+    let (first, later) = (s.rgba(35, 50), s.rgba(65, 50));
+    assert!(first[3] > 0.99 && later[3] > 0.99);
+    assert!(!same(first, later), "the first dab still shows at x = 65: {first:?} {later:?}");
+    b.csp_correction = false;
+    let s = paint(&b, &pts, 200, 100);
+    assert!(same(s.rgba(35, 50), s.rgba(65, 50)));
+}
+
+/// The one-pass colour-tip rasteriser gives exactly the coverage of `rasterize` and the colours of
+/// `rasterize_tip_color`, at every anti-aliasing level, angle and flip; other tips decline it.
+#[test]
+fn csp_colour_tip_one_pass_equals_the_separate_passes() {
+    let (w, h) = (61u32, 47u32);
+    let tip = GrayTile::from_fn(w, h, |x, y| {
+        let r = (x as f32 - 30.0).hypot(y as f32 - 23.0);
+        if r < 9.0 { 1.0 } else if r < 21.0 { ((x * 7 + y * 13) % 11) as f32 / 10.0 } else { 0.0 }
+    });
+    let rgb: Vec<u8> = (0..w * h).flat_map(|i| [(i * 37 % 256) as u8, (i * 91 % 256) as u8, (i * 53 % 256) as u8]).collect();
+    for level in 0..=3u8 {
+        let mut b = BrushSettings {
+            size: 53.0,
+            spacing: 0.3,
+            pressure_size: false,
+            csp_correction: true,
+            csp_anti_alias: Some(level),
+            tip: TipShape::Sampled(tip.clone()),
+            csp_tip_colors: vec![Some(crate::CspTipColor { width: w, height: h, rgb: rgb.clone().into() })],
+            ..brush()
+        };
+        b.shape_dynamics.enabled = true;
+        b.shape_dynamics.angle.jitter = 1.0;
+        b.shape_dynamics.flip_x_jitter = true;
+        b.shape_dynamics.flip_y_jitter = true;
+        b.shape_dynamics.size.jitter = 0.6;
+        let ctx = BrushContext::new(&b);
+        let mut g = crate::dynamics::DabGenerator::new(&b, 1.0);
+        let (mut dabs, mut dual) = (Vec::new(), Vec::new());
+        g.push(&[StrokePoint::new(40.3, 40.7, 1.0), StrokePoint::new(260.9, 91.2, 1.0)], &mut dabs, &mut dual);
+        g.finish(&mut dabs, &mut dual);
+        assert!(dabs.len() > 8, "{}", dabs.len());
+        for d in &dabs {
+            let rect = ctx.dab_rect(d, false);
+            let (mut cov, mut colour) = (Vec::new(), Vec::new());
+            ctx.rasterize(d, false, rect, &mut cov);
+            assert!(ctx.rasterize_tip_color(d, rect, &mut colour));
+            let (mut cov1, mut colour1) = (Vec::new(), Vec::new());
+            assert!(ctx.rasterize_colored(d, rect, &mut cov1, &mut colour1), "level {level}");
+            assert!(cov.iter().any(|v| *v > 0.0));
+            assert_eq!(cov, cov1, "level {level}");
+            assert_eq!(colour, colour1, "level {level}");
+        }
+    }
+    // A ribbon's slices: the same, at every level, with flips and a turning path.
+    for level in [None, Some(0u8), Some(1), Some(2), Some(3)] {
+        let mut b = BrushSettings {
+            size: 48.0,
+            spacing: 0.2,
+            pressure_size: false,
+            csp_correction: true,
+            csp_anti_alias: level,
+            tip: TipShape::Sampled(tip.clone()),
+            csp_tip_colors: vec![Some(crate::CspTipColor { width: w, height: h, rgb: rgb.clone().into() })],
+            csp_ribbon: Some(crate::csp_ribbon::CspRibbon::from_rotation(0.0)),
+            ..brush()
+        };
+        b.shape_dynamics.enabled = true;
+        b.shape_dynamics.flip_x_jitter = true;
+        b.shape_dynamics.flip_y_jitter = true;
+        let ctx = BrushContext::new(&b);
+        let mut g = crate::dynamics::DabGenerator::new(&b, 1.0);
+        let (mut dabs, mut dual) = (Vec::new(), Vec::new());
+        let pts: Vec<StrokePoint> = (0..=30).map(|i| StrokePoint::new(60.3 + f64::from(i) * 8.0, 90.7 + (f64::from(i) * 0.4).sin() * 40.0, 1.0)).collect();
+        g.push(&pts, &mut dabs, &mut dual);
+        g.finish(&mut dabs, &mut dual);
+        let mut slices = 0;
+        for d in dabs.iter().filter(|d| d.ribbon.is_some()) {
+            let rect = ctx.dab_rect(d, false);
+            let (mut cov, mut colour) = (Vec::new(), Vec::new());
+            ctx.rasterize(d, false, rect, &mut cov);
+            assert!(ctx.rasterize_tip_color(d, rect, &mut colour));
+            let (mut cov1, mut colour1) = (Vec::new(), Vec::new());
+            assert!(ctx.rasterize_colored(d, rect, &mut cov1, &mut colour1), "ribbon level {level:?}");
+            assert_eq!(cov, cov1, "ribbon level {level:?}");
+            assert_eq!(colour, colour1, "ribbon level {level:?}");
+            slices += usize::from(cov.iter().any(|v| *v > 0.0));
+        }
+        assert!(slices > 8, "ribbon level {level:?}: {slices}");
+    }
+    // A tip without colours, and Photoshop sampling, keep the separate passes.
+    let plain =BrushSettings { size: 30.0, csp_anti_alias: Some(2), tip: TipShape::Sampled(tip.clone()), ..brush() };
+    let ctx = BrushContext::new(&plain);
+    let d = crate::dabs(&Stroke { brush: plain.clone(), points: vec![StrokePoint::new(20.0, 20.0, 1.0)] });
+    let (mut cov, mut colour) = (Vec::new(), Vec::new());
+    assert!(d.first().is_some_and(|d| !ctx.rasterize_colored(d, ctx.dab_rect(d, false), &mut cov, &mut colour)));
+}
+
+/// Dabs rasterised as a batch on all cores (a whole stroke pushed at once) and rows of a large
+/// dab rasterised in parallel give the pixels of dabs rasterised one at a time (the stroke fed
+/// point by point): a colour tip, a plain image tip, a computed tip and a ribbon, small and large.
+#[test]
+fn batched_and_row_parallel_dabs_equal_dabs_laid_one_at_a_time() {
+    let (w, h) = (64u32, 40u32);
+    let tip = GrayTile::from_fn(w, h, |x, y| if (x / 5 + y / 3) % 3 == 0 { 0.0 } else { ((x * 5 + y * 3) % 7) as f32 / 6.0 });
+    let rgb: Vec<u8> = (0..w * h).flat_map(|i| [(i * 29 % 256) as u8, (i * 71 % 256) as u8, (i * 113 % 256) as u8]).collect();
+    let colours = vec![Some(crate::CspTipColor { width: w, height: h, rgb: rgb.into() })];
+    let image = |size: f32| BrushSettings { size, spacing: 0.2, pressure_size: false, csp_correction: true, csp_anti_alias: Some(2), tip: TipShape::Sampled(tip.clone()), ..brush() };
+    let mut brushes = Vec::new();
+    for size in [24.0, 260.0] {
+        let mut turning = image(size);
+        turning.shape_dynamics.enabled = true;
+        turning.shape_dynamics.angle.jitter = 1.0;
+        brushes.push(BrushSettings { csp_tip_colors: colours.clone(), ..turning.clone() });
+        brushes.push(turning);
+        brushes.push(BrushSettings { tip: TipShape::Round, hardness: 0.6, ..image(size) });
+        brushes.push(BrushSettings { csp_ribbon: Some(crate::csp_ribbon::CspRibbon::from_rotation(0.0)), csp_tip_colors: colours.clone(), ..image(size) });
+    }
+    let pts: Vec<StrokePoint> = (0..=40).map(|i| StrokePoint::new(150.0 + f64::from(i) * 9.0, 200.0 + f64::from(i % 7) * 6.0, 1.0)).collect();
+    for (k, b) in brushes.iter().enumerate() {
+        let at_once = paint(b, &pts, 700, 500);
+        let mut one_by_one = Surface::new(PixelFormat::RGBA32F);
+        let pre = one_by_one.clone();
+        let mut r = StrokeRenderer::new(b, Some(one_by_one.format()), 1.0).with_full_path(&pts).with_mixing_source(&pre);
+        for p in &pts {
+            r.push(std::slice::from_ref(p));
+        }
+        r.finish();
+        r.composite(&pre, &mut one_by_one, None, false, true);
+        let mut inked = 0;
+        for y in (0..500).step_by(3) {
+            for x in (0..700).step_by(3) {
+                let (a, b) = (at_once.rgba(x, y), one_by_one.rgba(x, y));
+                assert_eq!(a, b, "brush {k} at {x},{y}");
+                inked += usize::from(a[3] > 0.0);
+            }
+        }
+        assert!(inked > 200, "brush {k}: {inked}");
+    }
 }

@@ -135,6 +135,12 @@ pub struct BrushContext {
     tip_means: Vec<Option<[f32; 3]>>,
     /// `tip_colors` trimmed like `ribbon_tips`, for ribbon slices.
     ribbon_colors: Vec<Option<Arc<[Mips; 3]>>>,
+    /// Which prepared colour tips are CSP gray tips (their planes hold the gray): see
+    /// [`BrushSettings::csp_tip_grays`]. Empty when none is.
+    tip_grays: Vec<bool>,
+    /// A gray tip's density `alpha × (1 − gray)`, laid instead of its alpha where it paints no
+    /// colours of its own (erasing, colour mixing, masks). Per prepared slot.
+    gray_density: Vec<Option<Arc<Mips>>>,
     /// CSP Ribbon: each tip without the transparent padding line at its end along the ribbon,
     /// and the factors from the full tip's normalised coordinates to the trimmed one's.
     ribbon_tips: Vec<(Arc<Mips>, [f32; 2])>,
@@ -235,7 +241,7 @@ impl BrushContext {
         };
         let n = samples(&brush.tip).saturating_add(samples(&brush.dual_brush.tip)).saturating_add(texture_samples);
         let colors = brush.csp_tip_colors.iter().flatten().fold(0usize, |n, c| n.saturating_add(c.rgb.len()));
-        if n > 0 && n <= 4 << 20 && colors <= 12 << 20 {
+        if n > 0 && n <= 8 << 20 && colors <= 24 << 20 {
             drop(Self::new(brush));
         }
     }
@@ -263,13 +269,28 @@ impl BrushContext {
         let (texture, texture_scale) = prepare_pattern(&brush);
         // Colour tips paint their own colours (except when erasing): per pixel, or their mean
         // colour when the brush mixes colours (the mixing reservoir holds one colour).
-        let prepared: Vec<(usize, &GrayTile)> = match &brush.tip {
-            _ if brush.erase || brush.csp_tip_colors.is_empty() => Vec::new(),
+        let all_tips: Vec<(usize, &GrayTile)> = match &brush.tip {
+            _ if brush.csp_tip_colors.is_empty() => Vec::new(),
             TipShape::Sampled(g) if g.is_valid() => vec![(0, g)],
             TipShape::Sequence(tips) => tips.iter().enumerate().take(64).filter(|(_, g)| g.is_valid()).collect(),
             _ => Vec::new(),
         };
+        let prepared: &[(usize, &GrayTile)] = if brush.erase { &[] } else { &all_tips };
         let colors = |i: usize| brush.csp_tip_colors.get(i).and_then(Option::as_ref);
+        let gray = |i: usize| colors(i).is_some() && brush.csp_tip_grays.get(i).copied().unwrap_or(false);
+        let tip_grays: Vec<bool> = prepared.iter().map(|(i, _)| gray(*i)).collect();
+        // Built for erasing too, which lays no colours.
+        let gray_density: Vec<Option<Arc<Mips>>> = all_tips
+            .iter()
+            .map(|(i, g)| {
+                let c = colors(*i).filter(|c| gray(*i) && c.fits(g))?;
+                let data = g.data.iter().zip(c.rgb.chunks_exact(3)).map(|(a, px)| {
+                    let v = px.first().copied().unwrap_or(0);
+                    ((u32::from(*a) * u32::from(255 - v) + 127) / 255) as u16
+                });
+                Some(Arc::new(Mips::new(&GrayTile { width: g.width, height: g.height, data: data.collect() })))
+            })
+            .collect();
         let tip_means: Vec<_> = prepared.iter().map(|(i, g)| colors(*i)?.mean(g)).collect();
         let planes: Vec<_> = if brush.csp_mixing.is_some() { Vec::new() } else { prepared.iter().map(|(i, g)| colors(*i)?.premultiplied(g)).collect() };
         let tip_colors: Vec<_> = planes.iter().map(|p| p.as_ref().map(|p| Arc::new(p.each_ref().map(Mips::new)))).collect();
@@ -291,6 +312,8 @@ impl BrushContext {
             dual_sequence: if brush.dual_brush.enabled { sequence(&brush.dual_brush.tip) } else { Vec::new() },
             tip_colors: if tip_colors.iter().any(Option::is_some) { tip_colors } else { Vec::new() },
             tip_means: if tip_means.iter().any(Option::is_some) { tip_means } else { Vec::new() },
+            tip_grays: if tip_grays.iter().any(|g| *g) { tip_grays } else { Vec::new() },
+            gray_density: if gray_density.iter().any(Option::is_some) { gray_density } else { Vec::new() },
             ribbon_colors: if ribbon_colors.iter().any(Option::is_some) { ribbon_colors } else { Vec::new() },
             ribbon_tips,
             texture,
@@ -384,7 +407,14 @@ impl BrushContext {
         if dual {
             return [1.0; 2];
         }
-        self.brush.csp_tip_scale.map_or([1.0; 2], |scale| {
+        self.brush.csp_tip_scale.map_or([1.0; 2], |mut scale| {
+            // Thickness by pen input scales the thickness axis of this dab.
+            if let Some(t) = &self.brush.csp_thickness_dynamic {
+                let k = if d.thickness.is_finite() { d.thickness.clamp(0.0, 1.0) } else { 1.0 };
+                if let Some(axis) = scale.get_mut(usize::from(t.vertical)) {
+                    *axis *= k;
+                }
+            }
             // CSP keeps the thickness axis radius at least one pixel, without
             // restricting expansion to the base radius.
             let floor = (1.0 / d.radius.max(0.5)).min(1.0);
@@ -402,14 +432,37 @@ impl BrushContext {
         !self.tip_means.is_empty()
     }
 
-    /// The mean colour of dab `d`'s colour tip (`None`: it paints in the brush colour).
-    pub fn tip_mean_color(&self, d: &Dab) -> Option<[f32; 3]> {
-        let slot = match (d.ribbon, self.sequence.len()) {
+    /// The prepared tip slot dab `d` draws (a ribbon slice's tip, or the sequence's).
+    fn color_slot(&self, d: &Dab) -> usize {
+        match (d.ribbon, self.sequence.len()) {
             (_, 0) => 0,
             (Some(slice), n) => slice.tip as usize % n,
             (None, _) => self.tip_slot(d),
-        };
+        }
+    }
+
+    /// The mean colour of dab `d`'s colour tip (`None`: it paints in the brush colour, also for a
+    /// gray tip, whose colours follow the dab's).
+    pub fn tip_mean_color(&self, d: &Dab) -> Option<[f32; 3]> {
+        let slot = self.color_slot(d);
+        if self.tip_grays.get(slot).copied().unwrap_or(false) {
+            return None;
+        }
         self.tip_means.get(slot).copied().flatten()
+    }
+
+    /// Whether dab `d` draws a CSP gray tip: [`Self::rasterize_tip_color`] then gives its gray.
+    pub fn tip_is_gray(&self, d: &Dab) -> bool {
+        self.tip_grays.get(self.color_slot(d)).copied().unwrap_or(false)
+    }
+
+    /// Dab `d`'s gray-tip density (`alpha × (1 − gray)`), when it draws a gray tip outside a ribbon.
+    fn gray_density_for(&self, d: &Dab) -> Option<&Mips> {
+        if d.ribbon.is_some() || self.gray_density.is_empty() {
+            return None;
+        }
+        let slot = if self.sequence.is_empty() { 0 } else { self.tip_slot(d) };
+        self.gray_density.get(slot).and_then(Option::as_deref)
     }
 
     /// The straight RGB of dab `d`'s colour tip at each pixel of `rect` (row-major), sampled exactly
@@ -423,12 +476,12 @@ impl BrushContext {
             };
             let n = rect.width() as usize * rect.height() as usize;
             let mut alpha = vec![0.0; n];
-            self.rasterize_ribbon(d, &slice, shape, *k, rect, &mut alpha, (false, false, false));
+            self.rasterize_ribbon(d, &slice, shape, *k, rect, &mut alpha, (false, false, false), None);
             out.clear();
             out.resize(n, [0.0; 3]);
             for (c, m) in planes.iter().enumerate() {
                 let mut plane = vec![0.0; n];
-                self.rasterize_ribbon(d, &slice, m, *k, rect, &mut plane, (false, false, false));
+                self.rasterize_ribbon(d, &slice, m, *k, rect, &mut plane, (false, false, false), None);
                 for ((o, a), p) in out.iter_mut().zip(&alpha).zip(&plane) {
                     if *a > 1e-6 {
                         o[c] = (p / a).clamp(0.0, 1.0);
@@ -463,6 +516,163 @@ impl BrushContext {
         self.rasterize_with(d, dual, rect, out, None);
     }
 
+    /// A CSP colour tip's dab in one pass: `cov` as [`Self::rasterize`] and `rgb` as
+    /// [`Self::rasterize_tip_color`] give them, reading the shape and the three colour planes at
+    /// the same texels instead of walking the dab five times; a ribbon slice of a colour tip
+    /// likewise. `false` (nothing written) when the dab is not one of those (a computed tip,
+    /// Photoshop sampling, an aliased ribbon, a tip that paints in the brush colour): the caller
+    /// then uses the two separate calls.
+    pub fn rasterize_colored(&self, d: &Dab, rect: Rect, cov: &mut Vec<f32>, rgb: &mut Vec<[f32; 3]>) -> bool {
+        let b = &self.brush;
+        if let Some(slice) = d.ribbon {
+            // A ribbon slice: the same, locating each pixel in the slice once.
+            let slot = slice.tip as usize % self.ribbon_tips.len().max(1);
+            let (Some((shape, k)), Some(Some(planes)), false) = (self.ribbon_tips.get(slot), self.ribbon_colors.get(slot), b.aliased) else {
+                return false;
+            };
+            // The planes are read at the shape's level and texel grid: they must match it.
+            let same = |p: &Mips| p.levels.len() == shape.levels.len() && p.levels.iter().zip(&shape.levels).all(|(a, b)| (a.0, a.1) == (b.0, b.1));
+            if !planes.iter().all(same) {
+                return false;
+            }
+            let n = (rect.width() as usize).saturating_mul(rect.height() as usize);
+            cov.clear();
+            cov.resize(n, 0.0);
+            rgb.clear();
+            rgb.resize(n, [0.0; 3]);
+            let effects = (b.noise, b.texture.enabled && b.texture.each_tip && self.texture.is_some(), b.wet_edges);
+            self.rasterize_ribbon(d, &slice, shape, *k, rect, cov, effects, Some((planes.as_ref(), rgb.as_mut_slice())));
+            return true;
+        }
+        let Some(aa) = b.csp_anti_alias.filter(|_| !b.aliased) else { return false };
+        let slot = if self.sequence.is_empty() { 0 } else { self.tip_slot(d) };
+        let shape = if self.sequence.is_empty() { self.tip.as_deref() } else { self.sequence.get(slot).map(Arc::as_ref) };
+        let (Some(Some(planes)), Some(shape)) = (self.tip_colors.get(slot), shape) else { return false };
+        let Some((w0, h0, _)) = shape.levels.first() else { return false };
+        let (r, (ro, _)) = (d.radius, tip_axes(d));
+        let display = 2.0 * r * ro.max(0.25);
+        // The level `rasterize_with` picks (see there).
+        let level = if aa <= 1 { 0 } else { shape.level_for(display * 2.0) };
+        let Some((lw, lh, alpha)) = shape.levels.get(level) else { return false };
+        fn plane(m: &Mips, level: usize, w: usize, h: usize, len: usize) -> Option<&[f32]> {
+            m.levels.get(level).filter(|(pw, ph, v)| *pw == w && *ph == h && v.len() == len).map(|(_, _, v)| v.as_slice())
+        }
+        let [r_plane, g_plane, b_plane] = planes.as_ref();
+        let (Some(red), Some(green), Some(blue)) =
+            (plane(r_plane, level, *lw, *lh, alpha.len()), plane(g_plane, level, *lw, *lh, alpha.len()), plane(b_plane, level, *lw, *lh, alpha.len()))
+        else {
+            return false;
+        };
+        if lw.checked_mul(*lh) != Some(alpha.len()) {
+            return false;
+        }
+        let (w, h) = (rect.width() as usize, rect.height() as usize);
+        cov.clear();
+        cov.resize(w * h, 0.0);
+        rgb.clear();
+        rgb.resize(w * h, [0.0; 3]);
+        let effects = (b.noise, b.texture.enabled && b.texture.each_tip && self.texture.is_some(), b.wet_edges);
+        let (cx, cy) = (d.center.x as f32, d.center.y as f32);
+        let (sn, cs) = d.angle.sin_cos();
+        let (fx, fy) = (if d.flip_x { -1.0 } else { 1.0 }, if d.flip_y { -1.0 } else { 1.0 });
+        let scale = self.tip_scale(d, false);
+        let proj = (d.proj_scale < 0.999).then(|| {
+            let (ps, pc) = d.proj_angle.sin_cos();
+            (pc, ps, 1.0 / d.proj_scale.max(0.05) - 1.0)
+        });
+        let (tw, th) = (*w0 as f32, *h0 as f32);
+        let inv_scale = *w0.max(h0) as f32 / (2.0 * r);
+        let (lwf, lhf) = (*lw as f32, *lh as f32);
+        // The texel under a pixel-space offset from the dab centre, exactly as `to_tip` and
+        // `Mips::sample_nearest` find it.
+        let normalised = |dx: f32, dy: f32| -> (f32, f32) {
+            let (mut ux, mut uy) = (dx, -dy);
+            if let Some((ax, ay, k)) = proj {
+                let t = (ux * ax + uy * ay) * k;
+                ux += t * ax;
+                uy += t * ay;
+            }
+            let (u, v) = ((ux * cs + uy * sn) * fx / scale[0], (-ux * sn + uy * cs) * fy / scale[1]);
+            let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
+            (px / tw, py / th)
+        };
+        let texel = |dx: f32, dy: f32| -> Option<usize> {
+            let (un, vn) = normalised(dx, dy);
+            if !un.is_finite() || !vn.is_finite() || !(0.0..1.0).contains(&un) || !(0.0..1.0).contains(&vn) {
+                return None;
+            }
+            let (x, y) = ((un * lwf).floor() as usize, (vn * lhf).floor() as usize);
+            y.checked_mul(*lw).and_then(|at| at.checked_add(x)).filter(|at| *at < alpha.len())
+        };
+        let at = |v: &[f32], i: Option<usize>| i.and_then(|i| v.get(i)).copied().unwrap_or(0.0);
+        // The map to normalised tip coordinates is affine: a row reaches the tip only between
+        // the columns where both coordinates are within 0..1. Two pixels of slack cover the
+        // sub-pixel samples and rounding; the test inside stays exact.
+        let (origin, along, down) = (normalised(0.0, 0.0), normalised(1.0, 0.0), normalised(0.0, 1.0));
+        let slope = [along.0 - origin.0, along.1 - origin.1];
+        let fall = [down.0 - origin.0, down.1 - origin.1];
+        let affine = [origin.0, origin.1, slope[0], slope[1], fall[0], fall[1]].iter().all(|v| v.is_finite());
+        let (rx0, rx1) = (rect.x0 as f32 + 0.5 - cx, rect.x1 as f32 - 0.5 - cx);
+        let fill_row = |yy: usize, cov: &mut [f32], rgb: &mut [[f32; 3]]| {
+            let y = rect.y0 + yy as i32;
+            let dy = y as f32 + 0.5 - cy;
+            let (mut from, mut to) = (0usize, w);
+            if affine {
+                let (mut lo, mut hi) = (rx0, rx1);
+                for (base, k) in [(origin.0 + fall[0] * dy, slope[0]), (origin.1 + fall[1] * dy, slope[1])] {
+                    if k.abs() > 1e-12 {
+                        let (a, b) = ((0.0 - base) / k, (1.0 - base) / k);
+                        lo = lo.max(a.min(b));
+                        hi = hi.min(a.max(b));
+                    } else if !(0.0..1.0).contains(&base) {
+                        hi = lo - 1.0;
+                    }
+                }
+                if hi < lo {
+                    return;
+                }
+                from = ((lo - rx0 - 2.0).floor().max(0.0) as usize).min(w);
+                to = ((hi - rx0 + 3.0).ceil().max(0.0) as usize).min(w);
+            }
+            for xx in from..to {
+                let x = rect.x0 + xx as i32;
+                let dx = x as f32 + 0.5 - cx;
+                // One sample at the pixel centre, or the mean of 2×2 samples half a pixel apart.
+                let (val, color) = if aa == 0 {
+                    let i = texel(dx, dy);
+                    (at(alpha, i), [at(red, i), at(green, i), at(blue, i)])
+                } else {
+                    let (x0, y0) = (dx - 0.25, dy - 0.25);
+                    let i = [texel(x0, y0), texel(x0 + 0.5, y0), texel(x0, y0 + 0.5), texel(x0 + 0.5, y0 + 0.5)];
+                    let mean = |v: &[f32]| (at(v, i[0]) + at(v, i[1]) + at(v, i[2]) + at(v, i[3])) * 0.25;
+                    let val = mean(alpha);
+                    if val <= 0.0 {
+                        continue;
+                    }
+                    (val, [mean(red), mean(green), mean(blue)])
+                };
+                if val <= 0.0 {
+                    continue;
+                }
+                if val > 1e-6
+                    && let Some(o) = rgb.get_mut(xx)
+                {
+                    *o = color.map(|p| (p / val).clamp(0.0, 1.0));
+                }
+                if let Some(o) = cov.get_mut(xx) {
+                    *o = self.shade(d, val, 1.0 - val, x, y, effects);
+                }
+            }
+        };
+        if w * h >= ROW_PARALLEL_PIXELS {
+            use rayon::prelude::*;
+            cov.par_chunks_mut(w.max(1)).zip(rgb.par_chunks_mut(w.max(1))).enumerate().for_each(|(yy, (c, r))| fill_row(yy, c, r));
+        } else {
+            cov.chunks_mut(w.max(1)).zip(rgb.chunks_mut(w.max(1))).enumerate().for_each(|(yy, (c, r))| fill_row(yy, c, r));
+        }
+        true
+    }
+
     /// [`Self::rasterize`], or with `plane` the raw samples of that plane (shaped and placed like
     /// the dab's tip, without effects or flow).
     fn rasterize_with(&self, d: &Dab, dual: bool, rect: Rect, out: &mut Vec<f32>, plane: Option<&Mips>) {
@@ -486,7 +696,7 @@ impl BrushContext {
         let tex_tip = !dual && b.texture.enabled && b.texture.each_tip && self.texture.is_some();
         if let Some(slice) = d.ribbon.filter(|_| !dual && plane.is_none()) {
             if let Some((m, k)) = self.ribbon_tips.get(slice.tip as usize % self.ribbon_tips.len().max(1)) {
-                self.rasterize_ribbon(d, &slice, m, *k, rect, out, (noise, tex_tip, wet));
+                self.rasterize_ribbon(d, &slice, m, *k, rect, out, (noise, tex_tip, wet), None);
             }
             return;
         }
@@ -578,11 +788,12 @@ impl BrushContext {
                 let big = *w0.max(h0) as f32;
                 let display = 2.0 * r * ro.max(0.25);
                 let level = match csp_aa {
-                    // CSP: weak samples the original tip, medium the level at least as large as the
-                    // dab, strong the level at least half as large.
+                    // CSP: none and weak sample the original tip; medium and strong the level at
+                    // least twice as large as the dab, so the 2×2 samples half a pixel apart read
+                    // four different texels (measured against CLIP STUDIO PAINT with a 700 px
+                    // colour tip drawn 78 px across: docs/sut-analysis.md › Image tip anti-aliasing).
                     Some(0 | 1) => 0,
-                    Some(2) => m.level_for(display),
-                    Some(_) => m.level_for(display * 0.5),
+                    Some(_) => m.level_for(display * 2.0),
                     None => m.level_for(display),
                 };
                 (level, big / (2.0 * r), *w0 as f32, *h0 as f32)
@@ -646,7 +857,8 @@ impl BrushContext {
             }
             _ => None,
         };
-        for yy in 0..h {
+        // One row of the dab. Rows are independent, so a large dab runs them on all cores.
+        let fill_row = |yy: usize, row: &mut [f32]| {
             let y = rect.y0 + yy as i32;
             let dy = y as f32 + 0.5 - cy;
             for xx in 0..w {
@@ -688,7 +900,7 @@ impl BrushContext {
                     }
                     (None, None) => {
                         // The placed texels (above); only Wet Edges reads the relative radius.
-                        let val = out.get(yy * w + xx).copied().unwrap_or(0.0);
+                        let val = row.get(xx).copied().unwrap_or(0.0);
                         if val <= 0.0 {
                             continue;
                         }
@@ -714,8 +926,16 @@ impl BrushContext {
                 if val <= 0.0 {
                     continue;
                 }
-                out[yy * w + xx] = if plane.is_some() { val } else { self.shade(d, val, rn, x, y, (noise, tex_tip, wet)) };
+                if let Some(o) = row.get_mut(xx) {
+                    *o = if plane.is_some() { val } else { self.shade(d, val, rn, x, y, (noise, tex_tip, wet)) };
+                }
             }
+        };
+        if w * h >= ROW_PARALLEL_PIXELS {
+            use rayon::prelude::*;
+            out.par_chunks_mut(w.max(1)).enumerate().for_each(|(yy, row)| fill_row(yy, row));
+        } else {
+            out.chunks_mut(w.max(1)).enumerate().for_each(|(yy, row)| fill_row(yy, row));
         }
     }
 
@@ -743,6 +963,9 @@ impl BrushContext {
     /// Rasterise a CSP Ribbon slice: each pixel centre is located in the slice's quadrilateral
     /// and samples the tip there (bilinear on a mip level, nearest for CSP anti-aliasing off).
     /// Pixel centres belong to one slice each, so consecutive slices join without seams.
+    /// With `color` (the tip's colour planes, on the same texel grids as `m`, and a row-major
+    /// buffer as large as `out`), each covered pixel also gets its straight colour, read at the
+    /// same place as its shape: what [`Self::rasterize_tip_color`] finds in four more walks.
     #[allow(clippy::too_many_arguments)]
     fn rasterize_ribbon(
         &self,
@@ -753,6 +976,7 @@ impl BrushContext {
         rect: Rect,
         out: &mut [f32],
         effects: (bool, bool, bool),
+        color: Option<(&[Mips; 3], &mut [[f32; 3]])>,
     ) {
         let b = &self.brush;
         let w = rect.width() as usize;
@@ -765,11 +989,12 @@ impl BrushContext {
             _ => m.level_for(tw.max(th) / slice.texels_per_px(tw, th)),
         };
         let (lw, lh) = m.levels.get(if nearest { 0 } else { level }).map_or((1.0, 1.0), |(w, h, _)| ((*w).max(1) as f32, (*h).max(1) as f32));
-        for (yy, row) in out.chunks_exact_mut(w.max(1)).enumerate() {
+        let (planes, rgb) = color.unzip();
+        let fill_row = |yy: usize, row: &mut [f32], mut rgb: Option<&mut [[f32; 3]]>| {
             let y = rect.y0.saturating_add(yy as i32);
             // Pixel centres within half a pixel of the outline's span on this row.
             let span = [0.0, 0.5, 1.0].into_iter().filter_map(|k| slice.row_span(f64::from(y) + k)).reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)));
-            let Some((lo, hi)) = span else { continue };
+            let Some((lo, hi)) = span else { return };
             let from = ((lo - f64::from(rect.x0) - 1.0).floor().max(0.0) as usize).min(row.len());
             let to = ((hi - f64::from(rect.x0) + 1.0).ceil().max(0.0) as usize).min(row.len());
             for (xx, o) in row.iter_mut().enumerate().take(to).skip(from) {
@@ -795,7 +1020,28 @@ impl BrushContext {
                 if val > 0.0 {
                     *o = self.shade(d, val, 1.0 - val, x, y, effects);
                 }
+                // The colour: each plane (premultiplied) over the shape, both as the separate
+                // passes hold them (times the dab's alpha).
+                let alpha = if val > 0.0 { val * d.alpha } else { 0.0 };
+                if alpha > 1e-6
+                    && let (Some(planes), Some(c)) = (planes, rgb.as_deref_mut().and_then(|r| r.get_mut(xx)))
+                {
+                    *c = planes.each_ref().map(|p| {
+                        let pv = if nearest { p.sample_nearest(0, u, v) } else { p.sample_clamped(level, u, v) };
+                        if pv > 0.0 { (pv * d.alpha / alpha).clamp(0.0, 1.0) } else { 0.0 }
+                    });
+                }
             }
+        };
+        let parallel = out.len() >= ROW_PARALLEL_PIXELS;
+        use rayon::prelude::*;
+        match rgb {
+            Some(rgb) if parallel => {
+                out.par_chunks_exact_mut(w.max(1)).zip(rgb.par_chunks_exact_mut(w.max(1))).enumerate().for_each(|(yy, (row, c))| fill_row(yy, row, Some(c)));
+            }
+            Some(rgb) => out.chunks_exact_mut(w.max(1)).zip(rgb.chunks_exact_mut(w.max(1))).enumerate().for_each(|(yy, (row, c))| fill_row(yy, row, Some(c))),
+            None if parallel => out.par_chunks_exact_mut(w.max(1)).enumerate().for_each(|(yy, row)| fill_row(yy, row, None)),
+            None => out.chunks_exact_mut(w.max(1)).enumerate().for_each(|(yy, row)| fill_row(yy, row, None)),
         }
     }
 
@@ -837,6 +1083,37 @@ struct CovTile {
     col: Vec<f32>,
 }
 
+/// A rasterised dab: its coverage and, for a colour tip, the straight colour of each pixel.
+type RasterDab = (Vec<f32>, Option<Vec<[f32; 3]>>);
+
+/// Dabs rasterised together before they are laid, and the pixels of their rectangles a batch
+/// stops at (bounds its memory: about 16 bytes a pixel).
+const DAB_BATCH: usize = 32;
+const DAB_BATCH_PIXELS: usize = 4 << 20;
+/// A dab whose rectangle has at least this many pixels rasterises its rows on all cores.
+const ROW_PARALLEL_PIXELS: usize = 32 << 10;
+/// Batches smaller than this many pixels are rasterised on the calling thread.
+const DAB_PARALLEL_PIXELS: usize = 16 << 10;
+
+/// Rasterise one dab into `cov` (reused): a CSP colour tip in one pass, any other tip as its
+/// coverage and, when it paints its own colours (`want_color`), those.
+fn raster_dab(ctx: &BrushContext, d: &Dab, rect: Rect, want_color: bool, mut cov: Vec<f32>) -> RasterDab {
+    let mut rgb = Vec::new();
+    if want_color && ctx.rasterize_colored(d, rect, &mut cov, &mut rgb) {
+        return (cov, Some(rgb));
+    }
+    // A gray tip that lays no colours of its own keeps its gray as transparency.
+    if (!want_color || ctx.brush.csp_mixing.is_some())
+        && let Some(density) = ctx.gray_density_for(d)
+    {
+        ctx.rasterize_with(d, false, rect, &mut cov, Some(density));
+        return (cov, None);
+    }
+    ctx.rasterize(d, false, rect, &mut cov);
+    let colored = want_color && ctx.rasterize_tip_color(d, rect, &mut rgb);
+    (cov, colored.then_some(rgb))
+}
+
 /// A sparse tiled coverage (+ optional colour) buffer.
 #[derive(Clone, Debug, Default)]
 pub struct CoverageMap {
@@ -845,7 +1122,8 @@ pub struct CoverageMap {
     bounds: Rect,
     dirty: HashSet<(i32, i32)>,
     /// Each dab paints over the colour already stored (by its own tip value), even where the
-    /// coverage is full: CSP colour mixing lays every dab onto the layer in turn.
+    /// coverage is full: CSP lays every dab onto the layer in turn (colour mixing, colour tips
+    /// and the other per-dab colours of a CSP brush).
     pub(crate) paint_over: bool,
     /// CSP "Blend brush tips with Darken": a dab's colour only ever darkens the colour the
     /// stroke already holds at a pixel (per channel). Colour maps of additive modes only.
@@ -1094,7 +1372,11 @@ impl StrokeRenderer {
             ctx,
             generator: DabGenerator::new(brush, zoom),
             cov: CoverageMap {
-                paint_over: mixing.is_some(),
+                // CLIP STUDIO lays each dab onto the layer in turn, so a later dab covers an
+                // earlier one with its own colours (measured with overlapping colour tips,
+                // docs/sut-analysis.md › 가을낙엽): colour mixing, and every CSP brush whose dabs
+                // carry their own colour.
+                paint_over: mixing.is_some() || (brush.csp_correction && per_dab_color),
                 // Darken compares colour values: only where a larger value is lighter.
                 darken: brush.csp_darken_tips
                     && per_dab_color
@@ -1129,6 +1411,13 @@ impl StrokeRenderer {
         self
     }
 
+    /// Physical screen pixels per view point, for CSP's velocity input (see
+    /// [`DabGenerator::with_pixels_per_point`]).
+    pub fn with_pixels_per_point(mut self, ppp: f32) -> Self {
+        self.generator = self.generator.with_pixels_per_point(ppp);
+        self
+    }
+
     /// Keep a copy of every primary dab (for tests and sequential tools).
     pub fn record_dabs(mut self) -> Self {
         self.all_dabs = Some(Vec::new());
@@ -1159,9 +1448,40 @@ impl StrokeRenderer {
         let mut duals = std::mem::take(&mut self.dual_buf);
         let wet = self.ctx.brush.wet_edges;
         let mut native = [0.0f32; 8];
-        for d in dabs.iter_mut() {
+        // A dab's pixels depend only on the dab, not on what the stroke already holds: rasterise
+        // a bounded batch of dabs on all cores, then lay them in stroke order (the same pixels as
+        // one at a time). Small batches stay on this thread.
+        let want_color = self.per_dab_color && self.fmt.is_some();
+        let mut ready: std::collections::VecDeque<RasterDab> = std::collections::VecDeque::new();
+        let mut inline_until = 0;
+        for i in 0..dabs.len() {
+            if ready.is_empty() && i >= inline_until {
+                let ctx = &self.ctx;
+                let (mut end, mut pixels) = (i, 0usize);
+                while let Some(d) = dabs.get(end).filter(|_| end - i < DAB_BATCH && pixels <= DAB_BATCH_PIXELS) {
+                    let r = ctx.dab_rect(d, false);
+                    pixels = pixels.saturating_add((r.width() as usize).saturating_mul(r.height() as usize));
+                    end += 1;
+                }
+                match dabs.get(i..end) {
+                    Some(chunk) if chunk.len() >= 2 && pixels >= DAB_PARALLEL_PIXELS => {
+                        use rayon::prelude::*;
+                        let done: Vec<RasterDab> = chunk.par_iter().map(|d| raster_dab(ctx, d, ctx.dab_rect(d, false), want_color, Vec::new())).collect();
+                        ready.extend(done);
+                    }
+                    _ => inline_until = end,
+                }
+            }
+            let Some(d) = dabs.get_mut(i) else { break };
             let rect = self.ctx.dab_rect(d, false);
-            self.ctx.rasterize(d, false, rect, &mut self.scratch);
+            // A colour tip lays its own colour at each pixel (`tip_rgb`).
+            let (cov, tip_rgb) = match ready.pop_front() {
+                Some(done) => done,
+                None => raster_dab(&self.ctx, d, rect, want_color, std::mem::take(&mut self.scratch)),
+            };
+            self.scratch = cov;
+            let colored = tip_rgb.is_some();
+            let mut tip_rgb = tip_rgb.unwrap_or_default();
             // A colour tip's dab colour: its mean (mixing and ribbons lay one colour a dab).
             if let Some([r, g, b]) = self.ctx.tip_mean_color(d).filter(|_| self.per_dab_color) {
                 d.color = [r, g, b, d.color[3]];
@@ -1198,15 +1518,24 @@ impl StrokeRenderer {
             };
             // Mixing dabs blend towards their own colour and alpha: they build up to full weight.
             let ceiling = if target_alpha.is_some() { 1.0 } else { d.opacity };
-            // A colour tip lays its own colour at each pixel.
-            let mut tip_rgb = Vec::new();
-            match self.fmt.filter(|_| self.per_dab_color && self.ctx.rasterize_tip_color(d, rect, &mut tip_rgb)) {
+            // A gray tip: its gray blends the dab colour towards the sub colour, pixel by pixel.
+            if colored && self.ctx.tip_is_gray(d) {
+                let (c, sub) = (d.color, self.ctx.brush.background);
+                for px in tip_rgb.iter_mut() {
+                    let g = px[0].clamp(0.0, 1.0);
+                    *px = std::array::from_fn(|k| c[k] + (sub[k] - c[k]) * g);
+                }
+            }
+            match self.fmt.filter(|_| colored) {
                 Some(f) => {
                     let nc = f.mode.color_channels().min(native.len());
-                    let mut colors = Vec::with_capacity(tip_rgb.len() * nc);
-                    for [r, g, b] in &tip_rgb {
-                        from_rgba_into(&f, [*r, *g, *b, 1.0], &mut native);
-                        colors.extend_from_slice(&native[..nc]);
+                    let mut colors = vec![0.0; tip_rgb.len() * nc];
+                    // Only covered pixels are read back: the rest keep zeros.
+                    for (([r, g, b], v), out) in tip_rgb.iter().zip(&self.scratch).zip(colors.chunks_exact_mut(nc.max(1))) {
+                        if *v > 0.0 {
+                            from_rgba_into(&f, [*r, *g, *b, 1.0], &mut native);
+                            out.copy_from_slice(&native[..nc]);
+                        }
                     }
                     self.cov.accumulate_pixels(rect, &self.scratch, ceiling, wet, &colors);
                 }

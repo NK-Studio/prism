@@ -289,3 +289,36 @@ fn library_limits() {
     assert_eq!(total(&g), MAX_SWATCHES);
     assert_eq!(g[0].name.chars().count(), MAX_NAME);
 }
+
+#[test]
+fn csp_colour_sets_refuse_bad_sources_without_changing_the_library() {
+    let mut s = Session::new();
+    let before = s.presets.swatches.clone();
+    for p in [
+        json!({}),
+        json!({"uuid": ""}),
+        json!({"uuid": 3}),
+        json!({"uuid": "x", "root": "/nonexistent/prism-csp-root"}),
+        json!({"data": prism_paint::tile::b64_encode(b"not a colour set")}),
+        json!({"data": "%%%"}),
+        json!({"data": prism_paint::tile::b64_encode(b"x"), "root": "/x"}),
+    ] {
+        assert!(s.execute("swatches.importCsp", p.clone()).is_err(), "{p}");
+    }
+    assert_eq!(s.presets.swatches, before);
+    assert_eq!(hex_of([1.0, 0.5, 0.0]), "#ff8000");
+}
+
+#[test]
+#[ignore = "reads the local CLIP STUDIO material folder (PRISM_TEST_CSP_ROOT or the platform's)"]
+fn every_local_downloaded_colour_set_imports() {
+    let root = std::env::var_os("PRISM_TEST_CSP_ROOT").map(std::path::PathBuf::from).or_else(prism_io::sut::library::default_root).unwrap();
+    let mut s = Session::new();
+    let listed = s.execute("brush.cspLibrary.list", json!({"root": root.to_string_lossy()})).unwrap();
+    let sets = listed["colorSets"].as_array().unwrap();
+    assert!(!sets.is_empty());
+    for c in sets {
+        let r = s.execute("swatches.importCsp", json!({"uuid": c["uuid"], "root": root.to_string_lossy()}));
+        eprintln!("{} [{}]: {}", c["name"], c["status"], r.as_ref().map_or_else(|e| format!("ERROR {e}"), |v| v.to_string()));
+    }
+}

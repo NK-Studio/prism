@@ -3,7 +3,8 @@
 //! installed CLIP STUDIO PAINT (`brush.cspLibrary.list`) by collection, with CLIP STUDIO's own
 //! previews, and imports the checked ones (`brush.cspLibrary.import`) without a SUT export.
 //! Layer materials (images, special rulers) are listed too and go into the open document as
-//! layers (`layer.cspMaterial.import`).
+//! layers (`layer.cspMaterial.import`); auto-action sets go into the Actions panel
+//! (`actions.importLaf`).
 //! Laid out like PAINT's Material palette: a folder tree (CLIP STUDIO's own folders, [`tree`])
 //! beside the materials when the panel is wide, a folder menu above them when it is narrow.
 //! A ready material can be dragged onto any document's canvas: a layer material lands centred
@@ -30,6 +31,14 @@ pub enum KindFilter {
     SubTools,
     /// Images and special rulers: they are added to the open document as layers.
     Layers,
+    /// Auto-action sets: they import into the Actions panel.
+    Actions,
+    /// Gradients and gradient sets: they import into the Gradients panel.
+    Gradients,
+    /// Colour sets: they import into the Swatches panel.
+    ColorSets,
+    /// 3D figure poses: they become 3D figure layers.
+    Poses,
 }
 
 /// How the materials are laid out.
@@ -141,10 +150,14 @@ struct MaterialDrag {
     uuid: String,
     name: String,
     layer: bool,
+    action: bool,
+    gradient: bool,
+    color_set: bool,
+    pose: bool,
 }
 
 fn materials(listing: &Value) -> impl Iterator<Item = &Value> {
-    listing["brushes"].as_array().into_iter().flatten().chain(listing["layers"].as_array().into_iter().flatten())
+    ["brushes", "layers", "actions", "gradients", "colorSets", "poses"].into_iter().flat_map(|k| listing[k].as_array().into_iter().flatten())
 }
 
 fn is_ready(b: &Value) -> bool {
@@ -160,6 +173,31 @@ fn is_layer(b: &Value) -> bool {
     b["kind"] == "image"
 }
 
+/// An auto-action set, imported into the Actions panel.
+fn is_action(b: &Value) -> bool {
+    b["kind"] == "auto_action"
+}
+
+/// A gradient sub-tool or gradient set, imported into the Gradients panel.
+fn is_gradient(b: &Value) -> bool {
+    b["kind"] == "gradation" || b["kind"] == "gradation_set"
+}
+
+/// A colour set, imported into the Swatches panel.
+fn is_color_set(b: &Value) -> bool {
+    b["kind"] == "color_set"
+}
+
+/// A 3D figure pose, added to the document as a 3D figure layer.
+fn is_pose(b: &Value) -> bool {
+    b["kind"] == "pose"
+}
+
+/// A hand pose: it poses the hands of a 3D figure.
+fn is_hand_pose(b: &Value) -> bool {
+    is_pose(b) && b["hand"].is_string()
+}
+
 fn is_ruler(b: &Value) -> bool {
     is_layer(b) && b["ruler"] == true
 }
@@ -171,7 +209,7 @@ fn group_of(b: &Value) -> &str {
 
 /// Is a material of this name already in the brush library, in its collection's group?
 fn in_library(app: &PrismApp, b: &Value) -> bool {
-    if is_layer(b) {
+    if is_layer(b) || is_action(b) || is_gradient(b) || is_color_set(b) || is_pose(b) {
         return false;
     }
     let (Some(name), group) = (b["name"].as_str(), group_of(b)) else { return false };
@@ -195,9 +233,13 @@ fn tags_of<'a>(listing: &'a Value, b: &'a Value) -> Vec<&'a str> {
 fn passes(state: &CspLibraryState, filter: KindFilter, listing: &Value, b: &Value) -> bool {
     let kind_ok = match filter {
         KindFilter::All => true,
-        KindFilter::Brushes => !is_sub_tool(b) && !is_layer(b),
+        KindFilter::Brushes => !is_sub_tool(b) && !is_layer(b) && !is_action(b) && !is_gradient(b) && !is_color_set(b) && !is_pose(b),
         KindFilter::SubTools => is_sub_tool(b),
         KindFilter::Layers => is_layer(b),
+        KindFilter::Actions => is_action(b),
+        KindFilter::Gradients => is_gradient(b),
+        KindFilter::ColorSets => is_color_set(b),
+        KindFilter::Poses => is_pose(b),
     };
     if !kind_ok || !tree::contains(state.folder.as_deref(), b) {
         return false;
@@ -271,19 +313,35 @@ pub fn imported(app: &mut PrismApp, v: &Value) {
     app.ui.csp_library.selected.clear();
 }
 
+/// The listed materials `keep` accepts, by id.
+fn ids_of(app: &PrismApp, keep: fn(&Value) -> bool) -> Vec<String> {
+    app.ui.csp_library.listing.as_ref().map(|l| materials(l).filter(|b| keep(b)).filter_map(|b| b["uuid"].as_str().map(str::to_string)).collect()).unwrap_or_default()
+}
+
 fn import_selected(app: &mut PrismApp) {
     let selected = app.ui.csp_library.selected.clone();
     if selected.is_empty() {
         return;
     }
-    let layer_ids: Vec<String> = app
-        .ui
-        .csp_library
-        .listing
-        .as_ref()
-        .map(|l| materials(l).filter(|b| is_layer(b)).filter_map(|b| b["uuid"].as_str().map(str::to_string)).collect())
-        .unwrap_or_default();
+    let (layer_ids, action_ids, gradient_ids, color_set_ids) = (ids_of(app, is_layer), ids_of(app, is_action), ids_of(app, is_gradient), ids_of(app, is_color_set));
+    let pose_ids = ids_of(app, is_pose);
+    let (poses, selected): (Vec<String>, Vec<String>) = selected.into_iter().partition(|id| pose_ids.contains(id));
+    if !poses.is_empty() {
+        add_poses(app, &poses, None);
+    }
+    let (color_sets, selected): (Vec<String>, Vec<String>) = selected.into_iter().partition(|id| color_set_ids.contains(id));
+    if !color_sets.is_empty() {
+        import_color_sets(app, &color_sets);
+    }
+    let (gradients, selected): (Vec<String>, Vec<String>) = selected.into_iter().partition(|id| gradient_ids.contains(id));
+    let (actions, selected): (Vec<String>, Vec<String>) = selected.into_iter().partition(|id| action_ids.contains(id));
+    if !gradients.is_empty() {
+        import_gradients(app, &gradients);
+    }
     let (layers, uuids): (Vec<String>, Vec<String>) = selected.into_iter().partition(|id| layer_ids.contains(id));
+    if !actions.is_empty() {
+        import_actions(app, &actions);
+    }
     if !layers.is_empty() {
         add_layers(app, &layers);
     }
@@ -306,6 +364,22 @@ fn import_selected(app: &mut PrismApp) {
 fn use_material(app: &mut PrismApp, ctx: &egui::Context, drag: &MaterialDrag, target: Option<crate::layer_transfer::CanvasDrop>) {
     if let Some(d) = &target {
         crate::layer_transfer::activate(app, ctx, d);
+    }
+    if drag.action {
+        import_actions(app, std::slice::from_ref(&drag.uuid));
+        return;
+    }
+    if drag.gradient {
+        import_gradients(app, std::slice::from_ref(&drag.uuid));
+        return;
+    }
+    if drag.color_set {
+        import_color_sets(app, std::slice::from_ref(&drag.uuid));
+        return;
+    }
+    if drag.pose {
+        add_poses(app, std::slice::from_ref(&drag.uuid), target.map(|d| [d.at[0].round(), d.at[1].round()]));
+        return;
     }
     let root = app.ui.csp_library.root.clone();
     let mut p = if drag.layer { json!({ "uuid": drag.uuid }) } else { json!({ "uuids": [drag.uuid], "select": true }) };
@@ -397,6 +471,217 @@ fn add_layers(app: &mut PrismApp, uuids: &[String]) {
     app.ui.status_error = added == 0;
     notices::io_warnings(app, tl!("Added from CLIP STUDIO"), &warnings);
     app.ui.csp_library.selected.retain(|id| !uuids.contains(id));
+}
+
+/// Add poses to the document as 3D figure layers: poses of one collection together become one
+/// layer (CLIP STUDIO's paired poses keep their places), centred on `at` or the canvas. Hand
+/// poses pose the hands of the active 3D figure layer (the figure nearest `at` when dropped),
+/// as in CLIP STUDIO; without one they add Prism's figure with those hands.
+fn add_poses(app: &mut PrismApp, uuids: &[String], at: Option<[f64; 2]>) {
+    if app.session.active().is_none() {
+        notices::error(app, tl!("Open or create a document first: poses are added to it as 3D figure layers").to_string());
+        return;
+    }
+    let hand_ids = ids_of(app, is_hand_pose);
+    let (hands, uuids): (Vec<String>, Vec<String>) = uuids.iter().cloned().partition(|id| hand_ids.contains(id));
+    if !hands.is_empty() {
+        apply_hand_poses(app, &hands, at);
+    }
+    if uuids.is_empty() {
+        return;
+    }
+    // One pose with a figure picked on the active layer: that figure takes it, as in CLIP STUDIO.
+    if let Some((cmd, p)) = pose_on_pick_command(app, &uuids) {
+        match app.run(cmd, p) {
+            Ok(_) => {
+                app.ui.status = tl!("Posed the picked figure").to_string();
+                app.ui.status_error = false;
+                app.ui.csp_library.selected.retain(|id| !uuids.contains(id));
+            }
+            Err(e) => notices::error(app, format!("{}: {e}", tl!("Not added"))),
+        }
+        return;
+    }
+    let catalog_of = |app: &PrismApp, id: &str| -> String {
+        app.ui.csp_library.listing.as_ref().and_then(|l| materials(l).find(|b| b["uuid"] == id).map(|b| group_of(b).to_string())).unwrap_or_default()
+    };
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for id in &uuids {
+        let c = catalog_of(app, id);
+        match groups.iter_mut().find(|(g, _)| *g == c) {
+            Some((_, v)) => v.push(id.clone()),
+            None => groups.push((c, vec![id.clone()])),
+        }
+    }
+    let root = app.ui.csp_library.root.clone();
+    let (mut layers, mut warnings, mut done) = (0, Vec::new(), Vec::new());
+    for (_, ids) in groups {
+        let mut p = json!({ "uuids": ids });
+        if let Some(root) = &root {
+            p["root"] = json!(root);
+        }
+        if let Some(at) = at {
+            p["at"] = json!(at);
+        }
+        match app.run("layer.figure.new", p) {
+            Ok(_) => {
+                layers += 1;
+                done.extend(ids);
+            }
+            Err(e) => warnings.push(format!("{}: {e}", tl!("Not added"))),
+        }
+    }
+    app.ui.status = crate::i18n::fmt(tl!("Added {n} 3D figure layers; pose them with the Move tool"), &[("n", &layers.to_string())]);
+    app.ui.status_error = layers == 0;
+    notices::io_warnings(app, tl!("Imported from CLIP STUDIO"), &warnings);
+    app.ui.csp_library.selected.retain(|id| !done.contains(id));
+}
+
+/// Hand poses onto the active 3D figure layer, or a new one with Prism's figure.
+fn apply_hand_poses(app: &mut PrismApp, uuids: &[String], at: Option<[f64; 2]>) {
+    let (cmd, p) = hand_pose_command(app, uuids, at);
+    let on_figure = cmd == "layer.figure.applyHandPose";
+    match app.run(cmd, p) {
+        Ok(_) => {
+            app.ui.status = if on_figure { tl!("Posed the hands; refine fingers with the Move tool").to_string() } else { tl!("Added a 3D figure layer with this hand pose").to_string() };
+            app.ui.status_error = false;
+            app.ui.csp_library.selected.retain(|id| !uuids.contains(id));
+        }
+        Err(e) => notices::error(app, format!("{}: {e}", tl!("Not added"))),
+    }
+}
+
+/// `layer.figure.applyPose` for a single whole-figure pose when a figure of the active layer is
+/// picked; `None` otherwise (the poses make a new figure layer).
+fn pose_on_pick_command(app: &PrismApp, uuids: &[String]) -> Option<(&'static str, Value)> {
+    let [uuid] = uuids else { return None };
+    let pick = app.session.active().and_then(|st| st.active_layer).and_then(|l| crate::figure_ui::picked(app, l))?;
+    let mut p = json!({ "uuid": uuid, "layer": pick.layer.0, "figure": pick.figure });
+    if let Some(root) = &app.ui.csp_library.root {
+        p["root"] = json!(root);
+    }
+    Some(("layer.figure.applyPose", p))
+}
+
+/// The command that puts hand poses `uuids` on the document, and its params: onto the active 3D
+/// figure layer's hand picked on the canvas, else the figure nearest `at` (both hands), else a
+/// new figure layer.
+fn hand_pose_command(app: &PrismApp, uuids: &[String], at: Option<[f64; 2]>) -> (&'static str, Value) {
+    let on_figure = app.session.active().and_then(|st| st.active_layer.and_then(|l| crate::figure_ui::figure_layer(&st.doc, l))).is_some();
+    let mut p = json!({ "uuids": uuids });
+    if let Some(root) = &app.ui.csp_library.root {
+        p["root"] = json!(root);
+    }
+    if let Some(at) = at {
+        p["at"] = json!(at);
+    }
+    // A figure or hand picked on the canvas takes the pose alone, as in CLIP STUDIO.
+    let pick = app.session.active().and_then(|st| st.active_layer).and_then(|l| crate::figure_ui::picked(app, l));
+    if on_figure && let Some(pick) = pick {
+        p["figure"] = json!(pick.figure);
+        if let Some(side) = pick.side() {
+            p["side"] = json!(side);
+        }
+        if let Some(o) = p.as_object_mut() {
+            o.remove("at");
+        }
+    }
+    (if on_figure { "layer.figure.applyHandPose" } else { "layer.figure.new" }, p)
+}
+
+/// Import colour sets into the Swatches panel, one group each, and show it.
+fn import_color_sets(app: &mut PrismApp, uuids: &[String]) {
+    let root = app.ui.csp_library.root.clone();
+    let (mut count, mut warnings, mut done) = (0, Vec::new(), Vec::new());
+    for uuid in uuids {
+        let mut p = json!({ "uuid": uuid });
+        if let Some(root) = &root {
+            p["root"] = json!(root);
+        }
+        match app.run("swatches.importCsp", p) {
+            Ok(v) => {
+                done.push(uuid.clone());
+                count += v["count"].as_u64().unwrap_or(0);
+                warnings.extend(v["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).map(tl_dyn));
+            }
+            Err(e) => warnings.push(format!("{}: {e}", tl!("Not imported"))),
+        }
+    }
+    app.ui.status = crate::i18n::fmt(tl!("Imported {n} colors from CLIP STUDIO"), &[("n", &count.to_string())]);
+    app.ui.status_error = count == 0;
+    notices::io_warnings(app, tl!("Imported from CLIP STUDIO"), &warnings);
+    if count > 0 {
+        let pro = crate::prefs_ui::layout(app) == crate::theme::Layout::Compact;
+        crate::dock_model::toggle_panel(&mut app.ui, PanelId::Swatches, pro, Some(true));
+    }
+    // Failed ones stay checked for a second try.
+    app.ui.csp_library.selected.retain(|id| !done.contains(id));
+}
+
+/// Import gradients and gradient sets into the Gradients panel (a same-named gradient in its
+/// group is replaced) and show it.
+fn import_gradients(app: &mut PrismApp, uuids: &[String]) {
+    let root = app.ui.csp_library.root.clone();
+    let (mut count, mut warnings, mut done) = (0, Vec::new(), Vec::new());
+    for uuid in uuids {
+        let mut p = json!({ "uuid": uuid });
+        if let Some(root) = &root {
+            p["root"] = json!(root);
+        }
+        match app.run("gradient.presets.importCsp", p) {
+            Ok(v) => {
+                done.push(uuid.clone());
+                count += v["count"].as_u64().unwrap_or(0);
+                warnings.extend(v["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).map(tl_dyn));
+            }
+            Err(e) => warnings.push(format!("{}: {e}", tl!("Not imported"))),
+        }
+    }
+    app.ui.status = crate::i18n::fmt(tl!("Imported {n} gradients from CLIP STUDIO"), &[("n", &count.to_string())]);
+    app.ui.status_error = count == 0;
+    notices::io_warnings(app, tl!("Imported from CLIP STUDIO"), &warnings);
+    if count > 0 {
+        let pro = crate::prefs_ui::layout(app) == crate::theme::Layout::Compact;
+        crate::dock_model::toggle_panel(&mut app.ui, PanelId::Gradients, pro, Some(true));
+    }
+    // Failed ones stay checked for a second try.
+    app.ui.csp_library.selected.retain(|id| !done.contains(id));
+}
+
+/// Import auto-action sets into the Actions panel (same-named actions are replaced) and show it.
+/// Steps Prism cannot run yet stay in their actions; those actions say so and refuse to play.
+fn import_actions(app: &mut PrismApp, uuids: &[String]) {
+    let root = app.ui.csp_library.root.clone();
+    let (mut actions, mut ready, mut warnings, mut done) = (0, 0, Vec::new(), Vec::new());
+    for uuid in uuids {
+        let mut p = json!({ "uuid": uuid, "replace": true });
+        if let Some(root) = &root {
+            p["root"] = json!(root);
+        }
+        match app.run("actions.importLaf", p) {
+            Ok(v) => {
+                done.push(uuid.clone());
+                for a in v["imported"].as_array().into_iter().flatten() {
+                    actions += 1;
+                    ready += usize::from(a["ready"] == true);
+                }
+                warnings.extend(v["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).map(tl_dyn));
+            }
+            Err(e) => warnings.push(format!("{}: {e}", tl!("Not imported"))),
+        }
+    }
+    app.ui.status = crate::i18n::fmt(
+        tl!("Imported {n} auto actions from CLIP STUDIO; {ready} can play now"),
+        &[("n", &actions.to_string()), ("ready", &ready.to_string())],
+    );
+    app.ui.status_error = actions == 0;
+    notices::io_warnings(app, tl!("Imported from CLIP STUDIO"), &warnings);
+    if actions > 0 {
+        let pro = crate::prefs_ui::layout(app) == crate::theme::Layout::Compact;
+        crate::dock_model::toggle_panel(&mut app.ui, PanelId::Actions, pro, Some(true));
+    }
+    // Failed ones stay checked for a second try.
+    app.ui.csp_library.selected.retain(|id| !done.contains(id));
 }
 
 fn status_label(status: &str) -> &'static str {
@@ -533,7 +818,8 @@ enum Action {
 fn header(app: &mut PrismApp, ui: &mut egui::Ui, t: &Tokens, action: &mut Action) {
     let state = &mut app.ui.csp_library;
     ui.horizontal(|ui| {
-        let search_w = (ui.available_width() - 2.0 * 30.0).max(80.0);
+        // Search, then refresh, data folder and the one- or two-column view on the right.
+        let search_w = (ui.available_width() - 4.0 * 30.0).max(80.0);
         ui.add(egui::TextEdit::singleline(&mut state.search).hint_text(tl!("Search materials")).desired_width(search_w));
         if icons::button(ui, "rotate-cw", 24.0, false, tl!("Refresh")).clicked() {
             *action = Action::Refresh;
@@ -545,30 +831,32 @@ fn header(app: &mut PrismApp, ui: &mut egui::Ui, t: &Tokens, action: &mut Action
         if icons::button(ui, "folder-open", 24.0, state.root.is_some(), &folder_tip).clicked() {
             *action = Action::ChooseFolder;
         }
+        for (view, icon, tip) in [(View::List, "list", tl!("List view")), (View::Grid, "grid-2x2", tl!("Grid view"))] {
+            if icons::button(ui, icon, 24.0, state.view == view, tip).clicked() {
+                state.view = view;
+            }
+        }
     });
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
+    // The kind tabs wrap onto a second line in a narrow panel.
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
         let count = |f: KindFilter| state.listing.as_ref().map_or(0, |l| materials(l).filter(|b| passes(state, f, l, b)).count());
-        let counts = [KindFilter::All, KindFilter::Brushes, KindFilter::SubTools, KindFilter::Layers].map(count);
+        let counts = [KindFilter::All, KindFilter::Brushes, KindFilter::SubTools, KindFilter::Layers, KindFilter::Actions, KindFilter::Gradients, KindFilter::ColorSets, KindFilter::Poses].map(count);
         let kinds = [
             (KindFilter::All, tl!("All")),
             (KindFilter::Brushes, tl!("Brushes")),
             (KindFilter::SubTools, tl!("Sub tools")),
             (KindFilter::Layers, tl!("Layers")),
+            (KindFilter::Actions, tl!("Auto actions")),
+            (KindFilter::Gradients, tl!("Gradients")),
+            (KindFilter::ColorSets, tl!("Color sets")),
+            (KindFilter::Poses, tl!("Poses")),
         ];
         for ((f, label), n) in kinds.into_iter().zip(counts) {
             if widgets::pill_tab(ui, &format!("{label} {n}"), state.filter == f).clicked() {
                 state.filter = f;
             }
         }
-        // One column or two, on the right.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            for (view, icon, tip) in [(View::Grid, "grid-2x2", tl!("Grid view")), (View::List, "list", tl!("List view"))] {
-                if icons::button(ui, icon, 22.0, state.view == view, tip).clicked() {
-                    state.view = view;
-                }
-            }
-        });
     });
     if state.listing.as_ref().is_some_and(has_tags) || !state.tags.is_empty() {
         tag_bar(state, ui, t);
@@ -957,6 +1245,18 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
         ("image", tl!("Image"))
     } else if is_sub_tool(b) {
         ("paint-bucket", tl!("Sub tool"))
+    } else if is_action(b) {
+        ("play", tl!("Auto action"))
+    } else if b["kind"] == "gradation_set" {
+        ("blend", tl!("Gradient set"))
+    } else if is_gradient(b) {
+        ("blend", tl!("Gradient"))
+    } else if is_color_set(b) {
+        ("swatch-book", tl!("Color set"))
+    } else if is_hand_pose(b) {
+        ("figure", tl!("Hand pose"))
+    } else if is_pose(b) {
+        ("figure", tl!("Pose"))
     } else {
         ("brush", tl!("Brush"))
     };
@@ -1017,6 +1317,17 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
             ui.label(tl!("Adds a layer carrying its special ruler to the open document; brush strokes snap to it (View › Snap To › Special Ruler)"));
         } else if is_layer(b) {
             ui.label(tl!("Adds a layer to the open document"));
+        } else if is_action(b) {
+            ui.label(tl!("Imports into the Actions panel; steps Prism cannot run yet stay in the action and must be disabled before it plays"));
+        } else if is_gradient(b) {
+            ui.label(tl!("Imports into the Gradients panel, for the Gradient tool and gradient maps"));
+        } else if is_color_set(b) {
+            ui.label(tl!("Imports into the Swatches panel as one group"));
+        } else if is_hand_pose(b) {
+            ui.label(tl!("Poses the hands of the active 3D figure layer; without one, adds a 3D figure with these hands"));
+        } else if is_pose(b) {
+            ui.label(tl!("Adds a 3D figure layer in this pose; poses of one collection selected together share a layer"));
+            ui.label(tl!("With a figure picked on the canvas (click it with the Move tool), poses that figure instead"));
         }
         if owned {
             ui.label(tl!("Already in the brush library; importing again replaces it"));
@@ -1035,7 +1346,7 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
         }
     }
     // Drag onto a canvas, or double-click: use it (see `use_material`).
-    let drag = MaterialDrag { uuid: uuid.to_string(), name: name.to_string(), layer: is_layer(b) };
+    let drag = MaterialDrag { uuid: uuid.to_string(), name: name.to_string(), layer: is_layer(b), action: is_action(b), gradient: is_gradient(b), color_set: is_color_set(b), pose: is_pose(b) };
     if ready && resp.dragged() {
         resp.dnd_set_drag_payload(drag.clone());
     }

@@ -171,7 +171,15 @@ pub struct StepInput {
     pub step: u64,
     /// Path distance from the stroke's first point to this step (CSP start and end).
     pub distance: f64,
+    /// On-screen speed of the segment this step lies on, in screen pixels per millisecond (0 at
+    /// rest or without timestamps; CSP's velocity input).
+    pub speed: f32,
 }
+
+/// The rest CLIP STUDIO counts before a stroke's first segment for its velocity input (ms): a
+/// fast first segment of 16 ms reads two thirds of its speed, one of 8 ms half (measured,
+/// docs/sut-analysis.md › Effector velocity input › Stroke start).
+pub const CSP_REST_MS: f64 = 8.0;
 
 /// Walks a polyline and emits steps, each as far from the last as the step's own callback says (the
 /// spacing of the dab it laid), plus airbrush steps in time.
@@ -193,6 +201,22 @@ pub struct PathWalker {
     speed_acc: f64,
     /// Path length up to `last`.
     travelled: f64,
+    /// A pressure or pose change without movement lays a step in place (off while a CSP
+    /// stabilizer drains at pen-up: those samples are not input).
+    in_place: bool,
+    /// The first step waits for the path to move (a CSP tip turned by the line's direction):
+    /// a stroke that never moves lays nothing.
+    wait_for_direction: bool,
+    /// Screen pixels per document pixel, for the on-screen speed.
+    zoom: f64,
+    /// The previous segment's on-screen length (screen pixels) and duration (ms); before the
+    /// first segment, a rest of [`CSP_REST_MS`].
+    seg_prev: (f64, f64),
+    /// CSP's velocity input at the last input point: the speed over the two segments before it.
+    speed_at_last: f32,
+    /// The velocity input at the current segment's two ends; steps between them interpolate.
+    seg_from: f32,
+    seg_to: f32,
 }
 
 impl PathWalker {
@@ -209,7 +233,31 @@ impl PathWalker {
             speed: None,
             speed_acc: 0.0,
             travelled: 0.0,
+            in_place: true,
+            wait_for_direction: false,
+            zoom: 1.0,
+            seg_prev: (0.0, CSP_REST_MS),
+            speed_at_last: 0.0,
+            seg_from: 0.0,
+            seg_to: 0.0,
         }
+    }
+
+    /// The view zoom (screen pixels per document pixel) the stroke is drawn at: speeds are on-screen.
+    pub fn with_zoom(mut self, zoom: f32) -> Self {
+        self.zoom = if zoom.is_finite() && zoom > 0.0 { f64::from(zoom).clamp(1e-3, 1e3) } else { 1.0 };
+        self
+    }
+
+    /// Lay the first step only once the path has moved; a stroke that never moves lays nothing.
+    pub fn wait_for_direction(mut self, on: bool) -> Self {
+        self.wait_for_direction = on;
+        self
+    }
+
+    /// Stop laying steps for pressure or pose changes without movement.
+    pub fn stop_in_place_steps(&mut self) {
+        self.in_place = false;
     }
 
     /// Space steps by stroke time instead of distance ([`SPEED_SPACING_MS`]): faster movement
@@ -219,15 +267,30 @@ impl PathWalker {
         self
     }
 
-    /// Emit a step; returns the path distance `out` asks for to the next one.
-    fn emit(&mut self, point: StrokePoint, distance: f64, out: &mut impl FnMut(StepInput) -> f64) -> f64 {
-        let s = StepInput { point, direction: self.dir, initial_direction: self.initial_dir.unwrap_or(self.dir), step: self.step, distance };
+    /// Emit a step at fraction `f` of the current segment; returns the path distance `out` asks
+    /// for to the next one.
+    fn emit(&mut self, point: StrokePoint, distance: f64, f: f64, out: &mut impl FnMut(StepInput) -> f64) -> f64 {
+        let f = if f.is_finite() { f.clamp(0.0, 1.0) as f32 } else { 1.0 };
+        let s = StepInput {
+            point,
+            direction: self.dir,
+            initial_direction: self.initial_dir.unwrap_or(self.dir),
+            step: self.step,
+            distance,
+            speed: self.seg_from + (self.seg_to - self.seg_from) * f,
+        };
         self.step += 1;
         out(s)
     }
 
     /// Feed one point. `out` builds a step's dabs and returns the distance to the next step.
     pub fn push(&mut self, p: StrokePoint, out: &mut impl FnMut(StepInput) -> f64) {
+        self.push_with_speed(p, None, out);
+    }
+
+    /// [`Self::push`] with the velocity input at `p` given (document pixels per ms, as a CSP
+    /// stabilizer reports it) instead of measured from the path.
+    pub fn push_with_speed(&mut self, p: StrokePoint, speed: Option<f64>, out: &mut impl FnMut(StepInput) -> f64) {
         let Some(a) = self.last else {
             self.last = Some(p);
             self.pending_first = Some(p);
@@ -235,14 +298,43 @@ impl PathWalker {
         };
         let (dx, dy) = (p.x - a.x, p.y - a.y);
         let len = (dx * dx + dy * dy).sqrt();
+        // CSP's velocity input at an input point is the on-screen distance over the time of the two
+        // segments before it (at the stroke's start the segment before counts as a rest of
+        // `CSP_REST_MS`), and steps between two points interpolate it (measured,
+        // docs/sut-analysis.md › Effector velocity input). A move without a duration repeats the
+        // previous segment; an untimed stop is a rest as long as the previous segment.
+        let seg_dt = p.time - a.time;
+        let seg = if seg_dt > 0.0 && seg_dt.is_finite() && len.is_finite() {
+            ((len * self.zoom).min(1e9), seg_dt.min(1e9))
+        } else if len > 1e-9 {
+            self.seg_prev
+        } else {
+            (0.0, self.seg_prev.1)
+        };
+        let (dist, dt) = (seg.0 + self.seg_prev.0, seg.1 + self.seg_prev.1);
+        let v = match speed.filter(|v| v.is_finite()) {
+            Some(v) => v.max(0.0) * self.zoom,
+            None if dt > 0.0 => dist / dt,
+            None => 0.0,
+        };
+        self.seg_from = self.speed_at_last;
+        self.seg_to = if v.is_finite() { v.min(1e6) as f32 } else { 0.0 };
+        self.speed_at_last = self.seg_to;
+        self.seg_prev = seg;
         if len > 1e-9 {
             self.dir = (-dy).atan2(dx) as f32;
             if self.initial_dir.is_none() {
                 self.initial_dir = Some(self.dir);
             }
         }
+        if self.wait_for_direction && self.pending_first.is_some() && len <= 1e-9 {
+            // Still in place: keep waiting, with the newest pressure and pose.
+            self.pending_first = Some(p);
+            self.last = Some(p);
+            return;
+        }
         if let Some(f) = self.pending_first.take() {
-            self.next_at = self.emit(f, self.travelled, out).max(0.25);
+            self.next_at = self.emit(f, self.travelled, 0.0, out).max(0.25);
         }
         if len > 1e-9 {
             // Speed spacing needs the segment's duration; without timestamps (a straight ⇧-click
@@ -251,9 +343,10 @@ impl PathWalker {
             match self.speed.filter(|_| dt > 0.0 && dt.is_finite()) {
                 None => {
                     while self.next_at <= len + 1e-9 {
-                        let q = lerp_pt(&a, &p, (self.next_at / len).min(1.0));
+                        let t = (self.next_at / len).min(1.0);
+                        let q = lerp_pt(&a, &p, t);
                         let at = self.travelled + self.next_at.min(len);
-                        self.next_at += self.emit(q, at, out).max(0.25);
+                        self.next_at += self.emit(q, at, t, out).max(0.25);
                     }
                     self.next_at -= len;
                 }
@@ -264,7 +357,7 @@ impl PathWalker {
                     while self.speed_acc >= iv && n < max_n {
                         self.speed_acc -= iv;
                         let f = ((dt - self.speed_acc) / dt).clamp(0.0, 1.0);
-                        self.emit(lerp_pt(&a, &p, f), self.travelled + f * len, out);
+                        self.emit(lerp_pt(&a, &p, f), self.travelled + f * len, f, out);
                         n += 1;
                     }
                     if n == max_n {
@@ -280,7 +373,7 @@ impl PathWalker {
                 if dt > iv * MAX_AIRBRUSH_DABS_PER_SEGMENT as f64 {
                     // A stalled or hostile timestamp must not replay an arbitrarily long backlog.
                     self.time_acc = 0.0;
-                    self.emit(p, self.travelled + len, out);
+                    self.emit(p, self.travelled + len, 1.0, out);
                     self.travelled += len;
                     self.last = Some(p);
                     return;
@@ -290,24 +383,26 @@ impl PathWalker {
                 while self.time_acc >= iv && n < MAX_AIRBRUSH_DABS_PER_SEGMENT {
                     self.time_acc -= iv;
                     let f = ((dt - self.time_acc) / dt).clamp(0.0, 1.0);
-                    self.emit(lerp_pt(&a, &p, f), self.travelled + f * len, out);
+                    self.emit(lerp_pt(&a, &p, f), self.travelled + f * len, f, out);
                     emitted_endpoint = f >= 1.0;
                     n += 1;
                 }
             }
         }
-        if len <= 1e-9 && stylus_changed(&a, &p) && !emitted_endpoint {
+        if self.in_place && len <= 1e-9 && stylus_changed(&a, &p) && !emitted_endpoint {
             // Distance spacing cannot represent a pressure/pose change in place. Emit it once,
             // keeping unchanged stationary samples inert and avoiding a duplicate airbrush dab.
-            self.next_at = self.emit(p, self.travelled + len, out).max(0.25);
+            self.next_at = self.emit(p, self.travelled + len, 1.0, out).max(0.25);
         }
         self.travelled += len;
         self.last = Some(p);
     }
 
     pub fn finish(&mut self, out: &mut impl FnMut(StepInput) -> f64) {
-        if let Some(f) = self.pending_first.take() {
-            self.emit(f, self.travelled, out);
+        if let Some(f) = self.pending_first.take()
+            && !self.wait_for_direction
+        {
+            self.emit(f, self.travelled, 0.0, out);
         }
     }
 }
@@ -379,7 +474,12 @@ fn scalar(d: &Dynamic, s: &StepInput, r: f32) -> f32 {
     if !d.is_active() {
         return 1.0;
     }
-    jittered(d, dynamic_control(d, s), r) * csp_tilt(d, s) * csp_random(d, r)
+    jittered(d, dynamic_control(d, s), r) * csp_tilt(d, s) * csp_speed(d, s) * csp_random(d, r)
+}
+
+/// The CSP velocity response's factor at step `s` (1 when the control is off).
+fn csp_speed(d: &Dynamic, s: &StepInput) -> f32 {
+    d.csp_speed.as_ref().map_or(1.0, |v| v.multiplier(s.speed))
 }
 
 fn csp_tilt(d: &Dynamic, s: &StepInput) -> f32 {
@@ -432,17 +532,25 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     }
 }
 
+/// CLIP STUDIO's sub-colour blend for one dab: the amount times its pen input response (the
+/// per-dab evaluator multiplies a colour amount by its effector's output).
+fn csp_sub_amount(b: &BrushSettings, s: &StepInput, seed: u64, index: u64) -> f32 {
+    let amount = b.csp_sub_color.filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
+    let response = b.csp_sub_color_dynamic.as_ref().map_or(1.0, |d| scalar(d, s, rand01(seed, index, stream::FG_BG)));
+    Some(amount * response).filter(|t| t.is_finite()).map_or(amount, |t| t.clamp(0.0, 1.0))
+}
+
 /// Colour Dynamics for one dab (or once per stroke, with `index = 0`).
 pub fn dynamic_color(b: &BrushSettings, s: &StepInput, seed: u64, index: u64) -> [f32; 4] {
     let cd = &b.color_dynamics;
     let (fg, bg) = (b.color, b.background);
     if !cd.enabled {
-        let t = b.csp_sub_color.filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
+        let t = csp_sub_amount(b, s, seed, index);
         return std::array::from_fn(|i| fg[i] + (bg[i] - fg[i]) * t);
     }
     let r = |st: u64| rand01(seed, index, st);
     let base = if cd.fg_bg.control != Control::Off { 1.0 - dynamic_control(&cd.fg_bg, s) } else { 0.0 };
-    let fixed = b.csp_sub_color.filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
+    let fixed = csp_sub_amount(b, s, seed, index);
     let base = fixed + (1.0 - fixed) * base;
     let t = (base + (1.0 - base) * cd.fg_bg.jitter.clamp(0.0, 1.0) * r(stream::FG_BG)).clamp(0.0, 1.0);
     let rgb = [fg[0] + (bg[0] - fg[0]) * t, fg[1] + (bg[1] - fg[1]) * t, fg[2] + (bg[2] - fg[2]) * t];
@@ -467,7 +575,7 @@ pub fn dab_diameter(b: &BrushSettings, s: &StepInput, r: f32) -> f32 {
     } else {
         1.0
     };
-    (b.size * if sd.enabled { jittered(&sd.size, cv, r) * csp_tilt(&sd.size, s) * csp_random(&sd.size, r) } else { cv }).min(crate::brush::MAX_BRUSH_SIZE)
+    (b.size * if sd.enabled { jittered(&sd.size, cv, r) * csp_tilt(&sd.size, s) * csp_speed(&sd.size, s) * csp_random(&sd.size, r) } else { cv }).min(crate::brush::MAX_BRUSH_SIZE)
 }
 
 /// Builds the primary dabs of a step (Shape Dynamics, Scattering, Transfer, Color, Texture depth).
@@ -559,9 +667,12 @@ impl DabBuilder {
             let diameter = spray.map_or(area_diameter, |spray| spray.size * scalar(&spray.size_dynamic, s, r(stream::SPRAY_SIZE)) * taper(Taper::SpraySize));
             // CSP "at least 1 pixel": a sub-pixel dab (pressure, taper) is laid and spaced as 1 px.
             let diameter = if b.csp_at_least_1px && diameter.is_finite() { diameter.max(1.0) } else { diameter };
-            // The step's first dab sets the spacing to the next step.
+            // The step's first dab sets the spacing to the next step (CSP: times the spacing's
+            // pen response).
             if step.is_none() {
-                step = Some(self.step_after(diameter));
+                let k = b.csp_spacing_dynamic.as_ref().map_or(1.0, |d| scalar(d, s, r(stream::SPACING)));
+                let k = if k.is_finite() { f64::from(k.clamp(0.01, 1.0)) } else { 1.0 };
+                step = Some((self.step_after(diameter) * k).max(MIN_DAB_STEP));
             }
             let mut angle = b.angle;
             let mut roundness = b.roundness.clamp(0.01, 1.0);
@@ -680,6 +791,8 @@ impl DabBuilder {
                     (m.density * scalar(&m.density_dynamic, s, r(stream::PAINT_DENSITY))).clamp(0.0, 1.0),
                 )
             });
+            let thickness = b.csp_thickness_dynamic.as_ref().map_or(1.0, |t| scalar(&t.dynamic, s, r(stream::THICKNESS)));
+            let thickness = if thickness.is_finite() { thickness.clamp(0.0, 1.0) } else { 1.0 };
             out.push(Dab {
                 center: c,
                 radius,
@@ -699,6 +812,7 @@ impl DabBuilder {
                 paint_amount,
                 paint_density,
                 ribbon: None,
+                thickness,
             });
         }
         step.unwrap_or(MIN_DAB_STEP)
@@ -760,6 +874,7 @@ impl DualBuilder {
                 paint_amount: 1.0,
                 paint_density: 1.0,
                 ribbon: None,
+                thickness: 1.0,
             });
         }
         self.step()
@@ -798,6 +913,15 @@ pub struct DabGenerator {
 }
 
 impl DabGenerator {
+    /// Physical screen pixels per view point (HiDPI): CSP's velocity input is the speed in screen
+    /// pixels, while `zoom` is in view points. Only the speed uses it.
+    pub fn with_pixels_per_point(mut self, ppp: f32) -> Self {
+        let ppp = if ppp.is_finite() && ppp > 0.0 { ppp.clamp(0.1, 10.0) } else { 1.0 };
+        self.walker = self.walker.with_zoom(self.zoom * ppp);
+        self.dual_walker = self.dual_walker.map(|w| w.with_zoom(self.zoom * ppp));
+        self
+    }
+
     pub fn new(brush: &BrushSettings, zoom: f32) -> Self {
         let brush = brush.bounded_for_render();
         let interval = brush.build_up.then(|| 1000.0 / f64::from(brush.build_up_rate.clamp(0.1, 1000.0)));
@@ -806,21 +930,30 @@ impl DabGenerator {
             zoom,
             stabilizer: crate::csp_stabilizer::Stabilizer::new(&brush.csp_stabilizer.clone().unwrap_or_default(), zoom),
             smoother: Smoother::new(&brush.effective_smoothing(), zoom),
-            walker: if brush.spacing_enabled { PathWalker::new(interval) } else { PathWalker::new(interval).speed_spacing(SPEED_SPACING_MS) },
-            dual_walker: dual_on.then(|| PathWalker::new(None)),
+            // A CSP tip turned by the direction of the line has no angle until the pen moves:
+            // CLIP STUDIO lays nothing for a tap with such a brush (measured,
+            // docs/sut-analysis.md › 가을낙엽).
+            walker: if brush.spacing_enabled { PathWalker::new(interval) } else { PathWalker::new(interval).speed_spacing(SPEED_SPACING_MS) }
+                .wait_for_direction(brush.csp_follows_line())
+                .with_zoom(zoom),
+            dual_walker: dual_on.then(|| PathWalker::new(None).wait_for_direction(brush.csp_follows_line()).with_zoom(zoom)),
             builder: DabBuilder::new(&brush),
             dual: dual_on.then(|| DualBuilder::new(&brush)),
             scratch: Vec::new(),
         }
     }
 
-    fn walk(&mut self, pts: &[StrokePoint], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
-        for p in pts {
+    /// Walk the points; `speeds`, when it lines up with them, gives each point's velocity input
+    /// (a CSP stabilizer's, see [`crate::csp_stabilizer::Stabilizer::speed`]).
+    fn walk(&mut self, pts: &[StrokePoint], speeds: &[Option<f64>], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
+        let aligned = speeds.len() == pts.len();
+        for (i, p) in pts.iter().enumerate() {
             let p = apply_pose(&self.builder.brush, *p);
+            let speed = if aligned { speeds.get(i).copied().flatten() } else { None };
             let builder = &mut self.builder;
-            self.walker.push(p, &mut |s| builder.build(&s, dabs));
+            self.walker.push_with_speed(p, speed, &mut |s| builder.build(&s, dabs));
             if let (Some(w), Some(db)) = (self.dual_walker.as_mut(), self.dual.as_mut()) {
-                w.push(p, &mut |s| db.build(&s, dual));
+                w.push_with_speed(p, speed, &mut |s| db.build(&s, dual));
             }
         }
     }
@@ -849,11 +982,15 @@ impl DabGenerator {
     pub fn push(&mut self, pts: &[StrokePoint], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
         let mut sm = std::mem::take(&mut self.scratch);
         sm.clear();
+        let mut speeds = Vec::new();
         for p in pts {
             let p = self.stabilizer.push(*p);
+            let before = sm.len();
             self.smoother.push(p, &mut sm);
+            // The smoother may add or hold points; the velocity input follows one point each.
+            speeds.extend(std::iter::repeat_n(self.stabilizer.speed(), sm.len() - before));
         }
-        self.walk(&sm, dabs, dual);
+        self.walk(&sm, &speeds, dabs, dual);
         self.scratch = sm;
     }
 
@@ -862,11 +999,25 @@ impl DabGenerator {
         let mut sm = Vec::new();
         let mut caught_up = Vec::new();
         self.stabilizer.finish(&mut caught_up);
+        // The stabilizer's pen-up samples repeat the last position while their pressure drains.
+        // They are not input: laid in place they pile dabs on the end of the stroke, which shows
+        // on a brush that ignores pressure (CLIP STUDIO ends such a stroke with its last spaced
+        // dab; measured, docs/sut-analysis.md › 가을낙엽).
+        if !caught_up.is_empty() {
+            self.walker.stop_in_place_steps();
+            if let Some(w) = self.dual_walker.as_mut() {
+                w.stop_in_place_steps();
+            }
+        }
+        let mut speeds = Vec::new();
         for p in caught_up {
+            let before = sm.len();
             self.smoother.push(p, &mut sm);
+            speeds.extend(std::iter::repeat_n(self.stabilizer.speed(), sm.len() - before));
         }
         self.smoother.finish(&mut sm);
-        self.walk(&sm, dabs, dual);
+        speeds.resize(sm.len(), self.stabilizer.speed());
+        self.walk(&sm, &speeds, dabs, dual);
         let builder = &mut self.builder;
         self.walker.finish(&mut |s| builder.build(&s, dabs));
         if let (Some(w), Some(db)) = (self.dual_walker.as_mut(), self.dual.as_mut()) {

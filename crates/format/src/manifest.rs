@@ -230,6 +230,13 @@ pub struct LayerM {
     /// CLIP STUDIO special rulers (missing in older files = none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub special_rulers: Option<prism_doc::SpecialRulers>,
+    /// 3D figure scene of a figure layer (missing in older files = none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub figure: Option<prism_doc::FigureScene>,
+    /// The character model file of each of `figure`'s figures (none: the mannequin), as blobs;
+    /// the scene itself leaves the bytes out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub figure_models: Vec<Option<Hash>>,
     /// CLIP STUDIO reference layer (missing in older files = no).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reference: bool,

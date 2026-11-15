@@ -96,15 +96,21 @@ pub(super) fn color_jitter(r: &Row, b: &mut BrushSettings, warnings: &mut Vec<St
         let saturation = jitter(r, num(r, "BrushSaturationChange", 0.0) / 100.0, "BrushSaturationChangeEffector", "saturation", warnings);
         let value = jitter(r, num(r, "BrushValueChange", 0.0) / 100.0, "BrushValueChangeEffector", "luminosity", warnings);
         let sub_amount = num(r, "BrushSubColor", 0.0) / 100.0;
-        let fixed_sub = match r.get("BrushSubColorEffector") {
-            None | Some(Value::Null) => true,
-            Some(value) => value.blob().is_some_and(|blob| matches!(effector::controls(blob), Ok((0, _)))),
+        let sub_controls = match r.get("BrushSubColorEffector") {
+            None | Some(Value::Null) => Some(0),
+            Some(value) => value.blob().and_then(|blob| effector::controls(blob).ok()).map(|(active, _)| active),
         };
-        let sub = if fixed_sub && sub_amount.is_finite() {
-            b.csp_sub_color = (sub_amount != 0.0).then_some(sub_amount.clamp(0.0, 1.0));
-            0.0
-        } else {
-            jitter(r, sub_amount, "BrushSubColorEffector", "sub color blend", warnings)
+        let sub = match sub_controls {
+            // Without the random input the amount is the blend itself, times the effector's
+            // pressure and tilt response when those are on (Chainmail 2-C).
+            Some(active) if active & effector::RANDOM_CONTROL == 0 && sub_amount.is_finite() => {
+                b.csp_sub_color = (sub_amount != 0.0).then_some(sub_amount.clamp(0.0, 1.0));
+                if active != 0 && b.csp_sub_color.is_some() {
+                    b.csp_sub_color_dynamic = super::pressure_effector(r, "BrushSubColorEffector", warnings);
+                }
+                0.0
+            }
+            _ => jitter(r, sub_amount, "BrushSubColorEffector", "sub color blend", warnings),
         };
         // Prism's hue jitter j spreads ±180°·j.
         cd.hue_jitter = (hue * 2.0).clamp(0.0, 1.0);

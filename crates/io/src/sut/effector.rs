@@ -1,7 +1,7 @@
 //! Bounded SUT effector decoding. Serialized layout evidence is in docs/sut-analysis.md.
 //! Curve coordinates are data; the independent evaluator lives in prism-paint.
 
-use prism_paint::{Control, CspTilt, Dynamic, PressureCurve};
+use prism_paint::{Control, CspSpeed, CspTilt, Dynamic, PressureCurve};
 
 pub(super) struct Effector {
     /// Pen pressure and/or tilt response; `None` when neither is active.
@@ -9,11 +9,15 @@ pub(super) struct Effector {
     pub other_controls: u32,
     /// Why an active tilt response was dropped.
     pub tilt_error: Option<String>,
+    /// Why an active velocity response was dropped.
+    pub speed_error: Option<String>,
 }
 
 /// Active-control bits shared by the supported and active masks.
 const PRESSURE: u32 = 0x10;
 const TILT: u32 = 0x20;
+/// Velocity: the stroke's on-screen speed, with its minimum % in word 20 and the third curve.
+const SPEED: u32 = 0x40;
 /// Random: a per-dab factor between the minimum % in word 24 and 100 %.
 const RANDOM: u32 = 0x80;
 
@@ -79,16 +83,16 @@ pub(super) fn read(blob: &[u8]) -> Result<Effector, String> {
         return Err("invalid SUT effector header length".into());
     }
     let active = word(blob, 4)? & word(blob, 8)?;
-    let other_controls = active & !(PRESSURE | TILT | RANDOM);
+    let other_controls = active & !(PRESSURE | TILT | SPEED | RANDOM);
     let random = if active & RANDOM != 0 { Some(word(blob, 24)?.min(100) as f32 / 100.0) } else { None };
     let pressure_len = length(blob, 32)?;
     let tilt_len = length(blob, 36)?;
     let third_len = if header >= 48 { length(blob, 44)? } else { 0 };
     let pressure_end = header.checked_add(pressure_len).ok_or("SUT effector length overflow")?;
     let tilt_end = pressure_end.checked_add(tilt_len).ok_or("SUT effector length overflow")?;
-    if active & (PRESSURE | TILT) == 0 {
+    if active & (PRESSURE | TILT | SPEED) == 0 {
         let dynamic = random.map(|m| Dynamic { csp_random: Some(m), ..Dynamic::default() });
-        return Ok(Effector { dynamic, other_controls, tilt_error: None });
+        return Ok(Effector { dynamic, other_controls, tilt_error: None, speed_error: None });
     }
     let end = tilt_end.checked_add(third_len).ok_or("SUT effector length overflow")?;
     if end != blob.len() {
@@ -115,8 +119,22 @@ pub(super) fn read(blob: &[u8]) -> Result<Effector, String> {
             Err(error) => tilt_error = Some(error),
         }
     }
+    let mut speed_error = None;
+    // Like the tilt response, velocity needs its curve block (the third).
+    if active & SPEED != 0 && third_len != 0 {
+        let minimum = word(blob, 20)?;
+        let speed = if minimum > 100 {
+            Err("SUT velocity minimum must be between 0 and 100".to_string())
+        } else {
+            curve(blob.get(tilt_end..end).ok_or("truncated SUT velocity curve")?).map(|c| CspSpeed { minimum: minimum as f32 / 100.0, curve: Some(c) })
+        };
+        match speed {
+            Ok(speed) => dynamic.get_or_insert_with(Dynamic::default).csp_speed = Some(speed),
+            Err(error) => speed_error = Some(error),
+        }
+    }
     if let Some(m) = random {
         dynamic.get_or_insert_with(Dynamic::default).csp_random = Some(m);
     }
-    Ok(Effector { dynamic, other_controls, tilt_error })
+    Ok(Effector { dynamic, other_controls, tilt_error, speed_error })
 }

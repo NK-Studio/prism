@@ -107,23 +107,60 @@ pub struct Dynamic {
     /// minimum (0..1) and 1, on top of any pressure or tilt response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csp_random: Option<f32>,
+    /// CSP's velocity control (effector input 0x40): the value is also scaled by the stroke's
+    /// on-screen speed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_speed: Option<CspSpeed>,
 }
 
 impl Default for Dynamic {
     fn default() -> Self {
-        Self { jitter: 0.0, control: Control::Off, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None }
+        Self::controlled(Control::Off)
     }
 }
 
 impl Dynamic {
     pub const fn controlled(control: Control) -> Self {
-        Self { jitter: 0.0, control, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None }
+        Self { jitter: 0.0, control, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None, csp_speed: None }
     }
     pub const fn jitter(jitter: f32) -> Self {
-        Self { jitter, control: Control::Off, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None }
+        Self { jitter, control: Control::Off, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None, csp_speed: None }
     }
     pub fn is_active(&self) -> bool {
-        self.jitter > 0.0 || self.control != Control::Off || self.csp_tilt.is_some() || self.csp_random.is_some()
+        self.jitter > 0.0 || self.control != Control::Off || self.csp_tilt.is_some() || self.csp_random.is_some() || self.csp_speed.is_some()
+    }
+}
+
+/// On-screen speed, in screen pixels per millisecond, at which CSP's velocity input reaches 1
+/// (measured, docs/sut-analysis.md › Effector velocity input › Line width to brush size: linear
+/// from 0, 0.5 / 2 / 4 / 8 / 16 px/ms read 0.04 / 0.25 / 0.42 / 0.86 / 1).
+pub const CSP_SPEED_FULL: f32 = 9.3;
+
+/// CSP's velocity response (effector control 0x40): `minimum + (1 − minimum) · curve(v)` with `v`
+/// the on-screen speed over [`CSP_SPEED_FULL`], clamped to 0..1. The stored curves fall from 1 at
+/// rest to 0 at full speed, so a fast stroke reaches the minimum.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CspSpeed {
+    pub minimum: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curve: Option<PressureCurve>,
+}
+
+impl Default for CspSpeed {
+    fn default() -> Self {
+        Self { minimum: 1.0, curve: None }
+    }
+}
+
+impl CspSpeed {
+    /// The factor at `speed` screen pixels per millisecond (1 for a hostile or missing speed).
+    pub fn multiplier(&self, speed: f32) -> f32 {
+        let v = if speed.is_finite() { (speed / CSP_SPEED_FULL).clamp(0.0, 1.0) } else { 0.0 };
+        let c = self.curve.as_ref().map_or(v, |c| c.sample(v));
+        let m = if self.minimum.is_finite() { self.minimum.clamp(0.0, 1.0) } else { 1.0 };
+        let k = m + (1.0 - m) * if c.is_finite() { c.clamp(0.0, 1.0) } else { 1.0 };
+        k.clamp(0.0, 1.0)
     }
 }
 
@@ -600,6 +637,10 @@ pub struct BrushSettings {
     /// CSP's fixed sub-color contribution when no input effector is active (0..1).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csp_sub_color: Option<f32>,
+    /// The pen input that scales `csp_sub_color` per dab (CLIP STUDIO multiplies the amount by
+    /// its effector's output: pressure, tilt); `None` keeps the amount constant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_sub_color_dynamic: Option<Dynamic>,
     /// Imported CSP color mixing (amount/density of paint, color stretch): picks up the colour
     /// under the brush as it moves.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -622,6 +663,20 @@ pub struct BrushSettings {
     /// colour (`None`: that tip paints in the brush colour). Ignored with colour mixing or erasing.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub csp_tip_colors: Vec<Option<crate::csp_tip::CspTipColor>>,
+    /// Imported CSP gray tips: `true` where `csp_tip_colors[i]` holds tip `i`'s gray (the same
+    /// value in every channel) instead of its colours. CLIP STUDIO draws a gray tip's coverage from
+    /// its alpha and its gray as a blend from the dab colour (black) to the sub colour (white,
+    /// `background`); erasing and colour mixing keep the density `alpha × (1 − gray)`
+    /// (measured, docs/sut-analysis.md › Gray brush tips).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub csp_tip_grays: Vec<bool>,
+    /// Imported CSP spacing by pen input (`BrushIntervalEffector`): each step's spacing is
+    /// `spacing` times the response (at most 1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_spacing_dynamic: Option<Dynamic>,
+    /// Imported CSP thickness by pen input (`BrushThicknessEffector`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_thickness_dynamic: Option<crate::csp_tip::CspThickness>,
     /// Imported CSP Erase blending mode: the brush erases with whichever tool runs it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub csp_erase: bool,
@@ -709,12 +764,16 @@ impl Default for BrushSettings {
             smoothing: Smoothing::default(),
             csp_correction: false,
             csp_sub_color: None,
+            csp_sub_color_dynamic: None,
             csp_stabilizer: None,
             csp_in_out: None,
             csp_mixing: None,
             csp_ribbon: None,
             csp_tip_order: None,
             csp_tip_colors: Vec::new(),
+            csp_tip_grays: Vec::new(),
+            csp_spacing_dynamic: None,
+            csp_thickness_dynamic: None,
             csp_erase: false,
             csp_stroke: None,
             csp_size_by_view: false,
@@ -733,6 +792,29 @@ impl Default for BrushSettings {
 }
 
 impl BrushSettings {
+    /// A CSP brush whose tip (or spray particle) turns with the direction of the line
+    /// (`BrushRotationEffector` flag 0x40) and has no post correction. Such a brush lays nothing
+    /// until the pen has moved; with post correction CLIP STUDIO draws a tap's dab (measured with
+    /// Chainmail 1 and 2 2-C, docs/sut-analysis.md › Gray brush tips › Taps).
+    pub fn csp_follows_line(&self) -> bool {
+        let tip = self.shape_dynamics.enabled && self.shape_dynamics.angle.control == Control::Direction;
+        let particle = self.csp_spray.as_ref().is_some_and(|s| s.angle_input == crate::csp_spray::CspParticleAngle::Direction);
+        self.csp_correction && self.csp_post_correction.is_none() && (tip || particle)
+    }
+
+    /// Any dynamic reads CLIP STUDIO's velocity input, so a stroke needs the times of samples
+    /// where the pen rests: they are segments at speed 0 (measured, docs/sut-analysis.md ›
+    /// Effector velocity input › Stroke start).
+    pub fn reads_speed(&self) -> bool {
+        let (s, c, t, k) = (&self.shape_dynamics, &self.color_dynamics, &self.transfer, &self.scattering);
+        [&s.size, &s.angle, &s.roundness, &k.scatter, &k.count_jitter, &self.texture.depth_jitter, &c.fg_bg, &t.opacity, &t.flow, &t.wetness, &t.mix]
+            .into_iter()
+            .chain(self.csp_sub_color_dynamic.as_ref())
+            .chain(self.csp_spacing_dynamic.as_ref())
+            .chain(self.csp_thickness_dynamic.as_ref().map(|t| &t.dynamic))
+            .any(|d| d.csp_speed.is_some())
+    }
+
     /// Keep Photoshop's tool setting available for switching back without filtering CSP input.
     pub fn effective_smoothing(&self) -> Smoothing {
         if self.csp_correction { Smoothing::default() } else { self.smoothing.clone() }

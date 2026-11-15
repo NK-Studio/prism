@@ -812,6 +812,45 @@ fn algorithm_scenarios(b: &mut Bench, sz: &Sizes) {
             Err(e) => b.errors.push((names[0].into(), e)),
         }
     }
+    // 3D figure layers: a full-quality render and one draft step of a camera drag, on a 24 MP
+    // 16-bit document where the figure fills 80 % of the height.
+    let figure = ["3D figure render 24 MP 16-bit", "3D figure camera drag step (draft) 24 MP"];
+    if figure.iter().any(|n| b.wanted(n)) {
+        let (w, h) = sz.big_photo;
+        let mut s = Session::new();
+        match exec(&mut s, "file.new", json!({"width": w, "height": h, "depth": 16, "background": "white"})).and_then(|_| exec(&mut s, "layer.figure.new", json!({}))) {
+            Ok(_) => {
+                b.time(figure[0], &mut s, reps, false, |_, s, _| {
+                    let t = Instant::now();
+                    exec(s, "layer.figure.setLook", json!({"outline": true}))?;
+                    Ok(ms(t))
+                });
+                let steps = b.reps;
+                b.time(figure[1], &mut s, steps, false, |_, s, i| {
+                    let t = Instant::now();
+                    exec(s, "layer.figure.setCamera", json!({"orbitBy": [2.0, 0.0], "draft": true, "coalesce": format!("perf-orbit-{i}")}))?;
+                    Ok(ms(t))
+                });
+            }
+            Err(e) => b.errors.push((figure[0].into(), e)),
+        }
+    }
+    // A 3D character: a 190 × 190 grid (72 k triangles) with a 1024² texture, skinned to its
+    // hips, standing 1.7 m tall in a 24 MP 16-bit document.
+    let character = "3D character render 24 MP 16-bit";
+    if b.wanted(character) {
+        let (w, h) = sz.big_photo;
+        let mut s = Session::new();
+        let data = prism_paint::tile::b64_encode(&character_gltf(190, 1024));
+        match exec(&mut s, "file.new", json!({"width": w, "height": h, "depth": 16, "background": "white"})).and_then(|_| exec(&mut s, "layer.figure.importModel", json!({"data": data, "fileName": "grid.gltf"}))) {
+            Ok(_) => b.time(character, &mut s, reps, false, |_, s, _| {
+                let t = Instant::now();
+                exec(s, "layer.figure.setLook", json!({"outline": true}))?;
+                Ok(ms(t))
+            }),
+            Err(e) => b.errors.push((character.into(), e)),
+        }
+    }
     let cmyk = "brush dab on A4 300 ppi CMYK + refresh";
     if b.wanted(cmyk) {
         let (w, h) = sz.a4;
@@ -831,4 +870,70 @@ fn algorithm_scenarios(b: &mut Bench, sz: &Sizes) {
             Ok(ms(t) + b.refresh(s, false)?)
         });
     }
+}
+
+/// A synthetic glTF character for timing: an `n` × `n` grid of quads, 0.6 m wide and 1.7 m tall,
+/// facing +Z, skinned to a hips bone, textured with a `tex`² checker (PNG), its buffer inline.
+fn character_gltf(n: usize, tex: u32) -> Vec<u8> {
+    let mut bin: Vec<u8> = Vec::new();
+    let v = n + 1;
+    for r in 0..v {
+        for c in 0..v {
+            let (x, y) = (c as f32 / n as f32, r as f32 / n as f32);
+            // A gentle bulge so it shades.
+            let z = 0.08 * ((x * std::f32::consts::PI).sin() * (y * std::f32::consts::PI).sin());
+            for f in [x * 0.6 - 0.3, y * 1.7, z] {
+                bin.extend(f.to_le_bytes());
+            }
+        }
+    }
+    let pos_len = bin.len();
+    for r in 0..v {
+        for c in 0..v {
+            for f in [c as f32 / n as f32, 1.0 - r as f32 / n as f32] {
+                bin.extend(f.to_le_bytes());
+            }
+        }
+    }
+    let uv_len = bin.len() - pos_len;
+    let idx_start = bin.len();
+    for r in 0..n {
+        for c in 0..n {
+            let a = (r * v + c) as u32;
+            for i in [a, a + 1, a + v as u32 + 1, a, a + v as u32 + 1, a + v as u32] {
+                bin.extend(i.to_le_bytes());
+            }
+        }
+    }
+    let idx_len = bin.len() - idx_start;
+    let px: Vec<u8> = (0..tex * tex).flat_map(|i| if ((i % tex) / 64 + (i / tex) / 64).is_multiple_of(2) { [230u8, 120, 90, 255] } else { [250, 240, 220, 255] }).collect();
+    let im = prism_codecs::Image::from_raw(tex, tex, prism_codecs::ChannelLayout::Rgba, prism_codecs::SampleType::U8, px).expect("checker image");
+    let png = prism_codecs::encode(&im, prism_codecs::Format::Png, &prism_codecs::EncodeOptions::default()).expect("checker png");
+    let png_start = bin.len();
+    bin.extend(&png);
+    let count = v * v;
+    json!({
+        "asset": {"version": "2.0"},
+        "buffers": [{"uri": format!("data:application/octet-stream;base64,{}", prism_paint::tile::b64_encode(&bin)), "byteLength": bin.len()}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": pos_len},
+            {"buffer": 0, "byteOffset": pos_len, "byteLength": uv_len},
+            {"buffer": 0, "byteOffset": idx_start, "byteLength": idx_len},
+            {"buffer": 0, "byteOffset": png_start, "byteLength": png.len()}
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": count, "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5126, "count": count, "type": "VEC2"},
+            {"bufferView": 2, "componentType": 5125, "count": n * n * 6, "type": "SCALAR"}
+        ],
+        "images": [{"bufferView": 3, "mimeType": "image/png"}],
+        "textures": [{"source": 0}],
+        "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
+        "nodes": [{"name": "Hips", "translation": [0.0, 1.0, 0.0]}, {"name": "Body", "mesh": 0}],
+        "skins": [{"joints": [0]}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}, "indices": 2, "material": 0}]}],
+        "extensions": {"VRMC_vrm": {"humanoid": {"humanBones": {"hips": {"node": 0}}}}}
+    })
+    .to_string()
+    .into_bytes()
 }

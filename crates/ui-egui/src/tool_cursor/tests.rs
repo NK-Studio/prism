@@ -131,6 +131,11 @@ fn write_cursor_preview() {
         (Shape::Move, 1.0),
         (Shape::Move, 1.5),
         (Shape::Move, 2.0),
+        (Shape::Zoom { out: false }, 1.0),
+        (Shape::Zoom { out: true }, 1.0),
+        (Shape::Zoom { out: false }, 1.5),
+        (Shape::Zoom { out: false }, 2.0),
+        (Shape::Zoom { out: true }, 2.0),
     ];
     let (width, height) = (600_usize, cases.len() * 100);
     let mut rgba = vec![255; width * height * 4];
@@ -314,4 +319,96 @@ fn move_cursor_clears_its_image_on_drag_and_when_a_panel_takes_the_pointer() {
     });
     assert!(panel.platform_output.cursor_image.is_none());
     assert_eq!(panel.platform_output.cursor_icon, CursorIcon::PointingHand);
+}
+
+fn ink(image: &CustomCursorImage, x: u16, y: u16) -> bool {
+    let at = (usize::from(y) * usize::from(image.size[0]) + usize::from(x)) * 4;
+    image.rgba[at + 3] > 230 && image.rgba[at] < 40
+}
+
+#[test]
+fn zoom_bitmap_is_a_glass_with_a_plus_or_minus_about_its_hotspot_at_each_dpi() {
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        let plus = rasterize(Shape::Zoom { out: false }, scale).unwrap();
+        let minus = rasterize(Shape::Zoom { out: true }, scale).unwrap();
+        for img in [&plus, &minus] {
+            assert_eq!(img.size, [(24.0 * scale).ceil() as u16; 2]);
+            assert_eq!(img.rgba.len(), usize::from(img.size[0]) * usize::from(img.size[1]) * 4);
+            assert_eq!(img.hotspot, [(9.0 * scale).round() as u16; 2]);
+            let [x, y] = img.hotspot;
+            assert!(ink(img, x, y), "the sign crosses the lens centre");
+            assert!(ink(img, x + (2.0 * scale) as u16, y), "both signs have the horizontal bar");
+            assert!(ink(img, x + (6.5 * scale) as u16, y), "the lens ring");
+            assert!(ink(img, x + (9.0 * scale) as u16, y + (9.0 * scale) as u16), "the handle");
+            // The corners off the glass's diagonal stay clear.
+            assert_eq!(alpha(img, img.size[0] - 1, 0), 0);
+            assert_eq!(alpha(img, 0, img.size[1] - 1), 0);
+            // The lens is light, so the sign reads on a dark image.
+            let lens = (usize::from(y + (4.0 * scale) as u16) * usize::from(img.size[0]) + usize::from(x + (3.0 * scale) as u16)) * 4;
+            assert!(img.rgba[lens] > 230 && img.rgba[lens + 3] > 230);
+        }
+        let [x, y] = plus.hotspot;
+        let up = y - (2.0 * scale) as u16;
+        assert!(ink(&plus, x, up), "zoom in: the vertical bar");
+        assert!(!ink(&minus, x, up), "zoom out: no vertical bar");
+    }
+    for scale in [0.0, -1.0, f32::NAN, f32::INFINITY, 10000.0] {
+        assert!(rasterize(Shape::Zoom { out: false }, scale).is_none());
+    }
+}
+
+#[test]
+fn zoom_cursor_is_an_os_bitmap_with_the_stock_zoom_cursor_as_its_fallback() {
+    let ctx = egui::Context::default();
+    ctx.add_plugin(CursorLifecycle);
+    for (out, stock) in [(false, CursorIcon::ZoomIn), (true, CursorIcon::ZoomOut)] {
+        let output = frame(&ctx, |ui| {
+            let icon = zoom(ui.painter(), egui::pos2(40.0, 40.0), out);
+            ui.ctx().set_cursor_icon(icon);
+        });
+        assert!(output.platform_output.cursor_image.is_some());
+        assert_eq!(output.platform_output.cursor_icon, stock);
+    }
+    let panel = frame(&ctx, |ui| {
+        let icon = zoom(ui.painter(), egui::pos2(40.0, 40.0), false);
+        ui.ctx().set_cursor_icon(icon);
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    });
+    assert!(panel.platform_output.cursor_image.is_none());
+    assert_eq!(panel.platform_output.cursor_icon, CursorIcon::PointingHand);
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn zoom_tool_and_the_temporary_zoom_keys_show_the_glass_on_the_canvas() {
+    let key = |pressed: bool, modifiers: Modifiers| Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers };
+    let mut h = harness();
+    let brush = h.output().platform_output.cursor_image.clone().unwrap();
+    h.state_mut().ui.tool = crate::Tool::Zoom;
+    h.run_steps(2);
+    let plus = h.output().platform_output.cursor_image.clone().expect("the Zoom tool draws its own cursor");
+    assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::ZoomIn);
+    assert_eq!(plus.size, [24, 24]);
+
+    // Ctrl+Space over the Brush: the glass; with Alt as well, the minus.
+    h.state_mut().ui.tool = crate::Tool::Brush;
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    h.event(Event::ModifiersChanged(ctrl));
+    h.event(key(true, ctrl));
+    h.run_steps(2);
+    let held = h.output().platform_output.cursor_image.clone().unwrap();
+    assert_eq!(held.rgba, plus.rgba);
+    let alt = Modifiers { alt: true, ..ctrl };
+    h.event(Event::ModifiersChanged(alt));
+    h.event(key(true, alt));
+    h.run_steps(2);
+    let minus = h.output().platform_output.cursor_image.clone().unwrap();
+    assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::ZoomOut);
+    assert_ne!(minus.rgba, plus.rgba);
+
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.event(key(false, Modifiers::NONE));
+    h.run_steps(2);
+    let back = h.output().platform_output.cursor_image.clone().unwrap();
+    assert_eq!(back.size, brush.size, "releasing the keys gives the brush tip back");
 }

@@ -335,6 +335,19 @@ Not covered: image (sampled) tips, elliptical tips (thickness < 100), and soft t
 forces anti-aliasing off for a soft round tip wider than 25 px of falloff (`docs/sut-analysis.md`
 › Anti-aliasing levels).
 
+## 가을낙엽_낙엽 comparison with CLIP STUDIO PAINT (2026-11-14)
+
+The same method (synthetic pen into both apps, 1600×900 canvas, 100 % view) on a colour-tip
+spray brush found four differences that unit tests had not: image tip anti-aliasing, which dab
+is on top where dabs overlap, dabs piled at pen-up and a leaf drawn by a tap. All are fixed.
+After the fix a pen line, a sine and a fast line through the rebuilt app (729 `windowsInk`
+events, 7 strokes, one Brush Tool step each, taps laying nothing) measure 41.5–42.6 ink per pixel
+of path against CLIP STUDIO's 42.6–43.8, with 12.3–12.9 % dark outline pixels against 13.7–14.2 %.
+Details and what is still open: `docs/sut-analysis.md` › 가을낙엽_낙엽 against CLIP STUDIO PAINT.
+
+For a brush without pressure input CLIP STUDIO can stay on Wintab: the synthetic pen then draws
+as a mouse at full pressure, and no preference has to be changed.
+
 ## Remaining physical acceptance
 
 No physical tablet stroke has been driven or observed by this validation run.

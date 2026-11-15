@@ -59,6 +59,12 @@ pub struct DocumentSettings {
     /// Display units only; width/height are always pixels and resolution is always ppi.
     pub unit: String,
     pub resolution_unit: String,
+    /// Create the document as an artboard (`file.new` `artboards`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub artboards: bool,
+    /// Color Profile (`file.new` `profile`): absent = Don't Color Manage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 impl DocumentSettings {
@@ -84,6 +90,9 @@ impl DocumentSettings {
         }
         if !matches!(self.unit.as_str(), "px" | "in" | "cm" | "mm" | "pt" | "pica") || !matches!(self.resolution_unit.as_str(), "in" | "cm") {
             return Err("Unknown dimension or resolution display unit".into());
+        }
+        if self.profile.as_ref().is_some_and(|p| p.trim().is_empty() || p.chars().count() > 255) {
+            return Err("A colour profile name must contain 1 to 255 characters".into());
         }
         Ok(())
     }
@@ -113,6 +122,10 @@ impl DocumentSettings {
             let c = background_color(&Value::Object(fields.clone()), s.tools.background, cmd)?;
             fields.insert("backgroundColor".into(), json!([c[0], c[1], c[2]]));
         }
+        // "none" (Don't Color Manage) is no profile.
+        if fields.get("profile").is_some_and(|p| p.is_null() || p.as_str() == Some("none")) {
+            fields.remove("profile");
+        }
         let settings: Self = serde_json::from_value(Value::Object(fields)).map_err(|e| bad(cmd, format!("invalid settings: {e}")))?;
         settings.validate().map_err(|e| bad(cmd, e))?;
         Ok(settings)
@@ -124,6 +137,12 @@ impl DocumentSettings {
             "mode":self.mode,"depth":self.depth,"background":self.background});
         if let Some(c) = self.background_color {
             p["backgroundColor"] = json!(c);
+        }
+        if self.artboards {
+            p["artboards"] = json!(true);
+        }
+        if let Some(profile) = &self.profile {
+            p["profile"] = json!(profile);
         }
         p
     }
@@ -160,6 +179,44 @@ pub(crate) fn load(value: Value) -> Vec<DocumentPreset> {
         presets.push(preset);
     }
     presets
+}
+
+/// File › New › Recent keeps this many documents (Photoshop: "Your Recent Items (20)").
+pub const MAX_RECENT: usize = 20;
+
+/// Recent items share names ("Custom"), so read them without the saved presets' uniqueness rule.
+pub(crate) fn load_recent(value: Value) -> Vec<DocumentPreset> {
+    let Some(entries) = value.as_array() else { return Vec::new() };
+    entries
+        .iter()
+        .filter_map(|e| serde_json::from_value::<DocumentPreset>(e.clone()).ok())
+        .filter(|p| checked_name(&p.name).is_ok() && p.settings.validate().is_ok())
+        .map(|mut p| {
+            if p.settings.mode == "grayscale" {
+                p.settings.mode = "gray".into();
+            }
+            p
+        })
+        .take(MAX_RECENT)
+        .collect()
+}
+
+/// Remember a document made from File › New: newest first, the same settings only once, at most
+/// [`MAX_RECENT`].
+fn add_recent(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "document.recent.add";
+    let name = match p.get("name") {
+        None | Some(Value::Null) => "Custom".to_string(),
+        Some(v) => checked_name(v.as_str().unwrap_or("")).map_err(|e| bad(CMD, e))?,
+    };
+    let settings = DocumentSettings::from_params(s, p.get("settings").unwrap_or(&Value::Null), CMD)?;
+    let item = DocumentPreset { name, settings };
+    let recent = &mut s.presets.recent_documents;
+    recent.retain(|r| r.settings.command_params() != item.settings.command_params());
+    recent.insert(0, item.clone());
+    recent.truncate(MAX_RECENT);
+    s.presets_changed();
+    Ok(json!({"recent": item}))
 }
 
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
@@ -228,6 +285,40 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: true,
         },
         CommandSpec {
+            id: "document.recent.list",
+            label: "List Recent Document Sizes",
+            menu: &[],
+            shortcut: None,
+            params: "{} -> {recent:[{name,settings}]} (File › New › Recent, newest first)",
+            enabled: always,
+            run: |s, _| Ok(json!({"recent":s.presets.recent_documents})),
+            journal: false,
+        },
+        CommandSpec {
+            id: "document.recent.add",
+            label: "Remember Recent Document Size",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"name":str="Custom" (the preset it came from),"settings":{same as document.presets.save}} (newest first, de-duplicated, at most 20)"##,
+            enabled: always,
+            run: add_recent,
+            journal: false,
+        },
+        CommandSpec {
+            id: "document.recent.clear",
+            label: "Clear Recent Document Sizes",
+            menu: &[],
+            shortcut: None,
+            params: "{}",
+            enabled: always,
+            run: |s, _| {
+                s.presets.recent_documents.clear();
+                s.presets_changed();
+                Ok(Value::Null)
+            },
+            journal: false,
+        },
+        CommandSpec {
             id: "document.presets.delete",
             label: "Delete Document Preset",
             menu: &[],
@@ -251,6 +342,68 @@ mod tests {
 
     fn saved(s: &mut Session, name: &str, settings: Value) -> Value {
         s.execute("document.presets.save", json!({"name":name,"settings":settings})).unwrap()["preset"].clone()
+    }
+
+    #[test]
+    fn recent_items_are_newest_first_unique_capped_and_persist() {
+        let mut s = Session::new();
+        let add = |s: &mut Session, w: u32, name: Option<&str>| {
+            let mut p = json!({"settings":{"width":w,"height":10}});
+            if let Some(n) = name {
+                p["name"] = json!(n);
+            }
+            s.execute("document.recent.add", p).unwrap();
+        };
+        add(&mut s, 10, None);
+        add(&mut s, 20, Some("Letter"));
+        add(&mut s, 10, None);
+        let names: Vec<(String, u32)> = s.presets.recent_documents.iter().map(|r| (r.name.clone(), r.settings.width)).collect();
+        assert_eq!(names, vec![("Custom".into(), 10), ("Letter".into(), 20)], "the same settings once, newest first");
+        for w in 0..30 {
+            add(&mut s, 100 + w, None);
+        }
+        assert_eq!(s.presets.recent_documents.len(), MAX_RECENT);
+        assert_eq!(s.presets.recent_documents[0].settings.width, 129);
+        let next = reload(&s);
+        assert_eq!(next.presets.recent_documents, s.presets.recent_documents, "survives a restart, duplicate names and all");
+        let listed = s.execute("document.recent.list", json!({})).unwrap();
+        assert_eq!(listed["recent"].as_array().unwrap().len(), MAX_RECENT);
+        s.execute("document.recent.clear", json!({})).unwrap();
+        assert!(s.presets.recent_documents.is_empty());
+    }
+
+    #[test]
+    fn recent_add_refuses_bad_settings_without_panicking() {
+        let mut s = Session::new();
+        for bad in [
+            json!({}),
+            json!({"settings":null}),
+            json!({"settings":{"width":0,"height":5}}),
+            json!({"settings":{"width":5,"height":5,"mode":"hsv"}}),
+            json!({"name":"","settings":{"width":5,"height":5}}),
+            json!({"name":7,"settings":{"width":5,"height":5}}),
+            json!({"settings":{"width":"x"}}),
+            json!({"settings":{"width":5,"height":5,"profile":""}}),
+        ] {
+            assert!(s.execute("document.recent.add", bad.clone()).is_err(), "{bad}");
+        }
+        assert!(s.presets.recent_documents.is_empty());
+    }
+
+    #[test]
+    fn saved_settings_keep_artboards_and_profile_for_file_new() {
+        let mut s = Session::new();
+        let preset = saved(&mut s, "Web board", json!({"width":1366,"height":768,"artboards":true,"profile":"working"}));
+        assert_eq!(preset["settings"]["artboards"], true);
+        let params = s.execute("document.presets.get", json!({"name":"Web board"})).unwrap()["params"].clone();
+        assert_eq!((params["artboards"].clone(), params["profile"].clone()), (json!(true), json!("working")));
+        // "none" is no profile, and plain settings stay as before.
+        let plain = saved(&mut s, "Plain", json!({"width":10,"height":10,"profile":"none"}));
+        assert!(plain["settings"].get("profile").is_none() && plain["settings"].get("artboards").is_none());
+        s.execute("file.new", params).unwrap();
+        let d = &s.active().unwrap().doc;
+        assert!(d.icc_profile.is_some(), "working space embedded");
+        assert_eq!(d.artboards().len(), 1);
     }
 
     fn reload(s: &Session) -> Session {

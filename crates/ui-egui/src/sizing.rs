@@ -527,7 +527,8 @@ fn apply_fit(f: &mut Map<String, Value>, preset: &str) {
     } else if let Some(p) =
         crate::new_doc_ui::CATEGORIES.iter().filter(|(c, _)| matches!(*c, "Print" | "Web")).flat_map(|(_, p)| p.iter()).find(|p| p.0 == preset)
     {
-        let scale = (f64::from(p.1) / ow.max(1.0)).min(f64::from(p.2) / oh.max(1.0));
+        let (pw, ph) = crate::new_doc_ui::preset_px(p);
+        let scale = (f64::from(pw) / ow.max(1.0)).min(f64::from(ph) / oh.max(1.0));
         if f.get("resample").and_then(Value::as_str) == Some("none") {
             f.insert("resample".into(), json!("auto"));
         }

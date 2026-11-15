@@ -133,6 +133,9 @@ pub struct Drag {
     /// every Move-tool drag with a selection does (`move_ui::moves_selected_pixels`).
     pub sel_move: Option<bool>,
     pub lasso: Option<crate::lasso_ui::Lasso>,
+    /// A pen stroke with a CLIP STUDIO brush: it starts with the pen-down at no pressure (see
+    /// `csp_pen_down`).
+    pub csp_pen: bool,
 }
 
 impl Drag {
@@ -151,6 +154,7 @@ impl Drag {
             reposition: false,
             sel_move: None,
             lasso: None,
+            csp_pen: false,
         }
     }
 
@@ -329,7 +333,13 @@ fn live_stroke(app: &PrismApp, idx: usize) -> Option<&LiveStroke> {
 /// `paint.stroke` params for a Brush/Eraser drag (shared by the live preview and the commit). The
 /// stroke smoothing is the session brush's (the options bar's Smoothing %).
 fn stroke_params(app: &PrismApp, drag: &Drag, points: &[Vec<f64>]) -> serde_json::Value {
-    let mut p = json!({ "points": points, "erase": drag.erase, "zoom": app.current_zoom(), "target": paint_target(app) });
+    let mut p = json!({
+        "points": points,
+        "erase": drag.erase,
+        "zoom": app.current_zoom(),
+        "pixelsPerPoint": app.pixels_per_point,
+        "target": paint_target(app),
+    });
     if drag.connects_previous {
         // The connecting line is an explicit endpoint gesture. Apply the override
         // to both live and committed parameters, without changing the user's brush.
@@ -460,12 +470,35 @@ fn begin_live_stroke(app: &PrismApp) -> Option<LiveStroke> {
         p["target"] = paint_target(app);
         EngineStroke::Retouch(prism_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?)
     } else {
-        let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
+        let p = stroke_params(app, d, &csp_pen_down(d, app.stylus.stroke_points(&d.points), false));
         EngineStroke::Brush(Box::new(prism_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(d.tool), &p).ok()?))
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
     Some(LiveStroke { stroke, doc: st.doc.id, revision: st.revision, key: (1 << 44) | (n << 20), damage, fed: d.points.len() })
+}
+
+/// A CLIP STUDIO brush's pen stroke starts with the pen-down sample at pressure 0, at the first
+/// point's place and time, before the pen's own first sample: CLIP STUDIO reads the pen-down at no
+/// pressure. Unstabilized, the next dab covers it; stabilized, the 0 is averaged into the first
+/// outputs (a fast stroke starts thin); a tap (`finished` and never moved) keeps only that
+/// sample, so it lays the dot of a tap at no pressure (measured, docs/sut-analysis.md › Effector
+/// velocity input › Pen-down pressure).
+fn csp_pen_down(d: &Drag, mut pts: Vec<Vec<f64>>, finished: bool) -> Vec<Vec<f64>> {
+    let Some(first) = pts.first().cloned().filter(|_| d.csp_pen) else { return pts };
+    let tap = finished && d.points.iter().all(|p| p[0] == d.start[0] && p[1] == d.start[1]);
+    let mut down = first;
+    if let Some(pressure) = down.get_mut(2) {
+        *pressure = 0.0;
+    }
+    if tap {
+        if let Some(p) = pts.first_mut() {
+            *p = down;
+        }
+    } else {
+        pts.insert(0, down);
+    }
+    pts
 }
 
 /// Render the drag points the live stroke hasn't seen yet, with the pen pressure, tilt and
@@ -1372,7 +1405,7 @@ fn documents(app: &mut PrismApp, ui: &mut egui::Ui) {
     // Files opening in the background (#210) have tabs before they have documents.
     let opening = !app.jobs.opens.is_empty();
     if !opening && app.ui.chrome.shows_home(n, app.session.prefs().general.auto_show_home_screen) {
-        start_screen(app, ui);
+        crate::home_ui::show(app, ui);
         return;
     }
     if n == 0 && !opening {
@@ -1844,104 +1877,6 @@ pub fn mode_label(doc: &Document) -> &'static str {
         prism_doc::ColorMode::Bitmap => "Bitmap",
         prism_doc::ColorMode::Duotone => "Duotone",
         prism_doc::ColorMode::Multichannel => "Multichannel",
-    }
-}
-
-fn start_screen(app: &mut PrismApp, ui: &mut egui::Ui) {
-    let t = crate::theme::Tokens::get(ui.ctx());
-    let area = ui.available_rect_before_wrap();
-    paint_dots(ui, area);
-    // File › Open Recent, newest first.
-    let recent: Vec<String> = { app.ui.recent_files.iter().take(HOME_RECENT).cloned().collect() };
-    let recent_h = if recent.is_empty() { 0.0 } else { 34.0 + recent.len() as f32 * HOME_RECENT_ROW };
-    let card = Rect::from_center_size(area.center(), egui::vec2(460.0, 240.0 + recent_h));
-    let new_label = crate::shortcuts::command_label(app, "New document…", "file.new");
-    let open_label = crate::shortcuts::command_label(app, "Open…", "file.open");
-    ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
-        ui.vertical_centered(|ui| {
-            ui.horizontal(|ui| {
-                let title = ui.painter().layout_no_wrap(tl!("Prism").into(), crate::theme::semibold(38.0), t.text);
-                let by = ui.painter().layout_no_wrap("NK Studio".into(), egui::FontId::proportional(13.0), t.text_faint);
-                let total = title.size().x + by.size().x + 10.0;
-                ui.add_space(((card.width() - total) / 2.0).max(0.0));
-                let (r, _) = ui.allocate_exact_size(title.size(), Sense::hover());
-                ui.painter().galley(r.min, title, t.text);
-                let (r2, _) = ui.allocate_exact_size(egui::vec2(by.size().x + 10.0, r.height()), Sense::hover());
-                ui.painter().galley(egui::pos2(r2.left() + 10.0, r.bottom() - by.size().y - 8.0), by, t.text_faint);
-            });
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new(tl!("Create a new document or open an existing file.")).color(t.text_dim).size(14.0));
-            ui.add_space(22.0);
-            ui.horizontal(|ui| {
-                ui.add_space(((card.width() - 2.0 * 190.0 - 12.0) / 2.0).max(0.0));
-                ui.spacing_mut().item_spacing.x = 12.0;
-                if crate::widgets::primary_button(ui, &new_label, 190.0).clicked() {
-                    let fields = app.new_document_fields();
-                    app.ui.open_dialog(crate::state::DialogKind::NewDocument, fields);
-                }
-                if crate::widgets::secondary_button(ui, &open_label, 190.0).clicked() {
-                    let _ = app.open_dialog_file();
-                }
-            });
-            ui.add_space(22.0);
-            ui.horizontal(|ui| {
-                let msg = tl!("Drop an image or PSD anywhere to open it.");
-                let g = ui.painter().layout_no_wrap(msg.to_string(), egui::FontId::proportional(12.5), t.text_faint);
-                ui.add_space(((card.width() - g.size().x - 24.0) / 2.0).max(0.0));
-                let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), Sense::hover());
-                crate::icons::paint(ui, r, "image", 15.0, t.text_faint);
-                ui.label(egui::RichText::new(msg).color(t.text_faint));
-            });
-            if !recent.is_empty() {
-                ui.add_space(22.0);
-                home_recent(app, ui, &recent);
-            }
-        });
-    });
-}
-
-/// Recent files listed on the Home screen.
-const HOME_RECENT: usize = 6;
-/// Height of one Home-screen recent-file row.
-const HOME_RECENT_ROW: f32 = 30.0;
-
-/// The Home screen's "Recent" list: file name, its folder on the right, click to open.
-fn home_recent(app: &mut PrismApp, ui: &mut egui::Ui, recent: &[String]) {
-    let t = crate::theme::Tokens::get(ui.ctx());
-    let width = 380.0;
-    ui.horizontal(|ui| {
-        // Line the heading up with the file icons.
-        ui.add_space(((ui.available_width() - width) / 2.0).max(0.0) + 8.0);
-        ui.label(egui::RichText::new(tl!("Recent")).font(crate::theme::semibold(12.5)).color(t.text_dim));
-    });
-    ui.add_space(4.0);
-    let mut open = None;
-    for path in recent {
-        let name = crate::file_open::display_name(path);
-        let folder = std::path::Path::new(path).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
-        let (row, resp) = ui.allocate_exact_size(egui::vec2(width, HOME_RECENT_ROW), Sense::click());
-        if resp.hovered() {
-            ui.painter().rect_filled(row, t.radius_sm, t.hover);
-        }
-        let icon = Rect::from_center_size(egui::pos2(row.left() + 16.0, row.center().y), egui::vec2(16.0, 16.0));
-        crate::icons::paint(ui, icon, "file", 14.0, t.text_dim);
-        let x = row.left() + 32.0;
-        let name_g = crate::tab_strip::elided(ui, &name, egui::FontId::proportional(12.5), t.text, 170.0);
-        let name_w = name_g.size().x;
-        ui.painter().galley(egui::pos2(x, row.center().y - name_g.size().y / 2.0), name_g, t.text);
-        let folder_max = (row.right() - 10.0 - (x + name_w + 14.0)).max(0.0);
-        if folder_max > 20.0 && !folder.is_empty() {
-            let fg = crate::tab_strip::elided(ui, &folder, egui::FontId::proportional(11.5), t.text_faint, folder_max);
-            ui.painter().galley(egui::pos2(row.right() - 10.0 - fg.size().x, row.center().y - fg.size().y / 2.0), fg, t.text_faint);
-        }
-        if resp.on_hover_text(path).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-            open = Some(path.clone());
-        }
-    }
-    if let Some(path) = open
-        && let Err(e) = app.open_path(&path)
-    {
-        app.open_failed(&crate::file_open::display_name(&path), &e);
     }
 }
 
@@ -2691,6 +2626,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         if app.ui.view.extras {
             let layer = app.session.documents().get(idx).and_then(|st| st.active_layer);
             crate::special_ruler_ui::draw(app, &painter, &xf, &doc, layer);
+            crate::figure_ui::draw(app, &painter, &xf);
         }
         draw_drag_preview(app, &painter, &xf);
         crate::zoom_tool::draw(&ctx, &painter);
@@ -2704,7 +2640,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
             painter.rect_stroke(img_rect, 0.0, Stroke::new(1.0, Color32::from_gray(20)), egui::StrokeKind::Outside);
         }
         crate::type_tool::draw_overlay(app, &painter, &xf);
-        crate::transform_tool::draw_overlay(app, &painter, &xf);
+        crate::transform_tool::draw_overlay(app, &painter, &xf, size);
         crate::distort_ui::draw_overlay(app, &painter, &xf);
         crate::retouch_ui::draw_source_marker(app, &painter, &xf);
         crate::vector_ui::draw_overlay(app, &painter, &xf, &doc);
@@ -2718,7 +2654,9 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
             let d = xf.to_doc(p);
             crate::rulers::guide_at(app, d[0], d[1])
         });
-        let ruler_cursor = response.hover_pos().and_then(|p| crate::special_ruler_ui::handles::cursor(app, xf.to_doc(p)));
+        let ruler_cursor = response
+            .hover_pos()
+            .and_then(|p| crate::special_ruler_ui::handles::cursor(app, xf.to_doc(p)).or_else(|| crate::figure_ui::cursor(app, xf.to_doc(p))));
         if let Some(c) = ruler_cursor {
             let c = response.hover_pos().map_or(c, |p| crate::cursor_pack::stock(&ctx, p, c));
             ui.ctx().set_cursor_icon(c);
@@ -2856,13 +2794,8 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                     }
                 }
                 Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
-                Tool::Zoom => {
-                    if zoom_out(alt) {
-                        egui::CursorIcon::ZoomOut
-                    } else {
-                        egui::CursorIcon::ZoomIn
-                    }
-                }
+                // The magnifying glass, for the Zoom tool and the temporary zoom keys alike.
+                Tool::Zoom => crate::tool_cursor::zoom(&painter, p, zoom_out(alt)),
                 Tool::Type | Tool::VerticalType => egui::CursorIcon::Text,
                 // Path Selection's black arrow, Direct Selection's white one; ⌘ swaps them while
                 // held, with what a press does (direct_select.rs).
@@ -3443,8 +3376,11 @@ fn tool_move(app: &mut PrismApp, x: f64, y: f64, pressure: f32, mods: egui::Modi
         let [x, y] = crate::special_ruler_ui::snap(d, [x, y], mods.shift);
         let sample = app.stylus.sample().unwrap_or_default();
         let pose_changed = app.stylus.stroke.last().is_some_and(|p| *p != [sample.tilt_x, sample.tilt_y, sample.rotation]);
-        let timed_build_up = app.session.tools.brush.build_up && app.stylus.times.last().is_some_and(|t| app.stylus.time > *t);
-        if d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25 || p[2] != f64::from(pressure)) || pose_changed || timed_build_up {
+        // A pen at rest still counts for the airbrush and for CSP's velocity input (the rest is a
+        // segment at speed 0, not part of the next move's duration).
+        let brush = &app.session.tools.brush;
+        let timed = (brush.build_up || brush.reads_speed()) && app.stylus.times.last().is_some_and(|t| app.stylus.time > *t);
+        if d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25 || p[2] != f64::from(pressure)) || pose_changed || timed {
             d.points.push([x, y, pressure as f64]);
             app.stylus.record_point();
         }
@@ -3463,6 +3399,10 @@ pub fn tool_event(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) {
     }
     // Special ruler handles (Move tool on a ruler layer, as CLIP STUDIO's Operation tool).
     if crate::special_ruler_ui::handles::pointer(app, ev, mods) {
+        return;
+    }
+    // 3D figure layers (Move tool): pose joints, orbit and move the camera.
+    if crate::figure_ui::pointer(app, ev, mods) {
         return;
     }
     if app.ui.transform.is_none() && crate::type_transform::pointer(app, ev, mods) {
@@ -3698,6 +3638,7 @@ pub fn tool_event(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) {
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
             let mut drag = Drag::new(tool, from.unwrap_or([x, y]), points, mods, erase);
             drag.connects_previous = from.is_some();
+            drag.csp_pen = from.is_none() && app.session.tools.brush.csp_correction && app.stylus.sample().is_some();
             // A ⇧-click connection is a straight line of its own; rulers snap freehand strokes.
             if from.is_none() && !mods.shift {
                 drag.ruler = crate::special_ruler_ui::snapper(app, tool, [x, y]);
@@ -3882,7 +3823,7 @@ pub(crate) fn finish_gesture(app: &mut PrismApp, d: Drag) {
         Tool::Type | Tool::VerticalType => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
         Tool::Brush | Tool::Pencil | Tool::Eraser => {
             let live = app.live_stroke.take();
-            let mut p = stroke_params(app, &d, &app.stylus.stroke_points(&d.points));
+            let mut p = stroke_params(app, &d, &csp_pen_down(&d, app.stylus.stroke_points(&d.points), true));
             if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
                 p["seed"] = json!(seed);
             }
@@ -4563,6 +4504,75 @@ mod tests {
         // Transparency and points outside the canvas have nothing to compare.
         assert!(super::eyedropper_ring_colors(&mut app, 30.0, 10.0).is_none());
         assert!(super::eyedropper_ring_colors(&mut app, -1.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn a_csp_pen_tap_is_drawn_at_no_pressure() {
+        // The dab a tap leaves on a white document with a pressure-sized brush, as alpha summed.
+        let tap = |csp: bool, pen: bool, moved: bool| {
+            let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 60, "height": 40, "background": "transparent"})).unwrap();
+            app.ui.tool = Tool::Brush;
+            crate::paint_mouse::sync_tool_brush(&mut app);
+            let b = &mut app.session.tools.brush;
+            (b.size, b.hardness, b.csp_correction) = (20.0, 1.0, csp);
+            b.shape_dynamics.enabled = true;
+            b.shape_dynamics.size.control = prism_paint::brush::Control::PenPressure;
+            b.shape_dynamics.size.minimum = 0.5;
+            if pen {
+                app.stylus.feed.set(Some(crate::stylus::PenSample { pressure: 1.0, ..Default::default() }));
+            }
+            tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            if moved {
+                tool_event(&mut app, ToolEvent::Move { x: 21.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            }
+            assert!(app.drag.as_ref().is_some_and(|d| d.csp_pen == (csp && pen)));
+            tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, egui::Modifiers::NONE);
+            let mut alpha = 0.0;
+            for y in 0..40 {
+                for x in 0..60 {
+                    let v = app.run("document.pixel", json!({"x": x, "y": y})).unwrap();
+                    alpha += serde_json::from_value::<Vec<f32>>(v).unwrap()[3];
+                }
+            }
+            alpha
+        };
+        let (full, light) = (tap(false, true, false), tap(true, true, false));
+        assert!(light < full * 0.5, "a CSP pen tap is the small dot: {light} vs {full}");
+        assert!((tap(true, false, false) - full).abs() < 1.0, "a mouse click keeps its pressure");
+        assert!(tap(true, true, true) > full * 0.9, "a stroke that moved keeps its first pressure");
+        // A moving stroke starts with the pen-down at no pressure, then the pen's own samples.
+        let mut d = Drag::new(Tool::Brush, [1.0, 2.0], vec![[1.0, 2.0, 0.8], [5.0, 2.0, 0.9]], egui::Modifiers::NONE, false);
+        d.csp_pen = true;
+        let pts = vec![vec![1.0, 2.0, 0.8, 0.0, 0.0, 0.0, 3.0], vec![5.0, 2.0, 0.9, 0.0, 0.0, 0.0, 11.0]];
+        let moving = csp_pen_down(&d, pts.clone(), true);
+        assert_eq!(moving.len(), 3);
+        assert_eq!(moving[0], vec![1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 3.0], "same place and time, no pressure");
+        assert_eq!(&moving[1..], &pts[..]);
+        d.csp_pen = false;
+        assert_eq!(csp_pen_down(&d, pts.clone(), true), pts, "a mouse or a Photoshop brush is unchanged");
+    }
+
+    #[test]
+    fn a_resting_pen_keeps_its_samples_for_csp_velocity_input() {
+        // CLIP STUDIO counts a pen held still as segments at speed 0: the first move after a rest
+        // reads half its speed, not the move spread over the whole rest.
+        let points = |speed: bool| {
+            let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
+            app.ui.tool = Tool::Brush;
+            if speed {
+                app.session.tools.brush.shape_dynamics.size.csp_speed = Some(prism_paint::CspSpeed { minimum: 0.6, curve: None });
+            }
+            app.stylus.time = 0.0;
+            tool_event(&mut app, ToolEvent::Down { x: 5.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            for (i, x) in [5.0, 5.0, 5.0, 30.0].into_iter().enumerate() {
+                app.stylus.time = 8.0 * (i + 1) as f64;
+                tool_event(&mut app, ToolEvent::Move { x, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            }
+            app.drag.as_ref().map_or(0, |d| d.points.len())
+        };
+        assert_eq!(points(true), points(false) + 3, "three resting samples kept");
     }
 
     #[test]

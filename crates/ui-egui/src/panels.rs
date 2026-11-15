@@ -17,35 +17,48 @@ pub(crate) mod color_slider_ui;
 // ----------------------------------------------------------------------------- toolbar
 
 /// Tool groups separated by hairlines, Photoshop order.
-/// Photoshop toolbar: divider-separated sections of slots; each slot is a flyout group whose button
-/// shows the group's last-used tool.
+/// Photoshop 2026's default toolbar: divider-separated sections of slots; each slot is a flyout
+/// group whose button shows the group's last-used tool. In two columns the slots pair up row by
+/// row across sections, as Photoshop draws them: Move | Artboard (here Slice), Marquee | Lasso,
+/// Magic Wand | Crop, Eyedropper | Brush, Eraser | Gradient, Type | Pen, Path Selection |
+/// Rectangle, Adjustment Brush (here Mixer Brush) | Ellipse, Custom Shape | Hand, Zoom | ….
+/// The last slot, "…", holds [`EXTRA_TOOLS`].
 const TOOL_SECTIONS: &[&[&[Tool]]] = &[
-    &[&[Tool::Move]],
+    &[&[Tool::Move], &[Tool::Slice, Tool::SliceSelect]],
     &[
         &[Tool::RectMarquee, Tool::EllipseMarquee],
         &[Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso],
         &[Tool::ObjectSelection, Tool::QuickSelection, Tool::MagicWand],
-        &[Tool::Crop, Tool::Slice, Tool::SliceSelect],
+        &[Tool::Crop],
         &[Tool::Eyedropper, Tool::Ruler, Tool::Note, Tool::Count],
     ],
+    &[&[Tool::Brush, Tool::Pencil], &[Tool::Eraser, Tool::BackgroundEraser, Tool::MagicEraser], &[Tool::Gradient, Tool::PaintBucket]],
     &[
-        &[Tool::SpotHealing, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye],
-        &[Tool::Brush, Tool::Pencil, Tool::MixerBrush],
-        &[Tool::CloneStamp, Tool::PatternStamp],
-        &[Tool::HistoryBrush],
-        &[Tool::Eraser, Tool::BackgroundEraser, Tool::MagicEraser],
-        &[Tool::Gradient, Tool::PaintBucket],
-        &[Tool::Blur, Tool::Sharpen, Tool::Smudge],
-        &[Tool::Dodge, Tool::Burn, Tool::Sponge],
-    ],
-    &[
-        &[Tool::Pen],
         &[Tool::Type, Tool::VerticalType],
+        &[Tool::Pen],
         &[Tool::PathSelection, Tool::DirectSelection],
-        &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::Arrow, Tool::CustomShape],
+        &[Tool::Rectangle, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::Arrow],
+        &[Tool::MixerBrush],
+        &[Tool::EllipseShape],
+        &[Tool::CustomShape],
     ],
     &[&[Tool::Hand, Tool::RotateView], &[Tool::Zoom]],
 ];
+
+/// The tools Photoshop 2026 keeps out of its default toolbar, listed (by group) under its last
+/// button, "…", with Edit Toolbar.
+const EXTRA_TOOLS: &[&[Tool]] = &[
+    &[Tool::SpotHealing, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye],
+    &[Tool::CloneStamp, Tool::PatternStamp],
+    &[Tool::HistoryBrush],
+    &[Tool::Blur, Tool::Sharpen, Tool::Smudge],
+    &[Tool::Dodge, Tool::Burn, Tool::Sponge],
+];
+
+/// The slot index of "…" (after every slot of [`TOOL_SECTIONS`]).
+fn extras_slot() -> usize {
+    TOOL_SECTIONS.iter().map(|section| section.len()).sum()
+}
 
 /// The tool a slot shows: the current tool if it belongs to the slot, else the last one used.
 fn slot_tool(ui: &egui::Ui, current: Tool, slot: &[Tool], key: egui::Id) -> Tool {
@@ -60,12 +73,14 @@ fn slot_tool(ui: &egui::Ui, current: Tool, slot: &[Tool], key: egui::Id) -> Tool
 /// dialog writes `Tool` debug names, `edit.toolbar` takes any name `Tool::from_name` reads). A
 /// slot keeps only its visible tools, so its flyout lists just those; a slot with none left is
 /// dropped, and so is a section with no slots. Each slot carries its index in `TOOL_SECTIONS`,
-/// so its remembered tool and flyout stay put when other slots are hidden.
+/// so its remembered tool and flyout stay put when other slots are hidden. The last section ends
+/// with "…" ([`extras_slot`]), holding the visible [`EXTRA_TOOLS`].
 fn visible_sections(hidden: &[String]) -> Vec<Vec<(usize, Vec<Tool>)>> {
     let hidden: Vec<Tool> = hidden.iter().map(String::as_str).filter_map(Tool::from_name).collect();
     let mut index = 0usize;
     let mut sections = Vec::new();
-    for section in TOOL_SECTIONS {
+    let mut last_section_shown = false;
+    for (si, section) in TOOL_SECTIONS.iter().enumerate() {
         let mut slots = Vec::new();
         for slot in section.iter() {
             let tools: Vec<Tool> = slot.iter().copied().filter(|tool| !hidden.contains(tool)).collect();
@@ -76,6 +91,15 @@ fn visible_sections(hidden: &[String]) -> Vec<Vec<(usize, Vec<Tool>)>> {
         }
         if !slots.is_empty() {
             sections.push(slots);
+            last_section_shown = si + 1 == TOOL_SECTIONS.len();
+        }
+    }
+    let extras: Vec<Tool> = EXTRA_TOOLS.iter().flat_map(|group| group.iter()).copied().filter(|tool| !hidden.contains(tool)).collect();
+    if !extras.is_empty() {
+        // Beside Zoom, at the end of the last section (or in a section of its own without it).
+        match sections.last_mut() {
+            Some(last) if last_section_shown => last.push((extras_slot(), extras)),
+            _ => sections.push(vec![(extras_slot(), extras)]),
         }
     }
     sections
@@ -198,17 +222,35 @@ pub(crate) fn toolbar_body(app: &mut PrismApp, ui: &mut egui::Ui, geo: &ToolbarG
                     ui.horizontal(|ui| {
                         for (slot_index, slot) in row.iter() {
                             let key = egui::Id::new(("tool-slot", *slot_index));
+                            // "…": its click lists the extra tools (and Edit Toolbar) instead.
+                            let extras = *slot_index == extras_slot();
                             let tool = slot_tool(ui, app.ui.tool, slot, key);
                             let sel = slot.contains(&app.ui.tool) && !crate::transform_tool::modal(app);
-                            let tip = if tool.key() == '\0' { tl!(tool.label()).to_string() } else { format!("{}  ({})", tl!(tool.label()), tool.key()) };
-                            let resp = icons::button(ui, icons::tool_icon(tool), bx, sel, &tip);
-                            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, sel, tl!(tool.label())));
+                            let resp = if extras {
+                                let resp = icons::button(ui, "ellipsis", bx, sel, tl!("Edit Toolbar…"));
+                                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, sel, tl!("Edit Toolbar…")));
+                                resp
+                            } else {
+                                let tip = if tool.key() == '\0' { tl!(tool.label()).to_string() } else { format!("{}  ({})", tl!(tool.label()), tool.key()) };
+                                let resp = icons::button(ui, icons::tool_icon(tool), bx, sel, &tip);
+                                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, sel, tl!(tool.label())));
+                                resp
+                            };
                             if slot.len() > 1 {
                                 let r = resp.rect;
                                 let tri = vec![r.right_bottom() + vec2(-2.0, -2.0), r.right_bottom() + vec2(-6.0, -2.0), r.right_bottom() + vec2(-2.0, -6.0)];
                                 ui.painter().add(egui::Shape::convex_polygon(tri, t.text_faint, Stroke::NONE));
                             }
-                            if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
+                            if extras && resp.clicked() {
+                                let open = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_some_and(|(k, _)| k == key);
+                                ui.data_mut(|d| {
+                                    if open {
+                                        d.remove::<(egui::Id, Rect)>(flyout_id);
+                                    } else {
+                                        d.insert_temp(flyout_id, (key, resp.rect));
+                                    }
+                                });
+                            } else if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
                                 app.ui.tool = tool;
                             }
                             // Right-click or long-press opens the flyout (Photoshop).
@@ -287,6 +329,25 @@ pub(crate) fn toolbar_body(app: &mut PrismApp, ui: &mut egui::Ui, geo: &ToolbarG
                                                     ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
                                                 }
                                             }
+                                            if extras {
+                                                crate::widgets::hairline(ui);
+                                                let (r, ir) = ui.allocate_exact_size(vec2(fw, 26.0), Sense::click());
+                                                if ir.hovered() {
+                                                    ui.painter().rect_filled(r, 3.0, t.hover);
+                                                }
+                                                ui.painter().text(
+                                                    pos2(r.left() + 42.0, r.center().y),
+                                                    Align2::LEFT_CENTER,
+                                                    tl!("Edit Toolbar…"),
+                                                    egui::FontId::proportional(12.5),
+                                                    t.text,
+                                                );
+                                                if ir.clicked() {
+                                                    ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
+                                                    let ctx = ui.ctx().clone();
+                                                    let _ = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}));
+                                                }
+                                            }
                                         });
                                     });
                                 let held_release = resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key);
@@ -300,9 +361,6 @@ pub(crate) fn toolbar_body(app: &mut PrismApp, ui: &mut egui::Ui, geo: &ToolbarG
                 }
             }
             let ctx = ui.ctx().clone();
-            if t.pro && icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…")).clicked() {
-                let _ = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}));
-            }
             ui.add_space(if t.pro { 8.0 } else { 14.0 });
             color_chips(app, ui);
             if t.pro {
@@ -348,8 +406,8 @@ pub(crate) fn toolbar_body(app: &mut PrismApp, ui: &mut egui::Ui, geo: &ToolbarG
 pub fn toolbar_needs_double(slots: usize, sections: usize, bx: f32, pro: bool, avail_h: f32) -> bool {
     let pitch = bx + 3.0;
     let needed = if pro {
-        // margins + header + slots + "…" + gap + chips (38 + swap row) + gap + 2 buttons
-        16.0 + 21.0 + (slots + 1) as f32 * pitch + 8.0 + 59.0 + 8.0 + 2.0 * pitch
+        // margins + header + slots ("…" included) + gap + chips (38 + swap row) + gap + 2 buttons
+        16.0 + 21.0 + slots as f32 * pitch + 8.0 + 59.0 + 8.0 + 2.0 * pitch
     } else {
         // margins + grip + slots + dividers + gap + chips
         16.0 + 8.0 + slots as f32 * pitch + sections.saturating_sub(1) as f32 * 12.0 + 14.0 + 59.0
@@ -675,7 +733,6 @@ pub fn options_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
                         if crate::brush_picker::named(airbrush, tl!("Enable airbrush-style build-up effects")).clicked() {
                             b.build_up = !b.build_up;
                         }
-                        opt_label(ui, tl!("Smoothing"));
                         smoothing_field(ui, b, 58.0);
                         smoothing_options(ui, b);
                         widgets::vline(ui, 22.0);
@@ -701,7 +758,6 @@ pub fn options_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
                             b.mode = mode;
                         }
                         percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, if t.pro { 62.0 } else { 66.0 });
-                        opt_label(ui, tl!("Smoothing"));
                         smoothing_field(ui, b, if t.pro { 58.0 } else { 66.0 });
                         widgets::vline(ui, 22.0);
                         widgets::checkbox(ui, &mut app.ui.tool_options.pencil_auto_erase, tl!("Auto Erase"));
@@ -716,7 +772,6 @@ pub fn options_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
                         percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0);
                         percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0);
                         percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0);
-                        opt_label(ui, tl!("Smoothing"));
                         smoothing_field(ui, b, 66.0);
                         widgets::vline(ui, 22.0);
                         widgets::toggle(ui, &mut b.pressure_size, tl!("Pressure for Size"));
@@ -1123,16 +1178,63 @@ fn body_text_width(ui: &egui::Ui, s: &str) -> f32 {
 }
 
 /// Options-bar label: Photoshop writes "Size:" with a colon.
-fn opt_label(ui: &mut egui::Ui, s: &str) {
+fn opt_label(ui: &mut egui::Ui, s: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let text = if t.pro && !s.ends_with(':') { format!("{s}:") } else { s.to_string() };
-    ui.label(RichText::new(tl!(&text)).color(t.text_dim));
+    ui.label(RichText::new(tl!(&text)).color(t.text_dim))
+}
+
+/// How far a drag of `dx` points on a scrubby label moves its value: a unit per point, ten with
+/// Shift and a tenth with Alt, as Photoshop's scrubby sliders do.
+fn scrub_delta(dx: f32, shift: bool, alt: bool) -> f32 {
+    let dx = if dx.is_finite() { dx } else { 0.0 };
+    dx * if shift {
+        10.0
+    } else if alt {
+        0.1
+    } else {
+        1.0
+    }
+}
+
+/// An options-bar percentage as Photoshop draws it: a scrubby label (drag it sideways to change
+/// the value) and a number field whose ▾ opens a pop-up slider. `value` is in percent; returns
+/// whether it changed.
+fn scrubby_percent(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) -> bool {
+    let text = opt_label(ui, label);
+    let scrub = ui.interact(text.rect, text.id.with("scrub"), egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    let before = *value;
+    let (lo, hi) = (*range.start(), *range.end());
+    // The drag's own running value: the field moves in whole percents, and a slow (Alt) drag
+    // would never get anywhere if each frame's fraction were rounded away.
+    let run = scrub.id.with("value");
+    if scrub.drag_started() {
+        ui.data_mut(|d| d.insert_temp(run, *value));
+    }
+    if scrub.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        // Read outside `ui.input`: `drag_delta` takes the input lock itself.
+        let dx = scrub.drag_delta().x;
+        let v = ui.data(|d| d.get_temp::<f32>(run)).unwrap_or(*value) + ui.input(|i| scrub_delta(dx, i.modifiers.shift, i.modifiers.alt));
+        if lo <= hi && v.is_finite() {
+            let v = v.clamp(lo, hi);
+            ui.data_mut(|d| d.insert_temp(run, v));
+            // Rounded before the field below draws it, so no fraction shows mid-drag.
+            *value = v.round().clamp(lo, hi);
+        }
+    }
+    let field = widgets::popup_value_field(ui, label, value, range, "%", width + widgets::POPUP_ARROW_W).changed;
+    // Whole percents only, however the value was set (Photoshop's fields show no decimals).
+    if (field || scrub.dragged()) && lo <= hi && value.is_finite() {
+        *value = value.round().clamp(lo, hi);
+    }
+    *value != before
 }
 
 fn percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) {
-    opt_label(ui, label);
-    let mut percent = *value * 100.0;
-    if widgets::value_field(ui, &mut percent, range, "%", width).changed() {
+    // Shown in whole percents; a brush that came with 55.5% keeps it until the field is edited.
+    let mut percent = (*value * 100.0).round();
+    if scrubby_percent(ui, label, &mut percent, range, width) {
         *value = percent / 100.0;
     }
 }
@@ -2320,7 +2422,7 @@ pub fn properties_window(app: &mut PrismApp, ctx: &egui::Context) {
     let Some(layer) = st.doc.layer(id) else { return };
     // Annotation arrows need their post-creation controls in Studio themes too.
     let arrow = matches!(&layer.content, LayerContent::Shape(sh) if matches!(sh.live, Some(prism_doc::LiveShape::Arrow { .. })));
-    if !arrow && !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
+    if !arrow && layer.figure.is_none() && !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
         return;
     }
     let layer = layer.clone();
@@ -2387,6 +2489,9 @@ pub fn properties_window(app: &mut PrismApp, ctx: &egui::Context) {
                     adjustment_controls(app, ui, id, adj);
                 } else if arrow {
                     crate::vector_ui::shape_properties(app, ui, id);
+                } else if layer.figure.is_some() {
+                    crate::figure_ui::properties(app, ui, &layer);
+                    layer_controls(app, ui, &layer);
                 } else {
                     layer_controls(app, ui, &layer);
                 }
@@ -2487,6 +2592,10 @@ fn properties_body(app: &mut PrismApp, ui: &mut egui::Ui) {
     } else {
         if matches!(layer.content, LayerContent::Fill(prism_doc::Fill::Gradient { .. })) {
             crate::gradient_ui::properties(app, ui, layer);
+            ui.add_space(6.0);
+        }
+        if layer.figure.is_some() {
+            crate::figure_ui::properties(app, ui, layer);
             ui.add_space(6.0);
         }
         layer_controls(app, ui, layer);
@@ -2664,7 +2773,7 @@ fn brush_tip(p: &egui::Painter, c: egui::Pos2, rad: f32, hardness: f32, color: C
 /// Options-bar Smoothing % (the brush's stroke smoothing; the live stroke and the commit use it).
 fn smoothing_field(ui: &mut egui::Ui, b: &mut prism_engine::BrushSettings, width: f32) {
     let mut sm = (b.smoothing.amount * 100.0).round();
-    if widgets::value_field(ui, &mut sm, 0.0..=100.0, "%", width).changed() {
+    if scrubby_percent(ui, tl!("Smoothing"), &mut sm, 0.0..=100.0, width) {
         b.smoothing.amount = (sm / 100.0).clamp(0.0, 1.0);
     }
 }
@@ -3211,6 +3320,10 @@ mod history_transform_tests {
 mod layer_pct_slider_tests;
 
 #[cfg(test)]
+#[path = "options_pct_field_tests.rs"]
+mod options_pct_field_tests;
+
+#[cfg(test)]
 mod lock_tests {
     use super::*;
     use crate::canvas::{ToolEvent, tool_event};
@@ -3338,21 +3451,19 @@ mod type_flyout_tests {
 
     #[test]
     fn red_eye_is_in_the_j_flyout() {
-        let j = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).find(|slot| slot.contains(&Tool::SpotHealing)).expect("J group");
+        let j = EXTRA_TOOLS.iter().find(|slot| slot.contains(&Tool::SpotHealing)).expect("J group");
         assert!(j.contains(&Tool::RedEye), "{j:?}");
         assert_eq!(j.last(), Some(&Tool::RedEye));
     }
 
     #[test]
-    fn long_press_clone_stamp_selects_pattern_stamp() {
+    fn the_last_button_lists_the_extra_tools_and_picks_pattern_stamp() {
         let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        let initial = app.ui.tool;
         let ctx = egui::Context::default();
         PrismApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         frame(&mut app, &ctx, 0.0, vec![]);
         frame(&mut app, &ctx, 0.1, vec![]);
-        let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::CloneStamp)).unwrap();
-        let slot = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).nth(index).copied().unwrap();
-        assert_eq!(slot, &[Tool::CloneStamp, Tool::PatternStamp]);
         let bx = if Tokens::get(&ctx).pro { 30.0 } else { 36.0 };
         let mut buttons: Vec<Rect> = ctx.viewport(|v| {
             v.prev_pass
@@ -3364,19 +3475,54 @@ mod type_flyout_tests {
                 .collect()
         });
         buttons.sort_by(|a, b| a.top().total_cmp(&b.top()));
-        let at = buttons[index].center();
+        // "…" is the last slot; a click opens its list without changing the tool.
+        let at = buttons[extras_slot()].center();
         let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
         frame(&mut app, &ctx, 1.0, vec![egui::Event::PointerMoved(at), pointer(at, true)]);
-        frame(&mut app, &ctx, 1.36, vec![]);
-        assert_eq!(ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::new("tool-flyout"))).map(|(id, _)| id), Some(egui::Id::new(("tool-slot", index))));
-        frame(&mut app, &ctx, 1.4, vec![pointer(at, false)]);
-        frame(&mut app, &ctx, 1.45, vec![]);
-        let key = egui::Id::new(("tool-slot", index));
+        frame(&mut app, &ctx, 1.05, vec![pointer(at, false)]);
+        frame(&mut app, &ctx, 1.1, vec![]);
+        let key = egui::Id::new(("tool-slot", extras_slot()));
+        assert_eq!(ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::new("tool-flyout"))).map(|(id, _)| id), Some(key));
+        assert_eq!(app.ui.tool, initial);
+        let extras: Vec<Tool> = EXTRA_TOOLS.iter().flat_map(|group| group.iter()).copied().collect();
+        let row = extras.iter().position(|t| *t == Tool::PatternStamp).unwrap();
         let menu = ctx.memory(|m| m.area_rect(key.with("flyout"))).unwrap();
-        let row = egui::pos2(menu.left() + 65.0, menu.top() + 39.0 + 8.0);
-        frame(&mut app, &ctx, 2.0, vec![egui::Event::PointerMoved(row), pointer(row, true)]);
-        frame(&mut app, &ctx, 2.05, vec![pointer(row, false)]);
+        // Its rows, top to bottom: the extra tools, then Edit Toolbar.
+        let mut rows: Vec<Rect> = ctx.viewport(|v| {
+            v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.height() == 26.0 && menu.contains_rect(w.rect)).map(|w| w.rect).collect()
+        });
+        rows.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        assert_eq!(rows.len(), extras.len() + 1);
+        let at = rows[row].center();
+        frame(&mut app, &ctx, 2.0, vec![egui::Event::PointerMoved(at), pointer(at, true)]);
+        frame(&mut app, &ctx, 2.05, vec![pointer(at, false)]);
         assert_eq!(app.ui.tool, Tool::PatternStamp);
+        assert!(ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::new("tool-flyout"))).is_none());
+    }
+
+    #[test]
+    fn two_columns_pair_tools_as_photoshop_2026_does() {
+        let firsts: Vec<Tool> = visible_sections(&[]).into_iter().flatten().map(|(_, tools)| tools[0]).collect();
+        let rows: Vec<Vec<Tool>> = firsts.chunks(2).map(<[Tool]>::to_vec).collect();
+        let expected = [
+            [Tool::Move, Tool::Slice],
+            [Tool::RectMarquee, Tool::Lasso],
+            [Tool::ObjectSelection, Tool::Crop],
+            [Tool::Eyedropper, Tool::Brush],
+            [Tool::Eraser, Tool::Gradient],
+            [Tool::Type, Tool::Pen],
+            [Tool::PathSelection, Tool::Rectangle],
+            [Tool::MixerBrush, Tool::EllipseShape],
+            [Tool::CustomShape, Tool::Hand],
+            [Tool::Zoom, Tool::SpotHealing],
+        ];
+        assert_eq!(rows, expected.map(|r| r.to_vec()).to_vec(), "the last cell is …, led by the extra tools");
+        // Every tool is reachable, once: on the toolbar or under "…".
+        let mut all: Vec<Tool> = TOOL_SECTIONS.iter().flat_map(|s| s.iter()).chain(EXTRA_TOOLS.iter()).flat_map(|g| g.iter()).copied().collect();
+        all.sort_by_key(|t| format!("{t:?}"));
+        let mut every = Tool::ALL.to_vec();
+        every.sort_by_key(|t| format!("{t:?}"));
+        assert_eq!(all, every);
     }
 
     #[test]
@@ -3415,10 +3561,10 @@ mod toolbar_hidden_tests {
     fn hidden_tools_leave_the_toolbar() {
         let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
         let all = tool_buttons(&mut app);
-        let slots: usize = TOOL_SECTIONS.iter().map(|section| section.len()).sum();
+        let slots = extras_slot() + 1;
         hide(&mut app, &Tool::ALL);
-        assert_eq!(tool_buttons(&mut app), all - slots, "every tool slot is gone when every tool is hidden");
-        hide(&mut app, &[Tool::Brush, Tool::Pencil, Tool::MixerBrush]);
+        assert_eq!(tool_buttons(&mut app), all - slots, "every tool slot, and …, is gone when every tool is hidden");
+        hide(&mut app, &[Tool::Brush, Tool::Pencil]);
         assert_eq!(tool_buttons(&mut app), all - 1, "a slot whose tools are all hidden is gone");
         hide(&mut app, &[Tool::Sponge]);
         assert_eq!(tool_buttons(&mut app), all, "a slot with a visible tool stays");
@@ -3426,14 +3572,17 @@ mod toolbar_hidden_tests {
 
     #[test]
     fn a_slot_keeps_only_its_visible_tools_and_its_index() {
-        let sections = visible_sections(&["Sponge".to_string(), "Move".to_string()]);
+        let hidden = ["Count", "Move", "Slice", "SliceSelect", "Sponge"].map(String::from);
+        let sections = visible_sections(&hidden);
         assert_eq!(sections.len(), TOOL_SECTIONS.len() - 1, "the Move section has no tools left");
-        let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::Sponge)).unwrap();
+        let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::Count)).unwrap();
         let slot = sections.iter().flatten().find(|(i, _)| *i == index).map(|(_, tools)| tools.clone());
-        assert_eq!(slot, Some(vec![Tool::Dodge, Tool::Burn]));
+        assert_eq!(slot, Some(vec![Tool::Eyedropper, Tool::Ruler, Tool::Note]));
+        let extras = sections.iter().flatten().find(|(i, _)| *i == extras_slot()).map(|(_, tools)| tools.clone()).unwrap();
+        assert!(extras.contains(&Tool::Dodge) && !extras.contains(&Tool::Sponge), "{extras:?}");
         assert!(sections.iter().flatten().all(|(_, tools)| !tools.contains(&Tool::Move) && !tools.contains(&Tool::Sponge)));
-        assert_eq!(visible_sections(&[]).iter().map(Vec::len).sum::<usize>(), TOOL_SECTIONS.iter().map(|section| section.len()).sum::<usize>());
-        let by_command = visible_sections(&["sponge".to_string(), "move".to_string()]);
+        assert_eq!(visible_sections(&[]).iter().map(Vec::len).sum::<usize>(), extras_slot() + 1);
+        let by_command = visible_sections(&hidden.map(|n| n.to_lowercase()));
         assert_eq!(by_command, sections, "edit.toolbar names are read like `ui.set {{tool}}` names");
     }
 }

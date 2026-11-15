@@ -133,7 +133,9 @@ application's tools the shell shows; engine, documents and renderer are the same
 Workspace › Clip Studio sets it and docks a left column with **Sub Tool** above **Tool
 Property** (`sub_tool_panel.rs`); every other built-in workspace sets it back to Photoshop.
 In the Clip Studio style the Tools window draws `csp_tools::SECTIONS` (CSP's tool set and
-keys: P, B, E, J, G, U, T, M, W, I, K, H, Z) instead of Photoshop's 53 tools; each CSP tool
+keys: P, B, E, J, G, U, T, M, W, I, K, H, Z) instead of Photoshop's 53 tools, in the order
+of Photoshop's toolbar (move, selections, painting, type and shapes, hand and zoom) and with the
+same solid `tool-*` glyphs; each CSP tool
 runs on an existing Prism tool and remembers its sub-tool (`UiState::csp_tool`,
 `csp_sub_tools`, saved with the layout). Unsupported sub-tools stay listed, greyed with a
 tooltip. Agents drive it with `ui.cspTool` (`docs/control-protocol.md`).

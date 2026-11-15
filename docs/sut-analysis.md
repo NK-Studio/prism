@@ -773,6 +773,404 @@ path, not pixel identity; tilt mapping itself is not part of this change.
 Images: `target/rea-tools/csp/water-edge-live-comparison.png` and the three
 `prism-*water-edge*.png` renders.
 
+## Effector velocity input (2026-11-15)
+
+**Layout (from the tilt trace above).** Control `0x40` takes its minimum from header word 20
+(`+0x20`) and its response from the third curve block (length in word 44). Every local velocity
+curve is the default `(0,1) (1,0)`: the value falls from full at rest to the minimum at full speed.
+
+**Measured: what speed reaches 1.** CLIP STUDIO PAINT 5.0.4 on Tablet PC, 밀리펜 (size 10, no
+stabilization, `BrushSizeEffector` pressure minimum 80 % and velocity minimum 60 %), synthetic pen
+strokes at pressure 1 and constant speed, line width as coverage summed per column over the middle
+of each stroke, velocity input `v = (1 − width ratio) / 0.4`:
+
+| Screen px/ms | 0.75 | 1 | 1.5 | 2 | 3 | 4 | 5 | 6 | 8 | 12 | 16 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `v`, view 57.4 %, 8 ms samples | 0.13 | 0.15 | 0.19 | 0.19 | 0.30 | 0.50 | 0.56 | 0.73 | 1.05 | 1.20 | 1.12 |
+| `v`, view 100 %, 8 ms samples | | | | 0.29 | | 0.51 | | 0.88 | 1.02 | | |
+| `v`, view 100 %, 16 ms samples | | 0.15 | | 0.32 | | 0.52 | | | | | |
+
+- The same on-screen speed gives the same input at 57.4 % and 100 % view: the speed is in screen
+  pixels, not canvas pixels (canvas pixels would have put the 57.4 % row near 0.9 at 4 px/ms).
+- Twice the distance per sample at twice the interval gives the same input: it is a speed in time,
+  not a distance per sample.
+- A line through the origin fits all 16 points with `v = speed / 7.8` (RMS 0.05); Prism used
+  `speed / 8` (`CSP_SPEED_FULL`, RMS 0.052), clamped to 0..1. Superseded: `v` here reads the
+  width as linear in the brush size, which it is not; read through the size, full speed is
+  9.3 px/ms (see Line width to brush size below).
+
+**Prism.** `Dynamic.cspSpeed { minimum, curve }` multiplies the value by
+`minimum + (1 − minimum) · curve(v)`, like `cspTilt`. `PathWalker` gives each step its segment's
+speed in document pixels per ms times the zoom; the UI sends `pixelsPerPoint` with each stroke so
+the speed is in physical screen pixels as in CLIP STUDIO (the zoom is in view points). Without
+timestamps (`paint.stroke` points with equal times) the speed is 0 and the value stays full.
+The same 16 strokes in the app at the same on-screen scale (zoom 0.383 × 1.5 pixels per point),
+width relative to the slowest stroke:
+
+| Screen px/ms | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 16 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CLIP STUDIO | 0.941 | 0.924 | 0.881 | 0.799 | 0.777 | 0.711 | 0.581 | 0.554 |
+| Prism | 0.965 | 0.920 | 0.840 | 0.805 | 0.738 | 0.697 | 0.557 | 0.529 |
+
+**Smoothing (measured the same day).** 밀리펜 at 100 % view, strokes that change speed at one input
+point: 0.5 px/ms (4 px a sample) then 8 px/ms (64 px), the reverse, 0.5 then 4 px/ms, and the first
+case again with 16 ms samples. Velocity input along the path (`v` from the width as above):
+
+| Slow → fast, 8 ms samples, px past the switch | 0 | 16 | 32 | 48 | 64 | 96 | 128 | 160 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CLIP STUDIO | 0.07 | 0.21 | 0.29 | 0.37 | 0.47 | 0.75 | 0.90 | 0.98 |
+| two-segment mean, interpolated | 0.06 | 0.18 | 0.30 | 0.41 | 0.53 | 0.77 | 1.00 | 1.00 |
+| Prism after the change (app, same strokes) | 0.01 | 0.12 | 0.26 | 0.39 | 0.51 | 0.81 | 1.09 | 1.13 |
+
+- At each input point the input is the mean speed of the two segments before it: the first fast
+  point reads 0.47 (mean of 0.06 and 1: 0.53), the next 0.90–0.98; slow then 4 px/ms reads 0.28 at
+  its first point (predicted 0.28).
+- It is two samples, not a time span: with 16 ms samples the first fast point still reads 0.48 and
+  the second 0.92 (a 16 ms window would read 1 at once).
+- Between two input points the value changes linearly along the path (the dab widths in between
+  follow a straight line between the two points' values).
+- At the stroke's start the first point reads 0 and the second 0.61–0.67 for a fast start; counting
+  the missing earlier segment as rest gives 0.5, not counting it 1. Prism counts it as rest.
+
+Prism's `PathWalker` keeps the last segment (on-screen length and duration) and the input at the
+last point: each new point gets the distance over the time of its segment and the previous one
+(the mean of the two speeds when the intervals are equal; see Stroke start for unequal ones), and
+a step at fraction `f` of a segment gets `from + (to − from)·f`. A move without timestamps repeats
+the previous segment. Prism's values above 1 at full speed are the width difference already seen
+at constant speed (Prism's lines end slightly thinner at small sizes), not the speed.
+
+**With stabilization (measured the same day).** 밀리펜 with Stabilization 15 (no Adjust by speed,
+stickiness 0), 100 % view, five strokes from x 360: 4 px/ms and 8 px/ms throughout, 0.5 then
+8 px/ms (switch at x 600), 8 then 0.5 px/ms (switch at x 936), and 0.5 px/ms. Each raw stroke ends
+at x 1128–1176 and its pen-up frame (pressure 0) follows 8 ms later. `v` from the width as above,
+which also counts thinning from pressure (pressure minimum 80 %):
+
+| Stroke, x | CLIP STUDIO | Prism before | Prism after |
+| --- | --- | --- | --- |
+| 4 px/ms, 600 / 900 / 1050 / 1100 / 1150 | 0.40 / 0.48 / 0.77 / 0.88 / 0.95 | 0.38 / 0.42 / 0.43 / 0.43 / 0.43 | 0.51 / 0.51 / 0.71 / 0.82 / 0.95 |
+| 8 px/ms, 480 / 600 / 900 / 1050 / 1120 | 0.95 / 1.07 / 0.96 / 1.26 / 1.36 | 0.75 / 0.83 / 0.81 / 0.84 / 0.95 | 1.09 / 1.10 / 1.10 / 1.37 / 1.45 |
+| 0.5 → 8, 664 / 800 / 900 / 1000 | 0.40 / 0.77 / 0.91 / 0.98 | 0.36 / 0.67 / 0.73 / 0.73 | 0.37 / 0.66 / 0.95 / 1.24 |
+| 8 → 0.5, 700 / 900 / 936 / 1170 | 0.98 / 0.35 / 0.23 / 0.43 | 0.80 / 0.34 / 0.17 / 0.01 | 1.11 / 0.46 / 0.24 / 0.41 |
+| 0.5 px/ms, 1140 / 1150 / 1158 | 0.23 / 0.37 / 0.56 | 0.00 / 0.00 / 0.13 | 0.13 / 0.33 / 0.53 |
+
+Mean difference from CLIP STUDIO over all 42 points (`v` capped at 1): 0.159 before, 0.041 after.
+
+- The input is the speed of the stabilized brush, not of the pen: the 8 → 0.5 stroke slows before
+  the raw switch reaches the brush (0.35 at x 900), as the averaged position does.
+- At a steady speed the brush keeps the pen's speed even while the window grows (8 px/ms reads
+  about 1 throughout). Averaging the position alone moves it at three quarters of the speed while
+  the window ramps up by half a sample per input (Prism before: 0.75–0.84). Averaging the sample
+  times with the same weights as the positions gives the pen's speed and matches every row.
+- The pen-up catch-up thins the end of the line: a slow stroke, where the speed changes little,
+  still thins over its last 20–30 px (0.5 px/ms row). Feeding the release sample again with
+  pressure 0 (the pen-up frame's pressure) matches it; with the last contact pressure the end
+  stays full until the last pixels (Prism before).
+- With the times averaged and the release sample carrying the last contact time, the catch-up
+  moves at the stroke's own speed (4 px/ms reads 0.5 plus the pressure thinning, 8 px/ms the
+  thinnest line the pressure minimum allows). Catch-up samples with a fixed 8 ms interval would
+  slow down towards the end, and samples all at one time would keep the last speed; both fit
+  worse in an offline replay of the same strokes.
+
+Prism: `Stabilizer::average` averages `time` like `x`, `y` and pressure, and after a moving stroke
+`finish` feeds `{ pressure: 0, ..last }` (a stationary click keeps its pressure). Remaining
+differences: the first 40–100 px of a stroke (see Stroke start) and Prism's line already being
+slightly thinner at full speed. Not measured: Adjust by speed, stickiness above 0, and whether a
+mouse's release sample also has pressure 0 (Prism applies it to every pointer).
+
+**Stroke start (measured the same day).** 밀리펜 without stabilization, 100 % view, strokes from
+x 360 that start moving at once (2, 4, 8 and 16 px/ms with 8 ms samples, 8 px/ms with 16 ms
+samples, one 4 px slow sample then 8 px/ms) and the same after the pen rests 40 or 80 ms (samples
+at the down position). `v` from the width against a 0.5 px/ms stroke, at the first input points:
+
+| Stroke | First point | CLIP STUDIO | Two-segment mean | Distance over time, 8 ms rest |
+| --- | --- | ---: | ---: | ---: |
+| rest 80 ms, then 8 px/ms (8 ms samples) | x 424 | 0.51 | 0.50 | 0.50 |
+| 8 px/ms with 16 ms samples, at once or after 40 ms rest | x 488 | 0.70–0.73 | 0.50 | 0.67 |
+| 8 px/ms (8 ms samples) at once | x 424 | 0.67 | 0.50 | 0.50 |
+| 4 px/ms at once: points 2–4 (peak), then steady | x 424–488 | 0.51–0.59 (0.63), 0.51 | 0.50 | 0.50 |
+| 4 px/ms after 40 ms rest: points 2–4, then steady | x 424–488 | 0.44–0.49, 0.50 | 0.50 | 0.50 |
+
+- A pen resting before it moves is a run of segments at speed 0: after 80 ms of rest the first
+  fast point reads half its speed and the next the full speed. Prism's canvas dropped samples that
+  did not move, so the first move's duration spanned the whole rest and its speed came out near 0
+  (0.03 at x 424 after 40 ms). It now keeps them when a dynamic reads the velocity input
+  (`BrushSettings::reads_speed`), as it already did for the airbrush.
+- With unequal intervals the input is the distance over the time of the two segments, not the mean
+  of their speeds: a 16 ms fast segment after an 8 ms rest reads 0.73 (two thirds: 0.67; the mean:
+  0.5). The same holds at the stroke's start without a rest, so the missing segment counts as an
+  8 ms rest (`CSP_REST_MS`): a 16 ms rest would read 0.5.
+- Strokes that move at once read 10–25 % faster than their speed for about the first 30 ms (8 px/ms
+  0.67 at the first point; 4 and 2 px/ms overshoot their steady value and settle by about the fifth
+  sample), and not at all after a rest. This reads like CLIP STUDIO timing the first samples late
+  (a stall when the stroke starts, then a burst), not a rule of the effector; Prism does not
+  reproduce it. Inference, not traced.
+- Within a segment CLIP STUDIO's value rises a little faster just after a point than a straight
+  line (about +0.1 in the first 8–16 px of a stroke); with `v` read through the brush size this
+  is the width's curve, not the input (see Between input points: withdrawn).
+
+Mean difference from CLIP STUDIO over 34 points of each stroke (`v` capped at 1): the first seven
+strokes 0.076 before, 0.048 after (resting 40 ms then 8 px/ms 0.184 → 0.031, 16 ms samples
+0.088 → 0.047); the seven confirming strokes 0.066 with the resting samples kept but speeds
+averaged, 0.043 with distance over time (16 ms samples 0.119 → 0.042–0.044). The stabilized
+strokes above are unchanged.
+
+**Between input points: withdrawn.** A fit of the shape between two input points (with `v`
+read from the width as above) favoured `1 − (1 − f)^1.5` over a straight line (19 strokes:
+0.040 → 0.032), and Prism shipped it briefly. Read through the brush size (next section) the
+straight line fits best (the 10 strokes without the start burst: 0.021 for a line, 0.023 for
+`^1.5`); the faster rise just after a point was the width's own curve, so Prism interpolates
+linearly again.
+
+**Line width to brush size (measured the same day).** Strokes of one size at a time, made with
+pressure 1 or 0.02 and 0.5, 4 and 16 px/ms (밀리펜, 100 % view, the tool unchanged), and lone
+taps. Width (coverage summed down a column) in pixels:
+
+| Stroke | Brush size | CLIP STUDIO | Prism before |
+| --- | ---: | ---: | ---: |
+| pressure 1, 0.5 px/ms | 9.8 | 8.64 | 8.56 |
+| pressure 0.02, 0.5 px/ms | 7.8 | 6.60 | 6.54 |
+| pressure 1, 16 px/ms | 6.0 | 4.64 | 4.57 |
+| pressure 0.02, 16 px/ms | 4.8 | 3.28 | 3.26 |
+| pressure 1, 4 px/ms | | 7.15 | 6.83 |
+| pressure 0.02, 4 px/ms | | 5.33 | 5.11 |
+
+- At the same brush size the two apps draw the same width (within 0.08 px down to 4.8 px), so
+  Prism's thin fast lines were not a rendering difference. Only the 4 px/ms rows differ: Prism
+  read a higher velocity input there.
+- The width is not linear in the size: it runs about 1.2–1.4 px below it (9.8 → 8.6, 6 → 4.6,
+  4.8 → 3.3), so `v = (1 − width ratio) / 0.4` overstates fast strokes (16 px/ms read 1.15).
+  Every `v` in the tables above is that proxy.
+- Read through the size instead (a quadratic fit of width against size from Prism's own
+  strokes of known size, RMS 0.04 px), CLIP STUDIO's velocity input is 0.04 / 0.25 / 0.42 / 0.86
+  / 1.0 at 0.5 / 2 / 4 / 8 / 16 px/ms: linear from 0 and full at 9.3 px/ms (through the origin;
+  2 px/ms is 0.035 above it). `CSP_SPEED_FULL` is 9.3 (was 8).
+- Re-checked on true values: distance over time with an 8 ms rest still fits the stroke starts
+  better than the mean of speeds (19 strokes: 0.030 against 0.039).
+
+The same strokes in the app, mean width difference from CLIP STUDIO per column (px):
+
+| Strokes | Full at 8, eased | Full at 9.5 | Full at 9.3 |
+| --- | ---: | ---: | ---: |
+| 7 confirming starts | 0.242 | 0.212 | 0.177 |
+| 7 first starts | 0.336 | 0.239 | 0.200 |
+| 5 speed steps | 0.310 | 0.115 | 0.111 |
+| 6 single-size strokes | 0.216 | 0.075 | 0.078 |
+| 5 stabilized strokes | 0.242 | 0.254 | 0.227 |
+| all 30 | 0.270 | 0.182 | 0.160 |
+
+**Stabilized strokes re-checked through the size (same day).** The five stabilized strokes,
+CLIP STUDIO's widths read as brush sizes and compared with offline replays of the same input
+(dab diameters; the replay of the shipped model matches the app's own strokes, 0.044 against
+0.045). Mean difference in `v` (size difference / 4) per part of each stroke:
+
+| Model | 4 px/ms middle, end | 8 px/ms middle, end | 0.5 → 8 ramp, end | 8 → 0.5 drop, end | 0.5 px/ms end | Mean |
+| --- | --- | --- | --- | --- | ---: | ---: |
+| shipped: time averaged, release at pressure 0 | 0.025, 0.086 | 0.017, 0.010 | 0.104, 0.130 | 0.014, 0.017 | 0.029 | 0.044 |
+| release at the last contact pressure | 0.025, 0.292 | 0.018, 0.186 | 0.140, 0.096 | 0.014, 0.049 | 0.122 | 0.095 |
+| time not averaged | 0.103, 0.131 | 0.197, 0.177 | 0.124, 0.109 | 0.128, 0.018 | 0.029 | 0.103 |
+| both (the model before 2026-11-15) | 0.103, 0.342 | 0.202, 0.386 | 0.162, 0.373 | 0.128, 0.049 | 0.122 | 0.188 |
+| the pen-up frame as one more sample (pressure 0, 8 ms later) | 0.025, 0.127 | 0.017, 0.134 | 0.116, 0.055 | 0.014, 0.017 | 0.030 | 0.055 |
+| level 12 / 10 / 8 / 6 instead of 15 | | | 0.090 / 0.073 / 0.042 / 0.041 ramp | | | 0.049 / 0.053 / 0.056 / 0.065 |
+
+- Both earlier conclusions hold on true values: the release at pressure 0 and the averaged time
+  each halve the error.
+- What is left sits in two places. The slow → fast stroke (60 slow samples, 9 fast, then pen-up)
+  thins sooner in CLIP STUDIO (size 7.47 against 8.10 at x 756) and ends less thin (5.94 against
+  5.32 at x 1172). The 4 px/ms stroke thins about 40 px sooner after pen-up (7.76 against 8.03 at
+  x 996). A smaller window fits the ramp but breaks the 4 px/ms end, the drop and the slow end,
+  so the window is not the cause. Both lines end at the same place (within 1–2 px of the raw end).
+  With this brush the end's thinning is pressure and speed together, so these strokes cannot tell
+  which of the two differs. A brush with only velocity on its size (or only pressure) would.
+- The 8 px/ms stroke reads thinner in CLIP STUDIO between x 500 and 650 (size 6.21 against 6.64
+  at x 564) and matches after that: CLIP STUDIO's start burst (Stroke start), delayed by the
+  stabilizer. Not modelled.
+
+**Pressure and velocity apart (measured the same day).** A copy of 밀리펜 (deleted afterwards,
+밀리펜 itself untouched) with Stabilization 15 and its size effector on velocity only, then on
+pressure only; the same five strokes, sizes read through the width as above:
+
+| Velocity only, x | 788 | 812 | 860 | 980 | 1100 | 1172 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.5 → 8 px/ms, CLIP STUDIO | 7.33 | 7.25 | 7.25 | 7.25 | 7.25 | 7.25 |
+| same, Prism | 7.97 | 7.86 | 7.63 | 7.08 | 6.67 | 6.69 |
+
+- With velocity only the line keeps one width from the pen-up point (x ≈ 812, the same place in
+  both apps) to its end, in every stroke: the catch-up adds no speed, and the velocity input
+  stays at its value when the pen lifted. Prism's catch-up samples carry averaged times and read
+  the stroke's own speed (thinning on to 6.67).
+- With pressure only the two apps agree to 0.1 px on average (0.094 px), including the pen-up
+  drain: the window (15) and the release at pressure 0 are right. CLIP STUDIO starts thinning
+  about one sample (8–12 px) sooner after pen-up.
+- What differs is the speed before the pen lifts in the slow → fast stroke: CLIP STUDIO reads
+  0.69 at the lift, Prism 0.54. A uniform 15-sample window ramps 9/15 of the way in the 9 fast
+  samples; CLIP STUDIO about 0.79 of the way, as a 12-sample window would, yet its lift point and
+  its pressure drain match 15. The 4 px/ms stroke also reads faster stabilized (0.48) than
+  unstabilized (0.42), likely CLIP STUDIO's start burst carried by the averaged times. Not
+  explained.
+- Tried in the app: freezing Prism's velocity at the lift (pen-up samples at the lift's time)
+  makes it worse while the ramp differs (velocity only 0.154 → 0.175 px, 밀리펜 0.178 → 0.205),
+  because Prism lifts at a lower speed. Not shipped; it belongs with a fix for the ramp.
+
+**Stabilized velocity (same day).** Candidate filters for the velocity input, replayed against
+the velocity-only strokes (mean size difference in px; the input held from the lift on):
+
+| Velocity input | Mean | 0.5 → 8 ramp, end | 8 → 0.5 drop |
+| --- | ---: | --- | ---: |
+| speed of the stabilized path (shipped) | 0.199 | 0.52, 0.71 | 0.06 |
+| raw speeds, uniform over the window | 0.211 | 0.52, 0.71 | 0.15 |
+| raw speeds, weights `(W − k) / W` | 0.105 | 0.12, 0.03 | 0.19 |
+| raw speeds, weights `(level − k) / level` | 0.095 | 0.12, 0.03 | 0.07 |
+| the larger of the path speed and `(W − k) / W` | 0.092 | 0.12, 0.03 | 0.06 |
+
+`W` is the current window, `k` a sample's age (0 = newest) and the raw speed each sample's
+two-segment speed (distance over time with the 8 ms rest, as unstabilized). The single filter
+weighted by the level fits as well as the two-filter maximum, and it is what Prism uses
+(`Stabilizer::speed`): the k-th newest raw speed weighs `(level − k) / level`, over the same
+fractional window as the positions, and the value holds from pen-up to the end. The path itself
+is unchanged (uniform window, so the lift point and the pressure drain still match). The fit
+rests on one stroke that separates the filters (slow → fast); the others agree with all of them.
+
+In the app, mean size difference from CLIP STUDIO over the five strokes:
+
+| Brush | Before | After |
+| --- | ---: | ---: |
+| velocity only | 0.154 | 0.089 |
+| pressure only | 0.094 | 0.092 |
+| 밀리펜 (both) | 0.178 | 0.124 |
+
+The slow → fast stroke goes from 0.39 / 0.44 px (ramp / end) to 0.14 / 0.05 with velocity only.
+Still open: with 밀리펜 the 4 px/ms end reads 0.34 → 0.40 (CLIP STUDIO drains pressure about
+one sample sooner after pen-up, and its 4 px/ms speed reads 0.48 stabilized against 0.42
+unstabilized). Unstabilized strokes are unchanged.
+
+**The 4 px/ms end (same day, no change).** Sizes along the 4 px/ms stroke (25 samples) with
+each brush, CLIP STUDIO / Prism:
+
+| x | 540–680 | 756 | 852 | 972 | 1020 | 1092 | 1140 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| velocity only | 8.34 / 8.29 | 8.26 / 8.28 | 8.17 / 8.29 | 8.05 / 8.28 | 8.05 / 8.28 | 8.05 / 8.28 | 8.05 / 8.28 |
+| pressure only | 10.09 / 10.03 | 10.09 / 10.03 | 10.09 / 10.03 | 9.99 / 10.03 | 9.26 / 9.45 | 8.65 / 8.74 | 8.33 / 8.29 |
+| 밀리펜 | 8.35 / 8.29 | 8.25 / 8.30 | 8.17 / 8.29 | 8.02 / 8.30 | 7.44 / 7.91 | 6.84 / 7.30 | 6.65 / 6.94 |
+
+- Velocity: after the start burst CLIP STUDIO reads the pen's speed (8.34, as unstabilized
+  4 px/ms strokes do to their end), then speeds up slowly from x ≈ 700 to the lift (0.415 → 0.49)
+  and holds that. x ≈ 700 is where the window has grown to 8.5 and starts growing by less than
+  half a sample per input, but no rule tried reproduces the rise: averaging the raw speeds
+  (uniform or weighted) gives a constant for a constant pen; the path's speed with raw times
+  starts at three quarters and rises only to the pen's; a velocity window always as long as the
+  level only lowers the start. Unstabilized strokes of 20–25 samples stay flat, so it is the
+  stabilizer, not the stroke's length.
+- Pressure: after pen-up CLIP STUDIO drops sooner and then more slowly (9.26 against 9.45 at
+  x 1020, 8.65 against 8.74 at 1092) and ends the same. Averaging the pressure with the
+  velocity's weights, `(level − k) / level`, reproduces that on the 4 px/ms, 8 px/ms and slow
+  strokes (replay: 0.132 → 0.082, 0.201 → 0.102, 0.162 → 0.144 px) but doubles the slow → fast
+  end (0.100 → 0.220), where CLIP STUDIO drains less than either model. Not shipped.
+- On 밀리펜 the two add up: 0.07 of velocity input (about 0.3 px at this size) and the earlier
+  drop give the 0.40 px. Both need a stroke that separates them better, such as a 4 px/ms stroke
+  twice as long (the window full well before the lift) and a fast stroke that lifts at once.
+
+**Stabilized velocity, revised (same day).** Read per stabilized sample, CLIP STUDIO's velocity
+input over the pen's own speed follows how fast the window grows (`dW` per input), not the
+window: about 1 while `dW` = 0.5 (up to a window of 8.5 at level 15), rising as the growth slows
+(at 2 px/ms: 1.11 at `dW` 0.35, 1.18 at 0.23, 1.24 at 0), flat once the window is full. The
+stabilized path, timed by the raw input, moves at `1 − dW/2` of the pen: 0.75 while the window
+grows by half a sample. So the input is the path's speed over raw time divided by 0.75. Fitted
+per sample over all eleven velocity-only strokes (mean `|Δv|`):
+
+| Velocity input | All | 0.5 → 8 ramp | 8 px/ms, 5 samples | 2 px/ms, 55 samples |
+| --- | ---: | ---: | ---: | ---: |
+| raw speeds weighted `(level − k) / level` (shipped before) | 0.028 | 0.014 | 0.158 | 0.068 |
+| stabilized path over raw time | 0.052 | 0.024 | 0.279 | 0.092 |
+| stabilized path over raw time ÷ 0.75 | 0.015 | 0.009 | 0.073 | 0.028 |
+
+Prism: `Stabilizer::speed` is now the two-segment speed of the stabilized outputs over their raw
+input times, divided by `PATH_SPEED_SCALE` (0.75), held from pen-up. Why CLIP STUDIO divides by
+0.75 is not known; it is measured at level 15 with 8 ms input only (Adjust by speed and sparse
+input untested). In the app, mean size difference from CLIP STUDIO:
+
+| Strokes | Before | After |
+| --- | ---: | ---: |
+| 6 long velocity-only (to the lift) | 0.277 | 0.129 |
+| 5 velocity-only | 0.089 | 0.080 |
+| 5 밀리펜 | 0.204 | 0.074 |
+| 5 pressure-only (unchanged path) | 0.101 | 0.097 |
+
+**Longer strokes (measured the same day).** The single-input copies of 밀리펜 again (deleted
+afterwards), stabilization 15, six strokes: 2 px/ms for 55 and for 25 samples, 1 px/ms for 55,
+3 px/ms for 37, 4 px/ms for 25 and 8 px/ms for 5. The window is full (15) from about the 43rd
+sample. Velocity input read through the size, CLIP STUDIO:
+
+| Pen speed | Unstabilized | Stabilized, window 6–8 | Stabilized, window 12.7 | Stabilized, window 15 |
+| --- | ---: | ---: | ---: | ---: |
+| 1 px/ms | not measured | 0.117 | 0.146 | 0.169 |
+| 2 px/ms | 0.25 | 0.249 | 0.285 | 0.30 |
+| 3 px/ms | not measured | 0.332 | 0.371 | (0.396 at 14.6) |
+| 4 px/ms | 0.415 | 0.418 | 0.486 | |
+
+- While the window is up to about 8.5 the stabilized input equals the unstabilized one (where
+  that was measured: 2 and 4 px/ms). It then
+  rises with the window, by 0.05–0.07 at 15 whatever the speed (not a fixed ratio: 1.44 at
+  1 px/ms, 1.2 at 2–4, against the value at window 6–8), and stays there once the window stops growing (2 px/ms: 0.30 from the
+  43rd to the 55th sample). Prism's weighted raw speed stays at the unstabilized value. No rule
+  is known; it starts where the window's growth falls below half a sample per input.
+- Pressure after pen-up: the same front-loaded drop on every stroke. The pressure weighted like
+  the velocity input fits two strokes better and three worse (replay 0.146 → 0.130 px mean; the
+  app 0.117), so it is not the rule either.
+- Pen-down pressure: with pressure alone on the size, fast strokes start thin in CLIP STUDIO
+  (8 px/ms: 8.89 px at x 380, 10.07 at 444; 4 px/ms: 9.40 at 380) and Prism does not. Taps
+  earlier the same day agree: a tap at pressure 1 drew exactly what a tap at 0.02 drew (25.73
+  units of coverage both; Prism 45.89 and 25.65). CLIP STUDIO appears to treat the pen-down
+  sample's pressure as 0 (or not to read it); with stabilization that 0 is averaged into the
+  first outputs. Measured with synthetic pens only, whose down frame carries the full pressure;
+  a real pen's down frame is usually light. Taps modelled since; see Pen-down pressure.
+
+**Pen-down pressure (same day).** Tried first: the pen-down sample of every pen stroke with a
+CLIP STUDIO brush at pressure 0. Taps then matched, but moving strokes did not:
+
+| Mean size difference from CLIP STUDIO at the start (px) | Before | Pen-down at 0 |
+| --- | ---: | ---: |
+| 7 unstabilized 밀리펜 starts (x 366–500) | 0.290 | 0.498 |
+| 6 stabilized pressure-only starts (x 372–468) | 0.175 | 0.383 |
+| 5 stabilized 밀리펜 starts (x 372–560) | 0.396 | 0.228 |
+
+Prism carried the 0 along the whole first segment (pressure is interpolated between samples,
+and the stabilizer's padding repeats the first sample), so an 8 px/ms stroke started at 7.9 px
+where CLIP STUDIO starts at 9.4; stabilized, CLIP STUDIO is back to full pressure about two
+samples after pen-down where Prism's window needed four. Shipped first: only a pen tap (a
+stroke that never moves) is drawn at no pressure, the canvas zeroing its single sample's pressure
+before the commit (`Drag::csp_pen`, set at pen-down for a CLIP STUDIO brush and a pen; a mouse
+click and a ⇧-click line keep theirs). In the app a tap at pressure 1 now covers 25.43 units
+(CLIP STUDIO 25.73, Prism before 45.89).
+
+**In a moving stroke (measured the same day).** A copy of 밀리펜 with pressure alone on the size
+and no stabilization (deleted afterwards): strokes at 2, 4 and 8 px/ms, 8 px/ms with 16 ms
+samples, and 8 px/ms after a 40 ms rest, plus taps at pressure 1 and 0.5.
+
+- Unstabilized, every stroke starts at full width from its second column on (8.71–8.92 px of
+  coverage from x 360, like the middle of the line): the pen-down's 0 leaves no trace on a
+  moving stroke. The tap at pressure 1 again covers 25.73. The second tap of each run reads 55.06
+  (here at pressure 0.5, earlier at 0.02): its patch shows a ring around the dot, a mark of the
+  second injection rather than of pressure, so it is left out.
+- Replayed against the stabilized pressure-only strokes, the pen-down's 0 fits when it is a
+  sample of its own before the pen's first sample (same place and time), not a replacement of
+  it: mean size difference over x 364–516 0.197 → 0.120 px (six long strokes) and 0.228 → 0.123
+  (five earlier strokes), the stroke starting back at full pressure after two to three samples as
+  CLIP STUDIO does. Unstabilized it changes nothing (0.094 both): the next dab covers it.
+- Prism: `csp_pen_down` (ui-egui canvas) puts that sample in front of a CLIP STUDIO brush's pen
+  stroke, for the live stroke and the commit; a tap keeps only it, so taps are unchanged.
+
+In the app, mean size difference from CLIP STUDIO at the start of each stroke:
+
+| Strokes | Before | After |
+| --- | ---: | ---: |
+| 6 long stabilized pressure-only (x 364–516) | 0.179 | 0.116 |
+| 5 stabilized pressure-only (x 364–516) | 0.213 | 0.123 |
+| 5 stabilized 밀리펜 (x 372–560) | 0.396 | 0.334 |
+| 7 unstabilized 밀리펜 (x 366–500) | 0.290 | 0.293 |
+| 5 unstabilized pressure-only (x 364–516) | not drawn | 0.074 |
+
+A pen tap still covers 25.43 (CLIP STUDIO 25.73).
+
 ## Effector tilt response (2026-10-16)
 
 Same executable. Existing direct Ghidra outputs (`evidence/ghidra-effector.txt`,
@@ -790,7 +1188,7 @@ values need not be ordered and the response is independent of pen pressure.
 Grainy's `BrushSizeEffector` has `A = 50`, `B = 100` and the curve
 `(0,1) (0.5,1) (0.8,0) (1,0)`. The importer now maps active `0x20` onto the
 existing `Dynamic.cspTilt` (input 1 = vertical pen or mouse, 0 = horizontal);
-`CspTilt` no longer requires `minimum <= maximum`. Speed (`0x40`) and random
+`CspTilt` no longer requires `minimum <= maximum`. Speed (`0x40`, imported since 2026-11-15, see Effector velocity input) and random
 (`0x80`) still warn. The exact native altitude input for physical pens is not
 traced here; the mouse value is supported by the comparison below.
 
@@ -854,9 +1252,9 @@ no proprietary code or pseudocode is copied into the implementation.
 
 Prism now independently adds a bounded release drain (at most 202 extra samples),
 pressure-zero interpolation and deceleration termination, keeping stationary dot
-pressure and making finish idempotent. The source's initial release-packet pressure
-and device-type scaling remain unverified; initial repeats still retain the last
-contact pressure. Threshold distances use document pixels × zoom in Prism, pending
+pressure and making finish idempotent. The device-type scaling remains unverified.
+The initial repeats of a moving stroke carry pressure 0 since 2026-11-15 (measured with a
+synthetic pen, see Effector velocity input › With stabilization). Threshold distances use document pixels × zoom in Prism, pending
 physical-pen comparison. The full live-preview policy is also not a CSP pixel oracle.
 See [matched settings, timings and capture limits](brush-latency.md).
 
@@ -1006,7 +1404,9 @@ texel at the pixel centre. There is no bilinear filtering at any level.
 Prism (`render.rs`, `csp_aa`): level 0 samples once at the pixel centre; other levels
 average 2×2 nearest samples at ±¼ pixel around the centre (the source starts its rows at
 the pixel corner, but CSP's own stroke edges are symmetric, so the offsets are taken as
-centred); sampled tips use mip level 0 / `level_for(d)` / `level_for(d/2)`. A soft computed
+centred); sampled tips use mip level 0 for none and weak and `level_for(2d)` for medium and
+strong (measured 2026-11-14, see Image tip anti-aliasing below; the earlier reading of the
+trace, `level_for(d)` / `level_for(d/2)`, drew a blurred tip). A soft computed
 round tip uses Prism's falloff. A hard computed round tip with anti-aliasing follows the
 measured CLIP STUDIO rule (2026-11-14, `docs/pen-input-validation.md` › G-pen comparison).
 Coverage is `clamp((R − d) / w)`: the edge stays at R and the ramp runs inward, with w =
@@ -1015,6 +1415,82 @@ centre. The earlier 1 px / 2 px box filter kept the nominal diameter, which CLIP
 not (a size-25 medium dab is 22.5 px across). `cspAntiAlias` is now a
 level 0..3; older presets stored a boolean (false = 0, true = 1). Grainy Pen (level 0)
 renders unchanged.
+
+## 가을낙엽_낙엽 against CLIP STUDIO PAINT (2026-11-14)
+
+The colour-tip spray brush 가을낙엽_낙엽 (nine 677×700 colour tips in random order, one particle
+a step on the circumference of the brush area, random particle angle) was drawn in CLIP STUDIO
+PAINT PRO 5.0.4 and in Prism with the same synthetic pen strokes
+(`docs/pen-input-validation.md` › Synthetic pen injection; CLIP STUDIO on Wintab, so the strokes
+arrive at full pressure; the brush has no pressure input). The sub tool as set in CLIP STUDIO:
+brush size 17, particle size 78.2 (synchronized with the brush size, ratio 4.60), anti-aliasing
+strong, gap Narrow. Screenshots at 100 % view against Prism's saved PNG. These are observations
+of output; nothing below is traced in code.
+
+**What already matched.** With gap Fixed (interval 100) both lay 16 leaves along 1200 px: the
+step is the *particle* size times the interval, not the brush size. Leaf sizes agree by kind
+(longest extent, px: ginkgo 46.0 / 45.3–46.8, red maple 47.4 / 46.6–47.5, large maple 67.1–68.1 /
+67.8, CLIP STUDIO / Prism). Gap Narrow at 0.04 × particle size gives the same band: ink per
+pixel of path 42.6–43.8 against 41.5–42.8, mean band height 55.0–55.7 against 52–55.6 px.
+
+**What differed, and is fixed.**
+
+- *Image tip anti-aliasing.* See the next section.
+- *A later dab covers an earlier one.* Where leaves overlap, CLIP STUDIO shows every later leaf
+  whole, with its outline. Prism kept the colour of the first dab to cover a pixel (its build-up
+  only coloured newly covered area), so leaves merged and outlines vanished: pixels darker than
+  luma 60 were 3.9 % of the ink against CLIP STUDIO's 13.7–14.2 %. A CSP brush whose dabs carry
+  their own colour (colour tips, sub colour, colour jitter) now paints each dab over the stroke
+  (`CoverageMap::paint_over`, as colour mixing already did): 12.0–12.9 %.
+- *No pile of dabs at pen-up.* Prism laid three or four extra leaves on the end of every stroke:
+  the stabilizer's pen-up samples repeat the last position while their pressure drains, and each
+  pressure change in place laid a dab. On a pen with pressure size they shrink to nothing; on a
+  brush without pressure input they are full size. CLIP STUDIO ends with the last spaced leaf.
+  The stabilizer's pen-up samples no longer lay dabs in place.
+- *A tap draws nothing.* A one-sample tap with this brush, and with 葉っぱブラシ (no spray; tip
+  angle from the line direction, `BrushRotationEffector` 195), draws nothing in CLIP STUDIO; the
+  G-pen (no direction input) draws its dab. Prism drew one leaf. A CSP brush whose tip or
+  particle angle follows the direction of the line (flag 0x40) now waits for the pen to move
+  before its first dab (`BrushSettings::csp_follows_line`, `PathWalker::wait_for_direction`).
+  Inference: the rule is taken to be the direction input; spray without it was not tried.
+  2026-11-15: the rule also needs post correction off. Chainmail 1 (`BrushRotationEffector`
+  0xc3) and Chainmail 2 2-C (0x43), both with post correction, draw a tap's dab; Chainmail 1 with
+  post correction switched off draws nothing (see Gray brush tips › Taps).
+- *Tool Property.* A particle size synchronized with the brush size showed its stored value (30)
+  instead of what it paints (78.2); it now shows the synchronized size, as CLIP STUDIO does.
+
+**Not the same, by design or unknown.**
+
+- The random streams are Prism's own: which leaf, its angle and its place differ dab by dab.
+- A sub tool Prism imported before the importer read the particle angle (`angleJitter`) keeps its
+  old settings until it is imported again. Imports read the material as downloaded, not the
+  edits made in CLIP STUDIO (here: size 17, gap Narrow), which have to be set in Prism too.
+- `BrushSizeUnit` / `BrushSpraySizeUnit` 2 on this material (stored 6.518 and 30): CLIP STUDIO's
+  own display of the unedited material was not captured, so the import default size is unverified.
+- Anti-aliasing weak on an image tip: CLIP STUDIO keeps more dark outline (11.3 % of ink below
+  luma 60) than Prism (7.7 %); not investigated.
+- Stroke-interior dark share is still a little lower in Prism (12.0–12.9 % against 13.7–14.2 %).
+
+## Image tip anti-aliasing (2026-11-14)
+
+Single leaves of 가을낙엽_낙엽 (a 700 px colour tip drawn 78 px across) at each anti-aliasing
+level, gap Fixed, measured as the share of partly covered pixels ("soft": distance from white
+8–128 over pixels above 128) and of outline pixels darker than luma 60, per ink pixel:
+
+| Level | CLIP STUDIO soft / dark | Prism before | Prism now |
+| --- | --- | --- | --- |
+| none | 0.041 / 0.158 | 0.041 / 0.174 | unchanged |
+| weak | 0.142 / 0.113 | 0.117 / 0.077 | unchanged |
+| medium | 0.156 / 0.058 | 0.191 / 0.028 | 0.138 / 0.057 |
+| strong | 0.127–0.150 / 0.051–0.063 (four rows) | 0.324 / 0.008 | 0.147 / 0.058 |
+
+Prism read the trace above as "medium: the level at least as large as the dab; strong: at least
+half as large", which upsamples a 44 px level at strong: a blurred leaf with a washed-out
+outline. CLIP STUDIO's medium and strong look alike and keep the outline. Sampling the level at
+least **twice** the dab's size for both (175 px here), still as the mean of 2×2 nearest texels
+half a pixel apart, reproduces both numbers; four times the size (0.122 / 0.073) and one times
+(0.191 / 0.028) do not. Whether medium and strong pick different levels at other sizes is not
+measured. Ribbon tips keep their previous level rule.
 
 ## Tip rotation controls (2026-10-16)
 
@@ -1470,7 +1946,7 @@ by the common Photoshop-style action model. Set names, enabled flags, dialog fla
 and source-step identities are now retained. Clear Outside Selection is one atomic
 Prism command, so the three source steps remain three steps rather than five. Unknown
 commands/parameters still reject the complete import. See [Actions](actions.md) and
-the separate [Photoshop investigation](actions-analysis.md).
+the separate [Photoshop investigation](actions-analysis.md). (Superseded 2026-11-15: unknown steps import as blocking placeholders; see [Auto actions](#auto-actions-value-types-and-step-mapping-2026-11-15).)
 
 ### Product behavior and limits
 
@@ -1638,8 +2114,8 @@ The 15 CHERU hair-highlight tips are colour layers drawn in pure white with
 paint highlights, so CLIP STUDIO must draw colour tips in their own colours unless *Change brush
 tip colour* is on (inference, not traced). Prism's tips are density masks painted in the brush
 colour, so a colour tip now uses its alpha as the shape, and the import warns
-(`COLOUR_TIP`) when CLIP STUDIO would keep the tip's colours. Gray tips keep
-`alpha × (1 − gray)`. With *Change brush tip colour* on, Prism already does what CLIP STUDIO does,
+(`COLOUR_TIP`) when CLIP STUDIO would keep the tip's colours. Gray tips kept
+`alpha × (1 − gray)` until 2026-11-15; see Gray brush tips. With *Change brush tip colour* on, Prism already does what CLIP STUDIO does,
 so that setting no longer warns.
 
 ### Still open (measured on the local library)
@@ -1895,6 +2371,91 @@ brightness jitter `|v|/100` (±), foreground/background jitter the sub-colour am
 CLIP STUDIO's range is one-sided; other inputs on a jitter warn; a jitter without the random input
 is a constant shift Prism can't apply (warning, dropped). Erasing brushes skip colour jitter.
 
+2026-11-15: the sub-colour blend without the random input is the blend itself (`cspSubColor`), and
+with pen pressure or tilt on its effector (0x44c) it is scaled per dab by that response
+(`cspSubColorDynamic`: the amount times minimum + (1 − minimum)·curve(pressure), as the evaluator
+multiplies a value by its effector's output). Chainmail 2 2-C and Chainmail Interlocked 2-C use
+pressure with a falling curve (100 % at pressure 0, 0 from 0.39): a light touch paints the sub
+colour, a firm one the main colour. They import without warnings. The SUT panel's Sub color row
+switches the pressure response and edits its minimum, and draws the imported curve read-only.
+
+**Per-stroke sub colour has no input.** CLIP STUDIO's tool database (`Variant`) has
+`BrushSubColorEffector` but no effector column for `BrushStrokeSubColor` (0x4fa) or the other
+per-stroke amounts, so per-stroke colour change is random only; there is no pressure to import.
+
+**Measured against CLIP STUDIO PAINT 5.0.4 (2026-11-15).** Chainmail 2 2-C at size 170, main
+(190,100,100), sub (39,35,153), white 1600×900 canvas, both at 57.4 % view; one synthetic Windows
+Ink stroke (doc x 150→1450, pressure 0→1 linear, 8 ms samples) in each app, CLIP STUDIO on Tablet
+PC for the run. Sub-colour share per pixel (median, solved against white for coverage):
+
+| Pressure | 0.05 | 0.15 | 0.25 | 0.35 | 0.45 | 0.55 | 0.75 | 0.95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CLIP STUDIO | 0.59 | 0.46 | 0.36 | 0.29 | 0.22 | 0.18 | 0.10 | 0.08 |
+| Prism | 0.55 | 0.42 | 0.31 | 0.22 | 0.15 | 0.10 | 0.03 | 0.00 |
+| amount × curve | 0.54 | 0.38 | 0.22 | 0.06 | 0 | 0 | 0 | 0 |
+
+Direction and scale match: the sub colour at a light touch, the main colour as pressure rises.
+Both trail the curve (stabilization 7 and overlapping tips 170 px wide). CLIP STUDIO trails a
+little further and keeps sub-coloured parts where tips overlap (upper quartile 0.19 at pressure
+0.95, Prism 0.00). The cause is the next section, not pressure lag.
+
+### Gray brush tips draw their gray in the sub colour (measured 2026-11-15)
+
+Same setup, with strokes at **constant** pressure (doc x 150→1450 at 1.0 and at 0.3) and single
+taps, on a transparent layer (Chainmail paints Compare density, which leaves an opaque layer
+alone). Sub-colour share per pixel, solved against the white paper:
+
+| Constant pressure | CLIP STUDIO p10 / median / p90 | Prism |
+| --- | --- | --- |
+| 1.0 | −0.01 / 0.08 / 0.29 | 0.00 / 0.00 / 0.00 |
+| 0.3 | 0.26 / 0.32 / 0.49 | 0.26 / 0.26 / 0.27 |
+| 1.0 and 0.3, *Change brush tip color* off | −0.01 / 0.08 / 0.29 (both) | — |
+
+- The lower bound equals Prism's amount × curve exactly, and start, middle and end of each stroke
+  read the same, so the pressure response itself matches and nothing lags.
+- The extra sub colour sits at the ends of every arc, the same place in every dab. The tip images
+  are gray materials (pixel kind 17): opaque (alpha > 200) with gray 0 in the middle rising to
+  about 0.5 at the arc ends. With *Change brush tip color* off the arc ends stay sub-coloured and
+  both pressures look the same, so this is not part of colour jitter.
+- **Inference (measured, not traced):** CLIP STUDIO draws a gray tip's coverage from its alpha and
+  its gray as a blend from the drawing colour (black) towards the sub colour (white). With the
+  sub-colour blend `t` on, the pixel's sub share fits `t + (1 − t)·g` (0.26 + 0.74 × 0.3 ≈ 0.48
+  against the measured 0.49). Prism reads a gray tip as density `alpha × (1 − gray)` (Colour brush
+  tips, above), which is indistinguishable while the sub colour is white over white paper, and
+  wrong as soon as either is not.
+- **Prism (2026-11-15).** A primary tip from a gray material with visible gray (at least 1 % of its
+  pixels with alpha ≥ ½ at gray ≥ 8/255) imports as its alpha, with its gray in every channel of
+  `cspTipColors` and `cspTipGrays` set for it; this holds whether or not *Change brush tip color* is
+  on. The renderer lays it through the colour-tip path and blends each pixel from the dab colour to
+  `background` (the sub colour) by the gray. Erasing and colour mixing lay one colour, so they keep
+  the old density `alpha × (1 − gray)`; so do alpha-only and thumbnail materials, and dual brush tips
+  (not measured). Same strokes rendered again in Prism: 0.00 / 0.08 / 0.28 at pressure 1.0 and
+  0.26 / 0.32 / 0.48 at 0.3, against CLIP STUDIO's −0.01 / 0.08 / 0.29 and 0.26 / 0.32 / 0.49.
+- 29 of the 159 local sub tools have gray tips with at least 5 % of their opaque pixels at gray
+  ≥ 32: the lace, scallop and ribbon brushes, both lightning brushes and Ikazuchi ×2 (all-gray
+  tips), 茂み下白黒, SMOKE 1, 爆発, Sparkle-Lei D - sub glow and the Chainmail 2-colour brushes.
+- **Two more gaps on the same brush, silently dropped by the import:** `BrushIntervalEffector`
+  (spacing by pressure, minimum 40 %: CLIP STUDIO spaces the 0.3 row about twice as densely) and
+  `BrushThicknessEffector` (thickness by pressure, minimum 75 %). Locally 15 sub tools use an
+  active spacing effector and 22 a thickness effector; neither is imported or warned about.
+  **Imported since 2026-11-15:** `cspSpacingDynamic` scales each step's spacing by the response
+  (at most 1), `cspThicknessDynamic` (with the axis, `BrushVerticalThicknes`) scales the thickness
+  axis of `cspTipScale` per dab (at most 1). The other inputs of these effectors warn like the other
+  pressure effectors (velocity 0x40 on 세모네모펜, Crystal sparkles and R4_SPARKS; R4_SPARKS 2's
+  thickness tilt limits are out of range). Chainmail 2 2-C rendered again: ink runs crossed by four
+  scan lines over doc x 600–1000 at constant pressure 0.3 are 37/27/36/26 (CLIP STUDIO 36/23/37/27;
+  21 each at pressure 1 in both), band height 170 px in both.
+- **Taps.** A single-sample pen tap paints a dab in CLIP STUDIO, at a lower effective pressure
+  (sub share 0.21 for a tap at 1.0, 0.46 at 0.3). In the live Prism app the same tap leaves a
+  history step but no pixels; `paint.stroke` with one point does paint (`local_csp_render_one`).
+  **Cause (2026-11-15):** `csp_follows_line` held back the first dab of any
+  brush whose tip follows the line direction until the pen moved, a rule taken from 葉っぱブラシ and
+  가을낙엽_낙엽, which have post correction off. Measured in CLIP STUDIO with the synthetic pen on
+  Tablet PC: Chainmail 1 (direction and random, post correction on) draws its taps at pressure 1
+  and 0.5; with post correction switched off it draws neither. So a tap is held back only without
+  post correction, and Prism now does the same: Chainmail 2 2-C and Chainmail 1 tap a dab
+  (`paint.stroke` and an injected pen tap in the app), 葉っぱブラシ still draws nothing.
+
 ### Smaller brush options
 
 - `BrushContinuousPlot` (0x413, Continuous spraying): Build-up on, at Prism's default rate (CLIP
@@ -2022,6 +2583,14 @@ warning names how many are missing. Unreadable reference blobs and ambiguous mat
 still leave it off (a broken file, not a missing asset). What CLIP STUDIO itself paints when a
 dual tip material is missing was not observed.
 
+**2026-11-15:** the round stand-in now applies only to masking modes. Both lightning brushes use
+dual mode 0 (Normal), an adding mode, where the second brush paints its own tips in the brush
+colour: the stand-in laid solid `DualSize` discs (746 px for D/Kaminari) over the stroke and,
+in the local contact sheet, over the neighbouring cells. With every tip missing an adding dual
+brush is now left off ("the adding dual brush is not applied") and the first brush (a
+Compare-density ribbon of the bolt image) paints alone. Test:
+`adding_dual_brush_without_any_tip_is_left_off`.
+
 ### Input rate (2026-11-04)
 
 The stabilization window now spans the time of that many samples at 125 Hz when input is
@@ -2065,6 +2634,12 @@ rulers, 1510, and the Korean UI labels (the UI language was not changed).
 Post correction, snapping, darken, density by gap and reference-layer lines are no longer in
 the open list above; spray size and water edge units are settled as pixels.
 
+**2026-11-15:** the importer now treats unit 0 and 2 alike as pixels without a warning for the
+spray particle size, watercolor edge radius/blur and dual size/particle size (it already did for
+start/end lengths); other unit codes still warn with their code. Seven local brushes lost a
+false warning (local library: 13 → 6 materials with warnings). Test:
+`length_unit_2_is_pixels_without_a_warning`.
+
 ### Fade, Smear and texture labels (2026-11-14, second session)
 
 Evidence (UI): start/end "How to specify" is Specify length / percentage / **Fade** for
@@ -2082,3 +2657,278 @@ color picked nothing up in the same setup.
 Inference: the fade's curve (the quarter sine of the other modes). Unknown: the amount of
 Emphasize density (CSP calls it emphasizing the texture's contrast; not measurable with a
 mouse), Running color, Brightness correction.
+
+## Auto actions: value types and step mapping (2026-11-15)
+
+All 13 auto-action sets in the local library (65 actions, 792 steps) were read without
+running CLIP STUDIO: the C2F container was decoded as documented above and the value stream
+parsed by an independent script, then by `prism_io::laf`. Before this, 12 of 13 failed with
+"unsupported value type 19" (one with 20). No executable was analysed for this work; values
+come from the files and the meaning of each step from its observed parameters.
+
+### Auto-action value types
+
+| Tag | Layout | Evidence |
+|---|---|---|
+| 6 | UTF-8 string, length-prefixed integer | names, layer names (`下描き`, `_M`) |
+| 7 | bytes, length-prefixed integer (≤ 644 bytes seen) | `colortype`, gradient-map `gradation`; kept as `{"$bytes": hex}` |
+| 17 | unsigned integer: byte count then big-endian bytes | flags, counts |
+| 19 | signed integer, value ≥ 0, same layout | `hue 180`, `steps 20`, colour channels |
+| 20 | signed integer, value < 0, stores the magnitude | `saturation` 20 01 64 = −100 in "make white transparent"; colour channel 20 01 01 = −1 = 0xFFFFFFFF (white) |
+| 21 | f64: byte 8 then eight big-endian bytes | lengths (`40 59 00…` = 100.0), scales, rotation |
+| 72 / 73 | array / object (unchanged) | |
+
+Colour channels are 32-bit, all ones = full: `-858993460` is 0xCCCCCCCC (0.8 gray),
+`3813008197` 0xE345E345. Lengths are `{unit, value}`; unit 0 is pixels (the canvas sizes and
+layer moves match the canvases they build). Unit 2 (mm, `input100` 14.1 with "mm") is not
+mapped.
+
+### Step mapping
+
+`crates/engine/src/laf_mapping.rs` maps 50 of the 68 step kinds seen, each only when every
+parameter is understood; anything else stays in the action as `actions.unsupportedLafStep`
+with its source parameters, and playback refuses that action before its first step (the
+Photoshop-import rule). Labels CLIP STUDIO users add between actions (no steps, repeated
+names such as dashes) now import; a repeated name gets " (2)".
+
+Observed, with the evidence that fixed the meaning:
+
+- Canvas size `basepoint` is 1-based (1 top left, 5 centre): the 1280 px checkerboard
+  action grows a 10 px canvas from the top left and moves copies right and down.
+- Transform `positiontype` is 0-based (0 top left, 4 centre): a scale with move −0.5 uses 0,
+  rotations about the middle use 4. `transformtype` 0 and 1 are the Transform tool
+  property's modes; a mode-1 step may carry a scale too (Isometric 30° L: `scalex` 58 with
+  `rotation` −30), so both are read as one affine scale-then-rotate.
+- Transform `rotation` is in degrees, positive **clockwise on screen**, and a step's scale is
+  applied along the frame's own axes before its rotation. Observed in CLIP STUDIO PAINT
+  (2026-11-15, Edit › Transform on a 1600×900 filled layer, Tool property *Rotation angle*):
+  +23.4° turned the rectangle clockwise; with W 6 % and +23.4° the result was a narrow
+  rectangle turned clockwise, not a parallelogram, so scale comes first. The downloaded
+  Isometric 30° L/R actions agree: −45°/+45° then 58 % with ∓30° gives vertical edges and
+  30° slopes, a left face for L and a right face for R only under that convention.
+- `remainoriginal` 1 keeps the source under the moved copy (seamless tile actions).
+- Composite mode codes are the brush blending mode codes (`prism_paint::csp_blend`); 30 is
+  Through (folders).
+- `selectfromlayerstatusmultiply` intersects; `layername` names the source layer.
+- Recorded drag moves carry fractions (511.87 for a 512 px move); they round to whole pixels.
+- Level Correction (`layeractionlevelnew`, `layeractionlevelsettings`) stores per channel
+  `input {low, mid, high}` and `output {low, high}` on the tone curve's 0..65535 scale. Evidence:
+  the normal-map action sets its layer to Multiply (code 2), which halves the neutral 0.5 to 0.25,
+  then a level layer with red and green input high 32638 (127/255) brings it back to 0.5; read
+  on a 0..32768 scale that level would do almost nothing. `mid` sits at the middle (16318 for
+  0..32638, one unit low) in every local step.
+- A Gradient Map layer's `gradation` bytes are the gradient tool's `GradationData` layout (see
+  Gradient data) with a four-word header (16 bytes: header size, stop record size 28, stop count,
+  curve point size 16; no trailing two words). The CMYK separation set's four maps decode to
+  K (36, 24, 21), cyan (0, 161, 233), magenta (230, 0, 127) and yellow (255, 242, 0), each to
+  white over 11 straight stops: the inks the action's name promises.
+- Convert Layer (`layeractionconvert`): `layerkind` 2 is an image material layer (the set named
+  "画像素材化", make an image material, uses it, and the misregistration set converts its plates
+  with it and says to tile them by hand), 0 a raster layer (the CMY/K separation actions run tone
+  curves and Convert brightness to opacity on the result, which only a raster layer takes).
+  `leaveoriginal` keeps the source, `layername` and `compositemode` set the result. `colortype`
+  `00000000 00000001 00000001` with `channelorder` 33 is in every colour action;
+  `00000001 00000001 00000000` with 1 only in the brush-material variant (likely Gray; refused).
+  Prism converts to a pixel layer or a smart object (its nearest to an image material layer;
+  no tiling). Layer kind 1 and the other values are not seen.
+- With a folder selected, a new raster layer or folder goes inside it at the top: the CMY/K
+  separation actions make a folder, add a layer, then select the layer below it inside the folder
+  (the converted copy); the manual does not say. Prism's `layer.new.layer`/`layer.new.group` take
+  `into`.
+- `selectactiondeselect` runs before anything is selected in Pixel Perfect Outline, so it maps to
+  `select.deselect {"ifAny": true}`, which does nothing without a selection.
+- `layeractionsetuselayercolor` `use` 0 turns Layer Color off; Prism layers have no layer colour,
+  so the step is skipped with a note (`use` 1 is refused).
+
+Inferred, not verified against CLIP STUDIO output:
+
+- Convert brightness to opacity: alpha × (1 − Rec. 601 luma), colour black. CLIP STUDIO's
+  own feature is documented as monochrome output, and the colour-separation actions refill
+  colour after it with transparency locked; the luma weights are not known.
+- `detailpaint` (Edit › Fill with options) fills the whole layer or selection; its
+  target-colour and colour-margin options have no seed point in an action and are ignored.
+- A level `mid` off the middle becomes a Photoshop gamma `ln r / ln 0.5` (`r` its place between
+  low and high), the gamma that sends that input to the middle of the output; no local step has
+  one.
+- Hue/Saturation/Luminosity uses Photoshop's Lightness; Brightness/Contrast clamps contrast to
+  Prism's −50..100; transform quality 1 = nearest, others bicubic.
+
+Not mapped: transform modes other than 0 and 1 (none in the local files), and 18 kinds:
+layer colour (`setlayermaincolor`, `setuselayercolor`), tone (`setusetone`, `settoneline`,
+`settoneangle`), border effect (`setuseedge`, `setedgecolor`, `setedgewidth`), draft layer,
+conversion to Gray or to other layer kinds, new layer with expression colour (`rasterdetailnew`), bordering,
+select colour, gradient maps whose stops follow the drawing colours or are not opaque, two
+filter plug-ins named by GUID, and lengths in millimetres.
+
+### Local result
+
+All 13 files import; 47 of 65 actions are ready (9 of them labels without steps). Of the 38
+ready actions with steps, 32 play to the end on a 64 px test drawing
+(`every_local_downloaded_laf_imports`, ignored test; until 2026-11-15 it ignored a step failure
+reported in `failed`, so earlier "all play" counts were too high). Six of the seven that stop
+need what the drawing lacks: a selection (2) or layers named in the author's file ("RorC",
+"GorM", "Layer 1 2 2"; 4). Colored Outline clears outside the selection on the Tone Curve layer
+it has just made; Prism applies that to the layer's mask (adding one), as Photoshop's Delete
+does with an adjustment layer targeted. Inference: CLIP STUDIO limits the correction layer the
+same way (the action would otherwise do nothing there); not compared with its output. The checkerboard and seamless-tile actions produce the expected tiles, and the
+four Isometric actions turn a 100 px square into the top face (142×82, a tan 30° ratio), the
+left and right faces and the 2:1 diamond; no result has been compared pixel for pixel with
+CLIP STUDIO.
+
+## Gradient materials (2026-11-15)
+
+Read-only inspection of the five gradient materials in the local download folder (the catalog's
+`MaterialKind` `gradation` ×3 and `gradation_set` ×2, one of the sets not on disk). No executable
+code was decompiled. Prism's reader is `crates/io/src/sut/gradient_material.rs`; its tests use
+synthetic data.
+
+- `gradation` is a gradient **sub-tool**: `data/material_0.tool`, the C2F container of the usual
+  tool database. The outer `Material` row's `MaterialToolVariantManager` holds the sub-tool
+  database; its `Node` names the sub-tool (`NodeName`, e.g. "hueshift cool tones") and points at
+  a `Variant` (`NodeVariantID`) carrying `GradationData` (216 bytes, the 24-byte-header layout of
+  *Gradient data*), `GradationRepeatType`, `GradationDither` and `GradationReverseSaved`.
+- `gradation_set` is a **gradient set**: `data/material_0.colorset`, a C2F container holding the
+  typed value records auto actions use (*Auto actions: value types*), with an empty root
+  `typename`: `gradationSetArray[] → {gradationSetName, gradationItemArray[] → {gradationName,
+  gradationData}}`. Each `gradationData` is the 16-byte-header layout Gradient Map layers use
+  (the CMYK set's first four items are the same K/C/M/Y maps as the CMYK separation action).
+- Prism imports both into the Gradients panel (`gradient.presets.importCsp`): a set as a group
+  named after it, a sub-tool's gradient into its collection's group. Curves between fixed
+  colours become sampled stops that match them; a curve between a drawing colour and another
+  colour runs straight (warned). The sub-tool's repeat, dither and reverse settings belong to
+  the tool, not the gradient, and are not kept.
+- Local result: all 5 listed; the 4 on disk import (14 + 18 set gradients, 3 sub-tool
+  gradients). Rendered beside CLIP STUDIO's thumbnails they show the same colour runs
+  (metallic golds and silvers, the hue-shift blues, rainbow and warm tones, the ink plates).
+
+## Colour set materials (2026-11-15)
+
+Read-only inspection of the two `color_set` materials in the local download folder; no
+executable code was decompiled. Prism's reader is `crates/io/src/sut/color_set.rs`; its test uses
+a synthetic database.
+
+- `data/material_0.colorset` is a C2F container holding a **SQLite** database (unlike a gradient
+  set's `.colorset`, which holds typed value records). Its one table:
+  `colorsetmaterial(_PW_ID, colorsetitemname, colorsetitemred, colorsetitemgreen,
+  colorsetitemblue, colorsetitemtransparent)`. Rows are the palette in `_PW_ID` order; names were
+  empty in both sets.
+- Channels are 32-bit with the byte repeated (`0xDCDCDCDC` = 220), as CLIP STUDIO's other colours;
+  `colorsetitemtransparent` 1 marks the transparent colour (none locally; Prism swatches are opaque,
+  so it is left out with a warning).
+- Prism imports a set into the Swatches panel as one group named after the material
+  (`swatches.importCsp`); unnamed colours take their hex value as the name. Both local sets (Hue
+  Shifting Palette 15, Retro24 Pixel Art Palette 24) match their thumbnails colour for colour and
+  in order, and the first matches the user's CLIP STUDIO Color Set palette.
+
+## Pose materials (2026-11-15)
+
+Read-only inspection of the two local `pose` materials (百合ポーズ１ and ２ of one collection);
+no executable code was decompiled and no CLIP STUDIO figure model is used: Prism poses its own
+procedural mannequin. Reader: `crates/io/src/sut/pose.rs` (tests use synthetic data); renderer
+`crates/algo/src/figure3d/`; commands `crates/engine/src/figure_cmds.rs`.
+
+- `data/material_0.pose` is a C2F container holding SQLite with `Material` (`MaterialName`, often
+  the default "新規ポーズ_0", so Prism names figures after the catalog entry) and `File`, whose
+  `FileData` is an XML `.pep`: `<celsysdocument><pose version="1.0.14" bone_mapping_version="0">`
+  with one `<node name="root_group_" rotquat="w x y z" trans="x y z">` tree of 67 nodes: hips,
+  three spine joints, neck, head, shoulders, arms, forearms, hands with five four-joint fingers,
+  up legs, legs, feet, toes and `*_end_bb_` tips.
+- Observed: `trans` is the joint's position in its parent's frame in centimetres (hips about
+  96 cm up, Y up); children lie along the parent's local ±X (left side +, right side −), so bone
+  lengths come from the file. `rotquat` is the full local rotation, `w` first: the root rotations
+  `0.906 0.210 0.354 −0.094` and `0.643 0 −0.766 0` keep both figures upright only read that way.
+- Verified against CLIP STUDIO's thumbnail: rendered from the side of the line between the two
+  figures, Prism's pair shows the same composition (facing each other, heads together, one arm on
+  the other's shoulder, the other hand at the waist). A figure facing +Z has its left on +X, so
+  its front is (left hip − right hip) × up; the pair faces each other under that rule.
+- Inferred, not verified: `bone_mapping_version` 0 means CLIP STUDIO's standard figure
+  skeleton; other skeletons (versions, custom 3D models) are read the same way and posed by
+  joint name, which may not match their meshes.
+
+### Right side and hand setup (2026-11-15)
+
+Read-only inspection of the `.pep` files CLIP STUDIO PAINT installs under
+`Settings/PAINT/3D` (`default_pose_ver2.pep`, `handsetup_gu00..03.pep`, `handsetup_pa00..01.pep`)
+and of its Object tool › Hand pose UI on a scratch canvas. Nothing from these files is shipped:
+Prism's hand shapes are its own angles (`crates/algo/src/figure3d/hand.rs`).
+
+- Observed, right side: the default pose stores the same `rotquat` on both sides and mirrors only
+  `trans.x`. Read as plain forward kinematics its fingers come out up to 6.5 cm asymmetric (the
+  thumb on the back of the right hand); negating `trans.y` and `trans.z` of every right-side
+  joint below the shoulder and thigh makes it exactly symmetric (0.000 cm over all 67 joints).
+  `rightshoulder_bb_` and `rightupleg_bb_` carry the half-turned frame. Prism's reader applies
+  that flip, so its skeleton stays plain FK.
+- Observed, fingers: segments 2 and 3 of every digit rotate about local Z only, curling about −Z
+  (both hands, same quaternions); segment 1 adds a little local Y (the spread); segment 4 (the
+  tip) never bends anything below it. The thumb's base carries most of its turn about its own
+  axis. Bone lengths differ between files, so a hand setup changes rotations only.
+- Observed, UI: an inverted triangle. Top left a flat hand, fingers together; top right a spread
+  hand; bottom a closed hand picked from four buttons (fist, cat paw, a grip round a tube, a
+  tight grip). The pointer's position blends the three. Five lock toggles above it (thumb first)
+  keep a finger as it is. With the whole figure selected both hands follow.
+- Prism: `layer.figure.setHand {weights:[flat,spread,closed], closed, side, locked}` and Properties
+  › Hand Pose. Curl hinges come from each hand's rest geometry (bone × palm normal, the palm being
+  the side the thumb's base is on), which yields CLIP STUDIO's −Z on its skeleton and the right
+  axes on Prism's standing figure.
+- Not verified: whether CLIP STUDIO blends linearly inside the triangle; Prism does.
+
+### Hand pose materials (2026-11-15)
+
+- Observed: CLIP STUDIO's own hand poses (`handsetup_*.pep`, "tool=Celsys PoseStudio", tags such
+  as `hand_pose` or `左手`) hold no figure: the `<pose>` element's top nodes are one hand's finger
+  chains (`lefthandmiddle1_bb_` with 2–4 nested, the thumb, index, ring, pinky), each `trans` in
+  the hand's frame. CLIP STUDIO's manual: with the whole figure selected a hand-only pose goes on
+  both hands, with one hand selected on that hand only, and a pose registered from either hand
+  works on both.
+- Verified (2026-11-15) on a free ASSETS collection, "Common Hand Poses [5.0 Version]"
+  (content 2257326, 26 poses, downloaded through CLIP STUDIO for this check and kept local):
+  every hand pose is a `pose` kind material (`MaterialKind` "pose", like whole figures), so
+  Prism tells them apart by content: `brush.cspLibrary.list` reads each pose file (up to 256)
+  and reports `hand: "left" | "right"`; all 26 list as left hands.
+- Observed, CLIP STUDIO 5.0 layout: those poses list every joint as a top node, flat, each
+  `trans` in the frame of the segment before it, and add palm bones `<side>hand<digit>0_bb_`
+  (index, middle, ring, pinky; offsets from the hand) before the knuckles; there is no tip (`4`)
+  joint. Prism rebuilds the chains by name (`hand → 0 → 1 → 2 → 3`), places the palm by the
+  knuckles' rest positions (offsets added along the chain), and on a figure without palm bones
+  folds each palm bone's turn into its knuckle (both frames lie along the hand at rest).
+- Observed, whole-figure poses on a placed figure (scratch canvas, Ver.2 drawing figure moved and
+  turned with its object launcher, 百合ポーズ１ dropped on it, three facings): the figure stays
+  where it was and keeps its own facing; the pose file's `root_group_` turn (−100° about Y here)
+  is not applied, only the joints below it. Prism's `layer.figure.applyPose` does the same: the
+  figure's root joint stays, everything below is the pose's (bone lengths included).
+- Compared with CLIP STUDIO on its own base left hand model: "Thumbs Up: Upright", "Finger Count:
+  3" and "Point at something" give the same finger shapes in Prism (raised and folded fingers,
+  thumb direction and bend); applied by id through `layer.figure.applyHandPose` in the app they
+  land on the chosen hand.
+- Prism: `prism_io::sut::pose::read_any` gives `Pose::Hand` (the chains under a made-up hand
+  joint); `layer.figure.applyHandPose` carries each finger rotation from the pose's palm frame
+  to the target hand's (mirrored for the other hand, re-aimed for Prism's figure whose fingers
+  lie along −Y), keeping the target's bone lengths. A left and a right pose together go to their
+  own hands, one pose to both. CLIP STUDIO's six installed hand poses, put on Prism's standing
+  figure this way, match its fist, cat paw, tube, grip, flat and spread hands
+  (`local_hand_poses_render`, ignored; reads them in place).
+- Observed in passing: `handsetup_pa00` ("パー") keeps the fingers almost parallel and
+  `handsetup_pa01` ("平手") fans them, the reverse of what their names suggest.
+
+## 3D character materials (2026-11-15)
+
+Read-only look at CLIP STUDIO's installed 3D files and the local material database; nothing was
+decoded beyond the container.
+
+- Observed: the 3D object files (`Settings/PAINT/3D/*.cs3o`, `.c3dd`) are SQLite with one
+  `object3d(catalog_id, catalog_data)` row; `catalog_data` starts with the length-prefixed text
+  `CLIP_STUDIO_3D_DATA2`, a `catalog_object` tag and an id, then data at 8.0 bits per byte that no
+  standard compression (zlib, raw deflate, LZMA) opens: encrypted. Installed 3D head materials
+  keep only XML and a 20-byte stub on disk. No 3D character material is downloaded here.
+- Decision: Prism does not read CLIP STUDIO's 3D models (that would mean breaking their
+  protection). It reads open formats instead: VRM 0.x / 1.0 and glTF 2.0 characters
+  (`crates/io/src/model/`), drawn with their textures and posed through their humanoid bones,
+  which take Prism's (CLIP STUDIO's) joint names, so pose and hand-pose materials apply.
+- Observed, for retargeting CLIP STUDIO poses onto characters (the two local poses): a pose
+  head's local +X runs up the head (world-up 0.92–1.00) and its local −Z points out of the face
+  (dot with the body's facing 0.92–1.00). Prism carries a pose onto a character bone by bone
+  (each shared bone points where the pose's does, the character keeps its lengths, root place
+  and facing), and turns the hips, chest, head and hands about themselves to match the thigh
+  line, shoulder line, face direction and knuckle line.
+- Not verified: how CLIP STUDIO itself retargets poses onto imported VRM characters; the head's
+  pitch on a VRM character looks a little higher than the mannequin's in the same pose.

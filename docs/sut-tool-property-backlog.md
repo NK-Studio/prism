@@ -66,7 +66,7 @@ below already renders; only the editable control is missing.
 | ~~P3~~ done 2026-11-04 (from D) | 102 | `TextureCompositeMode` | Texture blending mode | 1 | `texture.csp_mode` | list of the CSP texture modes |
 | ~~P3~~ done 2026-11-04 (from D) | 113 | `TextureReverseDensity` | Reverse density | 1 | `texture.invert` | checkbox in the texture block |
 | ~~P3~~ done 2026-11-04 (from D) | 114 | `TextureStressDensity` | Emphasize density | 1 | `texture.csp_emphasize` (+0.5 contrast at render time; approximation, warns) | checkbox; faithful effect stays open |
-| ~~P3~~ done 2026-11-04 (from D) | 1101 | `BrushSubColor` | Sub color (brush tip color change) | 1 | `csp_sub_color` (fixed) or `color_dynamics.fg_bg.jitter` (random) | slider 0–100 % beside 1103–1107 |
+| ~~P3~~ done 2026-11-04 (from D) | 1101 | `BrushSubColor` | Sub color (brush tip color change) | 1 | `csp_sub_color` (fixed; scaled by pen pressure/tilt through `csp_sub_color_dynamic` since 2026-11-15, its pressure switch and minimum editable in the panel) or `color_dynamics.fg_bg.jitter` (random) | slider 0–100 % beside 1103–1107 |
 
 P1 status (2026-11-04): all six rows have Tool Property controls (`sut_panel::control`);
 hardness re-derives automatic spacing, direction keeps a ribbon's quarter turns in sync, particle
@@ -96,7 +96,9 @@ changes the preview strip; save/reload of the preset keeps the edit.
 
 Spray, start/end and water-edge lengths are read as pixels; CLIP STUDIO units (mm, pt, %
 of canvas resolution) need the document resolution. One shared length-with-unit control
-should cover 1131, 1171, 1181, 1201 and 51000.
+should cover 1131, 1171, 1181, 1201 and 51000. Unit 2 is pixels at any resolution (measured
+2026-11-14) and, like 0, imports without a warning since 2026-11-15; every non-zero unit in the
+local library is 2, so the other codes are untested.
 
 ## C. Not read at all (behaviour missing)
 
@@ -109,7 +111,7 @@ should cover 1131, 1171, 1181, 1201 and 51000.
 | ~~P2~~ done 2026-11-04 (from D) | 1003 | `BrushAtLeast1Pixel` | At least 1 pixel (inferred) | 12 | Chainmail pens. Imported into `csp_at_least_1px`: a dab under 1 px is laid as a full-ink 1 px dab instead of fading with its area; checkbox row. Behaviour inferred from the key name, not yet compared with CSP |
 | ~~P2~~ done 2026-11-14 (from D) | 1230 | `BrushEnableSnap` | Enable snapping | 6 | Imported into `csp_no_snap` (only a stored 0 switches it off); a brush with it off ignores the special rulers (`special_ruler_ui::snaps`). Checkbox row. Label confirmed in CSP; what CSP's option snaps to besides rulers is not compared |
 | ~~P3~~ done 2026-11-14 (from D) | 1120 | `BrushBlendPatternByDarken` | Blend brush tips with Darken | 2 | Imported into `csp_darken_tips`: a dab's colour never lightens the colour the stroke holds at a pixel (per channel; RGB and Gray, per-dab colour, no colour mixing). Checkbox row. Label confirmed; pixels not compared with CSP |
-| P3 (named row, behaviour open) | 1913 | `ChangeRGBByDual` | Apply RGB value | 2 | D/Kaminari, D/Raigeki; child of Dual brush under Mode. Named read-only row and an import warning ("apply RGB value") since 2026-11-14. Not drawn: both brushes' dual tip material is missing from the local library and their dual ribbon, dynamics and darken settings are unsupported, so the dual brush is a round-tip density mask; the effect on colour needs the dual tip pipeline to carry colour first |
+| P3 (named row, behaviour open) | 1913 | `ChangeRGBByDual` | Apply RGB value | 2 | D/Kaminari, D/Raigeki; child of Dual brush under Mode. Named read-only row and an import warning ("apply RGB value") since 2026-11-14. Not drawn: both brushes' dual tip material is missing from the local library and their dual ribbon, dynamics and darken settings are unsupported; their dual mode adds (Normal), so since 2026-11-15 the dual brush is left off (a round stand-in painted solid discs); the effect on colour needs the dual tip pipeline to carry colour first |
 | ~~P3~~ done 2026-11-14 (from D) | 1022 | `BrushAdjustFlowByInterval` | Adjust brush density by gap | 1 | Imported into `csp_flow_by_spacing`: per-dab density `1 − (1 − flow)^spacing` so the stroke builds up to the brush density at any gap (`dynamics::spacing_flow`). Checkbox row. Label confirmed; the curve is Prism's, CSP's is not measured |
 
 ## D. IDs with no traced key

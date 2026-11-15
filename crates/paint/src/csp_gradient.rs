@@ -1,5 +1,5 @@
-//! CLIP STUDIO gradients (`GradationData`, Tool Property item 5400): the colour stops of a
-//! gradient sub-tool, decoded from the blob CLIP STUDIO stores, and the stops Prism paints them
+//! CLIP STUDIO gradients (`GradationData`, Tool Property item 5400, and the `gradation` of a
+//! Gradient Map layer in an auto action): the colour stops of a gradient, decoded from the blob CLIP STUDIO stores, and the stops Prism paints them
 //! with. Layout evidence: docs/sut-analysis.md › Gradient data (`GradationData`).
 use serde::{Deserialize, Serialize};
 
@@ -10,8 +10,9 @@ pub const MAX_CURVE_POINTS: usize = 64;
 const POSITION_ONE: f64 = 32768.0;
 /// Colour channels and opacity are 32-bit (0xFFFFFFFF is full).
 const CHANNEL_MAX: f64 = 4_294_967_295.0;
-/// The fewest bytes of the header, a stop record and a curve point.
-const MIN_SIZES: (usize, usize, usize) = (24, 28, 16);
+/// The fewest bytes of the header (its four size words; tool data adds two more), a stop record
+/// and a curve point.
+const MIN_SIZES: (usize, usize, usize) = (16, 28, 16);
 /// The most stops Prism's own gradient takes from one CLIP STUDIO gradient (colour and opacity
 /// stops each; a curve adds samples).
 const MAX_PRISM_STOPS: usize = 1024;
@@ -80,7 +81,8 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 
 impl CspGradient {
     /// Decode `GradationData`: a header of big-endian words (header size, stop record size, stop
-    /// count, curve point size, then two words of unknown use), the stop records (red, green,
+    /// count, curve point size; gradient tools add two words of unknown use, Gradient Map layers
+    /// none), the stop records (red, green,
     /// blue, opacity as 32-bit values; a flags word whose low nibble picks the colour, 0 fixed,
     /// 1 main, 2 sub; the position, 0x8000 = 1; the number of curve points to the next stop),
     /// then every stop's curve points in stop order (x, y as big-endian doubles).

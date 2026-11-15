@@ -13,7 +13,7 @@ fn name(out: &mut Vec<u8>, value: &str) {
 fn tile_fixture(width: u32, height: u32, values: &[u8]) -> (Vec<u8>, Vec<u8>) {
     tile_fixture_planes(width, height, values, None)
 }
-fn tile_fixture_planes(width: u32, height: u32, values: &[u8], gray: Option<&[u8]>) -> (Vec<u8>, Vec<u8>) {
+pub(in crate::sut) fn tile_fixture_planes(width: u32, height: u32, values: &[u8], gray: Option<&[u8]>) -> (Vec<u8>, Vec<u8>) {
     tile_fixture_kind(width, height, values, gray, false)
 }
 /// One 256² tile: an alpha plane, then a gray plane for gray materials; a monochrome tile

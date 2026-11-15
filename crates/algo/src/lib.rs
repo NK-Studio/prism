@@ -31,6 +31,7 @@ pub mod enclose_fill;
 pub mod erase;
 pub mod exif;
 pub mod features;
+pub mod figure3d;
 mod fxutil;
 mod gallery;
 pub mod hdr;

@@ -489,7 +489,7 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                     None => None,
                 };
                 let csp_library_filter: Option<crate::csp_library_ui::KindFilter> = match p.get("cspLibraryFilter") {
-                    Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("cspLibraryFilter: {e} (all, brushes, subTools, layers)"))?,
+                    Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("cspLibraryFilter: {e} (all, brushes, subTools, layers, actions, gradients, colorSets, poses)"))?,
                     None => None,
                 };
                 // A CLIP STUDIO folder path ("ダウンロード:Pack-1758445"), "favorite", or null for all.
@@ -1150,6 +1150,8 @@ pub fn inspect(app: &PrismApp, ctx: &egui::Context) -> Value {
         "shapeCorners": crate::shape_corners_ui::inspect(app),
         "arrowHandles": crate::arrow_handles_ui::inspect(app),
         "specialRulerHandles": crate::special_ruler_ui::handles::current(app),
+        "figureHandles": crate::figure_ui::inspect(app),
+        "figurePick": crate::figure_ui::inspect_pick(app),
         "layerMenu": app.ui.layer_menu,
         "brushPicker": app.ui.brush_picker.map(|pos| json!({
             "pos": pos,

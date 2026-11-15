@@ -82,6 +82,12 @@ pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -
 pub(crate) fn check_pixels_unlocked(doc: &Document, id: LayerId) -> Result<()> {
     let locks = doc.effective_locks(id);
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    if l.figure.is_some() {
+        return Err(EngineError::Other(format!(
+            "\"{}\" is a 3D figure layer: rasterize it first (Layer › Rasterize › Layer) to edit its pixels",
+            l.name
+        )));
+    }
     if locks.pixels || locks.all {
         return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
     }
@@ -238,6 +244,24 @@ pub fn blend_from_str(s: &str) -> Option<BlendMode> {
     std::iter::once(BlendMode::PassThrough).chain(BlendMode::LAYER_MODES).find(|m| norm(m.label()) == want || norm(&format!("{m:?}")) == want)
 }
 
+/// The optional `"into"` flag of the New Layer / New Group commands.
+fn into_param(cmd: &str, p: &Value) -> Result<bool> {
+    match p.get("into") {
+        None => Ok(false),
+        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`into` must be a boolean")),
+    }
+}
+
+/// Insert a new layer above `active`, or with `into` at the top inside `active` when it is a group.
+fn insert_new(doc: &mut Document, active: Option<LayerId>, into: bool, layer: Layer) -> LayerId {
+    let id = layer.id;
+    if into && let Some(LayerContent::Group(g)) = active.and_then(|a| doc.layer_mut(a)).map(|l| &mut l.content) {
+        g.children.push(layer);
+        return id;
+    }
+    doc.insert_above(active, layer)
+}
+
 /// The active selection as the mask of a layer being created, or None without a selection.
 /// Photoshop masks a new adjustment or fill layer with the selection, so the adjustment acts on
 /// the selected area only (#1250); the selection itself stays, as Reveal Selection leaves it.
@@ -339,7 +363,7 @@ fn build() -> Vec<CommandSpec> {
             "New…",
             ["File"],
             Some("Cmd+N"),
-            r##"{"width":u32=1920,"height":u32=1080,"mode":"rgb|gray|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":ppi=72,"name":str}"##,
+            r##"{"width":u32=1920,"height":u32=1080,"mode":"rgb|gray|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":ppi=72,"name":str,"artboards":bool=false (one "Artboard 1" covering the canvas, holding "Layer 1"; the background fills the board),"profile":"none|working|<profile>"="none" (none = Don't Color Manage; working = the Color Settings working space of the mode)}"##,
             always,
             |s, p| {
                 use crate::document_preset_cmds::{MAX_DIMENSION, MAX_RESOLUTION, background_color, color_mode, sample_type};
@@ -374,6 +398,35 @@ fn build() -> Vec<CommandSpec> {
                     }
                 };
                 doc.resolution_dpi = res;
+                doc.icc_profile = match p.get("profile").and_then(Value::as_str).unwrap_or("none") {
+                    "none" | "" => None,
+                    spec => {
+                        let prof = s.color.resolve(spec, None, Some(mode))?;
+                        if prof.color_space != crate::color_cmds::mode_space(mode) {
+                            return Err(EngineError::BadParams {
+                                cmd: "file.new".into(),
+                                msg: format!("profile `{}` is {:?}; the document is {mode:?}", prof.description, prof.color_space),
+                            });
+                        }
+                        Some(prof.to_bytes())
+                    }
+                };
+                if p.get("artboards").and_then(Value::as_bool) == Some(true) {
+                    let bg = match p.get("background").and_then(Value::as_str).unwrap_or("white") {
+                        "transparent" => prism_doc::ArtboardBackground::Transparent,
+                        "black" => prism_doc::ArtboardBackground::Black,
+                        "white" => prism_doc::ArtboardBackground::White,
+                        "backgroundColor" => {
+                            let c = background_color(p, s.tools.background, "file.new")?;
+                            prism_doc::ArtboardBackground::Custom(Color::rgba(c[0], c[1], c[2], 1.0))
+                        }
+                        other => {
+                            let c = parse_hex(other).unwrap_or([1.0; 4]);
+                            prism_doc::ArtboardBackground::Custom(Color::rgba(c[0], c[1], c[2], c[3]))
+                        }
+                    };
+                    crate::artboard_cmds::make_document_artboard(&mut doc, bg);
+                }
                 let i = s.add_document(doc, None);
                 Ok(json!({ "document": i }))
             }
@@ -415,7 +468,10 @@ fn build() -> Vec<CommandSpec> {
             })?;
             Ok(Value::Null)
         }),
-        cmd!("select.deselect", "Deselect", ["Select"], Some("Cmd+D"), "{}", has_selection, |s, _| {
+        cmd!("select.deselect", "Deselect", ["Select"], Some("Cmd+D"), r##"{"ifAny":bool=false (true: without a selection there is nothing to do instead of the command being unavailable; CLIP STUDIO auto actions)}"##, has_selection, |s, p| {
+            if p.get("ifAny").and_then(Value::as_bool) == Some(true) && s.active().is_some_and(|d| d.doc.selection.is_none()) {
+                return Ok(Value::Null);
+            }
             s.edit("Deselect", |doc, _| {
                 doc.selection = None;
                 Ok(())
@@ -506,19 +562,21 @@ fn build() -> Vec<CommandSpec> {
             }
         ),
         // Layer
-        cmd!("layer.new.layer", "Layer…", ["Layer", "New"], Some("Cmd+Shift+N"), r##"{"name":str?}"##, has_doc, |s, p| {
+        cmd!("layer.new.layer", "Layer…", ["Layer", "New"], Some("Cmd+Shift+N"), r##"{"name":str?,"into":bool=false (true: with a group active, the new layer goes to the top inside it, as CLIP STUDIO places it)}"##, has_doc, |s, p| {
+            let into = into_param("layer.new.layer", p)?;
             let id = s.edit("New Layer", |doc, active| {
                 let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| doc.next_layer_name("Layer"));
-                let id = doc.insert_above(*active, Layer::raster(name, doc.pixel_format()));
+                let id = insert_new(doc, *active, into, Layer::raster(name, doc.pixel_format()));
                 *active = Some(id);
                 Ok(id)
             })?;
             Ok(json!({ "layer": id.0 }))
         }),
-        cmd!("layer.new.group", "Group…", ["Layer", "New"], None, r##"{"name":str?}"##, has_doc, |s, p| {
+        cmd!("layer.new.group", "Group…", ["Layer", "New"], None, r##"{"name":str?,"into":bool=false (as for layer.new.layer)}"##, has_doc, |s, p| {
+            let into = into_param("layer.new.group", p)?;
             let id = s.edit("New Group", |doc, active| {
                 let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| doc.next_layer_name("Group"));
-                let id = doc.insert_above(*active, Layer::group(name, vec![]));
+                let id = insert_new(doc, *active, into, Layer::group(name, vec![]));
                 *active = Some(id);
                 Ok(id)
             })?;
@@ -1182,6 +1240,9 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::actions_cmds::specs());
     v.extend(crate::action_edit_cmds::specs());
     v.extend(crate::laf_import_cmds::specs());
+    v.extend(crate::laf_step_cmds::specs());
+    v.extend(crate::csp_gradient_cmds::specs());
+    v.extend(crate::figure_cmds::specs());
     v.extend(crate::atn_import_cmds::specs());
     v
 }
@@ -1275,6 +1336,10 @@ pub(crate) fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
         && m.linked
     {
         m.surface = translate_surface(&m.surface, dx, dy);
+    }
+    // A 3D figure layer's pixels move as they are; its scene moves along so re-renders line up.
+    if let Some(scene) = &mut l.figure {
+        prism_algo::figure3d::pan(scene, [f64::from(dx), f64::from(dy)]);
     }
     match &mut l.content {
         LayerContent::Raster(s) => *s = translate_surface(s, dx, dy),

@@ -92,10 +92,12 @@ pub fn preview_sig(b: &BrushSettings) -> u64 {
             b.csp_ribbon,
             b.csp_correction,
             b.csp_sub_color,
+            &b.csp_sub_color_dynamic,
         ),
     );
     js(&mut h, &(b.csp_darken_tips, b.csp_flow_by_spacing, b.csp_post_correction, b.csp_refer_layer));
-    js(&mut h, &(b.csp_at_least_1px, b.csp_size_by_view, &b.csp_tip_order, &b.csp_erase, &b.csp_stroke, &b.dual_brush.csp_add));
+    js(&mut h, &(b.csp_at_least_1px, b.csp_size_by_view, &b.csp_tip_order, &b.csp_erase, &b.csp_stroke, &b.dual_brush.csp_add, &b.csp_tip_grays));
+    js(&mut h, &(&b.csp_spacing_dynamic, &b.csp_thickness_dynamic));
     js(&mut h, &(&b.shape_dynamics, &b.scattering, &b.csp_spray, &b.color_dynamics, &b.transfer, &b.pose, &b.smoothing));
     tip_shape_sig(&mut h, &b.tip);
     let d = &b.dual_brush;

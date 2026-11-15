@@ -22,6 +22,7 @@ fn matches(a: &BrushSettings, b: &BrushSettings) -> bool {
         && a.tip == b.tip
         && a.dual_brush.tip == b.dual_brush.tip
         && a.csp_tip_colors == b.csp_tip_colors
+        && a.csp_tip_grays == b.csp_tip_grays
 }
 
 fn bytes(c: &BrushContext) -> usize {

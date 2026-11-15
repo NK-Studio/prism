@@ -451,6 +451,8 @@ fn colour_tips_and_tip_order_are_stored_as_tip_files() {
     let mut preset = sampled("Colour tips", "CSP", tip8(20, 16, 1));
     preset.brush.tip = TipShape::Sequence(vec![tip8(20, 16, 1), tip16(12, 12, 2), tip8(9, 5, 3)]);
     preset.brush.csp_tip_colors = vec![Some(rgb(20, 16)), None, Some(rgb(9, 5))];
+    // The last tip is a CSP gray tip: its flag stays with the brush settings.
+    preset.brush.csp_tip_grays = vec![false, false, true];
     preset.brush.csp_tip_order = Some(CspTipOrder::Reverse);
     // Colours that do not fit their size are dropped, not saved as a broken tip.
     let mut broken = sampled("Broken colours", "CSP", tip8(4, 4, 9));

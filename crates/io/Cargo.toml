@@ -19,6 +19,8 @@ heif = ["prism-codecs/heif"]
 blowfish = "0.9.1"
 flate2 = { workspace = true }
 resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+# CLIP STUDIO pose files (`.pep` XML inside `.pose` materials); already in the tree through usvg.
+roxmltree = "0.20"
 
 prism-geom = { workspace = true }
 prism-color = { workspace = true }

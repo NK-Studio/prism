@@ -2,7 +2,7 @@
 //! and limits are recorded in docs/sut-analysis.md.
 //!
 //! Each raw input sample enters a history; the brush follows the average of the newest `W`
-//! samples (position and pressure), where `W` is fractional: the next older sample contributes
+//! samples (position, pressure and time), where `W` is fractional: the next older sample contributes
 //! with the remaining weight. Missing history, and samples older than one second, are replaced by
 //! the oldest sample still used. `W` starts small at pen-down and grows towards the
 //! stabilization level; with Adjust by speed it instead follows the pointer speed, shrinking for
@@ -75,17 +75,54 @@ pub struct Stabilizer {
     rate_scale: f64,
     /// Pen-up repeats are not input: they keep the scale measured while drawing.
     releasing: bool,
+    /// The newest stabilized position and the raw time of its input, and the segment before
+    /// it (length in document pixels, duration in ms), for CLIP STUDIO's velocity input.
+    out_last: Option<(f64, f64, f64)>,
+    out_seg: (f64, f64),
+    /// The velocity input of the newest stabilized sample; held at pen-up.
+    speed: Option<f64>,
 }
+
+/// The rest CLIP STUDIO counts before a stroke's first segment (ms); see
+/// [`crate::dynamics::CSP_REST_MS`].
+const REST_MS: f64 = crate::dynamics::CSP_REST_MS;
+/// The stabilized path's speed over raw input time is divided by this: while the window grows by
+/// half a sample per input the path moves at three quarters of the pen, and CLIP STUDIO then
+/// reads the pen's own speed (docs/sut-analysis.md › Effector velocity input › Stabilized
+/// velocity, revised).
+const PATH_SPEED_SCALE: f64 = 0.75;
 
 impl Stabilizer {
     pub fn new(cfg: &CspStabilizer, zoom: f32) -> Self {
         let cfg = cfg.bounded();
         let zoom = if zoom.is_finite() && zoom > 0.0 { f64::from(zoom) } else { 1.0 };
-        Self { window: cfg.start_window(), cfg, zoom, history: VecDeque::new(), drawing: false, rate_scale: 1.0, releasing: false }
+        Self {
+            window: cfg.start_window(),
+            cfg,
+            zoom,
+            history: VecDeque::new(),
+            drawing: false,
+            rate_scale: 1.0,
+            releasing: false,
+            out_last: None,
+            out_seg: (0.0, REST_MS),
+            speed: None,
+        }
     }
 
     pub fn active(&self) -> bool {
         self.cfg.level >= 1
+    }
+
+    /// CLIP STUDIO's velocity input at the newest stabilized sample, in document pixels per ms
+    /// (`None` without stabilization): the stabilized path's distance over the raw input time of
+    /// its two latest segments, divided by [`PATH_SPEED_SCALE`]. It reads the pen's speed while
+    /// the window grows by half a sample per input, rises to 4/3 of it as the growth slows and
+    /// stays there once the window is full, and from pen-up it holds its value: the catch-up adds
+    /// no speed. Fitted to CLIP STUDIO strokes with velocity alone on the size
+    /// (docs/sut-analysis.md › Effector velocity input › Stabilized velocity, revised).
+    pub fn speed(&self) -> Option<f64> {
+        self.speed.filter(|_| self.active())
     }
 
     /// Feed one raw input sample; returns the stabilized brush position.
@@ -97,6 +134,33 @@ impl Stabilizer {
             self.history.pop_front();
         }
         self.history.push_back(p);
+        let out = self.filter(p);
+        if !self.releasing {
+            self.speed = Some(self.path_speed(out.x, out.y, p.time));
+        }
+        out
+    }
+
+    /// The stabilized path's two-segment speed over raw input time (see
+    /// [`crate::dynamics::PathWalker`]), scaled by [`PATH_SPEED_SCALE`].
+    fn path_speed(&mut self, x: f64, y: f64, time: f64) -> f64 {
+        let Some((ax, ay, at)) = self.out_last.replace((x, y, time)) else { return 0.0 };
+        let len = (x - ax).hypot(y - ay);
+        let dt = time - at;
+        let seg = if dt > 0.0 && dt.is_finite() && len.is_finite() {
+            (len.min(1e9), dt.min(1e9))
+        } else if len > 1e-9 {
+            self.out_seg
+        } else {
+            (0.0, self.out_seg.1)
+        };
+        let (d, t) = (seg.0 + self.out_seg.0, seg.1 + self.out_seg.1);
+        self.out_seg = seg;
+        let v = if t > 0.0 { d / t / PATH_SPEED_SCALE } else { 0.0 };
+        if v.is_finite() { v.min(1e6) } else { 0.0 }
+    }
+
+    fn filter(&mut self, p: StrokePoint) -> StrokePoint {
         if !self.releasing {
             self.rate_scale = self.measure_rate_scale();
         }
@@ -138,13 +202,19 @@ impl Stabilizer {
     /// Pen-up has two phases: initial repeats, then a bounded release-pressure drain until
     /// the filtered motion settles or pressure reaches zero. Omitting the second phase can
     /// leave a short flick halfway to the cursor when its window is smaller than stickiness.
+    ///
+    /// After a moving stroke the repeats are the pen's release sample: the last position and
+    /// time with pressure 0. A pressure-sized line thins over the catch-up, and with the time
+    /// averaged the catch-up keeps the stroke's speed (CLIP STUDIO with a synthetic pen,
+    /// docs/sut-analysis.md › Effector velocity input).
     pub fn finish(&mut self, out: &mut Vec<StrokePoint>) {
         let Some(last) = self.history.back().copied().filter(|_| self.active() && self.drawing) else { return };
         self.releasing = true;
         let moved = self.history.iter().any(|p| p.x != last.x || p.y != last.y);
         let repeats = (self.window.floor() as i64 - i64::from(self.cfg.stickiness)).clamp(0, i64::from(MAX_LEVEL));
+        let release = if moved { StrokePoint { pressure: 0.0, ..last } } else { last };
         for _ in 0..repeats {
-            let p = self.push(last);
+            let p = self.push(release);
             out.push(p);
         }
         // A stationary click retains its contact pressure and dot size.
@@ -253,12 +323,14 @@ impl Stabilizer {
         }
     }
 
-    /// Fractional moving average over the newest `window` samples.
+    /// Fractional moving average over the newest `window` samples. Time is averaged with the
+    /// same weights, so the brush's speed is its own: steady input keeps its speed while the
+    /// window grows, and the pen-up catch-up moves in time instead of all at once.
     fn average(&self, p: StrokePoint) -> StrokePoint {
         let w = (self.window * self.rate_scale).max(1.0);
         let whole = w.floor() as usize;
         let n = self.history.len();
-        let (mut x, mut y, mut pressure) = (0.0f64, 0.0f64, 0.0f64);
+        let (mut x, mut y, mut pressure, mut time) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
         let mut used = p;
         let mut exhausted = false;
         // The i-th newest sample, if it exists and is recent enough.
@@ -273,6 +345,7 @@ impl Stabilizer {
             x += used.x;
             y += used.y;
             pressure += f64::from(used.pressure);
+            time += used.time;
         }
         let frac = w - whole as f64;
         if frac > 0.0 {
@@ -280,8 +353,9 @@ impl Stabilizer {
             x += older.x * frac;
             y += older.y * frac;
             pressure += f64::from(older.pressure) * frac;
+            time += older.time * frac;
         }
-        StrokePoint { x: x / w, y: y / w, pressure: (pressure / w) as f32, ..p }
+        StrokePoint { x: x / w, y: y / w, pressure: (pressure / w) as f32, time: time / w, ..p }
     }
 }
 

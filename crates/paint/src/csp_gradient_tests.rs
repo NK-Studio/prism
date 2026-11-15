@@ -35,6 +35,22 @@ fn decodes_live_colours_opacity_positions_and_curves() {
 }
 
 #[test]
+fn gradient_map_data_has_a_four_word_header() {
+    // A Gradient Map layer's `gradation` (auto actions): the header stops after the curve point
+    // size; colours repeat 16-bit values (`0x24252425`).
+    let mut b = blob(&[([0x2425_2425, 0x18d0_18d0, 0x1567_1567], FULL, 0x10, 0, &[[0.0, 0.0], [1.0, 1.0]]), ([FULL; 3], FULL, 0, 0x8000, &[])]);
+    b.drain(16..24);
+    b[0..4].copy_from_slice(&16u32.to_be_bytes());
+    let g = CspGradient::decode(&b).unwrap();
+    let CspStopColor::Rgb(c) = g.stops[0].color else { panic!() };
+    assert!((c[0] - 0x24 as f32 / 255.0).abs() < 1e-3, "{c:?}");
+    assert_eq!(g.stops[0].curve, vec![[0.0, 0.0], [1.0, 1.0]]);
+    let mut short = b.clone();
+    short[0..4].copy_from_slice(&12u32.to_be_bytes());
+    assert!(CspGradient::decode(&short).is_err(), "header shorter than its size words");
+}
+
+#[test]
 fn malformed_data_is_an_error_never_a_panic() {
     let good = blob(&[([0; 3], FULL, 1, 0, &[[0.0, 0.0], [0.5, 0.2], [1.0, 1.0]]), ([FULL; 3], 0, 0, 0x8000, &[])]);
     assert!(CspGradient::decode(&good).is_ok());

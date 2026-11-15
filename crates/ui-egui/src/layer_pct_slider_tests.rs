@@ -29,8 +29,10 @@ fn steps(h: &Harness<'_, PrismApp>) -> usize {
     h.state().session.active().unwrap().history.entries().len()
 }
 
+/// The Layers panel's node: the brush options bar, above it, has an Opacity ▾ and slider too.
 fn by_role(h: &Harness<'_, PrismApp>, name: &str, role: Role) -> Option<Rect> {
-    h.query_all_by_role(role).find(|n| n.accesskit_node().label().as_deref() == Some(name)).map(|n| n.rect())
+    let named = h.query_all_by_role(role).filter(|n| n.accesskit_node().label().as_deref() == Some(name));
+    named.map(|n| n.rect()).max_by(|a, b| a.top().total_cmp(&b.top()))
 }
 
 fn click(h: &mut Harness<'_, PrismApp>, at: Pos2) {

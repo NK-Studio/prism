@@ -120,6 +120,9 @@ fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, 
     if locks.position || locks.all {
         return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
     }
+    if l.figure.is_some() {
+        return Err(EngineError::Other(format!("Warp needs a rasterized 3D figure: \"{}\" (Layer › Rasterize › Layer)", l.name)));
+    }
     let map = |x: f64, y: f64| w.map(x, y);
     match &mut l.content {
         LayerContent::Group(g) => {

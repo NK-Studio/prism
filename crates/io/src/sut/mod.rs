@@ -5,8 +5,11 @@ mod blend;
 mod display;
 mod dual;
 mod effector;
+pub mod color_set;
+pub mod gradient_material;
 pub mod layer_material;
 pub mod library;
+pub mod pose;
 mod material;
 mod sqlite;
 use crate::abr_map::AbrImport;
@@ -23,6 +26,13 @@ fn num(r: &Row, k: &str, default: f64) -> f32 {
 }
 fn enabled(r: &Row, k: &str) -> bool {
     num(r, k, 0.0) != 0.0
+}
+/// A length unit Prism reads correctly as pixels: 0 (unset) or 2, which is pixels at any
+/// document resolution (measured: docs/sut-experiment-materials.md › 2). The other codes are
+/// not traced; their lengths are still used in pixels, with a warning.
+fn pixel_unit(r: &Row, k: &str) -> bool {
+    let unit = num(r, k, 0.0);
+    unit == 0.0 || unit == 2.0
 }
 
 fn png(blob: &[u8]) -> Result<&[u8], String> {
@@ -58,6 +68,8 @@ struct Samples {
     color: bool,
     /// A colour material's straight RGB, three bytes a pixel.
     rgb: Option<Vec<u8>>,
+    /// The original raster has a gray plane (gray materials; not alpha-only ones or thumbnails).
+    gray_plane: bool,
 }
 /// Decode a material, reduced to at most `max_pixels` (original rasters; thumbnails are small).
 fn gray_alpha(blob: &[u8], max_pixels: usize, warnings: &mut Vec<String>) -> Result<Samples, String> {
@@ -66,7 +78,8 @@ fn gray_alpha(blob: &[u8], max_pixels: usize, warnings: &mut Vec<String>) -> Res
             let gray = |i: usize| raster.gray.as_ref().and_then(|g| g.get(i)).map_or(0.0, |g| f32::from(*g) / 255.0);
             let px = raster.alpha.iter().enumerate().map(|(i, a)| [gray(i), f32::from(*a) / 255.0]).collect();
             let rgb = raster.rgb.filter(|_| raster.color);
-            return Ok(Samples { width: raster.width, height: raster.height, px, reduced: raster.reduced, color: raster.color, rgb });
+            let gray_plane = raster.gray.is_some() && !raster.color;
+            return Ok(Samples { width: raster.width, height: raster.height, px, reduced: raster.reduced, color: raster.color, rgb, gray_plane });
         }
         Ok(None) => {}
         Err(error) => warnings.push(format!("SUT original material could not be read ({error}); using its thumbnail, which can change the brush grain")),
@@ -89,13 +102,16 @@ fn gray_alpha(blob: &[u8], max_pixels: usize, warnings: &mut Vec<String>) -> Res
         let alpha = if im.layout().has_alpha() { im.sample_normalized(base + ch - 1) } else { 1.0 };
         data.push([gray.clamp(0.0, 1.0), alpha.clamp(0.0, 1.0)]);
     }
-    Ok(Samples { width: im.width(), height: im.height(), px: data, reduced: 1.0, color: false, rgb: None })
+    Ok(Samples { width: im.width(), height: im.height(), px: data, reduced: 1.0, color: false, rgb: None, gray_plane: false })
 }
 /// A brush tip of at most `max_pixels` pixels, with its colours when its material is a colour
 /// one. A gray tip's darkness is its density; a colour tip is its shape (alpha), in its own
 /// colours, or in the brush colour when the brush changes the tip colour.
 fn tip(blob: &[u8], max_pixels: usize, warnings: &mut Vec<String>) -> Result<(GrayTile, Option<CspTipColor>), String> {
-    let Samples { width, height, px, color, rgb, .. } = gray_alpha(blob, max_pixels, warnings)?;
+    tip_from(gray_alpha(blob, max_pixels, warnings)?, warnings)
+}
+fn tip_from(samples: Samples, warnings: &mut Vec<String>) -> Result<(GrayTile, Option<CspTipColor>), String> {
+    let Samples { width, height, px, color, rgb, .. } = samples;
     let density = |[g, a]: &[f32; 2]| if color { *a } else { (1.0 - g) * a };
     let data = px.iter().map(|p| (density(p) * 65535.0).round() as u16).collect();
     let tile = GrayTile { width, height, data };
@@ -104,6 +120,27 @@ fn tip(blob: &[u8], max_pixels: usize, warnings: &mut Vec<String>) -> Result<(Gr
         warnings.push("SUT colour brush tip colours could not be read; the tip paints in the brush colour".into());
     }
     Ok((tile, colors))
+}
+/// A primary brush tip: as [`tip`], except a gray material with visible gray, which CLIP STUDIO
+/// draws with its alpha as coverage and its gray blending the dab colour towards the sub colour
+/// (measured, docs/sut-analysis.md › Gray brush tips). Such a tip comes back as its alpha with
+/// its gray in every channel of the colours, and `true`.
+fn primary_tip(blob: &[u8], max_pixels: usize, warnings: &mut Vec<String>) -> Result<(GrayTile, Option<CspTipColor>, bool), String> {
+    let s = gray_alpha(blob, max_pixels, warnings)?;
+    if !(s.gray_plane && visible_gray(&s.px)) {
+        let (tile, colors) = tip_from(s, warnings)?;
+        return Ok((tile, colors, false));
+    }
+    let data = s.px.iter().map(|[_, a]| (a.clamp(0.0, 1.0) * 65535.0).round() as u16).collect();
+    let tile = GrayTile { width: s.width, height: s.height, data };
+    let gray: Vec<u8> = s.px.iter().flat_map(|[g, _]| [(g.clamp(0.0, 1.0) * 255.0).round() as u8; 3]).collect();
+    let colors = Some(CspTipColor { width: s.width, height: s.height, rgb: gray.into() }).filter(|c| c.fits(&tile));
+    Ok((tile, colors, true))
+}
+/// At least 1 % of a tip's opaque pixels (alpha ≥ ½) are visibly gray (≥ 8/255).
+fn visible_gray(px: &[[f32; 2]]) -> bool {
+    let (opaque, gray) = px.iter().filter(|[_, a]| *a >= 0.5).fold((0usize, 0usize), |(o, g), [v, _]| (o + 1, g + usize::from(*v >= 8.0 / 255.0)));
+    opaque > 0 && gray.saturating_mul(100) >= opaque
 }
 /// Texture tiles keep luminance; transparency reads as white before mode-specific blending.
 /// Returns the tile and the factor its larger edge was reduced by.
@@ -178,6 +215,9 @@ fn pressure_effector(r: &Row, k: &str, warnings: &mut Vec<String>) -> Option<Dyn
             }
             if let Some(error) = e.tilt_error {
                 warnings.push(format!("SUT {k} tilt response could not be read ({error}); it is disabled"));
+            }
+            if let Some(error) = e.speed_error {
+                warnings.push(format!("SUT {k} velocity response could not be read ({error}); it is disabled"));
             }
             e.dynamic
         }
@@ -297,6 +337,10 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
         ));
     }
     b.spacing = spacing(r, &mut warnings);
+    // Spacing (1040) and thickness (1050) by pen input: the value times the effector's response.
+    b.csp_spacing_dynamic = pressure_effector(r, "BrushIntervalEffector", &mut warnings);
+    b.csp_thickness_dynamic = pressure_effector(r, "BrushThicknessEffector", &mut warnings)
+        .map(|dynamic| prism_paint::CspThickness { dynamic, vertical: enabled(r, "BrushVerticalThicknes") });
     b.csp_stabilizer = stabilizer(r, &mut warnings);
     b.csp_correction = true;
     b.csp_in_out = in_out(r, &mut warnings);
@@ -350,10 +394,12 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
         if enabled(r, "BrushSpraySizeSyncBrushSize") && b.size > 0.0 {
             spray.size_ratio = Some(spray.size / b.size);
         }
-        for key in ["BrushSpraySizeUnit", "BrushSprayUseFixedPoint"] {
-            if enabled(r, key) {
-                warnings.push(format!("SUT {key} is not supported; spray uses a fixed particle size in pixels"));
-            }
+        if !pixel_unit(r, "BrushSpraySizeUnit") {
+            let unit = num(r, "BrushSpraySizeUnit", 0.0);
+            warnings.push(format!("SUT BrushSpraySizeUnit {unit} is not supported; the particle size is used in pixels"));
+        }
+        if enabled(r, "BrushSprayUseFixedPoint") {
+            warnings.push("SUT BrushSprayUseFixedPoint is not supported; spray uses a fixed particle size in pixels".into());
         }
         particle_angle(r, &mut spray, &mut warnings);
         b.csp_spray = Some(spray);
@@ -376,23 +422,30 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
         let mut pixels = 0usize;
         // Large original tips are reduced so the whole set fits the tip pixel budget.
         let each = (TIP_PIXEL_BUDGET / ordered.len().max(1)).min(material::DEFAULT_MAX_PIXELS);
-        let mut colors = Vec::new();
+        let (mut colors, mut grays) = (Vec::new(), Vec::new());
         for mat in ordered {
             ctl.check().map_err(|e| e.to_string())?;
-            let (t, color) = tip(mat.get("FileData").and_then(Value::blob).ok_or("SUT tip material is missing")?, each, &mut warnings)?;
+            let (t, color, gray) = primary_tip(mat.get("FileData").and_then(Value::blob).ok_or("SUT tip material is missing")?, each, &mut warnings)?;
             pixels = pixels.checked_add(t.data.len()).filter(|n| *n <= TIP_PIXEL_BUDGET).ok_or("SUT tips exceed pixel budget")?;
             tips.push(t);
             colors.push(color);
+            grays.push(gray && colors.last().is_some_and(Option::is_some));
         }
         // Change brush tip colour (`BrushChangePatternColor`, property 0x44e) paints every tip in
-        // the brush colour; without it CLIP STUDIO keeps the colours of a colour tip.
-        if colors.iter().any(Option::is_some) && !enabled(r, "BrushChangePatternColor") {
+        // the brush colour; without it CLIP STUDIO keeps the colours of a colour tip. A gray tip's
+        // gray blends towards the sub colour either way (measured with the option off).
+        let keep_colours = !enabled(r, "BrushChangePatternColor");
+        let colors: Vec<_> = colors.into_iter().zip(&grays).map(|(c, gray)| c.filter(|_| *gray || keep_colours)).collect();
+        if colors.iter().any(Option::is_some) {
             // Single-colour tips (white highlights) lose nothing by being laid in one colour.
-            let uniform = tips.iter().zip(&colors).all(|(t, c)| c.as_ref().is_none_or(|c| c.is_uniform(t, 2)));
+            let uniform = tips.iter().zip(&colors).zip(&grays).all(|((t, c), gray)| *gray || c.as_ref().is_none_or(|c| c.is_uniform(t, 2)));
             if b.csp_mixing.is_some() && !uniform {
                 warnings.push(COLOUR_TIP.into());
             }
             b.csp_tip_colors = colors;
+            if grays.iter().any(|g| *g) {
+                b.csp_tip_grays = grays;
+            }
         }
         if tips.len() > 1 {
             b.csp_tip_order = tip_order(r, &mut warnings).filter(|o| *o != CspTipOrder::Repeat);
@@ -604,11 +657,9 @@ fn in_out(r: &Row, warnings: &mut Vec<String>) -> Option<CspInOut> {
     // Fade uses the Ending length alone, from the start of the stroke (the Starting control and
     // "by speed" are disabled in CLIP STUDIO).
     let use_in = use_in && mode != CspInOutMode::Fade;
-    // Lengths with unit 2 are pixels at any resolution (measured: docs/sut-experiment-materials.md).
     for key in ["BrushInLengthUnit", "BrushOutLengthUnit"] {
-        let unit = num(r, key, 0.0);
-        if mode != CspInOutMode::Percent && unit != 0.0 && unit != 2.0 {
-            warnings.push(format!("SUT {key} {unit} is not supported; the length is used in pixels"));
+        if mode != CspInOutMode::Percent && !pixel_unit(r, key) {
+            warnings.push(format!("SUT {key} {} is not supported; the length is used in pixels", num(r, key, 0.0)));
         }
     }
     let length = |used: bool, length_key: &str, ratio_key: &str| {
@@ -696,8 +747,8 @@ fn water_edge(r: &Row, warnings: &mut Vec<String>) -> CspWaterEdge {
     let radius = num(r, "BrushWaterEdgeRadius", 0.0).max(0.0);
     let blur = if after_drag { num(r, "BrushWaterEdgeBlur", 0.0).max(0.0) } else { 0.0 };
     for key in ["BrushWaterEdgeRadiusUnit", "BrushWaterEdgeBlurUnit"] {
-        if enabled(r, key) {
-            warnings.push(format!("SUT {key} is not supported; the value is used in pixels"));
+        if !pixel_unit(r, key) {
+            warnings.push(format!("SUT {key} {} is not supported; the value is used in pixels", num(r, key, 0.0)));
         }
     }
     if enabled(r, "BrushWaterEdgeStyle") {

@@ -460,3 +460,301 @@ fn folders_favourites_and_own_materials_are_listed_but_installed_defaults_are_no
     assert_eq!(lib.layers[1].folders[1].chars().count(), MAX_FOLDER_CHARS);
     assert!(lib.layers.iter().all(|l| l.status == Status::Missing), "no files were written");
 }
+
+#[test]
+fn auto_actions_are_listed_and_read_by_id() {
+    let f = folder("actions");
+    let lib = list(&f.0).unwrap();
+    let got: Vec<_> = lib.actions.iter().map(|a| (a.name.as_str(), a.catalog.as_str(), a.status)).collect();
+    assert_eq!(got, [("An action", "Collection", Status::Missing)]);
+    assert!(action_bytes(&f.0, "uuid-action").unwrap_err().contains("missing"));
+    let file = f.0.join(MATERIALS).join("01").join("02").join("collection").join("uuid-action").join("data").join("material_0.laf");
+    write(file, b"laf bytes");
+    let lib = list(&f.0).unwrap();
+    assert_eq!(lib.actions[0].status, Status::Ready(CacheSource::MaterialFile));
+    assert_eq!(action_bytes(&f.0, "uuid-action").unwrap(), ("An action".to_string(), b"laf bytes".to_vec()));
+    // Only auto actions: a brush or image id is not one.
+    for uuid in ["uuid-ready", "uuid-image", "", "../uuid-action"] {
+        assert!(action_bytes(&f.0, uuid).is_err(), "{uuid}");
+    }
+    assert!(lib.brushes.iter().all(|b| b.kind != "auto_action"));
+}
+
+/// A gradient blob (16-byte header): opaque `(rgb, flags, position)` stops, no curves.
+fn gradient(stops: &[([u32; 3], u32, u32)]) -> Vec<u8> {
+    let mut b: Vec<u8> = [16u32, 28, stops.len() as u32, 16].into_iter().flat_map(u32::to_be_bytes).collect();
+    for (rgb, flags, pos) in stops {
+        b.extend([rgb[0], rgb[1], rgb[2], u32::MAX, *flags, *pos, 0].into_iter().flat_map(u32::to_be_bytes));
+    }
+    b
+}
+
+#[test]
+fn a_gradient_sub_tool_reads_its_node_names_and_gradation_data() {
+    use crate::sut::gradient_material::read;
+    let red_white = gradient(&[([u32::MAX, 0, 0], 0, 0), ([u32::MAX; 3], 0, 0x8000)]);
+    let inner = database(
+        &[
+            ("Node", "CREATE TABLE Node (NodeName TEXT, NodeVariantID INTEGER)", vec![vec![text("Warm"), int(7)], vec![text("Pen"), int(8)]]),
+            ("Variant", "CREATE TABLE Variant (VariantID INTEGER, GradationData BLOB)", vec![vec![int(7), Value::Blob(red_white)], vec![int(8), Value::Null]]),
+        ],
+        false,
+    );
+    let outer = database(&[("Material", "CREATE TABLE Material (MaterialName TEXT, MaterialToolVariantManager BLOB)", vec![vec![text("Warm"), Value::Blob(inner.clone())]])], false);
+    let m = read(&crate::csp_container::plain_fixture(&outer), &prism_raster::Interrupt::NONE).unwrap();
+    assert_eq!(m.groups.len(), 1);
+    assert_eq!(m.groups[0].name, None);
+    assert_eq!(m.groups[0].gradients.len(), 1);
+    assert_eq!(m.groups[0].gradients[0].0, "Warm");
+    assert_eq!(m.groups[0].gradients[0].1.stops[0].color, prism_paint::csp_gradient::CspStopColor::Rgb([1.0, 0.0, 0.0]));
+    assert!(m.warnings.iter().any(|w| w.contains("Pen")), "a variant without gradient data is reported");
+    // Malformed inputs are errors, never panics.
+    let empty = database(&[("Material", "CREATE TABLE Material (MaterialName TEXT, MaterialToolVariantManager BLOB)", vec![])], false);
+    let broken = database(&[("Variant", "CREATE TABLE Variant (VariantID INTEGER, GradationData BLOB)", vec![vec![int(7), Value::Blob(vec![0, 0, 0, 16])]])], false);
+    for bytes in [empty, outer[..100].to_vec(), b"not a material".to_vec(), Vec::new(), broken] {
+        assert!(read(&bytes, &prism_raster::Interrupt::NONE).is_err());
+    }
+}
+
+#[test]
+fn a_colour_set_reads_its_colours_in_palette_order() {
+    use crate::sut::color_set::read;
+    const SQL: &str = "CREATE TABLE colorsetmaterial(_PW_ID INTEGER PRIMARY KEY AUTOINCREMENT, colorsetitemname TEXT DEFAULT NULL, colorsetitemred INTEGER DEFAULT NULL, colorsetitemgreen INTEGER DEFAULT NULL, colorsetitemblue INTEGER DEFAULT NULL, colorsetitemtransparent INTEGER DEFAULT NULL)";
+    let full = i64::from(u32::MAX);
+    let row = |id: i64, name: &str, rgb: [i64; 3], transparent: i64| vec![int(id), text(name), int(rgb[0]), int(rgb[1]), int(rgb[2]), int(transparent)];
+    let db = database(
+        &[(
+            "colorsetmaterial",
+            SQL,
+            vec![
+                row(2, "", [0, full, 0], 0),
+                row(1, "Sky", [0xDCDC_DCDC, 0, full], 0),
+                row(3, "", [0, 0, 0], 1),
+                row(4, "", [-5, 0, 0], 0),
+            ],
+        )],
+        false,
+    );
+    let set = read(&crate::csp_container::plain_fixture(&db), &prism_raster::Interrupt::NONE).unwrap();
+    assert_eq!(set.colors.len(), 2, "{set:?}");
+    assert_eq!(set.colors[0].name, "Sky", "palette order is _PW_ID");
+    assert!((set.colors[0].rgb[0] - 220.0 / 255.0).abs() < 1e-6);
+    assert_eq!(set.colors[1].rgb, [0.0, 1.0, 0.0]);
+    assert_eq!(set.transparent, 1);
+    assert_eq!(set.warnings.len(), 2, "transparent and unreadable entries are reported: {:?}", set.warnings);
+    assert_eq!(read(&db, &prism_raster::Interrupt::NONE).unwrap(), set, "plain SQLite reads too");
+    let empty = database(&[("colorsetmaterial", SQL, vec![row(1, "", [0, 0, 0], 1)])], false);
+    let other = database(&[("Material", "CREATE TABLE Material (MaterialName TEXT)", vec![vec![text("x")]])], false);
+    for bytes in [empty, other, db[..100].to_vec(), b"not a colour set".to_vec(), Vec::new()] {
+        assert!(read(&bytes, &prism_raster::Interrupt::NONE).is_err());
+    }
+}
+
+#[test]
+fn a_pose_material_reads_its_figure() {
+    use crate::sut::pose::read;
+    let pep = r#"<?xml version="1.0" encoding="UTF-8"?><celsysdocument><pose version="1.0.14"><node name="root_group_" rotquat="1 0 0 0" trans="1 2 3"><node name="hips_bb_" rotquat="1 0 0 0" trans="0 96 0"/></node></pose></celsysdocument>"#;
+    let db = database(
+        &[
+            ("Material", "CREATE TABLE Material(_PW_ID INTEGER PRIMARY KEY AUTOINCREMENT, MaterialName TEXT DEFAULT NULL)", vec![vec![int(1), text("Pose A")]]),
+            ("File", "CREATE TABLE File(_PW_ID INTEGER PRIMARY KEY AUTOINCREMENT, MainId INTEGER DEFAULT NULL, FileName TEXT DEFAULT NULL, FileData BLOB DEFAULT NULL)", vec![vec![int(1), int(1), text("a.pep"), Value::Blob(pep.as_bytes().to_vec())]]),
+        ],
+        false,
+    );
+    let f = read(&crate::csp_container::plain_fixture(&db), "fallback", &prism_raster::Interrupt::NONE).unwrap();
+    assert_eq!(f.name, "Pose A");
+    assert_eq!(f.root.offset, [1.0, 2.0, 3.0]);
+    assert_eq!(f.root.find("hips_bb_").unwrap().offset, [0.0, 96.0, 0.0]);
+    let no_file = database(&[("Material", "CREATE TABLE Material(_PW_ID INTEGER PRIMARY KEY AUTOINCREMENT, MaterialName TEXT DEFAULT NULL)", vec![vec![int(1), text("x")]])], false);
+    assert!(read(&no_file, "x", &prism_raster::Interrupt::NONE).is_err());
+}
+
+/// Render every local pose collection into one PNG per collection, with Prism's standing figure
+/// for comparison: `PRISM_LOOK_OUT=<dir> cargo test -p prism-io --lib local_poses -- --ignored`.
+#[test]
+#[ignore = "reads the local CLIP STUDIO folder and writes PNGs"]
+fn local_poses_render() {
+    use prism_algo::figure3d::{RenderOptions, frame, render};
+    use prism_doc::figure::{FigureScene, standing_figure};
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/csp-poses".into()));
+    std::fs::create_dir_all(&out).unwrap();
+    let root = std::env::var_os("PRISM_TEST_CSP_ROOT").map(std::path::PathBuf::from).or_else(default_root).unwrap();
+    let lib = list(&root).unwrap();
+    let mut by_catalog: Vec<(String, Vec<prism_doc::figure::Figure>)> = Vec::new();
+    for p in &lib.poses {
+        let (catalog, figure) = import_pose(&root, &p.uuid, &prism_raster::Interrupt::NONE).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+        eprintln!("{} [{}]: {} joints", p.name, catalog, figure.root.walk().len());
+        match by_catalog.iter_mut().find(|(c, _)| *c == catalog) {
+            Some((_, v)) => v.push(figure),
+            None => by_catalog.push((catalog, vec![figure])),
+        }
+    }
+    // The first collection from several sides, to compare with CLIP STUDIO's thumbnail.
+    if let Some((_, figures)) = by_catalog.first().cloned() {
+        for f in &figures {
+            let posed = prism_algo::figure3d::skeleton::pose(f);
+            let hips = prism_algo::figure3d::skeleton::find(&posed, "hips_bb_").map(|h| h.pos);
+            eprintln!("{}: facing {:?} hips {:?}", f.name, prism_algo::figure3d::facing(f), hips);
+        }
+        for (k, yaw) in [-60.0f64, -30.0, 30.0, 60.0, 120.0, 180.0].into_iter().enumerate() {
+            let mut scene = FigureScene { figures: figures.clone(), ..Default::default() };
+            frame(&mut scene, &[], [300.0, 225.0], 400.0, true).unwrap();
+            prism_algo::figure3d::orbit(&mut scene, yaw, 10.0);
+            frame(&mut scene, &[], [300.0, 225.0], 400.0, false).unwrap();
+            let s = render(&scene, &[], prism_color::PixelFormat::RGBA8, prism_geom::Rect::new(0, 0, 600, 450), RenderOptions { draft: true }, &prism_raster::Interrupt::NONE).unwrap();
+            let data: Vec<u8> = s.read_region(prism_geom::Rect::new(0, 0, 600, 450)).iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+            let im = prism_codecs::Image::from_raw(600, 450, prism_codecs::ChannelLayout::Rgba, prism_codecs::SampleType::U8, data).unwrap();
+            std::fs::write(out.join(format!("view{k}.png")), prism_codecs::encode(&im, prism_codecs::Format::Png, &prism_codecs::EncodeOptions::default()).unwrap()).unwrap();
+        }
+    }
+    by_catalog.push(("standing".into(), vec![standing_figure()]));
+    for (i, (name, figures)) in by_catalog.into_iter().enumerate() {
+        let mut scene = FigureScene { figures, ..Default::default() };
+        frame(&mut scene, &[], [300.0, 225.0], 400.0, true).unwrap();
+        let s = render(&scene, &[], prism_color::PixelFormat::RGBA8, prism_geom::Rect::new(0, 0, 600, 450), RenderOptions::default(), &prism_raster::Interrupt::NONE).unwrap();
+        let r = prism_geom::Rect::new(0, 0, 600, 450);
+        let data: Vec<u8> = s.read_region(r).iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+        let im = prism_codecs::Image::from_raw(600, 450, prism_codecs::ChannelLayout::Rgba, prism_codecs::SampleType::U8, data).unwrap();
+        let png = prism_codecs::encode(&im, prism_codecs::Format::Png, &prism_codecs::EncodeOptions::default()).unwrap();
+        std::fs::write(out.join(format!("pose{i}.png")), png).unwrap();
+        eprintln!("pose{i}.png = {name}");
+    }
+}
+
+/// Local look at Prism's hand setup shapes (no CLIP STUDIO data): each shape on its own left hand,
+/// fingers up, from the back, the thumb side and three-quarters, one strip per shape in
+/// `$PRISM_LOOK_OUT` (default `target/hand-shapes`).
+#[test]
+#[ignore = "writes PNGs to look at"]
+fn hand_shapes_render() {
+    use prism_algo::figure3d::hand::{Closed, HandSetup, Side, set_hand};
+    use prism_doc::figure::standing_figure;
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/hand-shapes".into()));
+    std::fs::create_dir_all(&out).unwrap();
+    let shapes: Vec<(&str, [f64; 3], Closed)> = vec![
+        ("flat", [1.0, 0.0, 0.0], Closed::Fist),
+        ("spread", [0.0, 1.0, 0.0], Closed::Fist),
+        ("fist", [0.0, 0.0, 1.0], Closed::Fist),
+        ("catPaw", [0.0, 0.0, 1.0], Closed::CatPaw),
+        ("tube", [0.0, 0.0, 1.0], Closed::Tube),
+        ("grip", [0.0, 0.0, 1.0], Closed::Grip),
+        ("middle", [1.0, 1.0, 1.0], Closed::Fist),
+    ];
+    for (name, weights, closed) in shapes {
+        let mut f = standing_figure();
+        set_hand(&mut f, Side::Left, &HandSetup { weights, closed, locked: [false; 5] }).unwrap();
+        hand_strip(&f, "left", &out.join(format!("{name}.png")));
+    }
+}
+
+/// One hand of `f` (`side` "left" or "right"), fingers up, from three sides, as a PNG strip.
+fn hand_strip(f: &prism_doc::figure::Figure, side: &str, path: &std::path::Path) {
+    use prism_algo::figure3d::{RenderOptions, frame, orbit, render};
+    use prism_doc::figure::{Figure, FigureScene, Joint};
+    let (w, h) = (300u32, 300u32);
+    // The hand under a short forearm and a root that turns it fingers up (the mannequin draws no
+    // bone off the tree root).
+    let mut hand = f.root.find(&format!("{side}hand_bb_")).unwrap().clone();
+    hand.offset = [0.0, -4.0, 0.0];
+    let arm = Joint { name: format!("{side}forearm_bb_"), rotation: [1.0, 0.0, 0.0, 0.0], offset: [0.0; 3], children: vec![hand] };
+    let root = Joint { name: "root_group_".into(), rotation: [0.0, 0.0, 0.0, 1.0], offset: [0.0; 3], children: vec![arm] };
+    let figure = Figure { name: String::new(), source: None, root, model: None };
+    let mut strip = vec![0u8; (w * 3 * h * 4) as usize];
+    for (k, yaw) in [0.0f64, 90.0, 45.0].into_iter().enumerate() {
+        let mut scene = FigureScene { figures: vec![figure.clone()], ..Default::default() };
+        frame(&mut scene, &[], [150.0, 150.0], 260.0, false).unwrap();
+        orbit(&mut scene, yaw, 0.0);
+        frame(&mut scene, &[], [150.0, 150.0], 260.0, false).unwrap();
+        let r = prism_geom::Rect::new(0, 0, w as i32, h as i32);
+        let s = render(&scene, &[], prism_color::PixelFormat::RGBA8, r, RenderOptions::default(), &prism_raster::Interrupt::NONE).unwrap();
+        let px: Vec<u8> = s.read_region(r).iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let (src, dst) = ((y * w as usize + x) * 4, (y * 3 * w as usize + k * w as usize + x) * 4);
+                // On white, so the outline reads like CLIP STUDIO's canvas.
+                let a = f32::from(px[src + 3]) / 255.0;
+                for c in 0..3 {
+                    strip[dst + c] = (f32::from(px[src + c]) * a + 255.0 * (1.0 - a)).round() as u8;
+                }
+                strip[dst + 3] = 255;
+            }
+        }
+    }
+    let im = prism_codecs::Image::from_raw(w * 3, h, prism_codecs::ChannelLayout::Rgba, prism_codecs::SampleType::U8, strip).unwrap();
+    std::fs::write(path, prism_codecs::encode(&im, prism_codecs::Format::Png, &prism_codecs::EncodeOptions::default()).unwrap()).unwrap();
+}
+
+/// Local look at CLIP STUDIO's own hand poses (its installed `handsetup_*.pep`, read in place and
+/// never copied) put on Prism's standing figure: each on both hands, as strips in
+/// `$PRISM_LOOK_OUT` (default `target/csp-hand-poses`). Set `PRISM_TEST_CSP_PAINT_3D` to the
+/// folder holding them when CLIP STUDIO is installed elsewhere.
+#[test]
+#[ignore = "reads CLIP STUDIO's installed hand poses and writes PNGs to look at"]
+fn local_hand_poses_render() {
+    use prism_algo::figure3d::hand::{Side, apply_hand_pose};
+    use prism_doc::figure::standing_figure;
+    let dir = std::env::var_os("PRISM_TEST_CSP_PAINT_3D").map(std::path::PathBuf::from).unwrap_or_else(|| r"C:\Program Files\CELSYS\CLIP STUDIO 1.5\CLIP STUDIO PAINT\Settings\PAINT\3D".into());
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/csp-hand-poses".into()));
+    std::fs::create_dir_all(&out).unwrap();
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        let path = entry.path();
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        if !stem.starts_with("handsetup_") {
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let super::super::pose::Pose::Hand(h) = super::super::pose::read_any(&bytes, &stem, &prism_raster::Interrupt::NONE).unwrap() else { panic!("{stem}: not a hand pose") };
+        let from = if h.left { Side::Left } else { Side::Right };
+        let mut f = standing_figure();
+        for side in [Side::Left, Side::Right] {
+            apply_hand_pose(&mut f, side, &h.hand, from, [false; 5]).unwrap();
+        }
+        hand_strip(&f, "left", &out.join(format!("{stem}_left.png")));
+        hand_strip(&f, "right", &out.join(format!("{stem}_right.png")));
+        eprintln!("{stem}: {} hand, {} fingers", if h.left { "left" } else { "right" }, h.hand.children.len());
+        seen += 1;
+    }
+    assert!(seen > 0, "no handsetup_*.pep in {}", dir.display());
+}
+
+/// Local check of downloaded hand pose materials: every listed pose with its hand flag, and each
+/// hand pose put on Prism's standing figure (both hands), as strips in `$PRISM_LOOK_OUT`
+/// (default `target/csp-hand-materials`).
+#[test]
+#[ignore = "reads the local CLIP STUDIO folder and writes PNGs to look at"]
+fn local_hand_pose_materials() {
+    use prism_algo::figure3d::hand::{Side, apply_hand_pose};
+    use prism_doc::figure::standing_figure;
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/csp-hand-materials".into()));
+    std::fs::create_dir_all(&out).unwrap();
+    let root = std::env::var_os("PRISM_TEST_CSP_ROOT").map(std::path::PathBuf::from).or_else(default_root).unwrap();
+    let lib = list(&root).unwrap();
+    let mut hands = 0;
+    for (i, p) in lib.poses.iter().enumerate() {
+        let (catalog, pose) = import_pose_any(&root, &p.uuid, &prism_raster::Interrupt::NONE).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+        match pose {
+            super::super::pose::Pose::Body(f) => eprintln!("{i:2} body  {} [{catalog}] listed hand={:?} joints={}", p.name, p.hand, f.root.walk().len()),
+            super::super::pose::Pose::Hand(h) => {
+                hands += 1;
+                let names: Vec<String> = h.hand.walk().into_iter().map(|(_, j)| j.name.clone()).collect();
+                eprintln!("{i:2} hand  {} [{catalog}] listed hand={:?} left={} joints={} first={:?}", p.name, p.hand, h.left, names.len(), names.get(1));
+                if std::env::var_os("PRISM_DUMP_HANDS").is_some() {
+                    for (d, j) in h.hand.walk() {
+                        let a = 2.0 * j.rotation[0].clamp(-1.0, 1.0).acos().to_degrees();
+                        eprintln!("    {}{} rot {:?} ({a:.1} deg) off {:?}", "  ".repeat(d), j.name, j.rotation.map(|v| (v * 1000.0).round() / 1000.0), j.offset.map(|v| (v * 100.0).round() / 100.0));
+                    }
+                }
+                assert_eq!(p.hand, Some(h.left), "{}: the listing tells hand poses apart", p.name);
+                let from = if h.left { Side::Left } else { Side::Right };
+                let mut f = standing_figure();
+                for side in [Side::Left, Side::Right] {
+                    apply_hand_pose(&mut f, side, &h.hand, from, [false; 5]).unwrap();
+                }
+                let side = if h.left { "left" } else { "right" };
+                hand_strip(&f, side, &out.join(format!("hand{i:02}.png")));
+            }
+        }
+    }
+    eprintln!("{hands} hand poses of {}", lib.poses.len());
+}

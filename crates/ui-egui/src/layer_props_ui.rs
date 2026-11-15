@@ -167,6 +167,9 @@ pub fn properties(app: &mut PrismApp, ui: &mut egui::Ui, layer: &Layer) {
             app.ui.status_error = true;
         }
     }
+    if layer.figure.is_some() {
+        crate::figure_ui::properties(app, ui, layer);
+    }
     match &layer.content {
         LayerContent::Text(_) => crate::type_tool::type_properties(app, ui),
         LayerContent::Shape(_) if !arrow => crate::vector_ui::shape_properties(app, ui, layer.id),

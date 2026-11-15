@@ -199,6 +199,20 @@ impl ImageResource {
         })
     }
 
+    /// The JPEG (JFIF) bytes of a thumbnail resource and whether they hold BGR rather than RGB
+    /// (the Photoshop 4 resource 1033 does). `None` for other resources, raw-format thumbnails
+    /// and a resource shorter than its 28-byte header.
+    pub fn thumbnail_jfif(&self) -> Option<(&[u8], bool)> {
+        if !matches!(self.id, ids::THUMBNAIL | ids::THUMBNAIL_PS4) {
+            return None;
+        }
+        // Header: format (1 = JPEG RGB), width, height, row bytes, total size, compressed size
+        // (u32 each), bits per pixel and planes (u16 each).
+        let format = u32::from_be_bytes(self.data.get(0..4)?.try_into().ok()?);
+        let jfif = self.data.get(28..).filter(|d| !d.is_empty())?;
+        (format == 1).then_some((jfif, self.id == ids::THUMBNAIL_PS4))
+    }
+
     /// XMP packet as a string (resource 1060).
     pub fn xmp_str(&self) -> Option<&str> {
         (self.id == ids::XMP).then(|| std::str::from_utf8(&self.data).ok()).flatten()
@@ -230,6 +244,17 @@ impl ImageResource {
         }
         Ok(())
     }
+}
+
+/// Parse the body of an image resources section (the bytes after its length field), e.g. read on
+/// its own to find the thumbnail without loading the rest of the file.
+pub fn parse_section(body: &[u8]) -> Result<Vec<ImageResource>> {
+    let mut s = Reader::new(body);
+    let mut v = Vec::new();
+    while !s.is_empty() {
+        v.push(ImageResource::read(&mut s)?);
+    }
+    Ok(v)
 }
 
 pub(crate) fn read_section(r: &mut Reader<'_>) -> Result<Vec<ImageResource>> {
@@ -352,6 +377,31 @@ mod tests {
         let r = ImageResource::new(ids::XMP, b"<x/>".to_vec());
         assert_eq!(r.xmp_str(), Some("<x/>"));
         assert_eq!(ImageResource::new(4242, vec![]).parsed(), None);
+    }
+
+    #[test]
+    fn thumbnail_jfif_skips_the_header_and_flags_bgr() {
+        let mut data = vec![0, 0, 0, 1];
+        data.extend_from_slice(&[0; 24]);
+        data.extend_from_slice(&[0xFF, 0xD8, 0xFF]);
+        let r = ImageResource::new(ids::THUMBNAIL, data.clone());
+        assert_eq!(r.thumbnail_jfif(), Some((&[0xFF, 0xD8, 0xFF][..], false)));
+        assert_eq!(ImageResource::new(ids::THUMBNAIL_PS4, data.clone()).thumbnail_jfif().map(|t| t.1), Some(true));
+        // Raw format, truncated header, other resources: none.
+        data[3] = 0;
+        assert_eq!(ImageResource::new(ids::THUMBNAIL, data).thumbnail_jfif(), None);
+        assert_eq!(ImageResource::new(ids::THUMBNAIL, vec![0, 0, 0, 1, 0]).thumbnail_jfif(), None);
+        assert_eq!(ImageResource::new(ids::XMP, vec![0; 40]).thumbnail_jfif(), None);
+    }
+
+    #[test]
+    fn parse_section_reads_a_bare_body_and_rejects_garbage() {
+        let mut out = Vec::new();
+        write_section(&mut out, &[ImageResource::new(ids::THUMBNAIL, vec![1, 2, 3])]).unwrap();
+        let res = parse_section(&out[4..]).unwrap();
+        assert_eq!((res.len(), res[0].id, res[0].data.clone()), (1, ids::THUMBNAIL, vec![1, 2, 3]));
+        assert!(parse_section(b"nope").is_err());
+        assert!(parse_section(&out[4..out.len() - 2]).is_err());
     }
 
     #[test]

@@ -259,9 +259,12 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
 
 fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
     match id {
+        // A CLIP STUDIO material id reads the installed CLIP STUDIO's user data folder.
+        "actions.importLaf" | "gradient.presets.importCsp" | "swatches.importCsp" | "layer.figure.new" | "layer.figure.addPose" | "layer.figure.applyHandPose" | "layer.figure.applyPose" | "layer.figure.importModel" => {
+            params.get("data").is_none() && (params.get("path").is_some() || params.get("uuid").is_some() || params.get("uuids").is_some())
+        }
         "brush.presets.importAbr"
         | "brush.presets.importSut"
-        | "actions.importLaf"
         | "actions.importAtn"
         | "gradient.presets.importGrd"
         | "plugin.install"
@@ -598,6 +601,17 @@ mod tests {
             ("brush.presets.importAbr", serde_json::json!({"path": "/outside/set.abr"})),
             ("brush.presets.importSut", serde_json::json!({"path": "/outside/set.sut"})),
             ("actions.importLaf", serde_json::json!({"path": "/outside/set.laf"})),
+            ("actions.importLaf", serde_json::json!({"uuid": "id"})),
+            ("gradient.presets.importCsp", serde_json::json!({"uuid": "id"})),
+            ("gradient.presets.importCsp", serde_json::json!({"path": "/outside/set.colorset"})),
+            ("swatches.importCsp", serde_json::json!({"uuid": "id", "root": "/outside"})),
+            ("swatches.importCsp", serde_json::json!({"path": "/outside/set.colorset"})),
+            ("layer.figure.new", serde_json::json!({"uuids": ["a", "b"]})),
+            ("layer.figure.addPose", serde_json::json!({"path": "/outside/pose.pose"})),
+            ("layer.figure.applyHandPose", serde_json::json!({"uuid": "id"})),
+            ("layer.figure.applyHandPose", serde_json::json!({"path": "/outside/hand.pose"})),
+            ("layer.figure.applyPose", serde_json::json!({"uuid": "id"})),
+            ("layer.figure.importModel", serde_json::json!({"path": "/outside/girl.vrm"})),
             ("actions.importAtn", serde_json::json!({"path": "/outside/set.atn"})),
             ("brush.cspLibrary.list", serde_json::json!({})),
             ("brush.cspLibrary.import", serde_json::json!({"uuids": ["id"]})),
@@ -617,6 +631,13 @@ mod tests {
             ("brush.presets.importAbr", serde_json::json!({"data": "QUJD"})),
             ("brush.presets.importSut", serde_json::json!({"data": "QUJD"})),
             ("actions.importLaf", serde_json::json!({"data": "QUJD"})),
+            ("gradient.presets.importCsp", serde_json::json!({"data": "QUJD"})),
+            ("swatches.importCsp", serde_json::json!({"data": "QUJD"})),
+            ("layer.figure.new", serde_json::json!({})),
+            ("layer.figure.addPose", serde_json::json!({"data": "QUJD"})),
+            ("layer.figure.applyHandPose", serde_json::json!({"data": "QUJD"})),
+            ("layer.figure.applyPose", serde_json::json!({"data": "QUJD"})),
+            ("layer.figure.importModel", serde_json::json!({"data": "QUJD"})),
             ("actions.importAtn", serde_json::json!({"data": "QUJD"})),
             ("actions.importAtn", serde_json::json!({"data": "QUJD", "path": "/outside/ignored.atn"})),
             ("gradient.presets.importGrd", serde_json::json!({"data": "QUJD"})),

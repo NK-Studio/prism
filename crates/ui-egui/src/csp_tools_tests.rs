@@ -123,3 +123,32 @@ fn clip_studio_tools_window_and_panels_replace_photoshop_tools() {
     h.run_steps(3);
     assert!(h.query_by_label("Decoration").is_none());
 }
+
+/// The Clip Studio toolbar draws Prism's solid tool artwork: one registered glyph a tool.
+#[test]
+fn every_csp_tool_has_its_own_solid_glyph() {
+    let mut seen = std::collections::HashSet::new();
+    for tool in CspTool::ALL {
+        let name = tool.icon();
+        assert!(name.starts_with("tool-"), "{tool:?} uses {name}");
+        assert!(crate::icon_data::ICONS.iter().any(|(n, _)| *n == name), "{name} is not registered");
+        assert!(seen.insert(name), "{tool:?} shares {name}");
+    }
+}
+
+/// The Clip Studio toolbar follows Photoshop's order: Move first, selections and the eyedropper,
+/// the painting tools from Brush to Gradient, Type and shapes, then Hand and Zoom last; every
+/// tool is on it once.
+#[test]
+fn the_toolbar_lists_every_tool_once_in_photoshops_order() {
+    let order: Vec<CspTool> = SECTIONS.iter().flat_map(|s| s.iter().copied()).collect();
+    assert_eq!(order.len(), CspTool::ALL.len());
+    for tool in CspTool::ALL {
+        assert_eq!(order.iter().filter(|t| **t == tool).count(), 1, "{tool:?}");
+    }
+    let at = |tool: CspTool| order.iter().position(|t| *t == tool).unwrap();
+    assert_eq!(at(CspTool::MoveLayer), 0);
+    let chain = [CspTool::Selection, CspTool::AutoSelect, CspTool::Eyedropper, CspTool::Brush, CspTool::Eraser, CspTool::Gradient, CspTool::Text, CspTool::Figure, CspTool::Hand, CspTool::Zoom];
+    assert!(chain.windows(2).all(|w| at(w[0]) < at(w[1])), "{order:?}");
+    assert_eq!(order.last(), Some(&CspTool::Zoom));
+}

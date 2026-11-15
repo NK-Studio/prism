@@ -63,7 +63,7 @@ pub enum Status {
     NoCache,
     /// The material is not stored below the local material folder.
     UnsupportedLocation,
-    /// A layer material whose file is not on disk.
+    /// A layer material or auto action whose file is not on disk.
     Missing,
 }
 
@@ -96,6 +96,22 @@ impl Status {
 pub const TOOL_KINDS: [&str; 2] = ["brush", "other_tool"];
 /// The catalog's material kinds that are layer materials (images, special rulers).
 pub const LAYER_KINDS: [&str; 1] = ["image"];
+/// The catalog's material kind of auto-action sets (`data/material_0.laf`).
+pub const ACTION_KINDS: [&str; 1] = ["auto_action"];
+/// Largest auto-action file read (the LAF reader's own limit).
+const ACTION_LIMIT: u64 = 8 << 20;
+/// The catalog's material kinds of gradients: one gradient sub-tool (`data/material_0.tool`)
+/// and a gradient set (`data/material_0.colorset`).
+pub const GRADIENT_KINDS: [&str; 2] = ["gradation", "gradation_set"];
+/// Largest gradient material file read.
+const GRADIENT_LIMIT: u64 = 8 << 20;
+/// The catalog's material kind of colour sets (`data/material_0.colorset`, a SQLite palette).
+pub const COLOR_SET_KINDS: [&str; 1] = ["color_set"];
+/// The catalog's material kind of 3D figure poses (`data/material_0.pose`), whole figures and
+/// hands alike.
+pub const POSE_KINDS: [&str; 1] = ["pose"];
+/// Listing reads each pose file to tell hand poses apart, up to this many poses.
+pub const HAND_PEEK_LIMIT: usize = 256;
 
 /// One downloaded sub-tool material.
 #[derive(Clone, Debug, PartialEq)]
@@ -138,6 +154,72 @@ pub struct LibraryLayer {
     pub info: MaterialInfo,
 }
 
+/// One downloaded auto-action set: it imports into the Actions panel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryAction {
+    pub uuid: String,
+    pub name: String,
+    /// The downloaded collection it belongs to (empty when unknown).
+    pub catalog: String,
+    pub status: Status,
+    pub thumbnail: Option<PathBuf>,
+    pub tags: Vec<String>,
+    /// As [`LibraryBrush::folders`].
+    pub folders: Vec<String>,
+    pub favorite: bool,
+}
+
+/// One downloaded gradient material: it imports into the Gradients panel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryGradient {
+    pub uuid: String,
+    pub name: String,
+    /// One of [`GRADIENT_KINDS`].
+    pub kind: String,
+    /// The downloaded collection it belongs to (empty when unknown).
+    pub catalog: String,
+    pub status: Status,
+    pub thumbnail: Option<PathBuf>,
+    pub tags: Vec<String>,
+    /// As [`LibraryBrush::folders`].
+    pub folders: Vec<String>,
+    pub favorite: bool,
+}
+
+/// One downloaded colour set: it imports into the Swatches panel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryColorSet {
+    pub uuid: String,
+    pub name: String,
+    /// The downloaded collection it belongs to (empty when unknown).
+    pub catalog: String,
+    pub status: Status,
+    pub thumbnail: Option<PathBuf>,
+    pub tags: Vec<String>,
+    /// As [`LibraryBrush::folders`].
+    pub folders: Vec<String>,
+    pub favorite: bool,
+}
+
+/// One downloaded 3D figure pose: a whole figure becomes a figure in a 3D figure layer, a hand
+/// pose poses a figure's hands.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryPose {
+    pub uuid: String,
+    pub name: String,
+    /// `Some(left)` for a hand pose and the hand it was made for (read from the file when the
+    /// library lists at most [`HAND_PEEK_LIMIT`] poses; `None` otherwise or for whole figures).
+    pub hand: Option<bool>,
+    /// The downloaded collection it belongs to (empty when unknown).
+    pub catalog: String,
+    pub status: Status,
+    pub thumbnail: Option<PathBuf>,
+    pub tags: Vec<String>,
+    /// As [`LibraryBrush::folders`].
+    pub folders: Vec<String>,
+    pub favorite: bool,
+}
+
 /// One downloaded collection (catalog) and its cover image (`thumbnail/catalogThumb.png`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Catalog {
@@ -154,6 +236,14 @@ pub struct Library {
     pub brushes: Vec<LibraryBrush>,
     /// Downloaded layer materials, in catalog order.
     pub layers: Vec<LibraryLayer>,
+    /// Downloaded auto-action sets, in catalog order.
+    pub actions: Vec<LibraryAction>,
+    /// Downloaded gradients and gradient sets, in catalog order.
+    pub gradients: Vec<LibraryGradient>,
+    /// Downloaded colour sets, in catalog order.
+    pub color_sets: Vec<LibraryColorSet>,
+    /// Downloaded 3D figure poses, in catalog order.
+    pub poses: Vec<LibraryPose>,
     /// The collections the brushes and layer materials belong to, in catalog order.
     pub catalogs: Vec<Catalog>,
     /// Folder-wide notices (license terms, stale snapshot, missing PAINT data).
@@ -214,8 +304,68 @@ pub fn list(root: &Path) -> Result<Library> {
             }
         })
         .collect();
+    let actions = snap
+        .action_entries
+        .iter()
+        .map(|e| LibraryAction {
+            uuid: e.uuid.clone(),
+            name: e.name.clone(),
+            catalog: e.catalog.clone(),
+            status: snap.action_status(e),
+            thumbnail: image(format!("{}:thumbnail:thumbnail.png", e.folder())),
+            tags: e.tags.clone(),
+            folders: e.folders.clone(),
+            favorite: e.favorite,
+        })
+        .collect();
+    let gradients = snap
+        .gradient_entries
+        .iter()
+        .map(|e| LibraryGradient {
+            uuid: e.uuid.clone(),
+            name: e.name.clone(),
+            kind: e.kind.clone(),
+            catalog: e.catalog.clone(),
+            status: snap.gradient_status(e),
+            thumbnail: image(format!("{}:thumbnail:thumbnail.png", e.folder())),
+            tags: e.tags.clone(),
+            folders: e.folders.clone(),
+            favorite: e.favorite,
+        })
+        .collect();
+    let color_sets = snap
+        .color_set_entries
+        .iter()
+        .map(|e| LibraryColorSet {
+            uuid: e.uuid.clone(),
+            name: e.name.clone(),
+            catalog: e.catalog.clone(),
+            status: snap.color_set_status(e),
+            thumbnail: image(format!("{}:thumbnail:thumbnail.png", e.folder())),
+            tags: e.tags.clone(),
+            folders: e.folders.clone(),
+            favorite: e.favorite,
+        })
+        .collect();
+    let peek = snap.pose_entries.len() <= HAND_PEEK_LIMIT;
+    let poses = snap
+        .pose_entries
+        .iter()
+        .map(|e| LibraryPose {
+            uuid: e.uuid.clone(),
+            name: e.name.clone(),
+            hand: if peek { snap.pose_file(e).and_then(|p| read_limited(&p, GRADIENT_LIMIT).ok()).and_then(|b| hand_side(&b)) } else { None },
+            catalog: e.catalog.clone(),
+            status: snap.pose_status(e),
+            thumbnail: image(format!("{}:thumbnail:thumbnail.png", e.folder())),
+            tags: e.tags.clone(),
+            folders: e.folders.clone(),
+            favorite: e.favorite,
+        })
+        .collect();
     let mut catalogs: Vec<Catalog> = Vec::new();
-    for e in snap.entries.iter().chain(&snap.layer_entries).filter(|e| !e.catalog.is_empty()) {
+    let all = snap.entries.iter().chain(&snap.layer_entries).chain(&snap.action_entries).chain(&snap.gradient_entries).chain(&snap.color_set_entries).chain(&snap.pose_entries);
+    for e in all.filter(|e| !e.catalog.is_empty()) {
         if !catalogs.iter().any(|c| c.name == e.catalog) {
             catalogs.push(Catalog {
                 name: e.catalog.clone(),
@@ -224,7 +374,7 @@ pub fn list(root: &Path) -> Result<Library> {
             });
         }
     }
-    Ok(Library { root: root.to_path_buf(), brushes, layers, catalogs, notices: snap.notices })
+    Ok(Library { root: root.to_path_buf(), brushes, layers, actions, gradients, color_sets, poses, catalogs, notices: snap.notices })
 }
 
 /// Largest preview image read by [`thumbnail_bytes`].
@@ -287,6 +437,93 @@ pub fn import_layer(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) -> R
     Ok((entry.name.clone(), material, info))
 }
 
+/// The name and file bytes of one downloaded auto-action set, by material UUID, for
+/// [`crate::laf::read_laf`]. Nothing is parsed or run here.
+pub fn action_bytes(root: &Path, uuid: &str) -> Result<(String, Vec<u8>)> {
+    let snap = Snapshot::read(root)?;
+    let entry = snap.action_entries.iter().find(|e| e.uuid == uuid).ok_or_else(|| format!("no downloaded CLIP STUDIO auto action has the id {uuid}"))?;
+    let status = snap.action_status(entry);
+    if !matches!(status, Status::Ready(_)) {
+        return Err(format!("{}: {}", entry.name, status.guidance().unwrap_or("not ready")));
+    }
+    let path = snap.action_file(entry).ok_or("the downloaded auto-action file is no longer available; refresh and try again")?;
+    Ok((entry.name.clone(), read_limited(&path, ACTION_LIMIT)?))
+}
+
+/// One downloaded gradient material by material UUID: its name, its collection and its
+/// gradients ([`super::gradient_material::read`]).
+pub fn import_gradients(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) -> Result<(String, String, super::gradient_material::GradientMaterial)> {
+    let snap = Snapshot::read(root)?;
+    let entry = snap.gradient_entries.iter().find(|e| e.uuid == uuid).ok_or_else(|| format!("no downloaded CLIP STUDIO gradient has the id {uuid}"))?;
+    let status = snap.gradient_status(entry);
+    if !matches!(status, Status::Ready(_)) {
+        return Err(format!("{}: {}", entry.name, status.guidance().unwrap_or("not ready")));
+    }
+    let path = snap.gradient_file(entry).ok_or("the downloaded gradient file is no longer available; refresh and try again")?;
+    let material = super::gradient_material::read(&read_limited(&path, GRADIENT_LIMIT)?, ctl).map_err(|e| format!("{}: {e}", entry.name))?;
+    Ok((entry.name.clone(), entry.catalog.clone(), material))
+}
+
+/// One downloaded colour set by material UUID: its name, its collection and its colours
+/// ([`super::color_set::read`]).
+pub fn import_color_set(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) -> Result<(String, String, super::color_set::ColorSet)> {
+    let snap = Snapshot::read(root)?;
+    let entry = snap.color_set_entries.iter().find(|e| e.uuid == uuid).ok_or_else(|| format!("no downloaded CLIP STUDIO colour set has the id {uuid}"))?;
+    let status = snap.color_set_status(entry);
+    if !matches!(status, Status::Ready(_)) {
+        return Err(format!("{}: {}", entry.name, status.guidance().unwrap_or("not ready")));
+    }
+    let path = snap.color_set_file(entry).ok_or("the downloaded colour set file is no longer available; refresh and try again")?;
+    let set = super::color_set::read(&read_limited(&path, GRADIENT_LIMIT)?, ctl).map_err(|e| format!("{}: {e}", entry.name))?;
+    Ok((entry.name.clone(), entry.catalog.clone(), set))
+}
+
+/// `Some(left)` when pose file `bytes` holds a hand pose.
+fn hand_side(bytes: &[u8]) -> Option<bool> {
+    match super::pose::read_any(bytes, "", &prism_raster::Interrupt::NONE).ok()? {
+        super::pose::Pose::Hand(h) => Some(h.left),
+        super::pose::Pose::Body(_) => None,
+    }
+}
+
+/// One downloaded 3D figure pose by material UUID: its collection and the posed figure (named
+/// after the material; [`super::pose::read`]). Hand poses are refused: see [`import_pose_any`].
+pub fn import_pose(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) -> Result<(String, prism_doc::figure::Figure)> {
+    match import_pose_any(root, uuid, ctl)? {
+        (catalog, super::pose::Pose::Body(f)) => Ok((catalog, f)),
+        (_, super::pose::Pose::Hand(h)) => Err(format!("{}: a hand pose; apply it to a 3D figure's hands", h.name)),
+    }
+}
+
+/// One downloaded pose by material UUID, a whole figure or a hand: its collection and content,
+/// named after the material.
+pub fn import_pose_any(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) -> Result<(String, super::pose::Pose)> {
+    let snap = Snapshot::read(root)?;
+    let entry = snap.pose_entries.iter().find(|e| e.uuid == uuid).ok_or_else(|| format!("no downloaded CLIP STUDIO pose has the id {uuid}"))?;
+    let status = snap.pose_status(entry);
+    if !matches!(status, Status::Ready(_)) {
+        return Err(format!("{}: {}", entry.name, status.guidance().unwrap_or("not ready")));
+    }
+    let path = snap.pose_file(entry).ok_or("the downloaded pose file is no longer available; refresh and try again")?;
+    let mut pose = super::pose::read_any(&read_limited(&path, GRADIENT_LIMIT)?, &entry.name, ctl).map_err(|e| format!("{}: {e}", entry.name))?;
+    // The catalog's name is what the Material palette shows (the file's own is often "新規ポーズ_0").
+    let catalog_name: Option<String> = (!entry.name.trim().is_empty()).then(|| entry.name.chars().take(prism_doc::figure::MAX_NAME).collect());
+    match &mut pose {
+        super::pose::Pose::Body(figure) => {
+            if let Some(n) = catalog_name {
+                figure.name = n;
+            }
+            figure.source = Some(format!("CLIP STUDIO: {}", figure.name));
+        }
+        super::pose::Pose::Hand(hand) => {
+            if let Some(n) = catalog_name {
+                hand.name = n;
+            }
+        }
+    }
+    Ok((entry.catalog.clone(), pose))
+}
+
 /// Read a layer material file (`data/material_0.layer`), or the material folder holding one.
 /// The material's `icedata/layerData.xml` beside `data/` is read when present.
 pub fn read_layer_file(path: &Path, ctl: &prism_raster::Interrupt) -> Result<(LayerMaterial, MaterialInfo)> {
@@ -331,6 +568,10 @@ struct Snapshot {
     materials: PathBuf,
     entries: Vec<Entry>,
     layer_entries: Vec<Entry>,
+    action_entries: Vec<Entry>,
+    gradient_entries: Vec<Entry>,
+    color_set_entries: Vec<Entry>,
+    pose_entries: Vec<Entry>,
     caches: Vec<(CacheSource, Vec<Row>, Vec<Row>)>,
     notices: Vec<String>,
 }
@@ -392,6 +633,10 @@ impl Snapshot {
         drop(bytes);
         let entries = catalog_entries(&modifiers, &meta, &tags, &folders, &TOOL_KINDS);
         let layer_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &LAYER_KINDS);
+        let action_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &ACTION_KINDS);
+        let gradient_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &GRADIENT_KINDS);
+        let color_set_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &COLOR_SET_KINDS);
+        let pose_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &POSE_KINDS);
 
         let mut caches = Vec::new();
         match paint_folder(root) {
@@ -421,7 +666,7 @@ impl Snapshot {
         if stale {
             notices.push("CLIP STUDIO appears to be running or has unsaved database changes; the newest downloads may be missing until it is closed".into());
         }
-        Ok(Self { materials: root.join(MATERIALS), entries, layer_entries, caches, notices })
+        Ok(Self { materials: root.join(MATERIALS), entries, layer_entries, action_entries, gradient_entries, color_set_entries, pose_entries, caches, notices })
     }
 
     fn tool(&self, source: CacheSource, uuid: &str) -> Option<(&Row, &Row)> {
@@ -452,6 +697,67 @@ impl Snapshot {
             return Status::Downloading;
         }
         self.layer_file(e).map_or(Status::Missing, |_| Status::Ready(CacheSource::MaterialFile))
+    }
+
+    fn action_status(&self, e: &Entry) -> Status {
+        if !e.local {
+            return Status::UnsupportedLocation;
+        }
+        if e.pending {
+            return Status::Downloading;
+        }
+        self.action_file(e).map_or(Status::Missing, |_| Status::Ready(CacheSource::MaterialFile))
+    }
+
+    fn gradient_status(&self, e: &Entry) -> Status {
+        if !e.local {
+            return Status::UnsupportedLocation;
+        }
+        if e.pending {
+            return Status::Downloading;
+        }
+        self.gradient_file(e).map_or(Status::Missing, |_| Status::Ready(CacheSource::MaterialFile))
+    }
+
+    fn pose_status(&self, e: &Entry) -> Status {
+        if !e.local {
+            return Status::UnsupportedLocation;
+        }
+        if e.pending {
+            return Status::Downloading;
+        }
+        self.pose_file(e).map_or(Status::Missing, |_| Status::Ready(CacheSource::MaterialFile))
+    }
+
+    fn pose_file(&self, e: &Entry) -> Option<PathBuf> {
+        let root = std::fs::canonicalize(&self.materials).ok()?;
+        resolve(&root, &format!("{}:data:material_0.pose", e.folder())).ok()
+    }
+
+    fn color_set_status(&self, e: &Entry) -> Status {
+        if !e.local {
+            return Status::UnsupportedLocation;
+        }
+        if e.pending {
+            return Status::Downloading;
+        }
+        self.color_set_file(e).map_or(Status::Missing, |_| Status::Ready(CacheSource::MaterialFile))
+    }
+
+    fn color_set_file(&self, e: &Entry) -> Option<PathBuf> {
+        let root = std::fs::canonicalize(&self.materials).ok()?;
+        resolve(&root, &format!("{}:data:material_0.colorset", e.folder())).ok()
+    }
+
+    fn gradient_file(&self, e: &Entry) -> Option<PathBuf> {
+        let root = std::fs::canonicalize(&self.materials).ok()?;
+        let file = if e.kind == "gradation_set" { "material_0.colorset" } else { "material_0.tool" };
+        resolve(&root, &format!("{}:data:{file}", e.folder())).ok()
+    }
+
+    fn action_file(&self, e: &Entry) -> Option<PathBuf> {
+        let root = std::fs::canonicalize(&self.materials).ok()?;
+        resolve(&root, &format!("{}:data:material_0.laf", e.folder())).ok()
     }
 
     fn layer_file(&self, e: &Entry) -> Option<PathBuf> {

@@ -3587,3 +3587,108 @@ cspTool	Space evenly	균등 배치
 	Linear burn	선형 번
 	Hard mix	하드 혼합
 	Height (Linear)	높이(선형)
+	Auto actions	오토 액션
+	Auto action	오토 액션
+	Imported {n} auto actions from CLIP STUDIO; {ready} can play now	클립 스튜디오에서 오토 액션 {n}개를 가져왔습니다. {ready}개는 바로 재생할 수 있습니다
+	Imports into the Actions panel; steps Prism cannot run yet stay in the action and must be disabled before it plays	액션 패널로 가져옵니다. 프리즘이 아직 실행하지 못하는 단계는 액션에 남으며, 재생하려면 그 단계를 꺼야 합니다
+	Gradient set	그라데이션 세트
+	Imported {n} gradients from CLIP STUDIO	CLIP STUDIO에서 그라데이션 {n}개를 가져왔습니다
+	Imports into the Gradients panel, for the Gradient tool and gradient maps	그라데이션 패널로 가져옵니다. 그라데이션 도구와 그라데이션 맵에서 쓸 수 있습니다
+	Pressure curve imported from CLIP STUDIO	CLIP STUDIO에서 가져온 필압 곡선
+	Color sets	컬러 세트
+	Color set	컬러 세트
+	Imported {n} colors from CLIP STUDIO	CLIP STUDIO에서 색 {n}개를 가져왔습니다
+	Imports into the Swatches panel as one group	색상 견본 패널에 그룹 하나로 가져옵니다
+	Poses	포즈
+	Pose	포즈
+	Adds a 3D figure layer in this pose; poses of one collection selected together share a layer	이 포즈로 3D 인형 레이어를 추가합니다. 같은 컬렉션의 포즈를 함께 선택하면 한 레이어에 들어갑니다
+	Open or create a document first: poses are added to it as 3D figure layers	먼저 문서를 열거나 만드세요. 포즈는 문서에 3D 인형 레이어로 추가됩니다
+	Added {n} 3D figure layers; pose them with the Move tool	3D 인형 레이어 {n}개를 추가했습니다. 이동 도구로 자세를 잡으세요
+	Aim at every figure and fit them to the canvas	모든 인형을 향하고 캔버스에 맞춥니다
+	Prism's standing pose, where each figure stands	각 인형이 선 자리에서 프리즘의 기본 선 자세로 돌립니다
+	Keep the pixels and drop the 3D figures, to paint on them	픽셀은 남기고 3D 인형을 지워 그 위에 그릴 수 있게 합니다
+	Turn	회전
+	Tilt	기울기
+	Field of view	화각
+	Drag on the canvas with the Move tool: orbit; ⇧ move; ⌥ zoom; drag a joint to pose it	이동 도구로 캔버스를 드래그: 회전, ⇧ 이동, ⌥ 확대/축소, 관절을 드래그하면 자세가 바뀝니다
+	Line width	선 굵기
+	3D Figures	3D 인형
+	Camera	카메라
+	Look	모양
+	Reset Pose	자세 초기화
+	3D Figure Layer	3D 인형 레이어
+	Fit Figures	인형 맞추기
+	Zoom in on a hand to pose its fingers	손을 확대하면 손가락 관절을 움직일 수 있습니다
+	Hand Pose	손 포즈
+	A locked finger keeps its pose	잠근 손가락은 지금 자세를 유지합니다
+	Drag in the triangle to blend the hands between flat, spread and closed	삼각형 안을 드래그해 편 손, 벌린 손, 쥔 손 사이로 손 모양을 섞습니다
+hand	Both Hands	양손
+hand	Left Hand	왼손
+hand	Right Hand	오른손
+hand	Thumb	엄지
+hand	Index	검지
+hand	Middle	중지
+hand	Ring	약지
+hand	Little	소지
+hand	Flat	편 손
+hand	Spread	벌린 손
+hand	Fist	주먹
+hand	Cat Paw	고양이 손
+hand	Tube	통 쥐기
+hand	Grip	꽉 쥐기
+	Lock Fingers	손가락 잠금
+	Hand pose	손 포즈
+	Posed the hands; refine fingers with the Move tool	손 포즈를 적용했습니다. 손가락은 이동 도구로 다듬을 수 있습니다
+	Added a 3D figure layer with this hand pose	이 손 포즈로 3D 인형 레이어를 추가했습니다
+	Poses the hands of the active 3D figure layer; without one, adds a 3D figure with these hands	활성 3D 인형 레이어의 손에 적용합니다. 없으면 이 손 모양으로 3D 인형을 추가합니다
+	Left hand picked: hand poses and Hand Pose go to it; click elsewhere for both hands	왼손을 선택했습니다. 손 포즈와 손 포즈 설정이 이 손에만 적용됩니다. 다른 곳을 클릭하면 양손으로 돌아갑니다
+	Right hand picked: hand poses and Hand Pose go to it; click elsewhere for both hands	오른손을 선택했습니다. 손 포즈와 손 포즈 설정이 이 손에만 적용됩니다. 다른 곳을 클릭하면 양손으로 돌아갑니다
+	Figure picked: poses from the CLIP STUDIO panel go to it; click empty canvas to drop the pick	인형을 선택했습니다. CLIP STUDIO 패널의 포즈가 이 인형에 적용됩니다. 빈 곳을 클릭하면 선택이 풀립니다
+	Nothing picked	선택 해제
+	Posed the picked figure	선택한 인형에 포즈를 적용했습니다
+	With a figure picked on the canvas (click it with the Move tool), poses that figure instead	캔버스에서 인형을 선택해 두면(이동 도구로 클릭) 새 레이어 대신 그 인형에 포즈를 적용합니다
+	Opened a 3D character: pose it with the Move tool	3D 캐릭터를 열었습니다. 이동 도구로 자세를 바꿀 수 있습니다
+	Advanced Options	고급 옵션
+	Artboards	아트보드
+	Color Profile	색상 프로파일
+	Delete Preset	사전 설정 삭제
+	Documents you create appear here.	만든 문서가 여기에 표시됩니다.
+	Don't Color Manage	색상 관리 안 함
+	New file	새 파일
+	Prism and Photoshop files you open appear here.	연 프리즘 파일과 Photoshop 파일이 여기에 표시됩니다.
+	SAVE DOCUMENT PRESET	문서 사전 설정 저장
+	SAVED BLANK DOCUMENT PRESETS ({n})	저장된 빈 문서 사전 설정 ({n})
+	Save Document Preset	문서 사전 설정 저장
+	Save Preset	사전 설정 저장
+	Saved {n}	저장됨 {n}
+	Square Pixels	정사각형 픽셀
+	Working {kind}: {profile}	작업 {kind}: {profile}
+	YOUR RECENT ITEMS ({n})	최근 항목 ({n})
+	Landscape, 3 x 2	가로, 3 x 2
+	Portrait, 2 x 3	세로, 2 x 3
+	Portrait, 8 x 10	세로, 8 x 10
+	Web Medium	웹 중형
+	Web Small	웹 소형
+	1000 pixel grid	1000픽셀 격자
+	2000 pixel grid	2000픽셀 격자
+	Mobile Design	모바일 디자인
+	Desktop HD Design	데스크톱 HD 디자인
+	Structure	구조
+	Elements	요소
+	Shading	음영
+	Fill Type	칠 유형
+	Technique	기법
+	Softer	더 부드럽게
+	Chisel Hard	강하게 깎기
+	Chisel Soft	부드럽게 깎기
+	Gloss Contour	광택 윤곽
+	Add a new instance of this effect	이 효과 하나 더 추가
+	Move Effect Up	효과를 위로 이동
+	Move Effect Down	효과를 아래로 이동
+	Delete Effect	효과 삭제
+	General Blending	일반 혼합
+	Advanced Blending	고급 혼합
+	Channel	채널
+	Up	위로
+	Contour	윤곽
+	Anti-aliased	앤티 앨리어스

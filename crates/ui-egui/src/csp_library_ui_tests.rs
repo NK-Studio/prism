@@ -169,7 +169,7 @@ fn dropping_a_material_uses_it_where_it_lands() {
     // A layer material needs a document; nothing happens without one.
     let ctx = egui::Context::default();
     let mut a = app();
-    let ruler = MaterialDrag { uuid: "r".into(), name: "Isometric ruler".into(), layer: true };
+    let ruler = MaterialDrag { uuid: "r".into(), name: "Isometric ruler".into(), layer: true, action: false, gradient: false, color_set: false, pose: false };
     use_material(&mut a, &ctx, &ruler, None);
     assert!(a.session.active().is_none());
     // With one, the import runs (the test folder has no CLIP STUDIO data, so it reports why).
@@ -178,7 +178,7 @@ fn dropping_a_material_uses_it_where_it_lands() {
     use_material(&mut a, &ctx, &ruler, None);
     assert_eq!(a.session.active().unwrap().doc.layers.len(), layers);
     // A brush goes to the brush import with this panel's folder.
-    let brush = MaterialDrag { uuid: "a".into(), name: "Ink pen".into(), layer: false };
+    let brush = MaterialDrag { uuid: "a".into(), name: "Ink pen".into(), layer: false, action: false, gradient: false, color_set: false, pose: false };
     let presets = a.session.tools.presets.len();
     use_material(&mut a, &ctx, &brush, None);
     assert_eq!(a.session.tools.presets.len(), presets, "nothing to import from the test folder");
@@ -418,4 +418,262 @@ fn render_the_material_palette() {
     h.set_size(egui::vec2(760.0, 620.0));
     h.run_steps(30);
     h.render().unwrap().save(out.join("palette-wide.png")).unwrap();
+}
+
+#[test]
+fn auto_actions_have_their_own_filter_and_import_into_the_actions_panel() {
+    let mut app = app();
+    let mut l = listing();
+    l["actions"] = json!([
+        {"uuid": "act", "name": "Outline set", "kind": "auto_action", "catalog": "Pack", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": ["ダウンロード:Pack-1:Brushes"]}
+    ]);
+    app.ui.csp_library.listing = Some(l.clone());
+    let mut h = harness(app);
+    assert!(h.query_by_label("Outline set").is_some(), "All lists auto actions too");
+    h.state_mut().ui.csp_library.filter = KindFilter::Actions;
+    h.run_steps(2);
+    assert!(h.query_by_label("Ink pen").is_none() && h.query_by_label("Outline set").is_some());
+    h.state_mut().ui.csp_library.filter = KindFilter::Brushes;
+    h.run_steps(2);
+    assert!(h.query_by_label("Outline set").is_none() && h.query_by_label("Ink pen").is_some());
+    assert!(!in_library(h.state(), &l["actions"][0]));
+
+    // The material cannot be read from this folder: the failure is reported, nothing imported,
+    // and the selection stays for a second try.
+    let mut a = super::tests::app();
+    a.ui.csp_library.listing = Some(l);
+    a.ui.csp_library.selected = vec!["act".into()];
+    import_selected(&mut a);
+    assert!(a.session.actions.list.is_empty());
+    assert!(a.ui.status_error);
+    assert_eq!(a.ui.csp_library.selected, ["act"]);
+}
+
+#[test]
+fn gradients_have_their_own_filter_and_import_into_the_gradients_panel() {
+    let mut app = app();
+    let mut l = listing();
+    l["gradients"] = json!([
+        {"uuid": "grad", "name": "Metallic set", "kind": "gradation_set", "catalog": "Pack", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": ["ダウンロード:Pack-1:Brushes"]},
+        {"uuid": "tool", "name": "Hue shift", "kind": "gradation", "catalog": "Pack", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": ["ダウンロード:Pack-1:Brushes"]}
+    ]);
+    app.ui.csp_library.listing = Some(l.clone());
+    let mut h = harness(app);
+    assert!(h.query_by_label("Metallic set").is_some(), "All lists gradients too");
+    h.state_mut().ui.csp_library.filter = KindFilter::Gradients;
+    h.run_steps(2);
+    assert!(h.query_by_label("Ink pen").is_none() && h.query_by_label("Metallic set").is_some() && h.query_by_label("Hue shift").is_some());
+    h.state_mut().ui.csp_library.filter = KindFilter::Brushes;
+    h.run_steps(2);
+    assert!(h.query_by_label("Metallic set").is_none());
+    assert!(!in_library(h.state(), &l["gradients"][0]));
+
+    // Not readable from this folder: reported, nothing imported, still selected.
+    let mut a = super::tests::app();
+    let before = a.session.presets.gradients.clone();
+    a.ui.csp_library.listing = Some(l);
+    a.ui.csp_library.selected = vec!["grad".into()];
+    import_selected(&mut a);
+    assert_eq!(a.session.presets.gradients, before);
+    assert!(a.ui.status_error);
+    assert_eq!(a.ui.csp_library.selected, ["grad"]);
+}
+
+/// The Gradients tab over the local CLIP STUDIO folder, then every gradient imported:
+/// `PRISM_LOOK_OUT=<dir> cargo test -p prism-ui-egui --lib local_gradients -- --ignored`.
+#[test]
+#[ignore = "reads the local CLIP STUDIO folder and writes a PNG"]
+fn local_gradients_list_and_import() {
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/csp-gradients".into()));
+    std::fs::create_dir_all(&out).unwrap();
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+    app.ui.csp_library.root = std::env::var_os("PRISM_TEST_CSP_ROOT").map(|r| r.to_string_lossy().into_owned());
+    refresh(&mut app);
+    let listing = app.ui.csp_library.listing.clone().unwrap();
+    let ids: Vec<String> = materials(&listing).filter(|b| is_gradient(b) && is_ready(b)).filter_map(|b| b["uuid"].as_str().map(str::to_string)).collect();
+    assert!(!ids.is_empty());
+    app.ui.csp_library.filter = KindFilter::Gradients;
+    app.ui.csp_library.view = View::List;
+    let mut h = wide(app);
+    h.set_size(egui::vec2(520.0, 420.0));
+    h.run_steps(30);
+    h.render().unwrap().save(out.join("gradients-tab.png")).unwrap();
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+    app.ui.csp_library.root = std::env::var_os("PRISM_TEST_CSP_ROOT").map(|r| r.to_string_lossy().into_owned());
+    refresh(&mut app);
+    app.ui.csp_library.selected = ids.clone();
+    import_selected(&mut app);
+    eprintln!("status: {}", app.ui.status);
+    let imported: usize = app.session.presets.gradients.iter().filter(|g| !g.items.is_empty()).map(|g| g.items.len()).sum();
+    assert!(imported > ids.len(), "{}", app.ui.status);
+    for g in &app.session.presets.gradients {
+        eprintln!("group {} ({})", g.name, g.items.len());
+    }
+    assert!(app.ui.csp_library.selected.is_empty());
+}
+
+#[test]
+fn colour_sets_have_their_own_filter_and_import_into_the_swatches_panel() {
+    let mut app = app();
+    let mut l = listing();
+    l["colorSets"] = json!([
+        {"uuid": "set", "name": "Retro palette", "kind": "color_set", "catalog": "Pack", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": ["ダウンロード:Pack-1:Brushes"]}
+    ]);
+    app.ui.csp_library.listing = Some(l.clone());
+    let mut h = harness(app);
+    assert!(h.query_by_label("Retro palette").is_some(), "All lists colour sets too");
+    h.state_mut().ui.csp_library.filter = KindFilter::ColorSets;
+    h.run_steps(2);
+    assert!(h.query_by_label("Ink pen").is_none() && h.query_by_label("Retro palette").is_some());
+    h.state_mut().ui.csp_library.filter = KindFilter::Brushes;
+    h.run_steps(2);
+    assert!(h.query_by_label("Retro palette").is_none());
+    assert!(!in_library(h.state(), &l["colorSets"][0]));
+
+    // Not readable from this folder: reported, nothing imported, still selected.
+    let mut a = super::tests::app();
+    let before = a.session.presets.swatches.clone();
+    a.ui.csp_library.listing = Some(l);
+    a.ui.csp_library.selected = vec!["set".into()];
+    import_selected(&mut a);
+    assert_eq!(a.session.presets.swatches, before);
+    assert!(a.ui.status_error);
+    assert_eq!(a.ui.csp_library.selected, ["set"]);
+}
+
+/// The Color sets tab over the local CLIP STUDIO folder, then every colour set imported:
+/// `PRISM_LOOK_OUT=<dir> cargo test -p prism-ui-egui --lib local_colour_sets -- --ignored`.
+#[test]
+#[ignore = "reads the local CLIP STUDIO folder and writes a PNG"]
+fn local_colour_sets_list_and_import() {
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/csp-colour-sets".into()));
+    std::fs::create_dir_all(&out).unwrap();
+    let root = std::env::var_os("PRISM_TEST_CSP_ROOT").map(|r| r.to_string_lossy().into_owned());
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+    app.ui.csp_library.root = root.clone();
+    refresh(&mut app);
+    let listing = app.ui.csp_library.listing.clone().unwrap();
+    let ids: Vec<String> = materials(&listing).filter(|b| is_color_set(b) && is_ready(b)).filter_map(|b| b["uuid"].as_str().map(str::to_string)).collect();
+    assert!(!ids.is_empty());
+    app.ui.csp_library.filter = KindFilter::ColorSets;
+    app.ui.csp_library.view = View::List;
+    let mut h = wide(app);
+    h.set_size(egui::vec2(520.0, 360.0));
+    h.run_steps(30);
+    h.render().unwrap().save(out.join("colour-sets-tab.png")).unwrap();
+    let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+    app.ui.csp_library.root = root;
+    refresh(&mut app);
+    let groups = app.session.presets.swatches.len();
+    app.ui.csp_library.selected = ids.clone();
+    import_selected(&mut app);
+    eprintln!("status: {}", app.ui.status);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(app.session.presets.swatches.len(), groups + ids.len());
+    for g in &app.session.presets.swatches[groups..] {
+        eprintln!("group {} ({}): {:?}", g.name, g.items.len(), g.items.iter().take(3).map(|i| i.name.clone()).collect::<Vec<_>>());
+    }
+    assert!(app.ui.csp_library.selected.is_empty());
+}
+
+#[test]
+fn poses_have_their_own_filter_and_need_a_document() {
+    let mut app = app();
+    let mut l = listing();
+    l["poses"] = json!([
+        {"uuid": "p1", "name": "Pair pose 1", "kind": "pose", "catalog": "Pair", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": ["ダウンロード:Pair-1"]},
+        {"uuid": "p2", "name": "Pair pose 2", "kind": "pose", "catalog": "Pair", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": ["ダウンロード:Pair-1"]}
+    ]);
+    app.ui.csp_library.listing = Some(l.clone());
+    let mut h = harness(app);
+    assert!(h.query_by_label("Pair pose 1").is_some(), "All lists poses too");
+    h.state_mut().ui.csp_library.filter = KindFilter::Poses;
+    h.run_steps(2);
+    assert!(h.query_by_label("Ink pen").is_none() && h.query_by_label("Pair pose 2").is_some());
+    assert!(!in_library(h.state(), &l["poses"][0]));
+
+    // No document: nothing happens but a message; with one, an unreadable folder is reported
+    // and the poses stay selected.
+    let mut a = super::tests::app();
+    a.ui.csp_library.listing = Some(l);
+    a.ui.csp_library.selected = vec!["p1".into(), "p2".into()];
+    import_selected(&mut a);
+    assert!(a.ui.status_error);
+    assert_eq!(a.ui.csp_library.selected.len(), 2);
+    a.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let layers = a.session.active().unwrap().doc.layers.len();
+    import_selected(&mut a);
+    assert_eq!(a.session.active().unwrap().doc.layers.len(), layers);
+    assert!(a.ui.status_error);
+    assert_eq!(a.ui.csp_library.selected.len(), 2);
+}
+
+#[test]
+fn hand_poses_go_onto_the_active_figure_layer() {
+    let mut l = listing();
+    l["poses"] = json!([
+        {"uuid": "h1", "name": "Peace sign", "kind": "pose", "hand": "right", "catalog": "Hands", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": []},
+        {"uuid": "p1", "name": "Standing", "kind": "pose", "hand": null, "catalog": "Body", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": []}
+    ]);
+    assert!(is_hand_pose(&l["poses"][0]) && !is_hand_pose(&l["poses"][1]) && is_pose(&l["poses"][0]));
+    let mut app = app();
+    app.ui.csp_library.listing = Some(l.clone());
+    app.ui.csp_library.filter = KindFilter::Poses;
+    let h = harness(app);
+    assert!(h.query_by_label("Peace sign").is_some(), "hand poses list with the poses");
+    // With a 3D figure layer active the hand pose goes to it (an unreadable CLIP STUDIO folder is
+    // reported and nothing is added); the selection stays for another try.
+    let mut a = super::tests::app();
+    a.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    a.run("layer.figure.new", json!({})).unwrap();
+    a.ui.csp_library.listing = Some(l);
+    a.ui.csp_library.root = Some(std::env::temp_dir().join("prism-no-such-csp-folder").display().to_string());
+    a.ui.csp_library.selected = vec!["h1".into()];
+    let layers = a.session.active().unwrap().doc.layers.len();
+    import_selected(&mut a);
+    assert!(a.ui.status_error, "{}", a.ui.status);
+    assert_eq!(a.session.active().unwrap().doc.layers.len(), layers, "no new layer for a hand pose");
+    assert_eq!(a.ui.csp_library.selected, vec!["h1".to_string()]);
+}
+
+#[test]
+fn a_picked_hand_takes_the_hand_pose_alone() {
+    let mut a = super::tests::app();
+    a.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let ids = vec!["h1".to_string()];
+    assert_eq!(hand_pose_command(&a, &ids, None).0, "layer.figure.new", "no figure layer: a new one");
+    a.run("layer.figure.new", json!({})).unwrap();
+    let (cmd, p) = hand_pose_command(&a, &ids, Some([10.0, 20.0]));
+    assert_eq!(cmd, "layer.figure.applyHandPose");
+    assert_eq!(p["at"], json!([10.0, 20.0]));
+    assert!(p.get("side").is_none(), "both hands of the figure nearest the drop");
+    let layer = a.session.active().unwrap().active_layer.unwrap();
+    a.figure_pick = Some(crate::figure_ui::FigurePick { layer, figure: 0, hand: Some(false) });
+    let (_, p) = hand_pose_command(&a, &ids, Some([10.0, 20.0]));
+    assert_eq!((p["side"].as_str(), p["figure"].as_u64()), (Some("right"), Some(0)));
+    assert!(p.get("at").is_none(), "the pick wins over the drop point");
+}
+
+#[test]
+fn a_picked_figure_takes_a_whole_pose() {
+    let mut a = super::tests::app();
+    a.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let one = vec!["p1".to_string()];
+    assert!(pose_on_pick_command(&a, &one).is_none(), "no figure layer: a new layer");
+    a.run("layer.figure.new", json!({})).unwrap();
+    assert!(pose_on_pick_command(&a, &one).is_none(), "nothing picked: a new layer");
+    let layer = a.session.active().unwrap().active_layer.unwrap();
+    a.figure_pick = Some(crate::figure_ui::FigurePick { layer, figure: 0, hand: None });
+    let (cmd, p) = pose_on_pick_command(&a, &one).unwrap();
+    assert_eq!(cmd, "layer.figure.applyPose");
+    assert_eq!((p["uuid"].as_str(), p["figure"].as_u64(), p["layer"].as_u64()), (Some("p1"), Some(0), Some(layer.0)));
+    // A picked hand counts as its figure too; several poses still make a layer of their own.
+    a.figure_pick = Some(crate::figure_ui::FigurePick { layer, figure: 0, hand: Some(true) });
+    assert!(pose_on_pick_command(&a, &one).is_some());
+    assert!(pose_on_pick_command(&a, &["p1".to_string(), "p2".to_string()]).is_none());
+    // A picked figure (no hand) takes hand poses on both hands.
+    a.figure_pick = Some(crate::figure_ui::FigurePick { layer, figure: 0, hand: None });
+    let (_, p) = hand_pose_command(&a, &one, Some([1.0, 2.0]));
+    assert_eq!(p["figure"].as_u64(), Some(0));
+    assert!(p.get("side").is_none() && p.get("at").is_none());
 }

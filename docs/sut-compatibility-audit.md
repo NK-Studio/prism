@@ -98,16 +98,18 @@ implementation does not establish exact Photoshop fidelity for ABR brushes.
 | Gap | Materials with warning | Current effect / source |
 |---|---:|---|
 | Post correction | 22 | imported since 2026-11-14 (`csp_post_correction`: the committed path is smoothed; Prism's own smoothing, not CSP's fit); `io/src/sut/blend.rs` |
-| Constant sub-color blend | 11 | No random input -> amount becomes zero; `blend::jitter` |
+| Constant sub-color blend | 11 | No random input -> amount becomes zero; `blend::jitter`. Since fixed: constant amount `csp_sub_color`; 2026-11-15: a pressure/tilt effector scales it per dab (`csp_sub_color_dynamic`, both Chainmail 2-C brushes; compared with CLIP STUDIO, `sut-analysis.md` › Colour jitter) |
 | Particle rotation input | 9 | 2026-11-04: inputs 0x10/0x20/0x40/0x100/0x200 and random 0x80 applied (`CspSpray.angleInput`); several inputs at once use the first |
-| Spray particle size units | 6 | Treats values as pixels; `mod.rs` |
+| Spray particle size units | 6 | Treats values as pixels; 2026-11-15: unit 2 is pixels (measured), no longer warns; `mod.rs` |
 | Color mixing type 2 | 5 | Approximated with blending; `mod.rs::color_mixing` |
-| Missing dual-tip assets | 2 | 2026-11-04: dual brush kept with the present tips (round tip when none), with a warning |
+| Missing dual-tip assets | 2 | 2026-11-04: dual brush kept with the present tips (round tip when none), with a warning; 2026-11-15: with none, an adding dual brush (both lightning brushes) is left off instead of painting round discs |
 | Dual input/random dynamics and rotation | 1 | Ignored; `io/src/sut/dual.rs` |
-| Size effector control 0x40 | 1 | Additional control unsupported; `io/src/sut/effector.rs` |
-| Watercolor-edge units | 1 | Value used in pixels; `mod.rs` |
+| Size effector control 0x40 | 1 | Velocity input, imported since 2026-11-15 (`Dynamic.csp_speed`, measured against CLIP STUDIO); `io/src/sut/effector.rs` |
+| Watercolor-edge units | 1 | Value used in pixels; 2026-11-15: unit 2 is pixels (measured), no longer warns; `mod.rs` |
 | Emphasize texture density | 1 | Approximated by contrast; `mod.rs` |
 | Start/end fade type 2 | 1 | Unsupported; `mod.rs` |
+| Gray tip drawn in the sub colour (2026-11-15) | 0 (no warning) | 29 sub tools; fixed the same day: gray blends the dab colour towards the sub colour (`cspTipGrays`), matched against CLIP STUDIO; `sut-analysis.md` › Gray brush tips |
+| Spacing / thickness by pressure (2026-11-15) | 0 (no warning) | 15 / 22 sub tools; imported the same day (`csp_spacing_dynamic`, `csp_thickness_dynamic`); velocity inputs warn |
 
 The screenshot's **葉っぱブラシ3** was reproduced in this run: imported, produced a
 stroke and emitted the same constant sub-color warning. It also has eight

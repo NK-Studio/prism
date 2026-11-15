@@ -40,6 +40,7 @@ mod flat;
 mod gradient_bake;
 pub mod linked;
 pub mod laf;
+pub mod model;
 mod multichannel_map;
 pub mod pattern_map;
 pub mod pixels;
@@ -52,6 +53,7 @@ pub mod sut;
 pub mod svg;
 mod text_import;
 pub mod text_styles_map;
+pub mod thumbnail;
 pub mod tiff_layers;
 pub mod vector_map;
 

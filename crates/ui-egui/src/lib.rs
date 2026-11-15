@@ -106,6 +106,7 @@ pub mod move_ui;
 mod native_dialogs;
 pub mod native_menu;
 pub mod native_popup;
+pub mod home_ui;
 pub mod new_doc_ui;
 pub mod notices;
 mod opacity_keys;
@@ -143,6 +144,7 @@ mod sizing;
 pub mod slice_ui;
 pub mod smart_ui;
 pub mod snap_ui;
+pub mod figure_ui;
 pub mod special_ruler_ui;
 pub mod state;
 pub mod stroke_constraint;
@@ -399,6 +401,8 @@ pub struct PrismApp {
     press_stroke: bool,
     /// End of the last painting stroke: ⇧-click draws a straight line from it (#178).
     last_stroke_end: Option<(DocId, [f64; 2])>,
+    /// Physical pixels per point of the last frame: strokes send it for CSP's velocity input.
+    pub(crate) pixels_per_point: f32,
     /// Control+Alt-drag brush resize in progress (`brush_resize`, #231).
     pub(crate) brush_resize: Option<brush_resize::Resize>,
     /// A ⌘⌥⌃-click layer pick is in progress; its drag and release are swallowed (`quick_pick`).
@@ -514,6 +518,13 @@ pub struct PrismApp {
     /// that keys its coalesced edits.
     pub(crate) ruler_drag: Option<special_ruler_ui::handles::RulerDrag>,
     pub(crate) ruler_handle_seq: u64,
+    /// A 3D figure gesture in progress (figure_ui), and the counter keying its coalesced edits.
+    pub(crate) figure_drag: Option<figure_ui::FigureDrag>,
+    pub(crate) figure_seq: u64,
+    /// The figure (and maybe one of its hands) picked on a 3D figure layer by clicking its dots:
+    /// poses go to that figure, hand poses and Properties › Hand Pose to that hand, as with a
+    /// selection in CLIP STUDIO.
+    pub(crate) figure_pick: Option<figure_ui::FigurePick>,
     /// Crop tool gesture in progress (see `crop_ui`).
     pub(crate) crop: crop_ui::CropState,
     pub(crate) arrow_handle_runtime: arrow_handles_ui::Runtime,
@@ -590,6 +601,7 @@ impl PrismApp {
             defer_live_stroke: false,
             press_stroke: false,
             last_stroke_end: None,
+            pixels_per_point: 1.0,
             brush_resize: None,
             quick_pick: false,
             brush_resize_armed: false,
@@ -635,6 +647,9 @@ impl PrismApp {
             guide_drag: None,
             ruler_drag: None,
             ruler_handle_seq: 0,
+            figure_drag: None,
+            figure_seq: 0,
+            figure_pick: None,
             crop: Default::default(),
             shape_corner_runtime: Default::default(),
             arrow_handle_runtime: Default::default(),
@@ -922,6 +937,9 @@ impl PrismApp {
         if let Some(r) = preset_files_ui::open(self, name, bytes) {
             return r.map(|()| Vec::new());
         }
+        if prism_io::model::is_model_name(name) {
+            return self.open_model(name, bytes, None);
+        }
         let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
@@ -1105,8 +1123,9 @@ impl PrismApp {
                 control::Outcome::AfterInput => self.input_waiters.push(reply),
                 control::Outcome::AfterJob(job) => self.jobs.waiters.push((job, reply)),
                 control::Outcome::Screenshot { token, path, window, dialog } => {
-                    // Wait out egui's animations (off in Prism's theme) and a few rendered frames first.
-                    let settle = ctx.global_style().animation_time as f64 * 2000.0 + 60.0;
+                    // Wait out egui's animations (off in Prism's theme), the unsaved-changes prompt's
+                    // entry animation, and a few rendered frames first.
+                    let settle = (ctx.global_style().animation_time * 2000.0).max(discard_ui::ENTRY_SECS * 1000.0) as f64 + 60.0;
                     self.queued_screenshots.push((
                         token,
                         gpu_canvas::now_ms() + settle,
@@ -1256,6 +1275,7 @@ impl eframe::App for PrismApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.pixels_per_point = ctx.pixels_per_point();
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
         if !self.fonts_ready {
@@ -1734,6 +1754,7 @@ impl PrismApp {
         if let Some(c) = self.session.clipboard.as_ref().filter(|c| !c.bounds.is_empty()) {
             crate::new_doc_ui::set_clipboard(&mut f, c.bounds.width(), c.bounds.height());
         }
+        crate::new_doc_ui::select_first_recent(&mut f, &self.session.presets.recent_documents);
         f
     }
 

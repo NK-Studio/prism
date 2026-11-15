@@ -283,6 +283,7 @@ impl Mapper<'_> {
             pressure_curve: None,
             csp_tilt: None,
             csp_random: None,
+            csp_speed: None,
         }
     }
 

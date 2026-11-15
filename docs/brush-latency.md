@@ -177,3 +177,99 @@ those per-frame checks cost microseconds. The window also presents with one queu
 of two (`SurfaceConfig::LOW_LATENCY`), removing about 17 ms at 60 Hz. Physical pen-to-photon
 latency remains unmeasured; the first stroke after selecting a large brush still pays its
 one-time tip preparation (~100 ms cold, see above).
+
+## Colour-tip spray brushes: dab rasterisation (2026-11-14)
+
+Reported: the frame rate collapses while drawing with 가을낙엽_낙엽 (nine 677×700 colour tips,
+particle 78 px, gap Narrow: a dab every 3.1 px). Each dab walked its 112×112 px rectangle five
+times (the shape, then the alpha and the red, green and blue planes for its colours), each time
+transforming every sample again: 2.6 ms a dab, on one core. The live preview also draws the
+stabilizer's catch-up tail every frame, about as many dabs again.
+
+- `BrushContext::rasterize_colored` reads the shape and the three colour planes at the same
+  texels in one pass, and skips the columns of each row that cannot reach the tip (the map to tip
+  coordinates is affine; the exact test stays inside). It applies to CSP-sampled colour tips;
+  ribbons, computed tips and Photoshop sampling keep the separate passes.
+- `StrokeRenderer` rasterises colour-tip dabs in batches of 32 on all cores (rayon) and lays them
+  in stroke order.
+- The prepared-tip prewarm limit rose from 4 to 8 million tip samples (12 to 24 MB of colour), so
+  this brush is prepared when it is selected instead of at the first pen-down (45 ms).
+
+The pixels are unchanged: the rendered comparison image is identical byte for byte, and the unit
+test `csp_colour_tip_one_pass_equals_the_separate_passes` compares the one pass with the separate
+ones at every anti-aliasing level.
+
+Release build, this Windows / Ryzen (24 threads) machine, `LiveStroke::push` per frame (two 8 ms
+samples a frame, 1600×900 document, size 17, gap Narrow), from the ignored test
+`local_csp_live_one`:
+
+| Pen speed | Before mean / p95 / max, ms | After mean / p95 / max, ms |
+|---|---:|---:|
+| 1000 px/s (5 dabs a frame) | 28.3–30.1 / 32.6–35.8 / 41.1–45.6 | 1.9–2.0 / 2.2–2.3 / 2.3–3.0 |
+| 3000 px/s (16 dabs a frame) | 78.5–82.0 / 85.9–91.0 / 87.1–93.5 | 4.1–4.3 / 4.7–5.3 / 4.7–5.8 |
+
+A committed stroke of 1,530 dabs (`local_csp_render_one`, four strokes with their fixed costs)
+fell from 5.08 s to 0.82 s. Not measured: the app's own frame time with a real pen (the
+maintainer's app was running during this change, so no stroke was injected), the `fast`
+profile, and `cargo xtask perf`.
+
+## Every brush: dabs in batches, rows of a large dab in parallel (2026-11-14)
+
+The colour-tip change above left ribbons and plain image tips on one core. A dab's pixels depend
+only on the dab, not on what the stroke already holds, so:
+
+- `StrokeRenderer` now rasterises the dabs of every brush in batches (at most 32 dabs or 4 million
+  rectangle pixels) on all cores and lays them in stroke order. Batches under 16 thousand pixels,
+  and single dabs, stay on the calling thread. Colour mixing still samples under each dab in
+  order; only its rasterisation is batched.
+- A dab whose rectangle has at least 32 thousand pixels rasterises its rows in parallel
+  (`rasterize_with`, `rasterize_colored`, `rasterize_ribbon`). This is what helps a large brush
+  with wide spacing, where a frame holds one or two dabs.
+
+Pixels are unchanged: the comparison renders of 茂み1 at size 300, 葉っぱブラシ at 200 and
+가을낙엽_낙엽 at 17 and 60 are identical byte for byte to the renders of the code before any of
+these changes, and `batched_and_row_parallel_dabs_equal_dabs_laid_one_at_a_time` compares a
+stroke pushed at once with the same stroke fed point by point (colour tip, image tip, computed
+tip and ribbon, at 24 and 260 px).
+
+`LiveStroke::push` per frame, release build, same machine (`local_csp_live_one`), mean / p95 ms:
+
+| Brush | Pen speed | Before | After |
+|---|---|---:|---:|
+| 茂み1 (colour ribbon), size 300 | 1000 px/s | 5.11 / 5.88 | 3.58 / 4.87 |
+| 茂み1, size 300 | 3000 px/s | 12.72 / 15.02 | 4.03 / 5.42 |
+| 葉っぱブラシ (image tip), size 200 | 1000 px/s | 2.60 / 6.77 | 1.42 / 4.06 |
+| 葉っぱブラシ, size 200 | 3000 px/s | 7.70 / 11.22 | 4.12 / 5.77 |
+| 가을낙엽_낙엽, size 60 (276 px leaves) | 1000 px/s | 4.07 / 35.21 | 0.21 / 1.66 |
+
+`bench_brush` (500-point stroke on 6016×6016 RGBA8, total ms): CSP hard 200 px medium 591–597 →
+231, strong 586–600 → 219, 25 px medium 113–119 → 101–108.
+
+Not done: a ribbon's colour tip is still read in five passes a dab (only the passes run in
+parallel); colour mixing brushes (NANAGOM PEN: 2.5 ms at 1000 px/s, 7.0 ms at 3000 px/s) are
+bound by the per-dab sampling under the dab, which stays in order; `cargo xtask perf` and the
+`fast` profile were not run.
+
+## Ribbon colour tips: shape and colours in one walk (2026-11-14)
+
+A ribbon slice of a colour tip was still walked five times (its shape, then the shape again and
+the three colour planes for its colours), locating every pixel in the slice's quadrilateral each
+time. `rasterize_ribbon` now takes the colour planes and reads them where it reads the shape, so
+`BrushContext::rasterize_colored` covers ribbon slices too (not aliased ribbons, whose
+thresholded shape keeps the tip's mean colour).
+
+Pixels are unchanged: the 茂み1 size 300 comparison render is identical byte for byte, and
+`csp_colour_tip_one_pass_equals_the_separate_passes` now also compares ribbon slices with the
+separate passes at every anti-aliasing level, with flips, on a turning path.
+
+`LiveStroke::push` per frame, release build, same machine (`local_csp_live_one`), 茂み1 at size
+300, mean / p95 ms over four rounds each:
+
+| Pen speed | Before | After |
+|---|---:|---:|
+| 1000 px/s | 3.58–3.63 / 4.87–5.01 | 1.90–1.93 / 2.43–2.56 |
+| 3000 px/s | 3.97–4.30 / 5.20–5.87 | 2.72–2.90 / 3.25–3.67 |
+
+The committed comparison render (four strokes with their fixed costs) went from 938 to 882 ms.
+Not done: each plane is still sampled with its own bilinear lookup (the weights are not shared);
+`cargo xtask perf` and the `fast` profile were not run.
