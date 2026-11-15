@@ -2162,6 +2162,10 @@ fn csp_line_following_brush_ignores_taps_and_does_not_pile_dabs_at_pen_up() {
     let mut fixed = follows.clone();
     fixed.shape_dynamics.angle.control = Control::Off;
     assert_eq!(dabs(&fixed, &[at(100.0, 1.0, 0.0)]).len(), 1);
+    // With post correction CLIP STUDIO draws the tap too (Chainmail 1 and 2 2-C, measured).
+    let corrected = BrushSettings { csp_post_correction: Some(10.0), ..follows.clone() };
+    assert!(!corrected.csp_follows_line());
+    assert_eq!(dabs(&corrected, &[at(100.0, 1.0, 0.0)]).len(), 1);
     let photoshop = BrushSettings { size: 50.0, spacing: 1.0, ..brush() };
     assert!(dabs(&photoshop, &pressed).len() > 1);
 }

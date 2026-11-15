@@ -1055,6 +1055,9 @@ pixel of path 42.6–43.8 against 41.5–42.8, mean band height 55.0–55.7 agai
   particle angle follows the direction of the line (flag 0x40) now waits for the pen to move
   before its first dab (`BrushSettings::csp_follows_line`, `PathWalker::wait_for_direction`).
   Inference: the rule is taken to be the direction input; spray without it was not tried.
+  2026-11-15: the rule also needs post correction off. Chainmail 1 (`BrushRotationEffector`
+  0xc3) and Chainmail 2 2-C (0x43), both with post correction, draw a tap's dab; Chainmail 1 with
+  post correction switched off draws nothing (see Gray brush tips › Taps).
 - *Tool Property.* A particle size synchronized with the brush size showed its stored value (30)
   instead of what it paints (78.2); it now shows the synchronized size, as CLIP STUDIO does.
 
@@ -2047,7 +2050,13 @@ alone). Sub-colour share per pixel, solved against the white paper:
 - **Taps.** A single-sample pen tap paints a dab in CLIP STUDIO, at a lower effective pressure
   (sub share 0.21 for a tap at 1.0, 0.46 at 0.3). In the live Prism app the same tap leaves a
   history step but no pixels; `paint.stroke` with one point does paint (`local_csp_render_one`).
-  Cause not found yet.
+  **Cause (2026-11-15):** `csp_follows_line` held back the first dab of any
+  brush whose tip follows the line direction until the pen moved, a rule taken from 葉っぱブラシ and
+  가을낙엽_낙엽, which have post correction off. Measured in CLIP STUDIO with the synthetic pen on
+  Tablet PC: Chainmail 1 (direction and random, post correction on) draws its taps at pressure 1
+  and 0.5; with post correction switched off it draws neither. So a tap is held back only without
+  post correction, and Prism now does the same: Chainmail 2 2-C and Chainmail 1 tap a dab
+  (`paint.stroke` and an injected pen tap in the app), 葉っぱブラシ still draws nothing.
 
 ### Smaller brush options
 
