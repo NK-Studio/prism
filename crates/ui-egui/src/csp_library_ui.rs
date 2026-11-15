@@ -33,6 +33,8 @@ pub enum KindFilter {
     Layers,
     /// Auto-action sets: they import into the Actions panel.
     Actions,
+    /// Gradients and gradient sets: they import into the Gradients panel.
+    Gradients,
 }
 
 /// How the materials are laid out.
@@ -145,10 +147,11 @@ struct MaterialDrag {
     name: String,
     layer: bool,
     action: bool,
+    gradient: bool,
 }
 
 fn materials(listing: &Value) -> impl Iterator<Item = &Value> {
-    ["brushes", "layers", "actions"].into_iter().flat_map(|k| listing[k].as_array().into_iter().flatten())
+    ["brushes", "layers", "actions", "gradients"].into_iter().flat_map(|k| listing[k].as_array().into_iter().flatten())
 }
 
 fn is_ready(b: &Value) -> bool {
@@ -169,6 +172,11 @@ fn is_action(b: &Value) -> bool {
     b["kind"] == "auto_action"
 }
 
+/// A gradient sub-tool or gradient set, imported into the Gradients panel.
+fn is_gradient(b: &Value) -> bool {
+    b["kind"] == "gradation" || b["kind"] == "gradation_set"
+}
+
 fn is_ruler(b: &Value) -> bool {
     is_layer(b) && b["ruler"] == true
 }
@@ -180,7 +188,7 @@ fn group_of(b: &Value) -> &str {
 
 /// Is a material of this name already in the brush library, in its collection's group?
 fn in_library(app: &PrismApp, b: &Value) -> bool {
-    if is_layer(b) || is_action(b) {
+    if is_layer(b) || is_action(b) || is_gradient(b) {
         return false;
     }
     let (Some(name), group) = (b["name"].as_str(), group_of(b)) else { return false };
@@ -204,10 +212,11 @@ fn tags_of<'a>(listing: &'a Value, b: &'a Value) -> Vec<&'a str> {
 fn passes(state: &CspLibraryState, filter: KindFilter, listing: &Value, b: &Value) -> bool {
     let kind_ok = match filter {
         KindFilter::All => true,
-        KindFilter::Brushes => !is_sub_tool(b) && !is_layer(b) && !is_action(b),
+        KindFilter::Brushes => !is_sub_tool(b) && !is_layer(b) && !is_action(b) && !is_gradient(b),
         KindFilter::SubTools => is_sub_tool(b),
         KindFilter::Layers => is_layer(b),
         KindFilter::Actions => is_action(b),
+        KindFilter::Gradients => is_gradient(b),
     };
     if !kind_ok || !tree::contains(state.folder.as_deref(), b) {
         return false;
@@ -289,8 +298,12 @@ fn import_selected(app: &mut PrismApp) {
     let ids_of = |app: &PrismApp, keep: fn(&Value) -> bool| -> Vec<String> {
         app.ui.csp_library.listing.as_ref().map(|l| materials(l).filter(|b| keep(b)).filter_map(|b| b["uuid"].as_str().map(str::to_string)).collect()).unwrap_or_default()
     };
-    let (layer_ids, action_ids) = (ids_of(app, is_layer), ids_of(app, is_action));
+    let (layer_ids, action_ids, gradient_ids) = (ids_of(app, is_layer), ids_of(app, is_action), ids_of(app, is_gradient));
+    let (gradients, selected): (Vec<String>, Vec<String>) = selected.into_iter().partition(|id| gradient_ids.contains(id));
     let (actions, selected): (Vec<String>, Vec<String>) = selected.into_iter().partition(|id| action_ids.contains(id));
+    if !gradients.is_empty() {
+        import_gradients(app, &gradients);
+    }
     let (layers, uuids): (Vec<String>, Vec<String>) = selected.into_iter().partition(|id| layer_ids.contains(id));
     if !actions.is_empty() {
         import_actions(app, &actions);
@@ -320,6 +333,10 @@ fn use_material(app: &mut PrismApp, ctx: &egui::Context, drag: &MaterialDrag, ta
     }
     if drag.action {
         import_actions(app, std::slice::from_ref(&drag.uuid));
+        return;
+    }
+    if drag.gradient {
+        import_gradients(app, std::slice::from_ref(&drag.uuid));
         return;
     }
     let root = app.ui.csp_library.root.clone();
@@ -412,6 +429,36 @@ fn add_layers(app: &mut PrismApp, uuids: &[String]) {
     app.ui.status_error = added == 0;
     notices::io_warnings(app, tl!("Added from CLIP STUDIO"), &warnings);
     app.ui.csp_library.selected.retain(|id| !uuids.contains(id));
+}
+
+/// Import gradients and gradient sets into the Gradients panel (a same-named gradient in its
+/// group is replaced) and show it.
+fn import_gradients(app: &mut PrismApp, uuids: &[String]) {
+    let root = app.ui.csp_library.root.clone();
+    let (mut count, mut warnings, mut done) = (0, Vec::new(), Vec::new());
+    for uuid in uuids {
+        let mut p = json!({ "uuid": uuid });
+        if let Some(root) = &root {
+            p["root"] = json!(root);
+        }
+        match app.run("gradient.presets.importCsp", p) {
+            Ok(v) => {
+                done.push(uuid.clone());
+                count += v["count"].as_u64().unwrap_or(0);
+                warnings.extend(v["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).map(tl_dyn));
+            }
+            Err(e) => warnings.push(format!("{}: {e}", tl!("Not imported"))),
+        }
+    }
+    app.ui.status = crate::i18n::fmt(tl!("Imported {n} gradients from CLIP STUDIO"), &[("n", &count.to_string())]);
+    app.ui.status_error = count == 0;
+    notices::io_warnings(app, tl!("Imported from CLIP STUDIO"), &warnings);
+    if count > 0 {
+        let pro = crate::prefs_ui::layout(app) == crate::theme::Layout::Compact;
+        crate::dock_model::toggle_panel(&mut app.ui, PanelId::Gradients, pro, Some(true));
+    }
+    // Failed ones stay checked for a second try.
+    app.ui.csp_library.selected.retain(|id| !done.contains(id));
 }
 
 /// Import auto-action sets into the Actions panel (same-named actions are replaced) and show it.
@@ -607,13 +654,14 @@ fn header(app: &mut PrismApp, ui: &mut egui::Ui, t: &Tokens, action: &mut Action
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
         let count = |f: KindFilter| state.listing.as_ref().map_or(0, |l| materials(l).filter(|b| passes(state, f, l, b)).count());
-        let counts = [KindFilter::All, KindFilter::Brushes, KindFilter::SubTools, KindFilter::Layers, KindFilter::Actions].map(count);
+        let counts = [KindFilter::All, KindFilter::Brushes, KindFilter::SubTools, KindFilter::Layers, KindFilter::Actions, KindFilter::Gradients].map(count);
         let kinds = [
             (KindFilter::All, tl!("All")),
             (KindFilter::Brushes, tl!("Brushes")),
             (KindFilter::SubTools, tl!("Sub tools")),
             (KindFilter::Layers, tl!("Layers")),
             (KindFilter::Actions, tl!("Auto actions")),
+            (KindFilter::Gradients, tl!("Gradients")),
         ];
         for ((f, label), n) in kinds.into_iter().zip(counts) {
             if widgets::pill_tab(ui, &format!("{label} {n}"), state.filter == f).clicked() {
@@ -1010,6 +1058,10 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
         ("paint-bucket", tl!("Sub tool"))
     } else if is_action(b) {
         ("play", tl!("Auto action"))
+    } else if b["kind"] == "gradation_set" {
+        ("blend", tl!("Gradient set"))
+    } else if is_gradient(b) {
+        ("blend", tl!("Gradient"))
     } else {
         ("brush", tl!("Brush"))
     };
@@ -1072,6 +1124,8 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
             ui.label(tl!("Adds a layer to the open document"));
         } else if is_action(b) {
             ui.label(tl!("Imports into the Actions panel; steps Prism cannot run yet stay in the action and must be disabled before it plays"));
+        } else if is_gradient(b) {
+            ui.label(tl!("Imports into the Gradients panel, for the Gradient tool and gradient maps"));
         }
         if owned {
             ui.label(tl!("Already in the brush library; importing again replaces it"));
@@ -1090,7 +1144,7 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
         }
     }
     // Drag onto a canvas, or double-click: use it (see `use_material`).
-    let drag = MaterialDrag { uuid: uuid.to_string(), name: name.to_string(), layer: is_layer(b), action: is_action(b) };
+    let drag = MaterialDrag { uuid: uuid.to_string(), name: name.to_string(), layer: is_layer(b), action: is_action(b), gradient: is_gradient(b) };
     if ready && resp.dragged() {
         resp.dnd_set_drag_payload(drag.clone());
     }

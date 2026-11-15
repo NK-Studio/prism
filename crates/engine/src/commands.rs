@@ -1206,6 +1206,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::action_edit_cmds::specs());
     v.extend(crate::laf_import_cmds::specs());
     v.extend(crate::laf_step_cmds::specs());
+    v.extend(crate::csp_gradient_cmds::specs());
     v.extend(crate::atn_import_cmds::specs());
     v
 }

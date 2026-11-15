@@ -129,11 +129,12 @@ impl<'a> Reader<'a> {
         }
     }
 }
-/// Parse an exported LAF or its downloaded C2F envelope, retaining original command names.
-pub fn read_laf(bytes: &[u8], ctl: &prism_raster::Interrupt) -> Result<Value> {
+/// Parse one typed value record (an object at the root), plain or in its C2F envelope. Auto
+/// actions (`.laf`) and gradient sets (`.colorset`) share this encoding.
+pub fn read_values(bytes: &[u8], ctl: &prism_raster::Interrupt) -> Result<Value> {
     ctl.check().map_err(|e| e.to_string())?;
     if bytes.len() > 8 << 20 {
-        return Err("CLIP STUDIO auto-action exceeds 8 MiB".into());
+        return Err("CLIP STUDIO value data exceeds 8 MiB".into());
     }
     let decoded;
     let bytes = if bytes.starts_with(crate::csp_container::MAGIC) {
@@ -144,10 +145,19 @@ pub fn read_laf(bytes: &[u8], ctl: &prism_raster::Interrupt) -> Result<Value> {
     };
     let mut r = Reader { bytes, at: 0, values: 0 };
     let value = r.object(0)?;
-    if r.at != bytes.len() || value.get("typename").and_then(Value::as_str) != Some("typeActionSet") {
+    if r.at != bytes.len() {
         return Err(invalid());
     }
     ctl.check().map_err(|e| e.to_string())?;
+    Ok(value)
+}
+
+/// Parse an exported LAF or its downloaded C2F envelope, retaining original command names.
+pub fn read_laf(bytes: &[u8], ctl: &prism_raster::Interrupt) -> Result<Value> {
+    let value = read_values(bytes, ctl)?;
+    if value.get("typename").and_then(Value::as_str) != Some("typeActionSet") {
+        return Err(invalid());
+    }
     Ok(value)
 }
 

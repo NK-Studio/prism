@@ -5,6 +5,7 @@ mod blend;
 mod display;
 mod dual;
 mod effector;
+pub mod gradient_material;
 pub mod layer_material;
 pub mod library;
 mod material;

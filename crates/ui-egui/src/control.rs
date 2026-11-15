@@ -489,7 +489,7 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                     None => None,
                 };
                 let csp_library_filter: Option<crate::csp_library_ui::KindFilter> = match p.get("cspLibraryFilter") {
-                    Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("cspLibraryFilter: {e} (all, brushes, subTools, layers, actions)"))?,
+                    Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("cspLibraryFilter: {e} (all, brushes, subTools, layers, actions, gradients)"))?,
                     None => None,
                 };
                 // A CLIP STUDIO folder path ("ダウンロード:Pack-1758445"), "favorite", or null for all.

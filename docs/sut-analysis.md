@@ -2317,3 +2317,29 @@ same way (the action would otherwise do nothing there); not compared with its ou
 four Isometric actions turn a 100 px square into the top face (142×82, a tan 30° ratio), the
 left and right faces and the 2:1 diamond; no result has been compared pixel for pixel with
 CLIP STUDIO.
+
+## Gradient materials (2026-11-15)
+
+Read-only inspection of the five gradient materials in the local download folder (the catalog's
+`MaterialKind` `gradation` ×3 and `gradation_set` ×2, one of the sets not on disk). No executable
+code was decompiled. Prism's reader is `crates/io/src/sut/gradient_material.rs`; its tests use
+synthetic data.
+
+- `gradation` is a gradient **sub-tool**: `data/material_0.tool`, the C2F container of the usual
+  tool database. The outer `Material` row's `MaterialToolVariantManager` holds the sub-tool
+  database; its `Node` names the sub-tool (`NodeName`, e.g. "hueshift cool tones") and points at
+  a `Variant` (`NodeVariantID`) carrying `GradationData` (216 bytes, the 24-byte-header layout of
+  *Gradient data*), `GradationRepeatType`, `GradationDither` and `GradationReverseSaved`.
+- `gradation_set` is a **gradient set**: `data/material_0.colorset`, a C2F container holding the
+  typed value records auto actions use (*Auto actions: value types*), with an empty root
+  `typename`: `gradationSetArray[] → {gradationSetName, gradationItemArray[] → {gradationName,
+  gradationData}}`. Each `gradationData` is the 16-byte-header layout Gradient Map layers use
+  (the CMYK set's first four items are the same K/C/M/Y maps as the CMYK separation action).
+- Prism imports both into the Gradients panel (`gradient.presets.importCsp`): a set as a group
+  named after it, a sub-tool's gradient into its collection's group. Curves between fixed
+  colours become sampled stops that match them; a curve between a drawing colour and another
+  colour runs straight (warned). The sub-tool's repeat, dither and reverse settings belong to
+  the tool, not the gradient, and are not kept.
+- Local result: all 5 listed; the 4 on disk import (14 + 18 set gradients, 3 sub-tool
+  gradients). Rendered beside CLIP STUDIO's thumbnails they show the same colour runs
+  (metallic golds and silvers, the hue-shift blues, rainbow and warm tones, the ink plates).

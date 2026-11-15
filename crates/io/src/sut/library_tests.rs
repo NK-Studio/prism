@@ -479,3 +479,39 @@ fn auto_actions_are_listed_and_read_by_id() {
     }
     assert!(lib.brushes.iter().all(|b| b.kind != "auto_action"));
 }
+
+/// A gradient blob (16-byte header): opaque `(rgb, flags, position)` stops, no curves.
+fn gradient(stops: &[([u32; 3], u32, u32)]) -> Vec<u8> {
+    let mut b: Vec<u8> = [16u32, 28, stops.len() as u32, 16].into_iter().flat_map(u32::to_be_bytes).collect();
+    for (rgb, flags, pos) in stops {
+        b.extend([rgb[0], rgb[1], rgb[2], u32::MAX, *flags, *pos, 0].into_iter().flat_map(u32::to_be_bytes));
+    }
+    b
+}
+
+#[test]
+fn a_gradient_sub_tool_reads_its_node_names_and_gradation_data() {
+    use crate::sut::gradient_material::read;
+    let red_white = gradient(&[([u32::MAX, 0, 0], 0, 0), ([u32::MAX; 3], 0, 0x8000)]);
+    let inner = database(
+        &[
+            ("Node", "CREATE TABLE Node (NodeName TEXT, NodeVariantID INTEGER)", vec![vec![text("Warm"), int(7)], vec![text("Pen"), int(8)]]),
+            ("Variant", "CREATE TABLE Variant (VariantID INTEGER, GradationData BLOB)", vec![vec![int(7), Value::Blob(red_white)], vec![int(8), Value::Null]]),
+        ],
+        false,
+    );
+    let outer = database(&[("Material", "CREATE TABLE Material (MaterialName TEXT, MaterialToolVariantManager BLOB)", vec![vec![text("Warm"), Value::Blob(inner.clone())]])], false);
+    let m = read(&crate::csp_container::plain_fixture(&outer), &prism_raster::Interrupt::NONE).unwrap();
+    assert_eq!(m.groups.len(), 1);
+    assert_eq!(m.groups[0].name, None);
+    assert_eq!(m.groups[0].gradients.len(), 1);
+    assert_eq!(m.groups[0].gradients[0].0, "Warm");
+    assert_eq!(m.groups[0].gradients[0].1.stops[0].color, prism_paint::csp_gradient::CspStopColor::Rgb([1.0, 0.0, 0.0]));
+    assert!(m.warnings.iter().any(|w| w.contains("Pen")), "a variant without gradient data is reported");
+    // Malformed inputs are errors, never panics.
+    let empty = database(&[("Material", "CREATE TABLE Material (MaterialName TEXT, MaterialToolVariantManager BLOB)", vec![])], false);
+    let broken = database(&[("Variant", "CREATE TABLE Variant (VariantID INTEGER, GradationData BLOB)", vec![vec![int(7), Value::Blob(vec![0, 0, 0, 16])]])], false);
+    for bytes in [empty, outer[..100].to_vec(), b"not a material".to_vec(), Vec::new(), broken] {
+        assert!(read(&bytes, &prism_raster::Interrupt::NONE).is_err());
+    }
+}

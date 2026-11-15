@@ -100,6 +100,11 @@ pub const LAYER_KINDS: [&str; 1] = ["image"];
 pub const ACTION_KINDS: [&str; 1] = ["auto_action"];
 /// Largest auto-action file read (the LAF reader's own limit).
 const ACTION_LIMIT: u64 = 8 << 20;
+/// The catalog's material kinds of gradients: one gradient sub-tool (`data/material_0.tool`)
+/// and a gradient set (`data/material_0.colorset`).
+pub const GRADIENT_KINDS: [&str; 2] = ["gradation", "gradation_set"];
+/// Largest gradient material file read.
+const GRADIENT_LIMIT: u64 = 8 << 20;
 
 /// One downloaded sub-tool material.
 #[derive(Clone, Debug, PartialEq)]
@@ -157,6 +162,23 @@ pub struct LibraryAction {
     pub favorite: bool,
 }
 
+/// One downloaded gradient material: it imports into the Gradients panel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryGradient {
+    pub uuid: String,
+    pub name: String,
+    /// One of [`GRADIENT_KINDS`].
+    pub kind: String,
+    /// The downloaded collection it belongs to (empty when unknown).
+    pub catalog: String,
+    pub status: Status,
+    pub thumbnail: Option<PathBuf>,
+    pub tags: Vec<String>,
+    /// As [`LibraryBrush::folders`].
+    pub folders: Vec<String>,
+    pub favorite: bool,
+}
+
 /// One downloaded collection (catalog) and its cover image (`thumbnail/catalogThumb.png`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Catalog {
@@ -175,6 +197,8 @@ pub struct Library {
     pub layers: Vec<LibraryLayer>,
     /// Downloaded auto-action sets, in catalog order.
     pub actions: Vec<LibraryAction>,
+    /// Downloaded gradients and gradient sets, in catalog order.
+    pub gradients: Vec<LibraryGradient>,
     /// The collections the brushes and layer materials belong to, in catalog order.
     pub catalogs: Vec<Catalog>,
     /// Folder-wide notices (license terms, stale snapshot, missing PAINT data).
@@ -249,8 +273,23 @@ pub fn list(root: &Path) -> Result<Library> {
             favorite: e.favorite,
         })
         .collect();
+    let gradients = snap
+        .gradient_entries
+        .iter()
+        .map(|e| LibraryGradient {
+            uuid: e.uuid.clone(),
+            name: e.name.clone(),
+            kind: e.kind.clone(),
+            catalog: e.catalog.clone(),
+            status: snap.gradient_status(e),
+            thumbnail: image(format!("{}:thumbnail:thumbnail.png", e.folder())),
+            tags: e.tags.clone(),
+            folders: e.folders.clone(),
+            favorite: e.favorite,
+        })
+        .collect();
     let mut catalogs: Vec<Catalog> = Vec::new();
-    for e in snap.entries.iter().chain(&snap.layer_entries).chain(&snap.action_entries).filter(|e| !e.catalog.is_empty()) {
+    for e in snap.entries.iter().chain(&snap.layer_entries).chain(&snap.action_entries).chain(&snap.gradient_entries).filter(|e| !e.catalog.is_empty()) {
         if !catalogs.iter().any(|c| c.name == e.catalog) {
             catalogs.push(Catalog {
                 name: e.catalog.clone(),
@@ -259,7 +298,7 @@ pub fn list(root: &Path) -> Result<Library> {
             });
         }
     }
-    Ok(Library { root: root.to_path_buf(), brushes, layers, actions, catalogs, notices: snap.notices })
+    Ok(Library { root: root.to_path_buf(), brushes, layers, actions, gradients, catalogs, notices: snap.notices })
 }
 
 /// Largest preview image read by [`thumbnail_bytes`].
@@ -335,6 +374,20 @@ pub fn action_bytes(root: &Path, uuid: &str) -> Result<(String, Vec<u8>)> {
     Ok((entry.name.clone(), read_limited(&path, ACTION_LIMIT)?))
 }
 
+/// One downloaded gradient material by material UUID: its name, its collection and its
+/// gradients ([`super::gradient_material::read`]).
+pub fn import_gradients(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) -> Result<(String, String, super::gradient_material::GradientMaterial)> {
+    let snap = Snapshot::read(root)?;
+    let entry = snap.gradient_entries.iter().find(|e| e.uuid == uuid).ok_or_else(|| format!("no downloaded CLIP STUDIO gradient has the id {uuid}"))?;
+    let status = snap.gradient_status(entry);
+    if !matches!(status, Status::Ready(_)) {
+        return Err(format!("{}: {}", entry.name, status.guidance().unwrap_or("not ready")));
+    }
+    let path = snap.gradient_file(entry).ok_or("the downloaded gradient file is no longer available; refresh and try again")?;
+    let material = super::gradient_material::read(&read_limited(&path, GRADIENT_LIMIT)?, ctl).map_err(|e| format!("{}: {e}", entry.name))?;
+    Ok((entry.name.clone(), entry.catalog.clone(), material))
+}
+
 /// Read a layer material file (`data/material_0.layer`), or the material folder holding one.
 /// The material's `icedata/layerData.xml` beside `data/` is read when present.
 pub fn read_layer_file(path: &Path, ctl: &prism_raster::Interrupt) -> Result<(LayerMaterial, MaterialInfo)> {
@@ -380,6 +433,7 @@ struct Snapshot {
     entries: Vec<Entry>,
     layer_entries: Vec<Entry>,
     action_entries: Vec<Entry>,
+    gradient_entries: Vec<Entry>,
     caches: Vec<(CacheSource, Vec<Row>, Vec<Row>)>,
     notices: Vec<String>,
 }
@@ -442,6 +496,7 @@ impl Snapshot {
         let entries = catalog_entries(&modifiers, &meta, &tags, &folders, &TOOL_KINDS);
         let layer_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &LAYER_KINDS);
         let action_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &ACTION_KINDS);
+        let gradient_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &GRADIENT_KINDS);
 
         let mut caches = Vec::new();
         match paint_folder(root) {
@@ -471,7 +526,7 @@ impl Snapshot {
         if stale {
             notices.push("CLIP STUDIO appears to be running or has unsaved database changes; the newest downloads may be missing until it is closed".into());
         }
-        Ok(Self { materials: root.join(MATERIALS), entries, layer_entries, action_entries, caches, notices })
+        Ok(Self { materials: root.join(MATERIALS), entries, layer_entries, action_entries, gradient_entries, caches, notices })
     }
 
     fn tool(&self, source: CacheSource, uuid: &str) -> Option<(&Row, &Row)> {
@@ -512,6 +567,22 @@ impl Snapshot {
             return Status::Downloading;
         }
         self.action_file(e).map_or(Status::Missing, |_| Status::Ready(CacheSource::MaterialFile))
+    }
+
+    fn gradient_status(&self, e: &Entry) -> Status {
+        if !e.local {
+            return Status::UnsupportedLocation;
+        }
+        if e.pending {
+            return Status::Downloading;
+        }
+        self.gradient_file(e).map_or(Status::Missing, |_| Status::Ready(CacheSource::MaterialFile))
+    }
+
+    fn gradient_file(&self, e: &Entry) -> Option<PathBuf> {
+        let root = std::fs::canonicalize(&self.materials).ok()?;
+        let file = if e.kind == "gradation_set" { "material_0.colorset" } else { "material_0.tool" };
+        resolve(&root, &format!("{}:data:{file}", e.folder())).ok()
     }
 
     fn action_file(&self, e: &Entry) -> Option<PathBuf> {
