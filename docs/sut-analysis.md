@@ -1096,7 +1096,26 @@ sample. Velocity input read through the size, CLIP STUDIO:
   units of coverage both; Prism 45.89 and 25.65). CLIP STUDIO appears to treat the pen-down
   sample's pressure as 0 (or not to read it); with stabilization that 0 is averaged into the
   first outputs. Measured with synthetic pens only, whose down frame carries the full pressure;
-  a real pen's down frame is usually light. Not modelled.
+  a real pen's down frame is usually light. Taps modelled since; see Pen-down pressure.
+
+**Pen-down pressure (same day).** Tried first: the pen-down sample of every pen stroke with a
+CLIP STUDIO brush at pressure 0. Taps then matched, but moving strokes did not:
+
+| Mean size difference from CLIP STUDIO at the start (px) | Before | Pen-down at 0 |
+| --- | ---: | ---: |
+| 7 unstabilized 밀리펜 starts (x 366–500) | 0.290 | 0.498 |
+| 6 stabilized pressure-only starts (x 372–468) | 0.175 | 0.383 |
+| 5 stabilized 밀리펜 starts (x 372–560) | 0.396 | 0.228 |
+
+Prism carries the 0 along the whole first segment (pressure is interpolated between samples,
+and the stabilizer's padding repeats the first sample), so an 8 px/ms stroke starts at 7.9 px
+where CLIP STUDIO starts at 9.4; stabilized, CLIP STUDIO is back to full pressure about two
+samples after pen-down where Prism's window needs four. Shipped instead: only a pen tap (a
+stroke that never moves) is drawn at no pressure, the canvas zeroing its single sample's pressure
+before the commit (`Drag::csp_pen`, set at pen-down for a CLIP STUDIO brush and a pen; a mouse
+click and a ⇧-click line keep theirs). In the app a tap at pressure 1 now covers 25.43 units
+(CLIP STUDIO 25.73, Prism before 45.89). How CLIP STUDIO weighs the pen-down sample in a moving
+stroke is open.
 
 ## Effector tilt response (2026-10-16)
 

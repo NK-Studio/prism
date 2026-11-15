@@ -133,6 +133,9 @@ pub struct Drag {
     /// every Move-tool drag with a selection does (`move_ui::moves_selected_pixels`).
     pub sel_move: Option<bool>,
     pub lasso: Option<crate::lasso_ui::Lasso>,
+    /// A pen stroke with a CLIP STUDIO brush: a tap is drawn at no pressure (see
+    /// `finish_gesture`).
+    pub csp_pen: bool,
 }
 
 impl Drag {
@@ -151,6 +154,7 @@ impl Drag {
             reposition: false,
             sel_move: None,
             lasso: None,
+            csp_pen: false,
         }
     }
 
@@ -3709,6 +3713,7 @@ pub fn tool_event(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) {
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
             let mut drag = Drag::new(tool, from.unwrap_or([x, y]), points, mods, erase);
             drag.connects_previous = from.is_some();
+            drag.csp_pen = from.is_none() && app.session.tools.brush.csp_correction && app.stylus.sample().is_some();
             // A ⇧-click connection is a straight line of its own; rulers snap freehand strokes.
             if from.is_none() && !mods.shift {
                 drag.ruler = crate::special_ruler_ui::snapper(app, tool, [x, y]);
@@ -3893,7 +3898,17 @@ pub(crate) fn finish_gesture(app: &mut PrismApp, d: Drag) {
         Tool::Type | Tool::VerticalType => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
         Tool::Brush | Tool::Pencil | Tool::Eraser => {
             let live = app.live_stroke.take();
-            let mut p = stroke_params(app, &d, &app.stylus.stroke_points(&d.points));
+            let mut points = d.points.clone();
+            // CLIP STUDIO draws a pen tap at no pressure: a tap at full pressure lays exactly the
+            // dot a tap at 0.02 lays (measured, docs/sut-analysis.md › Effector velocity input ›
+            // Pen-down pressure). Only a tap: on a moving stroke its start is not that thin.
+            if d.csp_pen
+                && points.iter().all(|p| p[0] == d.start[0] && p[1] == d.start[1])
+                && let Some(first) = points.first_mut()
+            {
+                first[2] = 0.0;
+            }
+            let mut p = stroke_params(app, &d, &app.stylus.stroke_points(&points));
             if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
                 p["seed"] = json!(seed);
             }
@@ -4574,6 +4589,43 @@ mod tests {
         // Transparency and points outside the canvas have nothing to compare.
         assert!(super::eyedropper_ring_colors(&mut app, 30.0, 10.0).is_none());
         assert!(super::eyedropper_ring_colors(&mut app, -1.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn a_csp_pen_tap_is_drawn_at_no_pressure() {
+        // The dab a tap leaves on a white document with a pressure-sized brush, as alpha summed.
+        let tap = |csp: bool, pen: bool, moved: bool| {
+            let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 60, "height": 40, "background": "transparent"})).unwrap();
+            app.ui.tool = Tool::Brush;
+            crate::paint_mouse::sync_tool_brush(&mut app);
+            let b = &mut app.session.tools.brush;
+            (b.size, b.hardness, b.csp_correction) = (20.0, 1.0, csp);
+            b.shape_dynamics.enabled = true;
+            b.shape_dynamics.size.control = prism_paint::brush::Control::PenPressure;
+            b.shape_dynamics.size.minimum = 0.5;
+            if pen {
+                app.stylus.feed.set(Some(crate::stylus::PenSample { pressure: 1.0, ..Default::default() }));
+            }
+            tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            if moved {
+                tool_event(&mut app, ToolEvent::Move { x: 21.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            }
+            assert!(app.drag.as_ref().is_some_and(|d| d.csp_pen == (csp && pen)));
+            tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, egui::Modifiers::NONE);
+            let mut alpha = 0.0;
+            for y in 0..40 {
+                for x in 0..60 {
+                    let v = app.run("document.pixel", json!({"x": x, "y": y})).unwrap();
+                    alpha += serde_json::from_value::<Vec<f32>>(v).unwrap()[3];
+                }
+            }
+            alpha
+        };
+        let (full, light) = (tap(false, true, false), tap(true, true, false));
+        assert!(light < full * 0.5, "a CSP pen tap is the small dot: {light} vs {full}");
+        assert!((tap(true, false, false) - full).abs() < 1.0, "a mouse click keeps its pressure");
+        assert!(tap(true, true, true) > full * 0.9, "a stroke that moved keeps its first pressure");
     }
 
     #[test]
