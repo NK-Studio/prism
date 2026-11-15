@@ -50,8 +50,8 @@ commands:
   release start X.Y.Z | status [--json] | check | done [--note T] | skip | back
                   local release conveyor belt (packaging/release/pipeline.json,
                   progress in log/release/state.json; see xtask/src/release.rs)
-  update keygen --secret PATH | update publish --site DIR --base-url URL [...]
-                  in-app update signing keys, and the signed update feed for the Vercel site
+  update keygen --secret PATH | update publish --site DIR [--packages-url URL] [...]
+                  in-app update signing keys, and the signed update feed for the Cloudflare site
                   (see xtask/src/update.rs)
   brush-compare <jsx|render|diff|all> [--out DIR] [--cases FILE] [--only ID,...]
                   brush engine vs Photoshop: generate the Photoshop script, render the same cases

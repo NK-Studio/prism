@@ -1,1 +1,1 @@
-https://prism-updates.vercel.app/stable/latest.json
+https://prism-updates.a62201631.workers.dev/stable/latest.json

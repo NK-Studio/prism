@@ -54,10 +54,14 @@ previous step (repeat to go further back).
   downloaded from the web is blocked by Gatekeeper. Once users have a Developer ID–signed build,
   later updates must use the same Team ID or Prism refuses them.
 - Publishing the update: RustRover "Prism Publish Update (dry run)" then "Prism Publish Update",
-  or `packaging/publish-update.sh`. It signs with `~/prism-update.key`, force-pushes a single
-  commit to NK-Studio/prism-updates (pushing with the `NK-Studio` gh account) and waits for
-  https://prism-updates.vercel.app/stable/latest.json to report the version. The site keeps the
-  newest three versions.
+  or `packaging/publish-update.sh`. It signs with `~/prism-update.key`, uploads the `.app.zip` /
+  `.msi` update packages (never the `.dmg`) to the GitHub Release `v<version>` of NK-Studio/prism
+  (creating it from the pushed tag), force-pushes a single commit to NK-Studio/prism-updates (as
+  the `NK-Studio` gh account) and waits for the feed on Cloudflare
+  (https://prism-updates.a62201631.workers.dev/stable/latest.json) to report the version. The
+  packages are on GitHub because Cloudflare's static assets stop at 25 MiB per file.
+- 1.2.0 reads the old Vercel feed, which no longer exists: for the first release after 1.2.0, skip
+  `check-update` and tell users to install it by hand.
 - The first release that contains in-app updates can't reach anyone through the updater: skip
   `check-update` for it and tell users to install it by hand.
 - Details: docs/releasing.md › In-app updates.
