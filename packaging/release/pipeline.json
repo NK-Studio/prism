@@ -59,24 +59,18 @@
       "verify": [{ "kind": "command", "run": "git rev-parse -q --verify refs/tags/v{version}" }]
     },
     {
-      "id": "confluence",
-      "title": "Share the installer on Confluence",
-      "do": [
-        "Attach dist/release/prism-{version}-macos-aarch64.dmg (and the .msi, if built) to the internal Confluence download page. First-time installs come only from there; it is not public.",
-        "Note on the page: Apple silicon Macs only; with an ad-hoc signed build, open it the first time with right-click › Open.",
-        "Copies that already have in-app updates don't need it: the next step reaches them."
-      ],
-      "verify": []
-    },
-    {
       "id": "publish-feed",
-      "title": "Publish the in-app update",
+      "title": "Publish the release and the in-app update",
       "do": [
-        "RustRover: run \"Prism Publish Update (dry run)\" and check the printed feed, then run \"Prism Publish Update\".",
+        "RustRover: run \"Prism Publish Update (dry run)\" and check the printed feed and file list, then run \"Prism Publish Update\".",
         "Terminal: `packaging/publish-update.sh` (add `--min-supported X.Y.Z` to send older versions to a manual download).",
-        "It signs the feed with ~/prism-update.key, uploads the .app.zip/.msi update packages (never the .dmg) to the GitHub Release v{version} (creating it from the tag), pushes NK-Studio/prism-updates and waits until Cloudflare serves {version}."
+        "It signs the feed with ~/prism-update.key, uploads the .app.zip/.msi update packages and the first-install .dmg to the public GitHub Release v{version} (creating it from the tag, with packaging/release/notes.md as its notes), pushes NK-Studio/prism-updates and waits until Cloudflare serves {version}.",
+        "New users install from that release: https://github.com/NK-Studio/prism/releases/tag/v{version} (open the DMG, drag Prism onto Applications)."
       ],
-      "verify": [{ "kind": "urlJson", "url": "https://prism-updates.a62201631.workers.dev/stable/latest.json", "field": "version", "equals": "{version}" }]
+      "verify": [
+        { "kind": "urlJson", "url": "https://prism-updates.a62201631.workers.dev/stable/latest.json", "field": "version", "equals": "{version}" },
+        { "kind": "command", "run": "gh release view v{version} --repo NK-Studio/prism --json assets --jq '.assets[].name' | grep '^prism-{version}-macos-.*[.]dmg$'" }
+      ]
     },
     {
       "id": "check-update",

@@ -48,15 +48,17 @@ previous step (repeat to go further back).
 - Builds are local (GitHub Actions is off for billing reasons). macOS is Apple silicon only:
   RustRover "Prism Package (macOS)" with ▶ (the hammer only builds the binary) or
   `packaging/macos/package.sh --arch aarch64`. Windows needs a Windows PC (`packaging/windows/package.ps1`).
-- First-time installers (.dmg) are shared only on the internal Confluence page, never publicly.
-  The `confluence` step has no automatic check: mark it done when the maintainer says it's attached.
+- First-time installs come from the public GitHub Release `v<version>` of NK-Studio/prism: the
+  `.dmg` (open it, drag Prism onto Applications), like Ramus. `publish-feed` uploads it together
+  with the update packages and checks it's on the release.
 - Without Developer ID secrets the app is ad-hoc signed: in-app updates work, but a .dmg
-  downloaded from the web is blocked by Gatekeeper. Once users have a Developer ID–signed build,
+  downloaded from the web is blocked by Gatekeeper the first time (System Settings › Privacy &
+  Security › Open Anyway; the release notes say so). Once users have a Developer ID–signed build,
   later updates must use the same Team ID or Prism refuses them.
-- Publishing the update: RustRover "Prism Publish Update (dry run)" then "Prism Publish Update",
+- Publishing: RustRover "Prism Publish Update (dry run)" then "Prism Publish Update",
   or `packaging/publish-update.sh`. It signs with `~/prism-update.key`, uploads the `.app.zip` /
-  `.msi` update packages (never the `.dmg`) to the GitHub Release `v<version>` of NK-Studio/prism
-  (creating it from the pushed tag), force-pushes a single commit to NK-Studio/prism-updates (as
+  `.msi` update packages and the `.dmg` installer to the GitHub Release `v<version>` of NK-Studio/prism
+  (creating it from the pushed tag, notes from `packaging/release/notes.md`), force-pushes a single commit to NK-Studio/prism-updates (as
   the `NK-Studio` gh account) and waits for the feed on Cloudflare
   (https://prism-updates.a62201631.workers.dev/stable/latest.json) to report the version. The
   packages are on GitHub because Cloudflare's static assets stop at 25 MiB per file.
