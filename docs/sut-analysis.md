@@ -1069,6 +1069,32 @@ each brush, CLIP STUDIO / Prism:
   drop give the 0.40 px. Both need a stroke that separates them better, such as a 4 px/ms stroke
   twice as long (the window full well before the lift) and a fast stroke that lifts at once.
 
+**Stabilized velocity, revised (same day).** Read per stabilized sample, CLIP STUDIO's velocity
+input over the pen's own speed follows how fast the window grows (`dW` per input), not the
+window: about 1 while `dW` = 0.5 (up to a window of 8.5 at level 15), rising as the growth slows
+(at 2 px/ms: 1.11 at `dW` 0.35, 1.18 at 0.23, 1.24 at 0), flat once the window is full. The
+stabilized path, timed by the raw input, moves at `1 − dW/2` of the pen: 0.75 while the window
+grows by half a sample. So the input is the path's speed over raw time divided by 0.75. Fitted
+per sample over all eleven velocity-only strokes (mean `|Δv|`):
+
+| Velocity input | All | 0.5 → 8 ramp | 8 px/ms, 5 samples | 2 px/ms, 55 samples |
+| --- | ---: | ---: | ---: | ---: |
+| raw speeds weighted `(level − k) / level` (shipped before) | 0.028 | 0.014 | 0.158 | 0.068 |
+| stabilized path over raw time | 0.052 | 0.024 | 0.279 | 0.092 |
+| stabilized path over raw time ÷ 0.75 | 0.015 | 0.009 | 0.073 | 0.028 |
+
+Prism: `Stabilizer::speed` is now the two-segment speed of the stabilized outputs over their raw
+input times, divided by `PATH_SPEED_SCALE` (0.75), held from pen-up. Why CLIP STUDIO divides by
+0.75 is not known; it is measured at level 15 with 8 ms input only (Adjust by speed and sparse
+input untested). In the app, mean size difference from CLIP STUDIO:
+
+| Strokes | Before | After |
+| --- | ---: | ---: |
+| 6 long velocity-only (to the lift) | 0.277 | 0.129 |
+| 5 velocity-only | 0.089 | 0.080 |
+| 5 밀리펜 | 0.204 | 0.074 |
+| 5 pressure-only (unchanged path) | 0.101 | 0.097 |
+
 **Longer strokes (measured the same day).** The single-input copies of 밀리펜 again (deleted
 afterwards), stabilization 15, six strokes: 2 px/ms for 55 and for 25 samples, 1 px/ms for 55,
 3 px/ms for 37, 4 px/ms for 25 and 8 px/ms for 5. The window is full (15) from about the 43rd

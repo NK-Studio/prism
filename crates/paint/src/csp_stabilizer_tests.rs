@@ -253,45 +253,30 @@ fn pen_up_catch_up_drains_pressure_and_keeps_moving_in_time() {
 }
 
 #[test]
-fn velocity_input_rises_sooner_than_the_path_and_holds_at_pen_up() {
-    let cfg = CspStabilizer { level: 15, ..Default::default() };
+fn velocity_input_reads_the_pen_while_the_window_grows_and_4_3_of_it_once_full() {
     // Off: no velocity input of its own.
     let mut off = Stabilizer::new(&CspStabilizer::default(), 1.0);
     off.push(pt(0.0, 0.0, 1.0, 0.0));
     assert_eq!(off.speed(), None);
-    // 60 samples at 0.5 px/ms, then 9 at 8 px/ms (CLIP STUDIO's slow → fast stroke).
-    let mut s = Stabilizer::new(&cfg, 1.0);
-    let (mut x, mut out) = (0.0, Vec::new());
-    for i in 0..70 {
-        if i > 0 {
-            x += if i <= 60 { 4.0 } else { 64.0 };
-        }
-        out.push(s.push(pt(x, 0.0, 1.0, f64::from(i) * 8.0)));
+    // A steady 4 px/ms pen, level 15: the window grows by half a sample per input to 8.5, so the
+    // path moves at 3 px/ms and the input reads 4; once the window is full the path moves at
+    // 4 px/ms and the input reads 16/3 (CLIP STUDIO: 0.42 → 0.49 of full speed).
+    let mut s = Stabilizer::new(&CspStabilizer { level: 15, ..Default::default() }, 1.0);
+    let mut seen = Vec::new();
+    for i in 0..60 {
+        s.push(pt(f64::from(i) * 32.0, 0.0, 1.0, f64::from(i) * 8.0));
+        seen.push((s.window, s.speed().unwrap()));
     }
-    let speed = s.speed().unwrap();
-    // The raw speeds weighted (15 − k) / 15 by age: the 9 fast samples hold 0.8 of the weight
-    // (the first fast point's two-segment speed is 4.25).
-    let w = |k: usize| (15.0 - k as f64) / 15.0;
-    let total: f64 = (0..15).map(w).sum();
-    let expected = ((0..8).map(|k| 8.0 * w(k)).sum::<f64>() + 4.25 * w(8) + (9..15).map(|k| 0.5 * w(k)).sum::<f64>()) / total;
-    assert!((speed - expected).abs() < 1e-9, "{speed} vs {expected}");
-    // The stabilized path moves slower than that: a uniform window has let in 9/15 of the step.
-    let path = (out[69].x - out[68].x) / (out[69].time - out[68].time);
-    assert!(path < speed - 1.0, "path {path} px/ms, input {speed}");
+    let growing = seen.iter().filter(|(w, _)| (4.0..8.5).contains(w));
+    assert!(growing.clone().count() > 3 && growing.clone().all(|(_, v)| (v - 4.0).abs() < 0.03), "{seen:?}");
+    let full = seen.iter().filter(|(w, _)| *w >= 15.0).skip(2);
+    assert!(full.clone().count() > 3 && full.clone().all(|(_, v)| (v - 16.0 / 3.0).abs() < 0.03), "{seen:?}");
     // Pen-up: the catch-up holds the value.
+    let held = s.speed();
     let mut tail = Vec::new();
     s.finish(&mut tail);
     assert!(!tail.is_empty());
-    assert_eq!(s.speed(), Some(speed));
-}
-
-#[test]
-fn velocity_input_follows_a_steady_pen() {
-    let mut s = Stabilizer::new(&CspStabilizer { level: 10, ..Default::default() }, 1.0);
-    for i in 0..40 {
-        s.push(pt(f64::from(i) * 24.0, 0.0, 1.0, f64::from(i) * 8.0));
-    }
-    assert!((s.speed().unwrap() - 3.0).abs() < 1e-9, "{:?}", s.speed());
+    assert_eq!(s.speed(), held);
     // Untimed input reads rest, not infinity.
     let mut untimed = Stabilizer::new(&CspStabilizer { level: 10, ..Default::default() }, 1.0);
     for i in 0..10 {
