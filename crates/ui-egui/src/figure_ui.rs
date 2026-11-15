@@ -4,7 +4,10 @@
 //! joints show as dots, and a hand's finger joints too once that hand is [`FINGER_HAND_MIN`]
 //! screen points long (zoom in on it). Drag a dot: turn the bone ending there in the picture plane
 //! (⇧: twist it about itself; ⌘/Ctrl on a hand, a foot or a fingertip: reach it there with
-//! two-bone IK). Drag anywhere else:
+//! two-bone IK). A click (no drag) on a hand's dot or one of its fingers picks that hand: hand pose
+//! materials and Properties › Hand Pose then go to it alone, as with a hand selected in CLIP
+//! STUDIO; a click elsewhere, or on another joint, drops the pick (both hands again). Drag anywhere
+//! else:
 //! orbit the camera (⇧: move the figures, ⌥: dolly). Every move runs one `layer.figure.*` command
 //! with `draft: true` under one `coalesce` key, and the release re-renders at full quality into
 //! the same history step, so a gesture undoes in one go and replays like any command.
@@ -30,6 +33,9 @@ const ORBIT_PER_POINT: f64 = 0.4;
 const DOLLY_PER_POINT: f64 = 0.005;
 /// Twist per screen point dragged (degrees).
 const TWIST_PER_POINT: f64 = 0.6;
+/// The pointer must travel this many screen points before a press becomes a drag; less is a
+/// click.
+const DRAG_START: f64 = 3.0;
 /// A hand's finger joints get handles once the hand (wrist to the farthest fingertip) is this
 /// many screen points long: then neighbouring knuckles sit about 6 points apart.
 pub const FINGER_HAND_MIN: f64 = 90.0;
@@ -73,6 +79,65 @@ pub struct FigureDrag {
     last: [f64; 2],
     key: String,
     moved: bool,
+    /// Where the press was, and the dot under it (figure, joint).
+    start: [f64; 2],
+    grabbed: Option<(usize, String)>,
+}
+
+/// A picked hand: which figure of which layer, and which side.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandPick {
+    #[serde(serialize_with = "layer_id")]
+    pub layer: LayerId,
+    pub figure: usize,
+    pub left: bool,
+}
+
+fn layer_id<S: serde::Serializer>(id: &LayerId, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_u64(id.0)
+}
+
+impl HandPick {
+    pub fn side(&self) -> &'static str {
+        if self.left { "left" } else { "right" }
+    }
+}
+
+/// The hand picked on layer `layer`, if it still names one of its figures.
+pub fn picked_hand(app: &PrismApp, layer: LayerId) -> Option<HandPick> {
+    let pick = app.figure_hand.clone().filter(|p| p.layer == layer)?;
+    let st = app.session.active()?;
+    let scene = figure_layer(&st.doc, layer)?.figure.as_ref()?;
+    (pick.figure < scene.figures.len()).then_some(pick)
+}
+
+/// `Some(left)` when `joint` is a hand or one of its fingers.
+fn hand_of(joint: &str) -> Option<bool> {
+    let n = joint.to_ascii_lowercase();
+    if let Some((hand, _)) = finger_joint(&n) {
+        return Some(hand.starts_with("left"));
+    }
+    match n.as_str() {
+        "lefthand_bb_" => Some(true),
+        "righthand_bb_" => Some(false),
+        _ => None,
+    }
+}
+
+/// A click on the editor: pick the hand under it, or drop the pick.
+fn click(app: &mut PrismApp, layer: LayerId, grabbed: Option<(usize, String)>) {
+    let pick = grabbed.and_then(|(figure, joint)| hand_of(&joint).map(|left| HandPick { layer, figure, left }));
+    if pick == app.figure_hand || (pick.is_none() && app.figure_hand.is_none()) {
+        return;
+    }
+    app.ui.status = match &pick {
+        Some(p) if p.left => tl!("Left hand picked: hand poses and Hand Pose go to it; click elsewhere for both hands").to_string(),
+        Some(_) => tl!("Right hand picked: hand poses and Hand Pose go to it; click elsewhere for both hands").to_string(),
+        None => tl!("Both hands").to_string(),
+    };
+    app.ui.status_error = false;
+    app.figure_hand = pick;
 }
 
 /// `Some((hand, segment))` for a finger joint such as `lefthandindex3_bb_`: the hand joint's name
@@ -218,7 +283,9 @@ pub fn pointer(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) -> bool
             let Some(layer) = app.session.active().and_then(|st| st.active_layer) else { return false };
             let zoom = f64::from(app.current_zoom());
             let all = current(app);
-            let mode = match at(&all, [x, y], zoom) {
+            let under = at(&all, [x, y], zoom);
+            let grabbed = under.as_ref().map(|h| (h.figure, h.joint.clone()));
+            let mode = match under {
                 Some(h) if h.end && mods.command => Mode::Reach { figure: h.figure, joint: h.joint },
                 Some(h) => {
                     let Some(parent) = h.parent.clone() else { return false };
@@ -239,7 +306,7 @@ pub fn pointer(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) -> bool
                 None => Mode::Orbit,
             };
             app.figure_seq = app.figure_seq.wrapping_add(1);
-            app.figure_drag = Some(FigureDrag { mode, layer, last: [x, y], key: format!("figure-{}", app.figure_seq), moved: false });
+            app.figure_drag = Some(FigureDrag { mode, layer, last: [x, y], key: format!("figure-{}", app.figure_seq), moved: false, start: [x, y], grabbed });
             true
         }
         ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => {
@@ -247,6 +314,15 @@ pub fn pointer(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) -> bool
             let up = matches!(ev, ToolEvent::Up { .. });
             let zoom = f64::from(app.current_zoom());
             let moved = (x - drag.last[0]).abs() > 1e-9 || (y - drag.last[1]).abs() > 1e-9;
+            // Within a few points of the press it is still a click: nothing moves yet.
+            let clicking = !drag.moved && (x - drag.start[0]).hypot(y - drag.start[1]) * zoom.max(1e-3) < DRAG_START;
+            if clicking {
+                if up {
+                    app.figure_drag = None;
+                    click(app, drag.layer, drag.grabbed);
+                }
+                return true;
+            }
             if moved && let Some((cmd, p)) = step(&drag, [x, y], zoom, !up) {
                 match app.run(cmd, p) {
                     Ok(_) => {
@@ -301,13 +377,21 @@ pub fn draw(app: &PrismApp, painter: &egui::Painter, xf: &crate::canvas::ViewXfo
         Mode::Reach { figure, joint } => Some((*figure, joint.clone(), false)),
         _ => None,
     });
+    // The picked hand: a ring round its wrist, its finger dots filled.
+    let picked = app.session.active().and_then(|st| st.active_layer).and_then(|l| picked_hand(app, l));
+    let in_pick = |h: &Handle| picked.as_ref().is_some_and(|p| p.figure == h.figure && hand_of(&h.joint) == Some(p.left));
+    if let Some(p) = &picked
+        && let Some(w) = all.iter().find(|h| h.figure == p.figure && h.joint.eq_ignore_ascii_case(&format!("{}hand_bb_", p.side())))
+    {
+        painter.circle_stroke(xf.to_screen(w.x as f32, w.y as f32), 10.0, Stroke::new(2.0, color));
+    }
     // Far dots first, so the ones in front are drawn over them.
     let mut order: Vec<&Handle> = all.iter().collect();
     order.sort_by(|a, b| b.depth.total_cmp(&a.depth));
     for h in order {
         let at = xf.to_screen(h.x as f32, h.y as f32);
         let grabbed = hot.as_ref().is_some_and(|(f, n, by_parent)| *f == h.figure && if *by_parent { h.parent.as_ref() == Some(n) } else { &h.joint == n });
-        let fill = if grabbed { color } else { Color32::WHITE };
+        let fill = if grabbed || in_pick(h) { color } else { Color32::WHITE };
         let r = match (h.finger, h.end) {
             (true, true) => 3.0,
             (true, false) => 2.5,
@@ -321,6 +405,11 @@ pub fn draw(app: &PrismApp, painter: &egui::Painter, xf: &crate::canvas::ViewXfo
 /// What agents see of the editor (`ui.inspect` › `figureHandles`).
 pub fn inspect(app: &PrismApp) -> Value {
     json!(current(app))
+}
+
+/// The picked hand for `ui.inspect` › `figureHand` (`null` when both hands).
+pub fn inspect_pick(app: &PrismApp) -> Value {
+    app.session.active().and_then(|st| st.active_layer).and_then(|l| picked_hand(app, l)).map_or(Value::Null, |p| json!(p))
 }
 
 /// Run a Properties edit: live drafts while a slider drags, the final render on release.
@@ -475,9 +564,14 @@ pub fn pad_state(ctx: &egui::Context, layer: u64) -> HandPad {
     ctx.data(|d| d.get_temp::<HandPad>(pad_id(layer))).unwrap_or_default()
 }
 
-/// Run the hand setup; `draft` while the pad drags, under the gesture's one history step.
+/// Run the hand setup; `draft` while the pad drags, under the gesture's one history step. A hand
+/// picked on the canvas narrows it to that figure's hand.
 fn run_hand(app: &mut PrismApp, pad: &HandPad, layer: u64, draft: bool) {
     let mut p = pad.params(layer);
+    if let Some(pick) = picked_hand(app, LayerId(layer)) {
+        p["figure"] = json!(pick.figure);
+        p["side"] = json!(pick.side());
+    }
     p["coalesce"] = json!(format!("figure-hand-{layer}-{}", pad.seq));
     p["draft"] = json!(draft);
     if let Err(e) = app.run("layer.figure.setHand", p) {
@@ -496,10 +590,18 @@ fn hand_section(app: &mut PrismApp, ui: &mut egui::Ui, layer: u64) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut pad = pad_state(ui.ctx(), layer);
     let before = pad;
+    // A hand picked on the canvas decides the side (and the figure).
+    let pick = picked_hand(app, LayerId(layer));
+    let side_now = pick.as_ref().map_or(pad.side, |p| if p.left { 1 } else { 2 });
     ui.horizontal_wrapped(|ui| {
         for (k, (_, label)) in SIDES.iter().enumerate() {
-            if widgets::pill_tab(ui, hand_label(label), pad.side == k).clicked() {
+            if widgets::pill_tab(ui, hand_label(label), side_now == k).clicked() {
                 pad.side = k;
+                // Choosing here replaces the canvas pick: one side of the same figure, or both.
+                app.figure_hand = match (&pick, k) {
+                    (Some(p), 1 | 2) => Some(HandPick { left: k == 1, ..p.clone() }),
+                    _ => None,
+                };
             }
         }
     });

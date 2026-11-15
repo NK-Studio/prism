@@ -527,15 +527,8 @@ fn add_poses(app: &mut PrismApp, uuids: &[String], at: Option<[f64; 2]>) {
 
 /// Hand poses onto the active 3D figure layer, or a new one with Prism's figure.
 fn apply_hand_poses(app: &mut PrismApp, uuids: &[String], at: Option<[f64; 2]>) {
-    let on_figure = app.session.active().and_then(|st| st.active_layer.and_then(|l| crate::figure_ui::figure_layer(&st.doc, l))).is_some();
-    let mut p = json!({ "uuids": uuids });
-    if let Some(root) = &app.ui.csp_library.root {
-        p["root"] = json!(root);
-    }
-    if let Some(at) = at {
-        p["at"] = json!(at);
-    }
-    let cmd = if on_figure { "layer.figure.applyHandPose" } else { "layer.figure.new" };
+    let (cmd, p) = hand_pose_command(app, uuids, at);
+    let on_figure = cmd == "layer.figure.applyHandPose";
     match app.run(cmd, p) {
         Ok(_) => {
             app.ui.status = if on_figure { tl!("Posed the hands; refine fingers with the Move tool").to_string() } else { tl!("Added a 3D figure layer with this hand pose").to_string() };
@@ -544,6 +537,30 @@ fn apply_hand_poses(app: &mut PrismApp, uuids: &[String], at: Option<[f64; 2]>) 
         }
         Err(e) => notices::error(app, format!("{}: {e}", tl!("Not added"))),
     }
+}
+
+/// The command that puts hand poses `uuids` on the document, and its params: onto the active 3D
+/// figure layer's hand picked on the canvas, else the figure nearest `at` (both hands), else a
+/// new figure layer.
+fn hand_pose_command(app: &PrismApp, uuids: &[String], at: Option<[f64; 2]>) -> (&'static str, Value) {
+    let on_figure = app.session.active().and_then(|st| st.active_layer.and_then(|l| crate::figure_ui::figure_layer(&st.doc, l))).is_some();
+    let mut p = json!({ "uuids": uuids });
+    if let Some(root) = &app.ui.csp_library.root {
+        p["root"] = json!(root);
+    }
+    if let Some(at) = at {
+        p["at"] = json!(at);
+    }
+    // A hand picked on the canvas takes the pose alone, as in CLIP STUDIO.
+    let pick = app.session.active().and_then(|st| st.active_layer).and_then(|l| crate::figure_ui::picked_hand(app, l));
+    if on_figure && let Some(pick) = pick {
+        p["figure"] = json!(pick.figure);
+        p["side"] = json!(pick.side());
+        if let Some(o) = p.as_object_mut() {
+            o.remove("at");
+        }
+    }
+    (if on_figure { "layer.figure.applyHandPose" } else { "layer.figure.new" }, p)
 }
 
 /// Import colour sets into the Swatches panel, one group each, and show it.

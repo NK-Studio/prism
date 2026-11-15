@@ -635,3 +635,21 @@ fn hand_poses_go_onto_the_active_figure_layer() {
     assert_eq!(a.session.active().unwrap().doc.layers.len(), layers, "no new layer for a hand pose");
     assert_eq!(a.ui.csp_library.selected, vec!["h1".to_string()]);
 }
+
+#[test]
+fn a_picked_hand_takes_the_hand_pose_alone() {
+    let mut a = super::tests::app();
+    a.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let ids = vec!["h1".to_string()];
+    assert_eq!(hand_pose_command(&a, &ids, None).0, "layer.figure.new", "no figure layer: a new one");
+    a.run("layer.figure.new", json!({})).unwrap();
+    let (cmd, p) = hand_pose_command(&a, &ids, Some([10.0, 20.0]));
+    assert_eq!(cmd, "layer.figure.applyHandPose");
+    assert_eq!(p["at"], json!([10.0, 20.0]));
+    assert!(p.get("side").is_none(), "both hands of the figure nearest the drop");
+    let layer = a.session.active().unwrap().active_layer.unwrap();
+    a.figure_hand = Some(crate::figure_ui::HandPick { layer, figure: 0, left: false });
+    let (_, p) = hand_pose_command(&a, &ids, Some([10.0, 20.0]));
+    assert_eq!((p["side"].as_str(), p["figure"].as_u64()), (Some("right"), Some(0)));
+    assert!(p.get("at").is_none(), "the pick wins over the drop point");
+}
