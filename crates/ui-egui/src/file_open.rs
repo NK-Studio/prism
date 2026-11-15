@@ -52,6 +52,9 @@ impl PrismApp {
         if let Some(r) = crate::preset_files_ui::open(self, path, bytes) {
             return r.map(|()| Vec::new());
         }
+        if prism_io::model::is_model_name(path) {
+            return self.open_model(path, bytes, Some(path.to_string()));
+        }
         if self.background_jobs {
             // The path and Open Recent are recorded when the background open finishes.
             crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), crate::jobs_ui::bytes(bytes))?;
@@ -88,6 +91,10 @@ impl PrismApp {
         // Documents opening in the background are read on the worker too (a 2 GB PSB read
         // would block the window). Preset files (brushes, gradients) go the usual way.
         let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if prism_io::model::is_model_name(path) {
+            let bytes = prism_format::read_file(std::path::Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+            return self.open_model(path, &bytes, Some(path.to_string()));
+        }
         if self.background_jobs && !crate::preset_files_ui::PRESET_EXTS.contains(&ext.as_str()) {
             crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), prism_engine::jobs::OpenSource::Path(path.to_string()))?;
             return Ok(Vec::new());
@@ -109,6 +116,16 @@ impl PrismApp {
             }
         }
         opened
+    }
+
+    /// A VRM / glTF character: a new document holding it in a 3D figure layer (the engine reads
+    /// it, with the file's folder for `.gltf` files that keep data beside them).
+    pub(crate) fn open_model(&mut self, name: &str, bytes: &[u8], path: Option<String>) -> Result<Vec<String>, String> {
+        prism_engine::file_cmds::open_bytes_as(&mut self.session, name, bytes, None, path).map_err(|e| e.to_string())?;
+        self.sync_views();
+        self.ui.status = tl!("Opened a 3D character: pose it with the Move tool").to_string();
+        self.ui.status_error = false;
+        Ok(Vec::new())
     }
 
     /// Show "Couldn't open <name>: <error>" as an error (status bar + notice).

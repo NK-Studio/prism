@@ -131,7 +131,7 @@ pub fn read_pep_any(bytes: &[u8]) -> Result<Pose> {
     let Some(left) = hand else {
         let [top] = tops.as_slice() else { return Err("CLIP STUDIO pose has more than one root joint".into()) };
         let root = joint(*top, 0, &mut count)?;
-        return Ok(Pose::Body(Figure { name: String::new(), source: None, root }));
+        return Ok(Pose::Body(Figure { name: String::new(), source: None, root, model: None }));
     };
     let name = format!("{}hand_bb_", if left { "left" } else { "right" });
     let mut hand = Joint { name: name.clone(), rotation: [1.0, 0.0, 0.0, 0.0], offset: [0.0; 3], children: Vec::new() };

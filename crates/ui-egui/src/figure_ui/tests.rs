@@ -245,3 +245,37 @@ fn clicking_a_hand_picks_it_for_hand_poses() {
     app.figure_pick = Some(FigurePick { layer: LayerId(9999), figure: 0, hand: Some(true) });
     assert!(picked(&app, layer).is_none());
 }
+
+/// A tiny glTF character (JSON, buffer inline): hips with a hair bone, a quad on the hips.
+fn tiny_character() -> Vec<u8> {
+    let floats = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let mut bin = floats(&[-0.2, 1.0, 0.0, 0.2, 1.0, 0.0, -0.2, 1.4, 0.0, 0.2, 1.4, 0.0]);
+    bin.extend([0u8, 0, 1, 0, 3, 0, 0, 0, 3, 0, 2, 0]);
+    let uri = format!("data:application/octet-stream;base64,{}", prism_paint::tile::b64_encode(&bin));
+    json!({
+        "asset": {"version": "2.0"},
+        "buffers": [{"uri": uri, "byteLength": bin.len()}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 48}, {"buffer": 0, "byteOffset": 48, "byteLength": 12}],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3"}, {"bufferView": 1, "componentType": 5123, "count": 6, "type": "SCALAR"}],
+        "nodes": [{"name": "Hips", "translation": [0.0, 1.0, 0.0], "children": [1, 2]}, {"name": "Hair", "translation": [0.0, 0.6, 0.0]}, {"name": "Body", "mesh": 0}],
+        "skins": [{"joints": [0, 1]}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],
+        "extensions": {"VRMC_vrm": {"humanoid": {"humanBones": {"hips": {"node": 0}}}}}
+    })
+    .to_string()
+    .into_bytes()
+}
+
+#[test]
+fn characters_open_and_show_only_their_humanoid_joints() {
+    let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+    app.open_bytes("tiny.gltf", &tiny_character()).unwrap();
+    app.ui.tool = Tool::Move;
+    let st = app.session.active().unwrap();
+    let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+    let f = &l.figure.as_ref().unwrap().figures[0];
+    assert!(f.model.is_some() && f.root.find("node:Hair").is_some());
+    let names: Vec<String> = current(&app).into_iter().map(|h| h.joint).collect();
+    assert!(names.contains(&"hips_bb_".to_string()), "{names:?}");
+    assert!(!names.iter().any(|n| n.starts_with("node:")), "hair bones get no dots: {names:?}");
+}

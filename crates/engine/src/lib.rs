@@ -60,6 +60,7 @@ mod laf_import_cmds;
 mod laf_mapping;
 pub mod csp_gradient_cmds;
 pub mod figure_cmds;
+pub mod figure_models;
 pub mod laf_step_cmds;
 pub mod layer_copy_cmds;
 pub mod layer_label_cmds;

@@ -354,6 +354,10 @@ fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Open a file's bytes, decoding them as the format `as_ext` (Open As) when given.
 pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&str>, path: Option<String>) -> Result<Value> {
+    // A 3D character (VRM / glTF) opens as a new document holding it in a 3D figure layer.
+    if as_ext.is_none() && prism_io::model::is_model_name(name) {
+        return open_model(s, name, bytes, path);
+    }
     let decode_name = match as_ext {
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
@@ -379,6 +383,20 @@ pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&
     Ok(json!({"document": i, "color": color, "warnings": r.warnings}))
 }
 
+/// A new document (portrait, white) with the character from a VRM / glTF file.
+fn open_model(s: &mut Session, name: &str, bytes: &[u8], path: Option<String>) -> Result<Value> {
+    // Parse first, so a bad file leaves no empty document behind.
+    let check = prism_io::model::read(&prism_io::model::self_contained(bytes, path.as_deref().map(std::path::Path::new).and_then(std::path::Path::parent)).map_err(EngineError::Other)?, &stem(name), None, &prism_raster::Interrupt::NONE)
+        .map_err(|e| EngineError::Other(format!("{}: {e}", file_name(name))))?;
+    s.execute("file.new", json!({"width": 1600, "height": 2000, "background": "white", "name": check.name}))?;
+    let params = match &path {
+        Some(p) => json!({"path": p}),
+        None => json!({"data": prism_paint::tile::b64_encode(bytes), "fileName": file_name(name)}),
+    };
+    let r = crate::figure_cmds::import_model(s, &params)?;
+    Ok(json!({"document": s.active_index(), "layer": r["layer"], "warnings": []}))
+}
+
 fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", "file.openAs")?.to_string();
     let bytes = read_file(&path)?;
@@ -395,6 +413,17 @@ pub const PLACE_EMBEDDED: &str = "Place Embedded";
 /// scaled down to fit, like Photoshop's Place with "Resize Image During Place". `linked` makes it
 /// a linked smart object that refers to that path instead of embedding the bytes.
 pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
+    // A 3D character goes in as a 3D figure layer, posable, not as a flat smart object.
+    if prism_io::model::is_model_name(name) {
+        let mut params = match &linked {
+            Some(path) => json!({"path": path}),
+            None => json!({"data": prism_paint::tile::b64_encode(&bytes), "fileName": file_name(name)}),
+        };
+        if let Some(c) = p.get("center") {
+            params["at"] = c.clone();
+        }
+        return crate::figure_cmds::import_model(s, &params);
+    }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let fmt = d.doc.pixel_format();
@@ -438,6 +467,14 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
 fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
     let cmd = if linked { "file.placeLinked" } else { "file.placeEmbedded" };
     let path = str_param(p, "path", cmd)?.to_string();
+    // A character file is read where it lies (a `.gltf` may keep data beside it).
+    if prism_io::model::is_model_name(&path) {
+        let mut params = json!({"path": path});
+        if let Some(c) = p.get("center") {
+            params["at"] = c.clone();
+        }
+        return crate::figure_cmds::import_model(s, &params);
+    }
     let bytes = read_file(&path)?;
     place_bytes(s, &path, bytes, linked.then(|| path.clone()), p)
 }

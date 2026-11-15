@@ -2,15 +2,20 @@
 //! into a surface of any colour model and depth, and the posing operations the editor uses.
 //!
 //! Rendering ray-casts Prism's own procedural mannequin ([`mannequin`]: capsules and
-//! ellipsoids, no meshes) for every pixel through the inverse of the scene's 2D placement, so a
-//! moved, scaled or rotated layer re-renders exactly, without resampling. 2×2 samples per pixel
-//! (one for drafts), Lambert + ambient gray shading, and lines where the depth jumps (silhouettes
-//! and limbs in front of the body). Row bands render in parallel.
+//! ellipsoids) for every pixel through the inverse of the scene's 2D placement, so a moved,
+//! scaled or rotated layer re-renders exactly, without resampling. Figures with a character
+//! model ([`mesh`], from VRM / glTF) draw its skinned mesh instead, rasterized onto the same
+//! sample points ([`raster`]). 2×2 samples per pixel (one for drafts), Lambert + ambient
+//! shading, and lines where the depth jumps (silhouettes and limbs in front of the body). Row
+//! bands render in parallel.
 pub mod camera;
 pub mod hand;
 pub mod ik;
 pub mod mannequin;
 pub mod math;
+pub mod mesh;
+pub(crate) mod raster;
+pub mod retarget;
 pub mod skeleton;
 pub mod trace;
 
@@ -21,7 +26,12 @@ use prism_color::PixelFormat;
 use prism_doc::figure::{Figure, FigureCamera, FigureScene};
 use prism_geom::{Affine, Point, Rect};
 use prism_raster::{Interrupt, Surface};
+use raster::{Grid, Meshes};
 use rayon::prelude::*;
+use std::sync::Arc;
+
+/// The character model of each figure (`None`: Prism's mannequin), index for index.
+pub type Models = [Option<Arc<mesh::Model>>];
 
 /// Most pixels one render covers (a 8000 × 8000 figure).
 pub const MAX_PIXELS: i64 = 64_000_000;
@@ -42,10 +52,13 @@ struct Solid {
     bbox: [f64; 4],
 }
 
-fn solids(scene: &FigureScene, view: &View) -> Vec<Solid> {
+fn solids(scene: &FigureScene, models: &Models, view: &View) -> Vec<Solid> {
     let margin = scene.look.outline_width.max(0.0) + 2.0;
     let mut out = Vec::new();
-    for f in &scene.figures {
+    for (i, f) in scene.figures.iter().enumerate() {
+        if models.get(i).is_some_and(Option::is_some) {
+            continue;
+        }
         for shape in mannequin::build(&skeleton::pose(f)) {
             let (c, r) = shape.bounds();
             let cc = view.to_camera(c);
@@ -72,11 +85,17 @@ fn solids(scene: &FigureScene, view: &View) -> Vec<Solid> {
 }
 
 /// The document rectangle the scene's figures cover (outline included), if any.
-pub fn bounds(scene: &FigureScene) -> Option<Rect> {
+pub fn bounds(scene: &FigureScene, models: &Models) -> Option<Rect> {
     let view = View::new(&scene.camera, scene.placement)?;
-    let s = solids(scene, &view);
+    let meshes = Meshes::build(scene, models, &view);
+    bounds_of(scene, &solids(scene, models, &view), &meshes)
+}
+
+fn bounds_of(scene: &FigureScene, s: &[Solid], meshes: &Meshes) -> Option<Rect> {
+    let margin = scene.look.outline_width.max(0.0) + 2.0;
+    let mesh_box = meshes.bbox().map(|b| [b[0] - margin, b[1] - margin, b[2] + margin, b[3] + margin]);
     let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for b in s.iter().map(|s| s.bbox) {
+    for b in s.iter().map(|s| s.bbox).chain(mesh_box) {
         x0 = x0.min(b[0]);
         y0 = y0.min(b[1]);
         x1 = x1.max(b[2]);
@@ -117,12 +136,13 @@ fn sample(view: &View, solids: &[&Solid], light: V3, color: [f32; 3], p: [f64; 2
 /// Render the scene's figures. The surface covers the figures' bounds within `allowed` (pass the
 /// canvas grown by a margin; renders are not clipped to the canvas so moving the layer never
 /// cuts an edge).
-pub fn render(scene: &FigureScene, format: PixelFormat, allowed: Rect, opts: RenderOptions, ctl: &Interrupt) -> Result<Surface, String> {
+pub fn render(scene: &FigureScene, models: &Models, format: PixelFormat, allowed: Rect, opts: RenderOptions, ctl: &Interrupt) -> Result<Surface, String> {
     scene.validate()?;
     let view = View::new(&scene.camera, scene.placement).ok_or("the figure layer's placement cannot be inverted")?;
-    let solids = solids(scene, &view);
+    let solids = solids(scene, models, &view);
+    let meshes = Meshes::build(scene, models, &view);
     let mut surface = Surface::new(format);
-    let Some(area) = bounds(scene).map(|b| b.intersect(&allowed)).filter(|r| !r.is_empty()) else {
+    let Some(area) = bounds_of(scene, &solids, &meshes).map(|b| b.intersect(&allowed)).filter(|r| !r.is_empty()) else {
         return Ok(surface);
     };
     let pixels = i64::from(area.width()) * i64::from(area.height());
@@ -150,19 +170,29 @@ pub fn render(scene: &FigureScene, format: PixelFormat, allowed: Rect, opts: Ren
             .par_iter()
             .map(|band| {
                 if opts.draft {
-                    return (*band, draft_band(&view, &solids, light, color, &format, *band, block));
+                    return (*band, draft_band(&view, &solids, &meshes, light, color, &format, *band, block));
                 }
                 let (w, ext0, ext1) = (i32::try_from(band.width()).unwrap_or(0), band.y0 - reach, band.y1 + reach);
                 let near: Vec<&Solid> = solids.iter().filter(|s| s.bbox[3] >= f64::from(ext0) && s.bbox[1] <= f64::from(ext1)).collect();
                 let wu = usize::try_from(w).unwrap_or(0);
                 let rows = usize::try_from(ext1 - ext0).unwrap_or(0);
+                let hu = usize::try_from(band.height()).unwrap_or(0);
+                // Meshes at the same sample points: pixel centres (with the outline margin), then
+                // each sub-sample offset.
+                let mesh_at = |x0: f64, y0: f64, rows: usize| -> Vec<(f64, [f32; 4])> {
+                    if meshes.is_empty() { Vec::new() } else { meshes.raster(Grid { x0, y0, step: 1.0, cols: wu, rows }, light, &view) }
+                };
+                let mesh_centre = mesh_at(f64::from(band.x0) + 0.5, f64::from(ext0) + 0.5, rows);
+                let mesh_subs: Vec<Vec<(f64, [f32; 4])>> = offsets.iter().map(|o| mesh_at(f64::from(band.x0) + o[0], f64::from(band.y0) + o[1], hu)).collect();
                 // Centre-sample depth for the band and its outline margin.
                 let mut depth = vec![f64::INFINITY; wu * rows];
                 for (r, row) in depth.chunks_mut(wu.max(1)).enumerate() {
                     let y = ext0 + r as i32;
                     for (c, d) in row.iter_mut().enumerate() {
                         let x = band.x0 + c as i32;
-                        *d = sample(&view, &near, light, color, [f64::from(x) + 0.5, f64::from(y) + 0.5]).0;
+                        let traced = if near.is_empty() { f64::INFINITY } else { sample(&view, &near, light, color, [f64::from(x) + 0.5, f64::from(y) + 0.5]).0 };
+                        let meshed = mesh_centre.get(r * wu + c).map_or(f64::INFINITY, |m| m.0);
+                        *d = traced.min(meshed);
                     }
                 }
                 let at = |x: i32, y: i32| -> f64 {
@@ -178,8 +208,10 @@ pub fn render(scene: &FigureScene, format: PixelFormat, allowed: Rect, opts: Ren
                     for c in 0..w {
                         let x = band.x0 + c;
                         let mut acc = [0.0f32; 4];
-                        for o in offsets {
-                            let (_, s) = sample(&view, &near, light, color, [f64::from(x) + o[0], f64::from(y) + o[1]]);
+                        for (k, o) in offsets.iter().enumerate() {
+                            let traced = if near.is_empty() { (f64::INFINITY, [0.0; 4]) } else { sample(&view, &near, light, color, [f64::from(x) + o[0], f64::from(y) + o[1]]) };
+                            let meshed = mesh_subs.get(k).and_then(|m| m.get(i * wu + c as usize)).copied().unwrap_or((f64::INFINITY, [0.0; 4]));
+                            let s = if meshed.0 < traced.0 { meshed.1 } else { traced.1 };
                             for k in 0..4 {
                                 acc[k] += s[k];
                             }
@@ -238,7 +270,8 @@ pub fn render(scene: &FigureScene, format: PixelFormat, allowed: Rect, opts: Ren
 }
 
 /// A draft band: one sample per `block` × `block` pixels, no lines.
-fn draft_band(view: &View, solids: &[Solid], light: V3, color: [f32; 3], format: &PixelFormat, band: Rect, block: i32) -> Vec<f32> {
+#[allow(clippy::too_many_arguments)]
+fn draft_band(view: &View, solids: &[Solid], meshes: &Meshes, light: V3, color: [f32; 3], format: &PixelFormat, band: Rect, block: i32) -> Vec<f32> {
     let channels = format.channels();
     let (w, h) = (i32::try_from(band.width()).unwrap_or(0), i32::try_from(band.height()).unwrap_or(0));
     let near: Vec<&Solid> = solids.iter().filter(|s| s.bbox[3] >= f64::from(band.y0) && s.bbox[1] <= f64::from(band.y1)).collect();
@@ -246,10 +279,21 @@ fn draft_band(view: &View, solids: &[Solid], light: V3, color: [f32; 3], format:
     let mut out = vec![0.0f32; wu * usize::try_from(h).unwrap_or(0) * channels];
     let mut px = vec![0.0f32; channels.max(4)];
     let block = block.max(1);
+    let half = f64::from(block) / 2.0;
+    let cols = usize::try_from((w + block - 1) / block).unwrap_or(0);
+    let mesh = if meshes.is_empty() {
+        Vec::new()
+    } else {
+        let rows = usize::try_from((h + block - 1) / block).unwrap_or(0);
+        meshes.raster(Grid { x0: f64::from(band.x0) + half, y0: f64::from(band.y0) + half, step: f64::from(block), cols, rows }, light, view)
+    };
     for by in (0..h).step_by(block as usize) {
         for bx in (0..w).step_by(block as usize) {
-            let centre = [f64::from(band.x0 + bx) + f64::from(block) / 2.0, f64::from(band.y0 + by) + f64::from(block) / 2.0];
-            let (_, s) = sample(view, &near, light, color, centre);
+            let centre = [f64::from(band.x0 + bx) + half, f64::from(band.y0 + by) + half];
+            let traced = if near.is_empty() { (f64::INFINITY, [0.0; 4]) } else { sample(view, &near, light, color, centre) };
+            let cell = usize::try_from(by / block).unwrap_or(0) * cols + usize::try_from(bx / block).unwrap_or(0);
+            let meshed = mesh.get(cell).copied().unwrap_or((f64::INFINITY, [0.0; 4]));
+            let s = if meshed.0 < traced.0 { meshed.1 } else { traced.1 };
             let alpha = s[3];
             let wrote = prism_raster::from_rgba_into(format, [s[0], s[1], s[2], alpha], &mut px);
             for y in by..(by + block).min(h) {
@@ -305,9 +349,18 @@ pub fn joint_points(scene: &FigureScene) -> Vec<JointPoint> {
     out
 }
 
-/// Every posed joint of every figure (world centimetres).
-fn all_joints(scene: &FigureScene) -> Vec<V3> {
-    scene.figures.iter().flat_map(|f| skeleton::pose(f).into_iter().map(|p| p.pos)).collect()
+/// Every posed joint of every figure (world centimetres), and the corners of each character
+/// mesh's posed box (meshes reach past their joints: hair, hands, shoes).
+fn all_joints(scene: &FigureScene, models: &Models) -> Vec<V3> {
+    let mut out: Vec<V3> = scene.figures.iter().flat_map(|f| skeleton::pose(f).into_iter().map(|p| p.pos)).collect();
+    for (f, m) in scene.figures.iter().zip(models) {
+        if let Some((lo, hi)) = m.as_deref().and_then(|m| mesh::posed_bounds(m, f)) {
+            for k in 0..8 {
+                out.push([if k & 1 == 0 { lo[0] } else { hi[0] }, if k & 2 == 0 { lo[1] } else { hi[1] }, if k & 4 == 0 { lo[2] } else { hi[2] }]);
+            }
+        }
+    }
+    out
 }
 
 /// The direction a figure faces (horizontal), from its hips: `None` without both hips.
@@ -343,8 +396,8 @@ fn view_direction(figures: &[Figure]) -> Option<V3> {
 
 /// Aim the camera at every figure (from the first figure's front when `face_front`) and place
 /// the image so the figures are `height` document pixels tall, centred on `center`.
-pub fn frame(scene: &mut FigureScene, center: [f64; 2], height: f64, face_front: bool) -> Result<(), String> {
-    let joints = all_joints(scene);
+pub fn frame(scene: &mut FigureScene, models: &Models, center: [f64; 2], height: f64, face_front: bool) -> Result<(), String> {
+    let joints = all_joints(scene, models);
     if joints.is_empty() {
         return Err("the layer has no figures".into());
     }

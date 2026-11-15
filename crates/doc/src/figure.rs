@@ -9,9 +9,32 @@
 
 use prism_geom::Affine;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-/// Joints one figure may hold (a CLIP STUDIO figure has 67).
-pub const MAX_JOINTS: usize = 512;
+/// Largest character model file a figure may carry (bytes).
+pub const MAX_MODEL_BYTES: usize = 256 << 20;
+
+/// A character model a figure is drawn with instead of Prism's mannequin: the original VRM /
+/// glTF file, kept whole (`.prism` stores it as a blob; it is parsed when drawn). The figure's
+/// joints are the model's skeleton.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FigureModel {
+    /// The file's name (`character.vrm`), which also tells its kind.
+    pub file_name: String,
+    #[serde(skip)]
+    pub bytes: Arc<Vec<u8>>,
+}
+
+impl PartialEq for FigureModel {
+    fn eq(&self, other: &Self) -> bool {
+        self.file_name == other.file_name && (Arc::ptr_eq(&self.bytes, &other.bytes) || self.bytes == other.bytes)
+    }
+}
+
+/// Joints one figure may hold (a CLIP STUDIO figure has 67; VRM characters with hair and cloth
+/// bones run to a few hundred).
+pub const MAX_JOINTS: usize = 1024;
 /// Deepest joint nesting accepted.
 pub const MAX_DEPTH: usize = 64;
 /// Figures one layer may hold.
@@ -47,11 +70,14 @@ pub struct Figure {
     /// Where the pose came from (a CLIP STUDIO material name or file), if anywhere.
     pub source: Option<String>,
     pub root: Joint,
+    /// The character drawn for this figure (none: Prism's mannequin).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<FigureModel>,
 }
 
 impl Default for Figure {
     fn default() -> Self {
-        Self { name: "Figure".into(), source: None, root: Joint::default() }
+        Self { name: "Figure".into(), source: None, root: Joint::default(), model: None }
     }
 }
 
@@ -195,6 +221,11 @@ impl Figure {
         if self.name.chars().count() > MAX_NAME {
             return Err("figure name is too long".into());
         }
+        if let Some(m) = &self.model
+            && (m.file_name.chars().count() > MAX_NAME || m.bytes.len() > MAX_MODEL_BYTES)
+        {
+            return Err("figure model is too large".into());
+        }
         let mut count = 0usize;
         let mut stack = vec![(0usize, &self.root)];
         while let Some((d, j)) = stack.pop() {
@@ -308,7 +339,7 @@ pub fn standing_figure() -> Figure {
         vec![j("spine1_bb_", [0.0, 10.0, 0.0], vec![j("spine2_bb_", [0.0, 10.0, 0.0], vec![head, arm("left", 1.0), arm("right", -1.0)])])],
     );
     let hips = j("hips_bb_", [0.0, 94.0, 0.0], vec![j("hips_end_bb_", [0.0, -12.0, 0.0], vec![]), spine, leg("left", 1.0), leg("right", -1.0)]);
-    Figure { name: "Figure".into(), source: None, root: j("root_group_", [0.0; 3], vec![hips]) }
+    Figure { name: "Figure".into(), source: None, root: j("root_group_", [0.0; 3], vec![hips]), model: None }
 }
 
 #[cfg(test)]

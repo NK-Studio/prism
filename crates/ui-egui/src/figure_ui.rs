@@ -205,13 +205,15 @@ pub fn figure_layer(doc: &Document, layer: LayerId) -> Option<&Layer> {
 /// The handles of figure layer `layer` seen at `zoom`: the main joints, plus the finger joints
 /// of hands at least [`FINGER_HAND_MIN`] screen points long.
 pub fn handles(doc: &Document, layer: LayerId, zoom: f64) -> Vec<Handle> {
-    if figure_layer(doc, layer).is_none() {
-        return Vec::new();
-    }
+    let Some(scene) = figure_layer(doc, layer).and_then(|l| l.figure.as_ref()) else { return Vec::new() };
+    // Characters (VRM / glTF) carry hair, cloth and helper bones too: only their humanoid
+    // joints, which have Prism's names, get dots.
+    let character = |i: usize| scene.figures.get(i).is_some_and(|f| f.model.is_some());
     let joints = prism_engine::figure_cmds::joints(doc, layer);
     let open = open_hands(&joints, zoom.max(1e-3));
     joints
         .into_iter()
+        .filter(|j| !character(j.figure) || j.name.ends_with("_bb_"))
         .filter_map(|j| {
             let finger = match finger_joint(&j.name) {
                 Some((hand, _)) if open.iter().any(|(f, h)| *f == j.figure && *h == hand) => true,

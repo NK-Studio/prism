@@ -598,10 +598,10 @@ fn local_poses_render() {
         }
         for (k, yaw) in [-60.0f64, -30.0, 30.0, 60.0, 120.0, 180.0].into_iter().enumerate() {
             let mut scene = FigureScene { figures: figures.clone(), ..Default::default() };
-            frame(&mut scene, [300.0, 225.0], 400.0, true).unwrap();
+            frame(&mut scene, &[], [300.0, 225.0], 400.0, true).unwrap();
             prism_algo::figure3d::orbit(&mut scene, yaw, 10.0);
-            frame(&mut scene, [300.0, 225.0], 400.0, false).unwrap();
-            let s = render(&scene, prism_color::PixelFormat::RGBA8, prism_geom::Rect::new(0, 0, 600, 450), RenderOptions { draft: true }, &prism_raster::Interrupt::NONE).unwrap();
+            frame(&mut scene, &[], [300.0, 225.0], 400.0, false).unwrap();
+            let s = render(&scene, &[], prism_color::PixelFormat::RGBA8, prism_geom::Rect::new(0, 0, 600, 450), RenderOptions { draft: true }, &prism_raster::Interrupt::NONE).unwrap();
             let data: Vec<u8> = s.read_region(prism_geom::Rect::new(0, 0, 600, 450)).iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
             let im = prism_codecs::Image::from_raw(600, 450, prism_codecs::ChannelLayout::Rgba, prism_codecs::SampleType::U8, data).unwrap();
             std::fs::write(out.join(format!("view{k}.png")), prism_codecs::encode(&im, prism_codecs::Format::Png, &prism_codecs::EncodeOptions::default()).unwrap()).unwrap();
@@ -610,8 +610,8 @@ fn local_poses_render() {
     by_catalog.push(("standing".into(), vec![standing_figure()]));
     for (i, (name, figures)) in by_catalog.into_iter().enumerate() {
         let mut scene = FigureScene { figures, ..Default::default() };
-        frame(&mut scene, [300.0, 225.0], 400.0, true).unwrap();
-        let s = render(&scene, prism_color::PixelFormat::RGBA8, prism_geom::Rect::new(0, 0, 600, 450), RenderOptions::default(), &prism_raster::Interrupt::NONE).unwrap();
+        frame(&mut scene, &[], [300.0, 225.0], 400.0, true).unwrap();
+        let s = render(&scene, &[], prism_color::PixelFormat::RGBA8, prism_geom::Rect::new(0, 0, 600, 450), RenderOptions::default(), &prism_raster::Interrupt::NONE).unwrap();
         let r = prism_geom::Rect::new(0, 0, 600, 450);
         let data: Vec<u8> = s.read_region(r).iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
         let im = prism_codecs::Image::from_raw(600, 450, prism_codecs::ChannelLayout::Rgba, prism_codecs::SampleType::U8, data).unwrap();
@@ -658,15 +658,15 @@ fn hand_strip(f: &prism_doc::figure::Figure, side: &str, path: &std::path::Path)
     hand.offset = [0.0, -4.0, 0.0];
     let arm = Joint { name: format!("{side}forearm_bb_"), rotation: [1.0, 0.0, 0.0, 0.0], offset: [0.0; 3], children: vec![hand] };
     let root = Joint { name: "root_group_".into(), rotation: [0.0, 0.0, 0.0, 1.0], offset: [0.0; 3], children: vec![arm] };
-    let figure = Figure { name: String::new(), source: None, root };
+    let figure = Figure { name: String::new(), source: None, root, model: None };
     let mut strip = vec![0u8; (w * 3 * h * 4) as usize];
     for (k, yaw) in [0.0f64, 90.0, 45.0].into_iter().enumerate() {
         let mut scene = FigureScene { figures: vec![figure.clone()], ..Default::default() };
-        frame(&mut scene, [150.0, 150.0], 260.0, false).unwrap();
+        frame(&mut scene, &[], [150.0, 150.0], 260.0, false).unwrap();
         orbit(&mut scene, yaw, 0.0);
-        frame(&mut scene, [150.0, 150.0], 260.0, false).unwrap();
+        frame(&mut scene, &[], [150.0, 150.0], 260.0, false).unwrap();
         let r = prism_geom::Rect::new(0, 0, w as i32, h as i32);
-        let s = render(&scene, prism_color::PixelFormat::RGBA8, r, RenderOptions::default(), &prism_raster::Interrupt::NONE).unwrap();
+        let s = render(&scene, &[], prism_color::PixelFormat::RGBA8, r, RenderOptions::default(), &prism_raster::Interrupt::NONE).unwrap();
         let px: Vec<u8> = s.read_region(r).iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
         for y in 0..h as usize {
             for x in 0..w as usize {

@@ -3647,3 +3647,4 @@ hand	Grip	꽉 쥐기
 	Nothing picked	선택 해제
 	Posed the picked figure	선택한 인형에 포즈를 적용했습니다
 	With a figure picked on the canvas (click it with the Move tool), poses that figure instead	캔버스에서 인형을 선택해 두면(이동 도구로 클릭) 새 레이어 대신 그 인형에 포즈를 적용합니다
+	Opened a 3D character: pose it with the Move tool	3D 캐릭터를 열었습니다. 이동 도구로 자세를 바꿀 수 있습니다

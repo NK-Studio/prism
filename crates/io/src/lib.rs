@@ -40,6 +40,7 @@ mod flat;
 mod gradient_bake;
 pub mod linked;
 pub mod laf;
+pub mod model;
 mod multichannel_map;
 pub mod pattern_map;
 pub mod pixels;

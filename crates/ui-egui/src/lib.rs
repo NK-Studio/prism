@@ -936,6 +936,9 @@ impl PrismApp {
         if let Some(r) = preset_files_ui::open(self, name, bytes) {
             return r.map(|()| Vec::new());
         }
+        if prism_io::model::is_model_name(name) {
+            return self.open_model(name, bytes, None);
+        }
         let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).

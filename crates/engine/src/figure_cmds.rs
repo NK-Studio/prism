@@ -23,6 +23,7 @@ const RESET: &str = "layer.figure.resetPose";
 const HAND: &str = "layer.figure.setHand";
 const HAND_POSE: &str = "layer.figure.applyHandPose";
 const POSE: &str = "layer.figure.applyPose";
+const MODEL: &str = "layer.figure.importModel";
 const LOOK: &str = "layer.figure.setLook";
 const RASTERIZE: &str = "layer.rasterize.figure";
 /// Largest `.pose` / `.pep` file read.
@@ -45,7 +46,8 @@ fn allowed(doc: &Document) -> Rect {
 /// Re-render a figure layer's pixels from its scene.
 pub(crate) fn render_into(doc: &Document, layer: &mut Layer, draft: bool) -> Result<()> {
     let Some(scene) = &layer.figure else { return Err(EngineError::Other("not a 3D figure layer".into())) };
-    let surface = figure3d::render(scene, doc.pixel_format(), allowed(doc), RenderOptions { draft }, &prism_raster::Interrupt::NONE).map_err(EngineError::Other)?;
+    let models = crate::figure_models::models_of(scene).map_err(EngineError::Other)?;
+    let surface = figure3d::render(scene, &models, doc.pixel_format(), allowed(doc), RenderOptions { draft }, &prism_raster::Interrupt::NONE).map_err(EngineError::Other)?;
     layer.content = LayerContent::Raster(surface);
     layer.fill_cache = None;
     Ok(())
@@ -154,7 +156,8 @@ fn new_layer(s: &mut Session, p: &Value) -> Result<Value> {
     scene.validate().map_err(|e| bad(NEW, e))?;
     let doc = &st.doc;
     let height = f64::from(doc.bounds().height()).max(1.0) * FRAME_SHARE;
-    figure3d::frame(&mut scene, at.unwrap_or_else(|| canvas_centre(doc)), height, true).map_err(|e| bad(NEW, e))?;
+    let models = crate::figure_models::models_of(&scene).map_err(|e| bad(NEW, e))?;
+    figure3d::frame(&mut scene, &models, at.unwrap_or_else(|| canvas_centre(doc)), height, true).map_err(|e| bad(NEW, e))?;
     let id = s.edit("New 3D Figure Layer", |doc, active| {
         let name = name.unwrap_or_else(|| if count == 1 && !first.is_empty() { first.clone() } else { doc.next_layer_name("3D Figure") });
         let mut l = Layer::raster(name, doc.pixel_format());
@@ -277,7 +280,10 @@ fn frame_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let face = flag(p, "faceFront", FRAME)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let (centre, height) = (canvas_centre(&st.doc), f64::from(st.doc.bounds().height()).max(1.0) * FRAME_SHARE);
-    edit_scene(s, p, FRAME, "Frame 3D Figures", |scene| figure3d::frame(scene, centre, height, face).map_err(|e| bad(FRAME, e)))
+    edit_scene(s, p, FRAME, "Frame 3D Figures", |scene| {
+        let models = crate::figure_models::models_of(scene).map_err(|e| bad(FRAME, e))?;
+        figure3d::frame(scene, &models, centre, height, face).map_err(|e| bad(FRAME, e))
+    })
 }
 
 /// What `rotateBy` turns a joint about.
@@ -349,11 +355,15 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     edit_scene(s, p, RESET, "Reset Pose", |scene| {
         for (k, f) in scene.figures.iter_mut().enumerate() {
             if only.is_none_or(|i| i == k) {
-                // Prism's standing pose, kept where the figure stands.
-                let mut standing = standing_figure().root;
-                standing.offset = f.root.offset;
-                standing.rotation = f.root.rotation;
-                f.root = standing;
+                // Prism's standing pose (a character's own rest pose), kept where the figure
+                // stands.
+                let mut rest = match &f.model {
+                    Some(m) => crate::figure_models::model_of(m).map_err(|e| bad(RESET, e))?.rest.clone(),
+                    None => standing_figure().root,
+                };
+                rest.offset = f.root.offset;
+                rest.rotation = f.root.rotation;
+                f.root = rest;
             }
         }
         Ok(())
@@ -423,6 +433,65 @@ fn locked_fingers(p: &Value, cmd: &str) -> Result<[bool; 5]> {
         Some(_) => return Err(bad(cmd, "`locked` lists finger names")),
     }
     Ok(locked)
+}
+
+/// A character from a VRM / glTF file: a new 3D figure layer, or another figure in `layer`.
+pub(crate) fn import_model(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = text(p, "path", MODEL)?.map(std::path::PathBuf::from);
+    let (bytes, _) = crate::preset_import_cmds::file_bytes_with_limit(p, MODEL, ".vrm, .glb or .gltf file", prism_io::model::MAX_FILE as u64)?;
+    let file_name = match (text(p, "fileName", MODEL)?, &path) {
+        (Some(n), _) => n.chars().take(prism_doc::figure::MAX_NAME).collect(),
+        (None, Some(path)) => path.file_name().map_or_else(|| "character.vrm".into(), |n| n.to_string_lossy().chars().take(prism_doc::figure::MAX_NAME).collect()),
+        (None, None) => if prism_io::model::is_glb(&bytes) { "character.vrm".into() } else { "character.gltf".into() },
+    };
+    // A `.gltf` keeping its data beside it is inlined, so the figure carries everything.
+    let bytes = prism_io::model::self_contained(&bytes, path.as_deref().and_then(std::path::Path::parent)).map_err(|e| bad(MODEL, e))?;
+    let model = prism_doc::figure::FigureModel { file_name, bytes: std::sync::Arc::new(bytes) };
+    let parsed = crate::figure_models::model_of(&model).map_err(|e| bad(MODEL, e))?;
+    let name = parsed.title.clone();
+    let figure = Figure { name: name.clone(), source: Some(model.file_name.clone()), root: parsed.rest.clone(), model: Some(model) };
+    // Into an existing figure layer: beside the figures already there.
+    let target = match p.get("layer") {
+        Some(_) => Some(layer_param(s, p)?),
+        None => None,
+    };
+    if let Some(id) = target {
+        let n = scene_len(s, p)?;
+        if n >= MAX_FIGURES {
+            return Err(bad(MODEL, format!("a layer holds at most {MAX_FIGURES} figures")));
+        }
+        return edit_scene(s, p, MODEL, "Add Character", move |scene| {
+            let mut f = figure;
+            let right = scene.figures.iter().map(skeleton_extent).fold(f64::NEG_INFINITY, f64::max);
+            if right.is_finite() {
+                f.root.offset[0] = right + 60.0;
+            }
+            scene.figures.push(f);
+            Ok(())
+        })
+        .map(|_| json!({"layer": id.0, "figures": n + 1, "name": name}));
+    }
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let at = numbers::<2>(p, "at", MODEL, 1e7)?;
+    let mut scene = FigureScene { figures: vec![figure], ..Default::default() };
+    scene.validate().map_err(|e| bad(MODEL, e))?;
+    let height = f64::from(st.doc.bounds().height()).max(1.0) * FRAME_SHARE;
+    figure3d::frame(&mut scene, &[Some(parsed)], at.unwrap_or_else(|| canvas_centre(&st.doc)), height, true).map_err(|e| bad(MODEL, e))?;
+    let layer_name = name.clone();
+    let id = s.edit("New 3D Figure Layer", |doc, active| {
+        let mut l = Layer::raster(layer_name, doc.pixel_format());
+        l.figure = Some(scene);
+        render_into(doc, &mut l, false)?;
+        let id = doc.insert_above(*active, l);
+        *active = Some(id);
+        Ok(id)
+    })?;
+    Ok(json!({"layer": id.0, "figures": 1, "name": name}))
+}
+
+/// The rightmost joint of a figure (world x, centimetres).
+fn skeleton_extent(f: &Figure) -> f64 {
+    figure3d::skeleton::pose(f).iter().map(|p| p.pos[0]).fold(f64::NEG_INFINITY, f64::max)
 }
 
 /// The figure of the layer named by `p` with a joint nearest document point `pt`.
@@ -495,6 +564,13 @@ fn apply_pose_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let [pose] = bodies.as_slice() else { return Err(bad(POSE, "pass one whole-figure pose: `uuid`, `path` or `data`")) };
     edit_scene(s, p, POSE, "Apply Pose", |scene| {
         let f = scene.figures.get_mut(index).ok_or_else(|| bad(POSE, "no such figure"))?;
+        // A character keeps its own skeleton: the pose is carried onto its bones.
+        if let Some(model) = f.model.clone() {
+            let rest = crate::figure_models::model_of(&model).map_err(|e| bad(POSE, e))?;
+            figure3d::retarget::retarget(pose, f, &rest.rest).map_err(|e| bad(POSE, e))?;
+            f.source = pose.source.clone();
+            return Ok(());
+        }
         let (offset, rotation) = (f.root.offset, f.root.rotation);
         let mut root = pose.root.clone();
         if !root.name.eq_ignore_ascii_case(&f.root.name) {
@@ -673,6 +749,13 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"layer":id?,"uuid":pose id from brush.cspLibrary.list poses?|"path":".pose or .pep"?|"data":base64?,"root"?,"figure":index? (default the only figure)|"at":[x,y] document px? (the figure nearest),"draft":bool=false} (a whole-figure CLIP STUDIO pose on one figure: it keeps its place and facing, every joint below takes the pose)"#,
             has_figure,
             apply_pose_cmd
+        ),
+        spec!(
+            MODEL,
+            "Import 3D Character",
+            r#"{"path":".vrm, .glb or .gltf file"?|"data":base64?,"fileName":str? (with data),"layer":id? (add to that 3D figure layer; default a new layer),"at":[x,y]? (centre of a new layer)} → {layer, figures, name} (VRM 0.x/1.0 and glTF 2.0 characters: the textured mesh is drawn and posed through its skeleton; humanoid bones take Prism's joint names, so poses, hand poses and the hand setup apply)"#,
+            has_doc,
+            import_model
         ),
         spec!(RESET, "Reset Pose", r#"{"layer":id?,"figure":index? (default every figure)} (Prism's standing pose where the figure stands)"#, has_figure, reset),
         spec!(LOOK, "3D Figure Look", r##"{"layer":id?,"color":"#rrggbb"|[r,g,b]?,"outline":bool?,"outlineWidth":0..64?}"##, has_figure, set_look),

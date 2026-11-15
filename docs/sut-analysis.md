@@ -2909,3 +2909,26 @@ Prism's hand shapes are its own angles (`crates/algo/src/figure3d/hand.rs`).
   (`local_hand_poses_render`, ignored; reads them in place).
 - Observed in passing: `handsetup_pa00` ("パー") keeps the fingers almost parallel and
   `handsetup_pa01` ("平手") fans them, the reverse of what their names suggest.
+
+## 3D character materials (2026-11-15)
+
+Read-only look at CLIP STUDIO's installed 3D files and the local material database; nothing was
+decoded beyond the container.
+
+- Observed: the 3D object files (`Settings/PAINT/3D/*.cs3o`, `.c3dd`) are SQLite with one
+  `object3d(catalog_id, catalog_data)` row; `catalog_data` starts with the length-prefixed text
+  `CLIP_STUDIO_3D_DATA2`, a `catalog_object` tag and an id, then data at 8.0 bits per byte that no
+  standard compression (zlib, raw deflate, LZMA) opens: encrypted. Installed 3D head materials
+  keep only XML and a 20-byte stub on disk. No 3D character material is downloaded here.
+- Decision: Prism does not read CLIP STUDIO's 3D models (that would mean breaking their
+  protection). It reads open formats instead: VRM 0.x / 1.0 and glTF 2.0 characters
+  (`crates/io/src/model/`), drawn with their textures and posed through their humanoid bones,
+  which take Prism's (CLIP STUDIO's) joint names, so pose and hand-pose materials apply.
+- Observed, for retargeting CLIP STUDIO poses onto characters (the two local poses): a pose
+  head's local +X runs up the head (world-up 0.92–1.00) and its local −Z points out of the face
+  (dot with the body's facing 0.92–1.00). Prism carries a pose onto a character bone by bone
+  (each shared bone points where the pose's does, the character keeps its lengths, root place
+  and facing), and turns the hips, chest, head and hands about themselves to match the thigh
+  line, shoulder line, face direction and knuckle line.
+- Not verified: how CLIP STUDIO itself retargets poses onto imported VRM characters; the head's
+  pitch on a VRM character looks a little higher than the mannequin's in the same pose.

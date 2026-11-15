@@ -38,7 +38,7 @@ pub use effects::{
     GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
 };
 pub use mode::{ColorTable, Duotone, DuotoneInk, StackMode};
-pub use figure::{Figure, FigureCamera, FigureLook, FigureScene, Joint};
+pub use figure::{Figure, FigureCamera, FigureLook, FigureModel, FigureScene, Joint};
 pub use pattern::Pattern;
 pub use special_ruler::{PerspectiveRuler, RulerKind, RulerRange, SpecialRuler, SpecialRulers, VanishTarget, VanishingPoint};
 pub use prism_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};

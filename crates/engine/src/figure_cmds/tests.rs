@@ -284,3 +284,100 @@ fn a_pose_goes_onto_one_figure_where_it_stands() {
     assert_eq!(f.root.name, "root_group_");
     assert_eq!(f.root.children.first().map(|c| c.name.as_str()), Some("hips_bb_"));
 }
+
+/// A tiny glTF character as JSON with its buffer inline: hips (1 m up) and chest (50 cm above),
+/// a 40 × 50 cm quad skinned half to each, a VRM 1.0 humanoid map naming both.
+fn character_gltf() -> String {
+    let floats = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let mut bin = floats(&[-0.2, 1.0, 0.0, 0.2, 1.0, 0.0, -0.2, 1.5, 0.0, 0.2, 1.5, 0.0]);
+    bin.extend(floats(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]));
+    bin.extend([0u8, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+    bin.extend(floats(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]));
+    bin.extend([0u8, 0, 1, 0, 3, 0, 0, 0, 3, 0, 2, 0]);
+    let ibm: Vec<f32> = [-1.0f32, -1.5].iter().flat_map(|y| [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, *y, 0.0, 1.0]).collect();
+    bin.extend(floats(&ibm));
+    let uri = format!("data:application/octet-stream;base64,{}", prism_paint::tile::b64_encode(&bin));
+    json!({
+        "asset": {"version": "2.0"},
+        "buffers": [{"uri": uri, "byteLength": bin.len()}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": 48}, {"buffer": 0, "byteOffset": 48, "byteLength": 48},
+            {"buffer": 0, "byteOffset": 96, "byteLength": 16}, {"buffer": 0, "byteOffset": 112, "byteLength": 64},
+            {"buffer": 0, "byteOffset": 176, "byteLength": 12}, {"buffer": 0, "byteOffset": 188, "byteLength": 128}
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3"}, {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"},
+            {"bufferView": 2, "componentType": 5121, "count": 4, "type": "VEC4"}, {"bufferView": 3, "componentType": 5126, "count": 4, "type": "VEC4"},
+            {"bufferView": 4, "componentType": 5123, "count": 6, "type": "SCALAR"}, {"bufferView": 5, "componentType": 5126, "count": 2, "type": "MAT4"}
+        ],
+        "nodes": [{"name": "Hips", "translation": [0.0, 1.0, 0.0], "children": [1]}, {"name": "Chest", "translation": [0.0, 0.5, 0.0]}, {"name": "Body", "mesh": 0, "skin": 0}],
+        "skins": [{"joints": [0, 1], "inverseBindMatrices": 5}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "JOINTS_0": 2, "WEIGHTS_0": 3}, "indices": 4}]}],
+        "extensions": {"VRMC_vrm": {"meta": {"name": "Quad Kid"}, "humanoid": {"humanBones": {"hips": {"node": 0}, "chest": {"node": 1}}}}}
+    })
+    .to_string()
+}
+
+#[test]
+fn characters_import_render_pose_and_reset() {
+    let mut s = session(200, 300);
+    let data = prism_paint::tile::b64_encode(character_gltf().as_bytes());
+    let steps = s.active().unwrap().history.entries().len();
+    let r = s.execute(MODEL, json!({"data": data, "fileName": "kid.gltf"})).unwrap();
+    assert_eq!(r["name"], "Quad Kid");
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+    let l = layer(&s, id);
+    assert_eq!(l.name, "Quad Kid");
+    let f = &l.figure.as_ref().unwrap().figures[0];
+    assert_eq!(f.model.as_ref().unwrap().file_name, "kid.gltf");
+    assert!(f.root.find("hips_bb_").is_some() && f.root.find("spine1_bb_").is_some());
+    let before = bounds(&s, id);
+    // Framed with its root on the ground: the 50 cm quad 1 m up fills the top part.
+    assert!(!before.is_empty() && before.height() > 50, "the quad is drawn and framed: {before:?}");
+    // Posing the chest moves the drawing; Reset Pose brings the model's rest pose back.
+    s.execute(JOINT, json!({"joint": "spine1_bb_", "rotateBy": {"axis": [0, 0, 1], "degrees": 90}})).unwrap();
+    assert_ne!(bounds(&s, id), before);
+    s.execute(RESET, json!({})).unwrap();
+    assert_eq!(bounds(&s, id), before);
+    assert!(layer(&s, id).figure.unwrap().figures[0].root.find("lefthand_bb_").is_none(), "its own skeleton, not the mannequin's");
+    // A CLIP STUDIO pose is carried onto the character's own bones (not swapped in).
+    s.execute(POSE, json!({"data": prism_paint::tile::b64_encode(PEP.as_bytes())})).unwrap();
+    let posed = layer(&s, id).figure.unwrap().figures[0].clone();
+    assert!(posed.root.find("spine1_bb_").is_some() && posed.root.find("head_end_bb_").is_none());
+    assert!(posed.model.is_some());
+    s.execute(RESET, json!({})).unwrap();
+    // A second character into the same layer, beside the first; saved and loaded back whole.
+    s.execute(MODEL, json!({"data": data, "layer": id.0})).unwrap();
+    let scene = layer(&s, id).figure.unwrap();
+    assert_eq!(scene.figures.len(), 2);
+    assert!(scene.figures[1].root.offset[0] > 30.0);
+    let doc = s.active().unwrap().doc.clone();
+    let saved = prism_format::save_to_bytes(&doc, &Default::default()).unwrap();
+    assert_eq!(prism_format::load_from_bytes(&saved).unwrap(), *doc);
+    // Bad files are errors.
+    for bad in [json!({}), json!({"data": "%%%"}), json!({"data": prism_paint::tile::b64_encode(b"glTF broken")}), json!({"data": data, "layer": 999_999})] {
+        assert!(s.execute(MODEL, bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn opening_or_placing_a_character_file_makes_a_figure_layer() {
+    let bytes = character_gltf().into_bytes();
+    let mut s = Session::new();
+    let r = crate::file_cmds::open_bytes_as(&mut s, "kid.gltf", &bytes, None, None).unwrap();
+    assert!(r["layer"].is_u64());
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.name, "Quad Kid");
+    let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+    assert!(l.figure.as_ref().unwrap().figures[0].model.is_some());
+    // Placed into an open document: a figure layer, not a flat smart object.
+    let mut s = session(100, 100);
+    let r = crate::file_cmds::place_bytes(&mut s, "kid.gltf", bytes.clone(), None, &json!({})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    assert!(layer(&s, id).figure.is_some());
+    // A broken character file opens nothing.
+    let mut s = Session::new();
+    assert!(crate::file_cmds::open_bytes_as(&mut s, "bad.vrm", b"glTFbroken", None, None).is_err());
+    assert!(s.documents().is_empty());
+}
