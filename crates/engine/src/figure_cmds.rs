@@ -19,6 +19,7 @@ const FRAME: &str = "layer.figure.frame";
 const JOINT: &str = "layer.figure.setJoint";
 const REACH: &str = "layer.figure.reachTo";
 const RESET: &str = "layer.figure.resetPose";
+const HAND: &str = "layer.figure.setHand";
 const LOOK: &str = "layer.figure.setLook";
 const RASTERIZE: &str = "layer.rasterize.figure";
 /// Largest `.pose` / `.pep` file read.
@@ -339,6 +340,58 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// CLIP STUDIO's hand setup: blend a hand between the flat, spread and closed shapes.
+fn set_hand(s: &mut Session, p: &Value) -> Result<Value> {
+    use figure3d::hand::{Closed, DIGITS, HandSetup, Side};
+    let n = scene_len(s, p)?;
+    let only = p.get("figure").map(|_| figure_index(p, n, HAND)).transpose()?;
+    let sides: &[Side] = match text(p, "side", HAND)?.unwrap_or("both") {
+        "both" => &[Side::Left, Side::Right],
+        "left" => &[Side::Left],
+        "right" => &[Side::Right],
+        other => return Err(bad(HAND, format!("`side` must be \"left\", \"right\" or \"both\", not {other:?}"))),
+    };
+    let weights = numbers::<3>(p, "weights", HAND, 1e6)?.ok_or_else(|| bad(HAND, "`weights` is required: [flat, spread, closed]"))?;
+    let closed = match text(p, "closed", HAND)? {
+        None => Closed::Fist,
+        Some(id) => Closed::from_id(id).ok_or_else(|| bad(HAND, format!("`closed` must be one of fist, catPaw, tube, grip, not {id:?}")))?,
+    };
+    let mut locked = [false; 5];
+    match p.get("locked") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(list)) => {
+            for v in list {
+                let name = v.as_str().ok_or_else(|| bad(HAND, "`locked` lists finger names"))?;
+                let i = DIGITS.iter().position(|d| d.eq_ignore_ascii_case(name)).ok_or_else(|| bad(HAND, format!("unknown finger {name:?} (thumb, index, middle, ring, pinky)")))?;
+                if let Some(l) = locked.get_mut(i) {
+                    *l = true;
+                }
+            }
+        }
+        Some(_) => return Err(bad(HAND, "`locked` lists finger names")),
+    }
+    let setup = HandSetup { weights, closed, locked };
+    edit_scene(s, p, HAND, "Hand Pose", |scene| {
+        let mut posed = 0;
+        let mut last_err = None;
+        for (k, f) in scene.figures.iter_mut().enumerate() {
+            if only.is_some_and(|i| i != k) {
+                continue;
+            }
+            for side in sides {
+                match figure3d::hand::set_hand(f, *side, &setup) {
+                    Ok(()) => posed += 1,
+                    Err(e) => last_err = Some(e),
+                }
+            }
+        }
+        if posed == 0 {
+            return Err(bad(HAND, last_err.unwrap_or_else(|| "no hand to pose".into())));
+        }
+        Ok(())
+    })
+}
+
 fn color_of(v: &Value) -> Option<[f32; 3]> {
     match v {
         Value::String(h) => {
@@ -443,6 +496,13 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"layer":id?,"figure":index=0,"joint":hand or foot name,"point":[x,y] document px,"draft":bool=false} (two-bone IK at the joint's current depth)"#,
             has_figure,
             reach
+        ),
+        spec!(
+            HAND,
+            "Hand Pose",
+            r#"{"layer":id?,"figure":index? (default every figure),"side":"both"|"left"|"right"="both","weights":[flat,spread,closed] (≥0, blended by ratio: CLIP STUDIO's hand setup triangle),"closed":"fist"|"catPaw"|"tube"|"grip"="fist","locked":["thumb","index","middle","ring","pinky"]? (fingers left as they are),"draft":bool=false}"#,
+            has_figure,
+            set_hand
         ),
         spec!(RESET, "Reset Pose", r#"{"layer":id?,"figure":index? (default every figure)} (Prism's standing pose where the figure stands)"#, has_figure, reset),
         spec!(LOOK, "3D Figure Look", r##"{"layer":id?,"color":"#rrggbb"|[r,g,b]?,"outline":bool?,"outlineWidth":0..64?}"##, has_figure, set_look),

@@ -153,3 +153,41 @@ fn pixels_are_locked_but_layer_geometry_follows_the_figure() {
     s.execute("select.all", json!({})).unwrap();
     s.execute("edit.fill", json!({"contents": "black"})).unwrap();
 }
+
+#[test]
+fn hand_poses_close_and_open_the_hands_in_one_step() {
+    let mut s = session(200, 300);
+    let id = LayerId(s.execute(NEW, json!({})).unwrap()["layer"].as_u64().unwrap());
+    let rot = |s: &Session, n: &str| layer(s, id).figure.unwrap().figures[0].root.find(n).unwrap().rotation;
+    let steps = s.active().unwrap().history.entries().len();
+    s.execute(HAND, json!({"weights": [0, 0, 1], "closed": "tube", "locked": ["thumb"]})).unwrap();
+    assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+    for side in ["left", "right"] {
+        assert_ne!(rot(&s, &format!("{side}handmiddle2_bb_")), [1.0, 0.0, 0.0, 0.0], "{side} closed");
+        assert_eq!(rot(&s, &format!("{side}handthumb2_bb_")), [1.0, 0.0, 0.0, 0.0], "{side} thumb locked");
+    }
+    // One side only.
+    s.execute(HAND, json!({"weights": [1, 0, 0], "side": "left"})).unwrap();
+    let left = rot(&s, "lefthandmiddle2_bb_");
+    assert!(left[0] > 0.99, "the left hand opens: {left:?}");
+    assert!(rot(&s, "righthandmiddle2_bb_")[0] < 0.9, "the right stays closed");
+    assert!(s.undo());
+    assert!(rot(&s, "lefthandmiddle2_bb_")[0] < 0.9);
+    for bad in [
+        json!({}),
+        json!({"weights": [0, 0, 0]}),
+        json!({"weights": [-1, 2, 0]}),
+        json!({"weights": [1, 0]}),
+        json!({"weights": "fist"}),
+        json!({"weights": [1, 0, 0], "side": "middle"}),
+        json!({"weights": [1, 0, 0], "closed": "paw"}),
+        json!({"weights": [1, 0, 0], "locked": ["toe"]}),
+        json!({"weights": [1, 0, 0], "locked": "thumb"}),
+        json!({"weights": [1, 0, 0], "figure": 3}),
+    ] {
+        assert!(s.execute(HAND, bad.clone()).is_err(), "{bad}");
+    }
+    // A figure without hands.
+    s.execute(NEW, json!({"data": prism_paint::tile::b64_encode(PEP.as_bytes())})).unwrap();
+    assert!(s.execute(HAND, json!({"weights": [1, 0, 0]})).is_err());
+}

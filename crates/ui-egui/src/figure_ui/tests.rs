@@ -90,3 +90,108 @@ fn dragging_elsewhere_moves_the_camera() {
     tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 50.0 }, egui::Modifiers::NONE);
     assert_eq!(steps(&app), n);
 }
+
+#[test]
+fn finger_joint_names_parse() {
+    assert_eq!(finger_joint("lefthandindex3_bb_"), Some(("lefthand_bb_".to_string(), 3)));
+    assert_eq!(finger_joint("RightHandThumb1_bb_"), Some(("righthand_bb_".to_string(), 1)));
+    for name in ["lefthand_bb_", "leftforearm_bb_", "lefthandindex_bb_", "lefthandindexx_bb_", "lefthandindex3", "hand", "ハンド", ""] {
+        assert_eq!(finger_joint(name), None, "{name}");
+    }
+    assert!(is_end("lefthandpinky4_bb_") && !is_end("lefthandpinky3_bb_") && is_end("righthand_bb_"));
+}
+
+#[test]
+fn zoomed_in_hands_show_their_finger_joints() {
+    let mut app = app();
+    assert!(!current(&app).iter().any(|h| h.finger), "a small hand shows no finger joints");
+    app.ui.views[0].zoom = 8.0;
+    let hs = current(&app);
+    for side in ["left", "right"] {
+        for digit in DIGITS {
+            for seg in 1..=4 {
+                let name = format!("{side}hand{digit}{seg}_bb_");
+                let h = hs.iter().find(|h| h.joint == name).unwrap_or_else(|| panic!("{name}"));
+                assert!(h.finger && h.end == (seg == 4), "{h:?}");
+            }
+        }
+    }
+    let v = inspect(&app);
+    assert!(v.as_array().unwrap().iter().any(|h| h["finger"] == json!(true)));
+}
+
+#[test]
+fn dragging_a_finger_joint_bends_that_finger_only() {
+    let mut app = app();
+    app.ui.views[0].zoom = 8.0;
+    let (knuckle, tip) = (find(&app, "lefthandmiddle3_bb_"), find(&app, "lefthandmiddle4_bb_"));
+    let others = |app: &PrismApp| ["lefthand_bb_", "lefthandmiddle3_bb_", "lefthandindex4_bb_", "righthandmiddle4_bb_"].map(|n| find(app, n));
+    let before_others = others(&app);
+    let before = steps(&app);
+    // Curl the tip a quarter turn round its knuckle.
+    let r = (tip.x - knuckle.x).hypot(tip.y - knuckle.y);
+    assert!(r * 8.0 > 6.0, "the segment is long enough on screen to grab: {r}");
+    let to = [knuckle.x - (tip.y - knuckle.y), knuckle.y + (tip.x - knuckle.x)];
+    drag(&mut app, [tip.x, tip.y], to, egui::Modifiers::NONE);
+    assert_eq!(steps(&app), before + 1, "one history step");
+    let moved = find(&app, "lefthandmiddle4_bb_");
+    assert!((moved.x - to[0]).hypot(moved.y - to[1]) < 0.25 * r, "the tip follows the pointer: {moved:?} vs {to:?}");
+    for (a, b) in before_others.iter().zip(others(&app)) {
+        assert!((a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6, "{} stays", a.joint);
+    }
+    // ⌘/Ctrl on a fingertip: reach with IK, bending the middle and end segments.
+    let (base, tip) = (find(&app, "lefthandmiddle2_bb_"), find(&app, "lefthandmiddle4_bb_"));
+    let goal = [(base.x + tip.x) / 2.0 + 0.3, (base.y + tip.y) / 2.0 + 0.3];
+    drag(&mut app, [tip.x, tip.y], goal, egui::Modifiers::COMMAND);
+    let reached = find(&app, "lefthandmiddle4_bb_");
+    assert!((reached.x - goal[0]).hypot(reached.y - goal[1]) < 0.2, "{reached:?} vs {goal:?}");
+    assert!((find(&app, "lefthandmiddle2_bb_").x - base.x).abs() < 1e-6, "the finger's base stays");
+}
+
+#[test]
+fn overlapping_dots_pick_the_one_in_front() {
+    let h = |joint: &str, x: f64, depth: f64| Handle { figure: 0, joint: joint.into(), parent: None, x, y: 0.0, end: false, finger: true, depth };
+    let dots = [h("behind", 0.0, 120.0), h("front", 0.5, 100.0), h("far-off", 30.0, 10.0)];
+    assert_eq!(at(&dots, [0.0, 0.0], 1.0).unwrap().joint, "front", "within the overlap, the nearer to the camera wins");
+    // Clearly nearer on screen beats depth.
+    let dots = [h("behind", 0.0, 120.0), h("front", 5.0, 100.0)];
+    assert_eq!(at(&dots, [0.0, 0.0], 1.0).unwrap().joint, "behind");
+    assert!(at(&dots, [50.0, 0.0], 1.0).is_none());
+}
+
+#[test]
+fn the_hand_pad_maps_corners_to_shapes() {
+    let r = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 120.0));
+    let c = pad_corners(r);
+    for (k, corner) in c.iter().enumerate() {
+        let w = pad_weights(c, *corner);
+        assert!((w[k] - 1.0).abs() < 1e-5, "{k}: {w:?}");
+        assert!((pad_point(c, w) - *corner).length() < 1e-3);
+    }
+    // Outside the triangle clamps onto it; the centre blends all three.
+    let w = pad_weights(c, egui::pos2(-50.0, -50.0));
+    assert!((w.iter().sum::<f32>() - 1.0).abs() < 1e-5 && w.iter().all(|v| *v >= 0.0));
+    let centre = egui::pos2((c[0].x + c[1].x + c[2].x) / 3.0, (c[0].y + c[1].y + c[2].y) / 3.0);
+    assert!(pad_weights(c, centre).iter().all(|v| (v - 1.0 / 3.0).abs() < 1e-4));
+    assert_eq!(pad_weights([egui::Pos2::ZERO; 3], egui::Pos2::ZERO), [1.0, 0.0, 0.0], "a degenerate pad");
+}
+
+#[test]
+fn the_hand_pad_runs_set_hand() {
+    let mut app = app();
+    let layer = app.session.active().unwrap().active_layer.unwrap().0;
+    let pad = HandPad { weights: [0.0, 0.0, 1.0], closed: 2, locked: [true, false, false, false, false], side: 1, ..Default::default() };
+    let p = pad.params(layer);
+    assert_eq!(p["closed"], "tube");
+    assert_eq!(p["side"], "left");
+    assert_eq!(p["locked"], json!(["thumb"]));
+    app.run("layer.figure.setHand", p).unwrap();
+    let f = scene(&app).figures[0].clone();
+    assert_ne!(f.root.find("lefthandmiddle2_bb_").unwrap().rotation, [1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(f.root.find("righthandmiddle2_bb_").unwrap().rotation, [1.0, 0.0, 0.0, 0.0], "left only");
+    assert_eq!(f.root.find("lefthandthumb2_bb_").unwrap().rotation, [1.0, 0.0, 0.0, 0.0], "thumb locked");
+    // The labels have their own translations: "Ring" is a finger, not a ring.
+    let ko = crate::i18n::Lang::from_pref("ko");
+    assert_eq!(crate::i18n::tr_ctx(ko, "hand", "Ring"), "약지");
+    assert_eq!(crate::i18n::tr_ctx(ko, "hand", "Spread"), "벌린 손");
+}

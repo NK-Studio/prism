@@ -3618,3 +3618,22 @@ cspTool	Space evenly	균등 배치
 	Reset Pose	자세 초기화
 	3D Figure Layer	3D 인형 레이어
 	Fit Figures	인형 맞추기
+	Zoom in on a hand to pose its fingers	손을 확대하면 손가락 관절을 움직일 수 있습니다
+	Hand Pose	손 포즈
+	A locked finger keeps its pose	잠근 손가락은 지금 자세를 유지합니다
+	Drag in the triangle to blend the hands between flat, spread and closed	삼각형 안을 드래그해 편 손, 벌린 손, 쥔 손 사이로 손 모양을 섞습니다
+hand	Both Hands	양손
+hand	Left Hand	왼손
+hand	Right Hand	오른손
+hand	Thumb	엄지
+hand	Index	검지
+hand	Middle	중지
+hand	Ring	약지
+hand	Little	소지
+hand	Flat	편 손
+hand	Spread	벌린 손
+hand	Fist	주먹
+hand	Cat Paw	고양이 손
+hand	Tube	통 쥐기
+hand	Grip	꽉 쥐기
+	Lock Fingers	손가락 잠금

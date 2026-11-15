@@ -2584,3 +2584,30 @@ procedural mannequin. Reader: `crates/io/src/sut/pose.rs` (tests use synthetic d
 - Inferred, not verified: `bone_mapping_version` 0 means CLIP STUDIO's standard figure
   skeleton; other skeletons (versions, custom 3D models) are read the same way and posed by
   joint name, which may not match their meshes.
+
+### Right side and hand setup (2026-11-15)
+
+Read-only inspection of the `.pep` files CLIP STUDIO PAINT installs under
+`Settings/PAINT/3D` (`default_pose_ver2.pep`, `handsetup_gu00..03.pep`, `handsetup_pa00..01.pep`)
+and of its Object tool › Hand pose UI on a scratch canvas. Nothing from these files is shipped:
+Prism's hand shapes are its own angles (`crates/algo/src/figure3d/hand.rs`).
+
+- Observed, right side: the default pose stores the same `rotquat` on both sides and mirrors only
+  `trans.x`. Read as plain forward kinematics its fingers come out up to 6.5 cm asymmetric (the
+  thumb on the back of the right hand); negating `trans.y` and `trans.z` of every right-side
+  joint below the shoulder and thigh makes it exactly symmetric (0.000 cm over all 67 joints).
+  `rightshoulder_bb_` and `rightupleg_bb_` carry the half-turned frame. Prism's reader applies
+  that flip, so its skeleton stays plain FK.
+- Observed, fingers: segments 2 and 3 of every digit rotate about local Z only, curling about −Z
+  (both hands, same quaternions); segment 1 adds a little local Y (the spread); segment 4 (the
+  tip) never bends anything below it. The thumb's base carries most of its turn about its own
+  axis. Bone lengths differ between files, so a hand setup changes rotations only.
+- Observed, UI: an inverted triangle. Top left a flat hand, fingers together; top right a spread
+  hand; bottom a closed hand picked from four buttons (fist, cat paw, a grip round a tube, a
+  tight grip). The pointer's position blends the three. Five lock toggles above it (thumb first)
+  keep a finger as it is. With the whole figure selected both hands follow.
+- Prism: `layer.figure.setHand {weights:[flat,spread,closed], closed, side, locked}` and Properties
+  › Hand Pose. Curl hinges come from each hand's rest geometry (bone × palm normal, the palm being
+  the side the thumb's base is on), which yields CLIP STUDIO's −Z on its skeleton and the right
+  axes on Prism's standing figure.
+- Not verified: whether CLIP STUDIO blends linearly inside the triangle; Prism does.

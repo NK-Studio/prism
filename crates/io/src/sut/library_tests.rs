@@ -620,3 +620,60 @@ fn local_poses_render() {
         eprintln!("pose{i}.png = {name}");
     }
 }
+
+/// Local look at Prism's hand setup shapes (no CLIP STUDIO data): each shape on its own left hand,
+/// fingers up, from the back, the thumb side and three-quarters, one strip per shape in
+/// `$PRISM_LOOK_OUT` (default `target/hand-shapes`).
+#[test]
+#[ignore = "writes PNGs to look at"]
+fn hand_shapes_render() {
+    use prism_algo::figure3d::hand::{Closed, HandSetup, Side, set_hand};
+    use prism_algo::figure3d::{RenderOptions, frame, orbit, render};
+    use prism_doc::figure::{Figure, FigureScene, standing_figure};
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/hand-shapes".into()));
+    std::fs::create_dir_all(&out).unwrap();
+    let shapes: Vec<(&str, [f64; 3], Closed)> = vec![
+        ("flat", [1.0, 0.0, 0.0], Closed::Fist),
+        ("spread", [0.0, 1.0, 0.0], Closed::Fist),
+        ("fist", [0.0, 0.0, 1.0], Closed::Fist),
+        ("catPaw", [0.0, 0.0, 1.0], Closed::CatPaw),
+        ("tube", [0.0, 0.0, 1.0], Closed::Tube),
+        ("grip", [0.0, 0.0, 1.0], Closed::Grip),
+        ("middle", [1.0, 1.0, 1.0], Closed::Fist),
+    ];
+    let (w, h) = (300u32, 300u32);
+    for (name, weights, closed) in shapes {
+        let mut f = standing_figure();
+        set_hand(&mut f, Side::Left, &HandSetup { weights, closed, locked: [false; 5] }).unwrap();
+        // The forearm and hand under a root that turns them fingers up (the mannequin draws no
+        // bone off the tree root).
+        let mut hand = f.root.find("lefthand_bb_").unwrap().clone();
+        hand.offset = [0.0, -4.0, 0.0];
+        let arm = prism_doc::figure::Joint { name: "leftforearm_bb_".into(), rotation: [1.0, 0.0, 0.0, 0.0], offset: [0.0; 3], children: vec![hand] };
+        let root = prism_doc::figure::Joint { name: "root_group_".into(), rotation: [0.0, 0.0, 0.0, 1.0], offset: [0.0; 3], children: vec![arm] };
+        let figure = Figure { name: name.into(), source: None, root };
+        let mut strip = vec![0u8; (w * 3 * h * 4) as usize];
+        for (k, yaw) in [0.0f64, 90.0, 45.0].into_iter().enumerate() {
+            let mut scene = FigureScene { figures: vec![figure.clone()], ..Default::default() };
+            frame(&mut scene, [150.0, 150.0], 260.0, false).unwrap();
+            orbit(&mut scene, yaw, 0.0);
+            frame(&mut scene, [150.0, 150.0], 260.0, false).unwrap();
+            let r = prism_geom::Rect::new(0, 0, w as i32, h as i32);
+            let s = render(&scene, prism_color::PixelFormat::RGBA8, r, RenderOptions::default(), &prism_raster::Interrupt::NONE).unwrap();
+            let px: Vec<u8> = s.read_region(r).iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+            for y in 0..h as usize {
+                for x in 0..w as usize {
+                    let (src, dst) = ((y * w as usize + x) * 4, (y * 3 * w as usize + k * w as usize + x) * 4);
+                    // On white, so the outline reads like CLIP STUDIO's canvas.
+                    let a = f32::from(px[src + 3]) / 255.0;
+                    for c in 0..3 {
+                        strip[dst + c] = (f32::from(px[src + c]) * a + 255.0 * (1.0 - a)).round() as u8;
+                    }
+                    strip[dst + 3] = 255;
+                }
+            }
+        }
+        let im = prism_codecs::Image::from_raw(w * 3, h, prism_codecs::ChannelLayout::Rgba, prism_codecs::SampleType::U8, strip).unwrap();
+        std::fs::write(out.join(format!("{name}.png")), prism_codecs::encode(&im, prism_codecs::Format::Png, &prism_codecs::EncodeOptions::default()).unwrap()).unwrap();
+    }
+}

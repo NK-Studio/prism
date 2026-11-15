@@ -3,8 +3,10 @@
 //! `<celsysdocument><pose version="…"><node name="root_group_" rotquat="w x y z" trans="x y z">`
 //! with the figure's joints nested inside. `trans` is the joint's position in its parent's frame
 //! (centimetres, Y up) and `rotquat` its local rotation, so the file holds both the pose and the
-//! bone lengths. The material name is `Material.MaterialName`. Evidence: docs/sut-analysis.md ›
-//! Pose materials.
+//! bone lengths. The material name is `Material.MaterialName`. Joints of the right arm and leg
+//! below the shoulder and thigh store their offsets with `y` and `z` mirrored (CLIP STUDIO's own
+//! symmetric default pose is only symmetric read that way), so they are flipped back here and
+//! Prism's skeleton stays plain forward kinematics. Evidence: docs/sut-analysis.md › Pose materials.
 use super::sqlite::{Database, Value};
 use prism_doc::figure::{Figure, Joint, MAX_DEPTH, MAX_JOINTS, MAX_NAME, normalize_quat};
 
@@ -79,6 +81,14 @@ pub fn read_pep(bytes: &[u8]) -> Result<Figure> {
     Ok(Figure { name: String::new(), source: None, root })
 }
 
+/// A right-side joint hanging off another right-side joint (everything of the right arm and leg
+/// but the shoulder and thigh, which hang off the torso): its stored offset has `y` and `z`
+/// mirrored.
+fn mirrored_side(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.starts_with("right") && n != "rightshoulder_bb_" && n != "rightupleg_bb_"
+}
+
 fn joint(node: roxmltree::Node, depth: usize, count: &mut usize) -> Result<Joint> {
     *count += 1;
     if *count > MAX_JOINTS {
@@ -89,7 +99,10 @@ fn joint(node: roxmltree::Node, depth: usize, count: &mut usize) -> Result<Joint
     }
     let name: String = node.attribute("name").unwrap_or("").chars().filter(|c| !c.is_control()).take(MAX_NAME).collect();
     let rotation = normalize_quat(numbers::<4>(node, "rotquat")?);
-    let offset = numbers::<3>(node, "trans")?;
+    let mut offset = numbers::<3>(node, "trans")?;
+    if mirrored_side(&name) {
+        offset = [offset[0], -offset[1], -offset[2]];
+    }
     let mut children = Vec::new();
     for c in node.children().filter(|n| n.has_tag_name("node")) {
         children.push(joint(c, depth + 1, count)?);
@@ -123,6 +136,38 @@ mod tests {
         assert_eq!(f.root.find("spine_bb_").unwrap().offset, [10.0, 0.0, 0.0]);
         let named = read(PEP.as_bytes(), "Pose 1", &prism_raster::Interrupt::NONE).unwrap();
         assert_eq!(named.name, "Pose 1", "a bare .pep takes the fallback name");
+    }
+
+    /// CLIP STUDIO's layout, synthetic numbers: the right shoulder's frame is the left one turned
+    /// half a turn about the body's side axis, the right side's local rotations equal the left
+    /// side's, and its stored offsets mirror only `x`. Read back, the figure is symmetric.
+    #[test]
+    fn the_right_side_reads_as_the_mirror_of_the_left() {
+        let side = |s: &str, x: f64, q: &str| {
+            format!(
+                r#"<node name="{s}shoulder_bb_" rotquat="{q}" trans="{} 10 0">
+                     <node name="{s}hand_bb_" rotquat="0.9 0.1 -0.3 0.2" trans="{} 0 0">
+                       <node name="{s}handthumb1_bb_" rotquat="0.8 0.4 -0.2 0.3" trans="{} -1 2">
+                         <node name="{s}handthumb2_bb_" rotquat="0.95 0 0 -0.3" trans="{} 0 0"/>
+                       </node>
+                     </node>
+                   </node>"#,
+                2.0 * x,
+                20.0 * x,
+                1.5 * x,
+                3.0 * x
+            )
+        };
+        let xml = format!(r#"<pose><node name="hips_bb_" rotquat="1 0 0 0" trans="0 90 0">{}{}</node></pose>"#, side("left", 1.0, "1 0 0 0"), side("right", -1.0, "0 1 0 0"));
+        let f = read_pep(xml.as_bytes()).unwrap();
+        assert_eq!(f.root.find("rightshoulder_bb_").unwrap().offset, [-2.0, 10.0, 0.0], "the shoulder hangs off the torso: as stored");
+        assert_eq!(f.root.find("righthandthumb1_bb_").unwrap().offset, [-1.5, 1.0, -2.0]);
+        let posed = prism_algo::figure3d::skeleton::pose(&f);
+        let at = |n: &str| prism_algo::figure3d::skeleton::find(&posed, n).unwrap().pos;
+        for j in ["shoulder_bb_", "hand_bb_", "handthumb1_bb_", "handthumb2_bb_"] {
+            let (l, r) = (at(&format!("left{j}")), at(&format!("right{j}")));
+            assert!((l[0] + r[0]).abs() < 1e-9 && (l[1] - r[1]).abs() < 1e-9 && (l[2] - r[2]).abs() < 1e-9, "{j}: {l:?} vs {r:?}");
+        }
     }
 
     #[test]

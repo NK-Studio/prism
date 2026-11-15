@@ -7,6 +7,7 @@
 //! (one for drafts), Lambert + ambient gray shading, and lines where the depth jumps (silhouettes
 //! and limbs in front of the body). Row bands render in parallel.
 pub mod camera;
+pub mod hand;
 pub mod ik;
 pub mod mannequin;
 pub mod math;
