@@ -204,8 +204,13 @@ pub struct PathWalker {
     wait_for_direction: bool,
     /// Screen pixels per document pixel, for the on-screen speed.
     zoom: f64,
-    /// On-screen speed of the current segment (screen pixels per ms).
-    speed_now: f32,
+    /// On-screen speed (screen pixels per ms) of the previous segment.
+    seg_speed_prev: f32,
+    /// CSP's velocity input at the last input point: the mean speed of the two segments before it.
+    speed_at_last: f32,
+    /// The velocity input at the current segment's two ends; steps between them interpolate.
+    seg_from: f32,
+    seg_to: f32,
 }
 
 impl PathWalker {
@@ -225,7 +230,10 @@ impl PathWalker {
             in_place: true,
             wait_for_direction: false,
             zoom: 1.0,
-            speed_now: 0.0,
+            seg_speed_prev: 0.0,
+            speed_at_last: 0.0,
+            seg_from: 0.0,
+            seg_to: 0.0,
         }
     }
 
@@ -253,15 +261,17 @@ impl PathWalker {
         self
     }
 
-    /// Emit a step; returns the path distance `out` asks for to the next one.
-    fn emit(&mut self, point: StrokePoint, distance: f64, out: &mut impl FnMut(StepInput) -> f64) -> f64 {
+    /// Emit a step at fraction `f` of the current segment; returns the path distance `out` asks
+    /// for to the next one.
+    fn emit(&mut self, point: StrokePoint, distance: f64, f: f64, out: &mut impl FnMut(StepInput) -> f64) -> f64 {
+        let f = if f.is_finite() { f.clamp(0.0, 1.0) as f32 } else { 1.0 };
         let s = StepInput {
             point,
             direction: self.dir,
             initial_direction: self.initial_dir.unwrap_or(self.dir),
             step: self.step,
             distance,
-            speed: self.speed_now,
+            speed: self.seg_from + (self.seg_to - self.seg_from) * f,
         };
         self.step += 1;
         out(s)
@@ -276,14 +286,23 @@ impl PathWalker {
         };
         let (dx, dy) = (p.x - a.x, p.y - a.y);
         let len = (dx * dx + dy * dy).sqrt();
-        // The segment's on-screen speed (kept across segments without a duration).
+        // The segment's on-screen speed (the previous one's for a move without a duration). CSP's
+        // velocity input at an input point is the mean of the two segments before it (one at the
+        // stroke's start, with nothing before it counted as rest), and steps between two points
+        // interpolate it (measured, docs/sut-analysis.md › Effector velocity input).
         let seg_dt = p.time - a.time;
-        if seg_dt > 0.0 && seg_dt.is_finite() && len.is_finite() {
+        let seg_speed = if seg_dt > 0.0 && seg_dt.is_finite() && len.is_finite() {
             let v = len * self.zoom / seg_dt;
-            self.speed_now = if v.is_finite() { v.min(1e6) as f32 } else { 0.0 };
-        } else if len <= 1e-9 {
-            self.speed_now = 0.0;
-        }
+            if v.is_finite() { v.min(1e6) as f32 } else { 0.0 }
+        } else if len > 1e-9 {
+            self.seg_speed_prev
+        } else {
+            0.0
+        };
+        self.seg_from = self.speed_at_last;
+        self.seg_to = 0.5 * (seg_speed + self.seg_speed_prev);
+        self.speed_at_last = self.seg_to;
+        self.seg_speed_prev = seg_speed;
         if len > 1e-9 {
             self.dir = (-dy).atan2(dx) as f32;
             if self.initial_dir.is_none() {
@@ -297,7 +316,7 @@ impl PathWalker {
             return;
         }
         if let Some(f) = self.pending_first.take() {
-            self.next_at = self.emit(f, self.travelled, out).max(0.25);
+            self.next_at = self.emit(f, self.travelled, 0.0, out).max(0.25);
         }
         if len > 1e-9 {
             // Speed spacing needs the segment's duration; without timestamps (a straight ⇧-click
@@ -306,9 +325,10 @@ impl PathWalker {
             match self.speed.filter(|_| dt > 0.0 && dt.is_finite()) {
                 None => {
                     while self.next_at <= len + 1e-9 {
-                        let q = lerp_pt(&a, &p, (self.next_at / len).min(1.0));
+                        let t = (self.next_at / len).min(1.0);
+                        let q = lerp_pt(&a, &p, t);
                         let at = self.travelled + self.next_at.min(len);
-                        self.next_at += self.emit(q, at, out).max(0.25);
+                        self.next_at += self.emit(q, at, t, out).max(0.25);
                     }
                     self.next_at -= len;
                 }
@@ -319,7 +339,7 @@ impl PathWalker {
                     while self.speed_acc >= iv && n < max_n {
                         self.speed_acc -= iv;
                         let f = ((dt - self.speed_acc) / dt).clamp(0.0, 1.0);
-                        self.emit(lerp_pt(&a, &p, f), self.travelled + f * len, out);
+                        self.emit(lerp_pt(&a, &p, f), self.travelled + f * len, f, out);
                         n += 1;
                     }
                     if n == max_n {
@@ -335,7 +355,7 @@ impl PathWalker {
                 if dt > iv * MAX_AIRBRUSH_DABS_PER_SEGMENT as f64 {
                     // A stalled or hostile timestamp must not replay an arbitrarily long backlog.
                     self.time_acc = 0.0;
-                    self.emit(p, self.travelled + len, out);
+                    self.emit(p, self.travelled + len, 1.0, out);
                     self.travelled += len;
                     self.last = Some(p);
                     return;
@@ -345,7 +365,7 @@ impl PathWalker {
                 while self.time_acc >= iv && n < MAX_AIRBRUSH_DABS_PER_SEGMENT {
                     self.time_acc -= iv;
                     let f = ((dt - self.time_acc) / dt).clamp(0.0, 1.0);
-                    self.emit(lerp_pt(&a, &p, f), self.travelled + f * len, out);
+                    self.emit(lerp_pt(&a, &p, f), self.travelled + f * len, f, out);
                     emitted_endpoint = f >= 1.0;
                     n += 1;
                 }
@@ -354,7 +374,7 @@ impl PathWalker {
         if self.in_place && len <= 1e-9 && stylus_changed(&a, &p) && !emitted_endpoint {
             // Distance spacing cannot represent a pressure/pose change in place. Emit it once,
             // keeping unchanged stationary samples inert and avoiding a duplicate airbrush dab.
-            self.next_at = self.emit(p, self.travelled + len, out).max(0.25);
+            self.next_at = self.emit(p, self.travelled + len, 1.0, out).max(0.25);
         }
         self.travelled += len;
         self.last = Some(p);
@@ -364,7 +384,7 @@ impl PathWalker {
         if let Some(f) = self.pending_first.take()
             && !self.wait_for_direction
         {
-            self.emit(f, self.travelled, out);
+            self.emit(f, self.travelled, 0.0, out);
         }
     }
 }

@@ -138,6 +138,40 @@ fn csp_speed_scales_by_on_screen_speed() {
     assert!((diameter(4.0, 2.0) - 12.0).abs() < 0.1, "twice the zoom, twice the on-screen speed: {}", diameter(4.0, 2.0));
 }
 
+/// CLIP STUDIO's velocity input at an input point is the mean speed of the two segments before
+/// it, and steps between points interpolate it (measured with 밀리펜, docs/sut-analysis.md ›
+/// Effector velocity input).
+#[test]
+fn csp_speed_is_averaged_over_two_segments_and_interpolated() {
+    use crate::dynamics::{PathWalker, StepInput};
+    let mut walker = PathWalker::new(None).with_zoom(1.0);
+    let mut seen: Vec<(f64, f32)> = Vec::new();
+    let mut out = |s: StepInput| {
+        seen.push((s.point.x, s.speed));
+        16.0
+    };
+    // 0.5 px/ms for four 8 ms samples, then 8 px/ms.
+    let mut x = 0.0;
+    for i in 0..=4 {
+        walker.push(StrokePoint { time: f64::from(i) * 8.0, ..StrokePoint::new(x, 0.0, 1.0) }, &mut out);
+        x += 4.0;
+    }
+    x -= 4.0;
+    for i in 5..=7 {
+        x += 64.0;
+        walker.push(StrokePoint { time: f64::from(i) * 8.0, ..StrokePoint::new(x, 0.0, 1.0) }, &mut out);
+    }
+    let at = |x: f64| seen.iter().find(|(px, _)| (px - x).abs() < 1e-6).map(|(_, v)| *v).unwrap();
+    // Stroke start: nothing before the first segment counts as rest.
+    assert!((at(0.0) - 0.0).abs() < 1e-6);
+    assert!((at(16.0) - 0.5).abs() < 1e-6, "{seen:?}");
+    // The first fast point averages the slow segment with the fast one; the next reaches 8.
+    assert!((at(80.0) - 4.25).abs() < 1e-6, "{seen:?}");
+    assert!((at(144.0) - 8.0).abs() < 1e-6, "{seen:?}");
+    // Halfway along the first fast segment: halfway between the two ends.
+    assert!((at(48.0) - (0.5 + 4.25) / 2.0).abs() < 1e-6, "{seen:?}");
+}
+
 #[test]
 fn csp_spacing_follows_pen_pressure() {
     // Spacing 10 % at full pressure, down to 40 % of it with no pressure (Chainmail 2-C).

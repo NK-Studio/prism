@@ -810,8 +810,32 @@ width relative to the slowest stroke:
 | CLIP STUDIO | 0.941 | 0.924 | 0.881 | 0.799 | 0.777 | 0.711 | 0.581 | 0.554 |
 | Prism | 0.965 | 0.920 | 0.840 | 0.805 | 0.738 | 0.697 | 0.557 | 0.529 |
 
-Not measured: whether CLIP STUDIO smooths the speed over several samples (single strokes at a
-constant speed cannot show it) and how a stabilizer's catch-up feeds it.
+**Smoothing (measured the same day).** 밀리펜 at 100 % view, strokes that change speed at one input
+point: 0.5 px/ms (4 px a sample) then 8 px/ms (64 px), the reverse, 0.5 then 4 px/ms, and the first
+case again with 16 ms samples. Velocity input along the path (`v` from the width as above):
+
+| Slow → fast, 8 ms samples, px past the switch | 0 | 16 | 32 | 48 | 64 | 96 | 128 | 160 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CLIP STUDIO | 0.07 | 0.21 | 0.29 | 0.37 | 0.47 | 0.75 | 0.90 | 0.98 |
+| two-segment mean, interpolated | 0.06 | 0.18 | 0.30 | 0.41 | 0.53 | 0.77 | 1.00 | 1.00 |
+| Prism after the change (app, same strokes) | 0.01 | 0.12 | 0.26 | 0.39 | 0.51 | 0.81 | 1.09 | 1.13 |
+
+- At each input point the input is the mean speed of the two segments before it: the first fast
+  point reads 0.47 (mean of 0.06 and 1: 0.53), the next 0.90–0.98; slow then 4 px/ms reads 0.28 at
+  its first point (predicted 0.28).
+- It is two samples, not a time span: with 16 ms samples the first fast point still reads 0.48 and
+  the second 0.92 (a 16 ms window would read 1 at once).
+- Between two input points the value changes linearly along the path (the dab widths in between
+  follow a straight line between the two points' values).
+- At the stroke's start the first point reads 0 and the second 0.61–0.67 for a fast start; counting
+  the missing earlier segment as rest gives 0.5, not counting it 1. Prism counts it as rest.
+
+Prism's `PathWalker` keeps the last segment speed and the input at the last point: each new point
+gets the mean of its segment's speed and the previous one, and a step at fraction `f` of a segment
+gets `from + (to − from)·f`. A move without timestamps reuses the previous segment's speed. Prism's
+values above 1 at full speed are the width difference already seen at constant speed (Prism's lines
+end slightly thinner at small sizes), not the speed. Not measured: a stabilizer's catch-up samples,
+and whether the mean is of speeds or of distance over time when the sample intervals differ.
 
 ## Effector tilt response (2026-10-16)
 
