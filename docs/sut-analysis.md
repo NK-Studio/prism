@@ -903,13 +903,42 @@ at the down position). `v` from the width against a 0.5 px/ms stroke, at the fir
   (a stall when the stroke starts, then a burst), not a rule of the effector; Prism does not
   reproduce it. Inference, not traced.
 - Within a segment CLIP STUDIO's value rises a little faster just after a point than a straight
-  line (about +0.1 in the first 8–16 px of a stroke); not modelled.
+  line (about +0.1 in the first 8–16 px of a stroke); see Between input points.
 
 Mean difference from CLIP STUDIO over 34 points of each stroke (`v` capped at 1): the first seven
 strokes 0.076 before, 0.048 after (resting 40 ms then 8 px/ms 0.184 → 0.031, 16 ms samples
 0.088 → 0.047); the seven confirming strokes 0.066 with the resting samples kept but speeds
 averaged, 0.043 with distance over time (16 ms samples 0.119 → 0.042–0.044). The stabilized
 strokes above are unchanged.
+
+**Between input points (measured the same day).** Along a segment CLIP STUDIO's value moves
+faster just after the first point than a straight line between the two points' values: after
+80 ms of rest and then 8 px/ms, the first segment (0 → 0.51) reads 0.32 halfway (a line: 0.25)
+and the second (0.51 → 0.96) 0.82 halfway (a line: 0.74). Fitted against the 19 measured strokes
+(the 14 stroke starts and the five speed steps of Smoothing), with the model's values compared
+with CLIP STUDIO directly:
+
+| Weight of the change at fraction `f` | Mean difference, 19 strokes | 10 without the start burst (5 rested starts, 5 steps) | 5 speed steps |
+| --- | ---: | ---: | ---: |
+| `f` (a straight line) | 0.040 | 0.026 | 0.017 |
+| `1 − (1 − f)^1.25` | 0.034 | 0.022 | 0.016 |
+| `1 − (1 − f)^1.5` | 0.032 | 0.022 | 0.017 |
+| `1 − (1 − f)^1.75` | 0.032 | 0.023 | 0.019 |
+
+Prism uses `1 − (1 − f)^1.5` (`CSP_SPEED_EASE`). The shape is fitted, not traced. In the app
+the same strokes compare as follows, each app's widths scaled so that its 0.5 px/ms line reads
+0.06 and its full-speed line 1:
+
+| Strokes | Straight line | Eased |
+| --- | ---: | ---: |
+| 14 stroke starts | 0.045 | 0.038 |
+| 5 speed steps | 0.023 | 0.023 |
+| all 19 | 0.039 | 0.034 |
+
+Unscaled, the app moves less (all 19: 0.038 → 0.039; speed steps 0.029 → 0.036). Prism's line
+at full speed is about 8 % thinner than CLIP STUDIO's (`v` 1.15 against 1.02 at a 6 px width),
+so a value that rises sooner also thins sooner. That width difference is separate from the
+velocity input and still open.
 
 ## Effector tilt response (2026-10-16)
 

@@ -182,8 +182,11 @@ fn csp_speed_is_averaged_over_two_segments_and_interpolated() {
     // The first fast point averages the slow segment with the fast one; the next reaches 8.
     assert!((at(80.0) - 4.25).abs() < 1e-6, "{seen:?}");
     assert!((at(144.0) - 8.0).abs() < 1e-6, "{seen:?}");
-    // Halfway along the first fast segment: halfway between the two ends.
-    assert!((at(48.0) - (0.5 + 4.25) / 2.0).abs() < 1e-6, "{seen:?}");
+    // Halfway along the first fast segment: past halfway, 1 − 0.5^1.5 of the change (CLIP STUDIO
+    // rises faster just after an input point).
+    let eased = 1.0 - 0.5f32.powf(1.5);
+    assert!((at(48.0) - (0.5 + (4.25 - 0.5) * eased)).abs() < 1e-5, "{seen:?}");
+    assert!(at(32.0) > 0.5 + (4.25 - 0.5) * 0.25 && at(64.0) < 4.25, "{seen:?}");
 }
 
 #[test]
