@@ -958,10 +958,32 @@ The same strokes in the app, mean width difference from CLIP STUDIO per column (
 | 5 stabilized strokes | 0.242 | 0.254 | 0.227 |
 | all 30 | 0.270 | 0.182 | 0.160 |
 
-Still open: the stabilized ramps and pen-up catch-up read slower in Prism than in CLIP STUDIO on
-true values (slow → fast at x 728: 0.43 against 0.56; 4 px/ms at x 1100: 0.70 against 0.80); the
-stabilizer analysis above was done
-with the width proxy.
+**Stabilized strokes re-checked through the size (same day).** The five stabilized strokes,
+CLIP STUDIO's widths read as brush sizes and compared with offline replays of the same input
+(dab diameters; the replay of the shipped model matches the app's own strokes, 0.044 against
+0.045). Mean difference in `v` (size difference / 4) per part of each stroke:
+
+| Model | 4 px/ms middle, end | 8 px/ms middle, end | 0.5 → 8 ramp, end | 8 → 0.5 drop, end | 0.5 px/ms end | Mean |
+| --- | --- | --- | --- | --- | ---: | ---: |
+| shipped: time averaged, release at pressure 0 | 0.025, 0.086 | 0.017, 0.010 | 0.104, 0.130 | 0.014, 0.017 | 0.029 | 0.044 |
+| release at the last contact pressure | 0.025, 0.292 | 0.018, 0.186 | 0.140, 0.096 | 0.014, 0.049 | 0.122 | 0.095 |
+| time not averaged | 0.103, 0.131 | 0.197, 0.177 | 0.124, 0.109 | 0.128, 0.018 | 0.029 | 0.103 |
+| both (the model before 2026-11-15) | 0.103, 0.342 | 0.202, 0.386 | 0.162, 0.373 | 0.128, 0.049 | 0.122 | 0.188 |
+| the pen-up frame as one more sample (pressure 0, 8 ms later) | 0.025, 0.127 | 0.017, 0.134 | 0.116, 0.055 | 0.014, 0.017 | 0.030 | 0.055 |
+| level 12 / 10 / 8 / 6 instead of 15 | | | 0.090 / 0.073 / 0.042 / 0.041 ramp | | | 0.049 / 0.053 / 0.056 / 0.065 |
+
+- Both earlier conclusions hold on true values: the release at pressure 0 and the averaged time
+  each halve the error.
+- What is left sits in two places. The slow → fast stroke (60 slow samples, 9 fast, then pen-up)
+  thins sooner in CLIP STUDIO (size 7.47 against 8.10 at x 756) and ends less thin (5.94 against
+  5.32 at x 1172). The 4 px/ms stroke thins about 40 px sooner after pen-up (7.76 against 8.03 at
+  x 996). A smaller window fits the ramp but breaks the 4 px/ms end, the drop and the slow end,
+  so the window is not the cause. Both lines end at the same place (within 1–2 px of the raw end).
+  With this brush the end's thinning is pressure and speed together, so these strokes cannot tell
+  which of the two differs. A brush with only velocity on its size (or only pressure) would.
+- The 8 px/ms stroke reads thinner in CLIP STUDIO between x 500 and 650 (size 6.21 against 6.64
+  at x 564) and matches after that: CLIP STUDIO's start burst (Stroke start), delayed by the
+  stabilizer. Not modelled.
 
 ## Effector tilt response (2026-10-16)
 
