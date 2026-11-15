@@ -4,13 +4,16 @@
 //! - **macOS** ([`macos::Monitor`]): an AppKit local event monitor reads the tablet fields of
 //!   each `NSEvent` (`pressure`, `tilt`, `rotation`, `subtype`, and `pointingDeviceType` from
 //!   proximity events) before winit sees the event, so every pointer event the UI handles already
-//!   has its pen sample. AppKit's block-based monitor API needs Objective-C interop, so
+//!   has its pen sample. [`macos::Monitor::install_with_queue`] also queues each reading as a
+//!   paired packet in the transport Windows uses ([`windows_ink::PenQueue`]) and turns AppKit's
+//!   mouse coalescing off, so no reading is merged away before the UI's next frame. AppKit's block-based monitor API needs Objective-C interop, so
 //!   `macos.rs` isolates its `unsafe` interop in this tested helper crate.
 //! - **Windows** ([`windows_ink`], plus `windows::message_hook` on Windows): capture paired
 //!   coordinate/pressure history before winit dispatches, disable pen press-and-hold per window,
 //!   and cancel interrupted contacts. Only `windows.rs` contains the Windows `unsafe` boundary.
-//! - **Testing without a tablet** ([`synthetic_pen`], `windows::SyntheticPen` on Windows): inject
-//!   timed pressure/tilt pen strokes through Windows Ink, the same path a physical pen takes
+//! - **Testing without a tablet** ([`synthetic_pen`], `windows::SyntheticPen` on Windows,
+//!   `macos::SyntheticPen` on macOS): inject timed pressure/tilt pen strokes through Windows Ink
+//!   or as a tablet driver's Quartz events, the same path a physical pen takes
 //!   (`examples/pen_inject.rs`; see `docs/pen-input-validation.md`).
 //!
 //! Platform glue hands raw values to pure mapping in [`appkit`] or [`windows_ink`], which

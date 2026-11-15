@@ -1,8 +1,6 @@
+use egui::accesskit::Role;
 use egui::{Key, Modifiers, vec2};
-use egui_kittest::{
-    Harness,
-    kittest::{Queryable, Role},
-};
+use egui_kittest::{Harness, kittest::Queryable};
 use serde_json::json;
 
 use super::*;

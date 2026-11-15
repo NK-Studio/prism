@@ -1,4 +1,6 @@
-//! Native pen adapters. Windows reads paired pointer history before winit consumes it.
+//! Native pen adapters. Windows reads paired pointer history before winit consumes it; macOS
+//! reads each AppKit tablet event in a local monitor. Both feed the same paired-packet transport
+//! (`windows_ink::PenQueue`) into the canvas's pen packets (`pen_input`).
 
 #[cfg(any(target_os = "macos", test))]
 use prism_tablet::Sample;
@@ -23,8 +25,6 @@ pub fn configure_windows(options: &mut eframe::NativeOptions) -> prism_tablet::w
 
 #[cfg(target_os = "windows")]
 pub fn connect_windows(ctx: &egui::Context, queue: prism_tablet::windows_ink::PenQueue) {
-    use prism_tablet::windows_ink::PenPhase;
-    use prism_ui_egui::pen_input::{Packet, Phase};
     let mut windows = std::collections::HashMap::new();
     prism_ui_egui::pen_input::install(
         ctx,
@@ -50,35 +50,109 @@ pub fn connect_windows(ctx: &egui::Context, queue: prism_tablet::windows_ink::Pe
             for error in queue.take_errors() {
                 log::warn!("pen input: {error}");
             }
+            // Client physical pixels → egui points.
             let scale = raw.viewports.get(&raw.viewport_id).and_then(|v| v.native_pixels_per_point).unwrap_or(1.0) * ctx.zoom_factor();
-            let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
-            events
-                .into_iter()
-                .map(|event| Packet {
-                    source: "windowsInk",
-                    id: u64::from(event.pointer_id),
-                    device: event.device_id as u64,
-                    phase: match event.phase {
-                        PenPhase::Down => Phase::Down,
-                        PenPhase::Move => Phase::Move,
-                        PenPhase::Up => Phase::Up,
-                        PenPhase::Cancel => Phase::Cancel,
-                        PenPhase::Hover => Phase::Hover,
-                    },
-                    pos: egui::pos2(event.x / scale, event.y / scale),
-                    sample: PenSample {
-                        pressure: event.pressure.unwrap_or(if event.pressure_supported == Some(false) { 1.0 } else { 0.0 }),
-                        tilt_x: event.tilt_x,
-                        tilt_y: event.tilt_y,
-                        rotation: event.rotation,
-                        eraser: event.eraser,
-                    },
-                    pressure_valid: event.pressure_valid,
-                    pressure_supported: event.pressure_supported,
-                    time: event.time_ms as f64,
-                    barrel: event.barrel_button,
-                })
-                .collect()
+            events.into_iter().map(|event| packet("windowsInk", event, scale)).collect()
+        }),
+    );
+}
+
+/// A transport reading as the canvas's pen packet; `scale` turns its position into egui points.
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+fn packet(source: &'static str, event: prism_tablet::windows_ink::PenEvent, scale: f32) -> prism_ui_egui::pen_input::Packet {
+    use prism_tablet::windows_ink::PenPhase;
+    use prism_ui_egui::pen_input::{Packet, Phase};
+    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    Packet {
+        source,
+        id: u64::from(event.pointer_id),
+        device: event.device_id as u64,
+        phase: match event.phase {
+            PenPhase::Down => Phase::Down,
+            PenPhase::Move => Phase::Move,
+            PenPhase::Up => Phase::Up,
+            PenPhase::Cancel => Phase::Cancel,
+            PenPhase::Hover => Phase::Hover,
+        },
+        pos: egui::pos2(event.x / scale, event.y / scale),
+        sample: PenSample {
+            pressure: event.pressure.unwrap_or(if event.pressure_supported == Some(false) { 1.0 } else { 0.0 }),
+            tilt_x: event.tilt_x,
+            tilt_y: event.tilt_y,
+            rotation: event.rotation,
+            eraser: event.eraser,
+        },
+        pressure_valid: event.pressure_valid,
+        pressure_supported: event.pressure_supported,
+        time: event.time_ms as f64,
+        barrel: event.barrel_button,
+    }
+}
+
+/// Which native window a viewport's packets come from, for transports keyed by window (macOS
+/// window numbers). egui does not expose a viewport's native window, so a viewport is bound to
+/// the one unclaimed window with pending packets in the first frame that brings it pointer
+/// events (one pen: only the window under it produces packets). Packets of a window no viewport
+/// claims (a native dialog, a closed window) are dropped after a while instead of filling the
+/// bounded queue.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Default)]
+struct WindowBinding {
+    windows: std::collections::HashMap<egui::ViewportId, usize>,
+    unclaimed: std::collections::HashMap<usize, u32>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl WindowBinding {
+    /// Frames an unclaimed window's packets may wait for a viewport (about 4 s at 60 fps).
+    const MAX_UNCLAIMED_FRAMES: u32 = 240;
+
+    /// The window to drain for `raw`'s viewport, given the windows with pending packets.
+    /// Returns windows whose packets should be discarded as the second value.
+    fn window_for(&mut self, raw: &egui::RawInput, pending: &[usize]) -> (Option<usize>, Vec<usize>) {
+        self.windows.retain(|id, _| raw.viewports.contains_key(id));
+        let claimed = |w: &usize, windows: &std::collections::HashMap<egui::ViewportId, usize>| windows.values().any(|v| v == w);
+        let unclaimed: Vec<usize> = pending.iter().copied().filter(|w| !claimed(w, &self.windows)).collect();
+        if !self.windows.contains_key(&raw.viewport_id)
+            && let [only] = unclaimed.as_slice()
+            && raw.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. }))
+        {
+            self.windows.insert(raw.viewport_id, *only);
+        }
+        let mut stale = Vec::new();
+        self.unclaimed.retain(|w, _| unclaimed.contains(w) && !claimed(w, &self.windows));
+        for w in unclaimed.into_iter().filter(|w| !claimed(w, &self.windows)) {
+            let age = self.unclaimed.entry(w).or_insert(0);
+            *age = age.saturating_add(1);
+            if *age > Self::MAX_UNCLAIMED_FRAMES {
+                stale.push(w);
+            }
+        }
+        for w in &stale {
+            self.unclaimed.remove(w);
+        }
+        (self.windows.get(&raw.viewport_id).copied(), stale)
+    }
+}
+
+/// Route the AppKit monitor's paired packets into each viewport's canvas.
+#[cfg(target_os = "macos")]
+fn connect_macos(ctx: &egui::Context, queue: prism_tablet::windows_ink::PenQueue) {
+    let mut binding = WindowBinding::default();
+    prism_ui_egui::pen_input::install(
+        ctx,
+        Box::new(move |ctx, raw| {
+            let (window, stale) = binding.window_for(raw, &queue.pending_windows());
+            for w in stale {
+                queue.drain(w);
+            }
+            for error in queue.take_errors() {
+                log::warn!("pen input: {error}");
+            }
+            let Some(window) = window else { return Vec::new() };
+            // Window-content points → egui points.
+            let scale = ctx.zoom_factor();
+            queue.drain(window).into_iter().map(|event| packet("appKit", event, scale)).collect()
         }),
     );
 }
@@ -96,11 +170,15 @@ pub fn sink(feed: StylusFeed) -> impl Fn(Option<Sample>) + Send + 'static {
 }
 
 /// Install the AppKit tablet monitor (main thread, once winit created the shared application:
-/// from eframe's app creation, not before the event loop). Keep the result until the event loop
-/// returns. On failure this logs why: pens then paint like a mouse.
+/// from eframe's app creation, not before the event loop) and route its paired packets to the
+/// canvas. Keep the result until the event loop returns. On failure this logs why: pens then
+/// paint like a mouse.
 #[cfg(target_os = "macos")]
-pub fn install_macos(feed: &StylusFeed) -> Option<prism_tablet::macos::Monitor> {
-    prism_tablet::macos::Monitor::install(sink(feed.clone())).map_err(|e| log::warn!("{e}")).ok()
+pub fn install_macos(ctx: &egui::Context, feed: &StylusFeed) -> Option<prism_tablet::macos::Monitor> {
+    let queue = prism_tablet::windows_ink::PenQueue::default();
+    let monitor = prism_tablet::macos::Monitor::install_with_queue(sink(feed.clone()), queue.clone()).map_err(|e| log::warn!("{e}")).ok()?;
+    connect_macos(ctx, queue);
+    Some(monitor)
 }
 
 #[cfg(test)]
@@ -111,6 +189,73 @@ mod tests {
     use prism_ui_egui::canvas::{ToolEvent, tool_event};
     use prism_ui_egui::state::Tool;
     use serde_json::{Value, json};
+
+    fn raw(viewport: u64, pointer: bool) -> egui::RawInput {
+        let id = egui::ViewportId::from_hash_of(viewport);
+        let mut raw = egui::RawInput { viewport_id: id, ..Default::default() };
+        raw.viewports.insert(id, Default::default());
+        raw.viewports.insert(egui::ViewportId::from_hash_of(2), Default::default());
+        raw.viewports.insert(egui::ViewportId::from_hash_of(1), Default::default());
+        if pointer {
+            raw.events.push(egui::Event::PointerMoved(egui::pos2(1.0, 1.0)));
+        }
+        raw
+    }
+
+    /// Each viewport drains only the native window it was bound to; a window nobody claims
+    /// (a native dialog) is dropped after a while instead of filling the queue.
+    #[test]
+    fn viewports_bind_to_the_window_their_pointer_events_come_from() {
+        let mut b = WindowBinding::default();
+        assert_eq!(b.window_for(&raw(1, false), &[40]), (None, vec![]), "no pointer events: no binding");
+        assert_eq!(b.window_for(&raw(1, true), &[40]).0, Some(40));
+        assert_eq!(b.window_for(&raw(1, false), &[]).0, Some(40), "stays bound");
+        // A second viewport takes the other window, never the first one's.
+        assert_eq!(b.window_for(&raw(2, true), &[40]).0, None);
+        assert_eq!(b.window_for(&raw(2, true), &[40, 41]).0, Some(41));
+        // Two unclaimed windows at once are ambiguous: wait.
+        let mut b = WindowBinding::default();
+        assert_eq!(b.window_for(&raw(1, true), &[40, 41]).0, None);
+        // An unclaimed window's packets go stale.
+        let mut b = WindowBinding::default();
+        b.window_for(&raw(1, true), &[40]);
+        let mut dropped = Vec::new();
+        for _ in 0..=WindowBinding::MAX_UNCLAIMED_FRAMES {
+            dropped.extend(b.window_for(&raw(1, false), &[40, 99]).1);
+        }
+        assert_eq!(dropped, vec![99]);
+        // A viewport that closed releases its window.
+        let mut gone = raw(2, true);
+        gone.viewports.remove(&egui::ViewportId::from_hash_of(1));
+        assert_eq!(b.window_for(&gone, &[40]).0, Some(40));
+    }
+
+    #[test]
+    fn transport_readings_become_canvas_packets() {
+        use prism_tablet::windows_ink::{PenEvent, PenPhase};
+        let event = PenEvent {
+            window: 3,
+            pointer_id: 1,
+            device_id: 1,
+            phase: PenPhase::Move,
+            x: 100.0,
+            y: 50.0,
+            time_ms: 1234,
+            pressure: Some(0.4),
+            pressure_valid: true,
+            pressure_supported: Some(true),
+            tilt_x: 10.0,
+            tilt_y: -5.0,
+            rotation: 30.0,
+            eraser: false,
+            barrel_button: false,
+        };
+        let p = packet("appKit", event, 2.0);
+        assert_eq!((p.pos, p.sample.pressure, p.time, p.source), (egui::pos2(50.0, 25.0), 0.4, 1234.0, "appKit"));
+        assert_eq!(packet("appKit", event, f32::NAN).pos, egui::pos2(100.0, 50.0), "a bad scale is 1");
+        let none = PenEvent { pressure: None, pressure_supported: None, ..event };
+        assert_eq!(packet("appKit", none, 1.0).sample.pressure, 0.0, "missing pressure is never full");
+    }
 
     #[test]
     fn samples_map_and_sanitize() {

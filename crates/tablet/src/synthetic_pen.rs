@@ -1,13 +1,18 @@
 //! Synthetic pen strokes for testing pressure without a physical tablet.
 //!
-//! A [`Stroke`] is a list of timed [`PenFrame`]s in screen pixels. On Windows,
+//! A [`Stroke`] is a list of timed [`PenFrame`]s in screen coordinates. On Windows,
 //! `windows::SyntheticPen` injects them through `InjectSyntheticPointerInput`, so they travel the
 //! same Windows Ink path as a real pen: into Prism's native capture, and equally into another
 //! application (CLIP STUDIO PAINT in TabletPC mode, Photoshop) to render a comparison oracle.
+//! On macOS, `macos::SyntheticPen` posts the tablet Quartz events a tablet driver posts
+//! ([`QuartzPen`]: proximity, then tablet-point mouse events) at the HID level, so they reach
+//! the target through the window server and AppKit like a physical pen's.
 //!
 //! This module is pure and safe: it validates frames and encodes the native flag/mask words, so
 //! the encoding is tested on every platform. Pointer flag, pen flag and pen mask values are the
 //! documented Win32 constants (`winuser.h`), restated here so the mapping compiles everywhere.
+//! Screen coordinates are physical pixels on Windows and points (Quartz global display
+//! coordinates) on macOS.
 
 use crate::Error;
 
@@ -247,9 +252,166 @@ pub fn pressure_ramp_with_hover(x: f64, y: f64, length: f64, hover_frames: usize
     Stroke::from_contact_with_hover(&samples, hover_frames)
 }
 
+/// One Quartz event the macOS synthetic pen posts. Pure data: `macos::SyntheticPen` builds and
+/// posts the matching `CGEvent`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum QuartzEvent {
+    /// `kCGEventTabletProximity`: the pen's tip or eraser end enters or leaves range.
+    Proximity { entering: bool, eraser: bool },
+    /// A mouse event with the tablet-point subtype. `kind` is the `CGEventType` (the same numbers
+    /// as `NSEventType`, see [`crate::appkit::event_type`]); `pressure` is 0..1, `tilt_x`/`tilt_y`
+    /// are AppKit's -1..1 of the device range, `rotation` is degrees, `buttons` the tip state.
+    TabletMouse { kind: usize, pressure: f64, tilt_x: f64, tilt_y: f64, rotation: f64, buttons: i64 },
+}
+
+/// Encodes [`PenFrame`]s as the Quartz event sequence of a tablet driver: proximity in before
+/// the first frame (and again when the pen flips ends), mouse moved/down/dragged/up with the
+/// tablet-point subtype, proximity out on `Leave`. The inverse of Prism's AppKit decoding
+/// ([`crate::appkit::State`]): tilt degrees become -1..1 of [`crate::appkit::TILT_DEGREES`], and
+/// W3C's +y (towards the user) becomes AppKit's -y.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QuartzPen {
+    /// The end in proximity: `Some(true)` = eraser, `None` = out of range.
+    pub proximity: Option<bool>,
+}
+
+impl QuartzPen {
+    /// The events to post for `frame`, in order.
+    pub fn events(&mut self, frame: &PenFrame) -> Vec<QuartzEvent> {
+        use crate::appkit::event_type::{LEFT_MOUSE_DOWN, LEFT_MOUSE_DRAGGED, LEFT_MOUSE_UP, MOUSE_MOVED};
+        let mut out = Vec::with_capacity(3);
+        if frame.phase == Phase::Leave {
+            if let Some(eraser) = self.proximity.take() {
+                out.push(QuartzEvent::Proximity { entering: false, eraser });
+            }
+            return out;
+        }
+        if self.proximity != Some(frame.eraser) {
+            if let Some(eraser) = self.proximity {
+                out.push(QuartzEvent::Proximity { entering: false, eraser });
+            }
+            out.push(QuartzEvent::Proximity { entering: true, eraser: frame.eraser });
+            self.proximity = Some(frame.eraser);
+        }
+        let (kind, contact) = match frame.phase {
+            Phase::Hover => (MOUSE_MOVED, false),
+            Phase::Down => (LEFT_MOUSE_DOWN, true),
+            Phase::Move => (LEFT_MOUSE_DRAGGED, true),
+            Phase::Up | Phase::Leave => (LEFT_MOUSE_UP, false),
+        };
+        let tilt = |degrees: f32| (f64::from(degrees) / crate::appkit::TILT_DEGREES).clamp(-1.0, 1.0);
+        out.push(QuartzEvent::TabletMouse {
+            kind,
+            pressure: if contact { f64::from(frame.pressure.clamp(0.0, 1.0)) } else { 0.0 },
+            tilt_x: tilt(frame.tilt_x),
+            tilt_y: -tilt(frame.tilt_y),
+            rotation: f64::from(frame.rotation.rem_euclid(360.0)),
+            buttons: i64::from(contact),
+        });
+        out
+    }
+
+    /// Events that bring a pen left in contact or in range back to rest (`last` = the last frame
+    /// posted): lift the tip, then leave range.
+    pub fn release(&mut self, last: Option<&PenFrame>) -> Vec<QuartzEvent> {
+        let mut out = Vec::new();
+        if let Some(last) = last.filter(|f| matches!(f.phase, Phase::Down | Phase::Move)) {
+            out.extend(self.events(&PenFrame { phase: Phase::Up, pressure: 0.0, ..*last }));
+        }
+        if let Some(eraser) = self.proximity.take() {
+            out.push(QuartzEvent::Proximity { entering: false, eraser });
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Decode the encoder's events with Prism's AppKit mapping: what the app would see.
+    fn decode(state: &mut crate::appkit::State, events: &[QuartzEvent]) -> Vec<crate::Update> {
+        use crate::appkit::{RawEvent, device, event_type, subtype};
+        events
+            .iter()
+            .map(|e| {
+                let raw = match *e {
+                    QuartzEvent::Proximity { entering, eraser } => RawEvent {
+                        kind: event_type::TABLET_PROXIMITY,
+                        device: if eraser { device::ERASER } else { device::PEN },
+                        entering,
+                        ..Default::default()
+                    },
+                    QuartzEvent::TabletMouse { kind, pressure, tilt_x, tilt_y, rotation, .. } => RawEvent {
+                        kind,
+                        subtype: subtype::TABLET_POINT,
+                        pressure: pressure as f32,
+                        tilt: (tilt_x, tilt_y),
+                        rotation: rotation as f32,
+                        ..Default::default()
+                    },
+                };
+                state.handle(&raw)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn quartz_sequence_matches_a_tablet_driver() {
+        use crate::appkit::event_type::*;
+        let mut pen = QuartzPen::default();
+        let stroke = pressure_ramp_with_hover(10.0, 20.0, 40.0, 2).unwrap();
+        let events: Vec<QuartzEvent> = stroke.frames().iter().flat_map(|f| pen.events(f)).collect();
+        assert_eq!(events.first(), Some(&QuartzEvent::Proximity { entering: true, eraser: false }));
+        assert_eq!(events.last(), Some(&QuartzEvent::Proximity { entering: false, eraser: false }));
+        let kinds: Vec<usize> = events.iter().filter_map(|e| if let QuartzEvent::TabletMouse { kind, .. } = e { Some(*kind) } else { None }).collect();
+        assert_eq!(&kinds[..3], &[MOUSE_MOVED, MOUSE_MOVED, LEFT_MOUSE_DOWN]);
+        assert_eq!(kinds.last(), Some(&LEFT_MOUSE_UP));
+        assert_eq!(kinds.iter().filter(|k| **k == LEFT_MOUSE_DRAGGED).count(), 10);
+        assert_eq!(pen.proximity, None);
+        // Flipping to the eraser end leaves and re-enters range with the other end.
+        let mut pen = QuartzPen { proximity: Some(false) };
+        let flip = pen.events(&PenFrame { eraser: true, ..PenFrame::new(Phase::Hover, 0.0, 0.0, 0.0, 0) });
+        assert_eq!(&flip[..2], &[QuartzEvent::Proximity { entering: false, eraser: false }, QuartzEvent::Proximity { entering: true, eraser: true }]);
+        // A leave out of range posts nothing.
+        assert!(QuartzPen::default().events(&PenFrame::new(Phase::Leave, 0.0, 0.0, 0.0, 0)).is_empty());
+    }
+
+    /// The encoder is the inverse of Prism's AppKit decoding: pressure, tilt, rotation and the
+    /// eraser end come back as injected.
+    #[test]
+    fn quartz_events_decode_back_to_the_frame() {
+        let mut pen = QuartzPen::default();
+        let mut state = crate::appkit::State::default();
+        let mut frame = PenFrame::new(Phase::Down, 5.0, 5.0, 0.35, 0);
+        (frame.tilt_x, frame.tilt_y, frame.rotation, frame.eraser) = (30.0, -15.0, 400.0, true);
+        let updates = decode(&mut state, &pen.events(&frame));
+        let Some(crate::Update::Set(Some(s))) = updates.last().copied() else { panic!("{updates:?}") };
+        assert!((s.pressure - 0.35).abs() < 1e-6, "{s:?}");
+        assert!((s.tilt_x - 30.0).abs() < 1e-4 && (s.tilt_y + 15.0).abs() < 1e-4, "{s:?}");
+        assert!((s.rotation - 40.0).abs() < 1e-4 && s.eraser, "{s:?}");
+        // Lifting keeps the stroke's pressure (AppKit mapping), leaving range is a mouse again.
+        let up = decode(&mut state, &pen.events(&PenFrame { phase: Phase::Up, ..frame }));
+        assert_eq!(up, vec![crate::Update::Keep]);
+        let leave = decode(&mut state, &pen.events(&PenFrame { phase: Phase::Leave, ..frame }));
+        assert_eq!(leave, vec![crate::Update::Set(None)]);
+        // Out-of-range tilt is clamped to the device range, never past it.
+        let mut steep = PenFrame::new(Phase::Hover, 0.0, 0.0, 0.0, 0);
+        steep.tilt_x = 89.0;
+        let QuartzEvent::TabletMouse { tilt_x, pressure, .. } = QuartzPen::default().events(&steep)[1] else { panic!() };
+        assert_eq!((tilt_x, pressure), (1.0, 0.0));
+    }
+
+    #[test]
+    fn quartz_release_lifts_and_leaves() {
+        let mut pen = QuartzPen::default();
+        let down = PenFrame::new(Phase::Down, 1.0, 2.0, 0.8, 0);
+        pen.events(&down);
+        let rest = pen.release(Some(&down));
+        assert!(matches!(rest[0], QuartzEvent::TabletMouse { kind: crate::appkit::event_type::LEFT_MOUSE_UP, buttons: 0, .. }), "{rest:?}");
+        assert_eq!(rest.last(), Some(&QuartzEvent::Proximity { entering: false, eraser: false }));
+        assert!(pen.release(None).is_empty(), "nothing left to release");
+    }
 
     #[test]
     fn flags_follow_the_injection_sequence() {

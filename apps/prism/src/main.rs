@@ -458,7 +458,7 @@ fn main() -> eframe::Result {
             // write into the stylus feed. The monitor goes in here, not before the event loop:
             // AppKit's shared application only exists once winit created it (#759).
             #[cfg(target_os = "macos")]
-            if let Some(monitor) = tablet::install_macos(&app.stylus.feed) {
+            if let Some(monitor) = tablet::install_macos(&cc.egui_ctx, &app.stylus.feed) {
                 let _ = tablet_monitor.set(monitor);
             }
             // Paths on the command line (Windows/FreeBSD file associations, `prism a.psd`).

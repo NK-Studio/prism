@@ -2458,16 +2458,16 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                 && ctx.layer_id_at(*first) == Some(response.layer_id)
             {
                 let start = xf.to_doc(*first);
-                tool_event(app, ToolEvent::Down { x: start[0], y: start[1], pressure: app.stylus.pressure() }, press_mods);
+                pointer_event(app, ToolEvent::Down { x: start[0], y: start[1], pressure: app.stylus.pressure() }, press_mods);
                 app.defer_live_stroke = true;
                 for p in points.iter().skip(1) {
                     let d = xf.to_doc(*p);
-                    tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+                    pointer_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
                 }
                 app.defer_live_stroke = false;
                 feed_live_stroke(app);
                 let end = xf.to_doc(*last);
-                tool_event(app, ToolEvent::Up { x: end[0], y: end[1] }, mods);
+                pointer_event(app, ToolEvent::Up { x: end[0], y: end[1] }, mods);
                 (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
                 app.press_stroke = false;
             }
@@ -2484,7 +2484,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                 let d = xf.to_doc(p);
                 // The press's own modifiers: a ⇧ that arrives with the click still connects the line.
                 let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
-                tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
+                pointer_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
                 app.press_stroke = app.drag.is_some();
             }
             let press_stroke = app.press_stroke;
@@ -2499,7 +2499,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                 }
                 let d = xf.to_doc(p);
                 let press_mods = if tool.is_type() { ctx.data(|d| d.get_temp(type_press)).unwrap_or(mods) } else { mods };
-                tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
+                pointer_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
             }
             if buttons.dragged || buttons.stopped || press_stroke {
                 // Feed every pointer move the OS delivered this frame, not just the latest position, so
@@ -2539,7 +2539,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                 app.defer_live_stroke = true;
                 for p in positions {
                     let d = xf.to_doc(p);
-                    tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+                    pointer_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
                 }
                 app.defer_live_stroke = false;
                 // One live-stroke update for the whole frame, not one per recovered sample.
@@ -2549,7 +2549,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
             if buttons.stopped {
                 let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
                 if let Some(d) = p {
-                    tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
+                    pointer_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
                 }
             }
             // A stroke started on the press ends with the release, whether egui saw a drag, a click,
@@ -2560,7 +2560,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                 if let Some(d) = p
                     && app.drag.is_some()
                 {
-                    tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
+                    pointer_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
                 }
             }
             if press_stroke && (app.drag.is_none() || !ui.input(|i| i.pointer.primary_down())) {
@@ -2598,8 +2598,8 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                         if tool == Tool::Move && app.ui.transform.is_none() {
                             begin_transform_controls_at(app, &ctx, &xf, p);
                         }
-                        tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, click_mods);
-                        tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods);
+                        pointer_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, click_mods);
+                        pointer_event(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods);
                     }
                 }
             }
@@ -3385,6 +3385,37 @@ fn tool_move(app: &mut PrismApp, x: f64, y: f64, pressure: f32, mods: egui::Modi
     }
 }
 
+/// A tool event from the canvas's own pointer input (not native pen packets or automation).
+/// Records it in `ui.penTrace` first when a pen is in use (see [`trace_pointer`]).
+fn pointer_event(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) {
+    trace_pointer(app, ev);
+    tool_event(app, ev, mods);
+}
+
+/// `ui.penTrace` for a pen that reaches a tool as mouse events with its sample on the side (on
+/// macOS every tool but the Brush, Pencil and Eraser, which paint from native packets and are
+/// traced there, `pen_input`). A mouse leaves the feed empty. Each entry is the pressure the
+/// tool event actually got, timed by egui's frame clock (moves batched into one frame share a
+/// time).
+fn trace_pointer(app: &mut PrismApp, ev: ToolEvent) {
+    if !app.stylus.trace_enabled || app.stylus.contact.is_some() {
+        return;
+    }
+    let Some(sample) = app.stylus.feed.get() else { return };
+    let (kind, x, y, pressure) = match ev {
+        ToolEvent::Down { x, y, pressure } => ("down", x, y, pressure),
+        ToolEvent::Move { x, y, pressure } => ("move", x, y, pressure),
+        ToolEvent::Up { x, y } => ("up", x, y, app.stylus.pressure()),
+    };
+    let source = if cfg!(target_os = "macos") { "appKit" } else { "pointer" };
+    if app.stylus.trace.len() >= 4096 {
+        app.stylus.trace.pop_front();
+    }
+    app.stylus.trace.push_back(json!({"source": source, "id": 0, "device": 0, "kind": kind, "x": x, "y": y, "pressure": pressure,
+        "pressureValid": app.stylus.sample().is_some(), "pressureSupported": true, "time": app.stylus.frame_ms,
+        "tiltX": sample.tilt_x, "tiltY": sample.tilt_y, "rotation": sample.rotation, "barrel": false}));
+}
+
 /// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) {
     // An Alt+right-drag armed for this press (`paint_mouse`): taken before anything else can
@@ -4161,6 +4192,35 @@ mod tests {
     }
 
     use super::*;
+
+    /// `ui.penTrace` records a pen that arrives as mouse events (macOS AppKit): each tool event
+    /// with the pressure it got. A mouse (empty feed) and a disabled trace record nothing.
+    #[test]
+    fn pointer_events_trace_the_pen_sample_they_paint_with() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.ui.tool = Tool::Brush;
+        let m = egui::Modifiers::NONE;
+        pointer_event(&mut app, ToolEvent::Down { x: 5.0, y: 5.0, pressure: 1.0 }, m);
+        pointer_event(&mut app, ToolEvent::Up { x: 5.0, y: 5.0 }, m);
+        assert!(app.stylus.trace.is_empty(), "trace off");
+        app.stylus.trace_enabled = true;
+        pointer_event(&mut app, ToolEvent::Down { x: 5.0, y: 5.0, pressure: 1.0 }, m);
+        pointer_event(&mut app, ToolEvent::Up { x: 5.0, y: 5.0 }, m);
+        assert!(app.stylus.trace.is_empty(), "a mouse is not traced");
+        app.stylus.feed.set(Some(crate::stylus::PenSample { pressure: 0.3, tilt_x: 20.0, ..Default::default() }));
+        let p = app.stylus.pressure();
+        pointer_event(&mut app, ToolEvent::Down { x: 10.0, y: 12.0, pressure: p }, m);
+        pointer_event(&mut app, ToolEvent::Move { x: 20.0, y: 12.0, pressure: p }, m);
+        pointer_event(&mut app, ToolEvent::Up { x: 20.0, y: 12.0 }, m);
+        let kinds: Vec<_> = app.stylus.trace.iter().map(|e| e["kind"].as_str().unwrap().to_string()).collect();
+        assert_eq!(kinds, ["down", "move", "up"]);
+        let first = &app.stylus.trace[0];
+        assert_eq!((first["x"].as_f64(), first["y"].as_f64()), (Some(10.0), Some(12.0)));
+        assert!((first["pressure"].as_f64().unwrap() - 0.3).abs() < 1e-6 && first["tiltX"].as_f64() == Some(20.0), "{first}");
+        assert_eq!(first["source"], if cfg!(target_os = "macos") { "appKit" } else { "pointer" });
+        assert_eq!(first["pressureValid"], true);
+    }
 
     /// #569: displays 1 (sRGB) and 4 (Display P3) side by side, and a document filled with an
     /// sRGB colour.

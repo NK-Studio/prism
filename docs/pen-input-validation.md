@@ -222,6 +222,80 @@ brought the previously background window forward, reached the trace without its
 with a single 16 ms hover frame, all committed. Whether a physical pen touching
 just as the window activates loses its stroke the same way is not yet established.
 
+## Synthetic pen injection on macOS (2026-11-16)
+
+The same `pen_inject` example now drives macOS. `macos::SyntheticPen` posts the
+Quartz events a tablet driver posts, at the HID level (`CGEventPost(kCGHIDEventTap)`):
+a `kCGEventTabletProximity` (pen or eraser end, entering), then mouse moved / down /
+dragged / up events with the tablet-point subtype carrying pressure, tilt (−1..1 of
+±60°) and rotation, and a proximity exit on `Leave`. They go through the window
+server and AppKit into Prism's local tablet monitor, the path a physical pen takes.
+The pure encoder (`synthetic_pen::QuartzPen`) is tested on every platform as the
+inverse of Prism's AppKit decoding, and on macOS the built `CGEvent`s are read back
+through the monitor's `read()`.
+
+```sh
+cargo run -p prism-tablet --example pen_inject -- --window Prism --list          # every match, with pid
+cargo run -p prism-tablet --example pen_inject -- --window Prism --pid PID       # 0→1→0 ramp
+cargo run -p prism-tablet --example pen_inject -- --window Prism --pid PID --file trace.json --origin X,Y --scale ZOOM
+```
+
+Differences from Windows:
+
+- Coordinates are **points** from the window frame's top-left. Prism uses a full-size
+  content view on macOS, so its frame is its client area; an app with a standard
+  title bar has its content lower. Document → window points is `origin + doc × zoom`
+  (`ui.inspect` › `views[].zoom`; the screenshot is at `pixelsPerPoint`).
+- Posting needs **Accessibility** access for the app that runs the tool (Terminal,
+  an IDE, the Claude app). Without it the tool asks macOS for the prompt and stops.
+  Reading other apps' window titles needs Screen Recording access; without it
+  `--window` still matches the application name.
+- `--pid` picks one process when two Prism instances are open.
+- `ui.penTrace` records AppKit pens as `source: "appKit"`: for the Brush, Pencil and
+  Eraser from their paired packets (below), for other tools from the mouse events they
+  follow (one entry per tool event, timed by egui's frame clock).
+
+**Verified end to end** on this machine (MacBook display, 1920×1050 pt window,
+2 px/pt, 60 fps). A 1000 pt ramp (251 contact samples, 8 ms apart) produced one
+`down`, 148 `move` and one `up` trace entry, all `source: appKit`,
+`pressureValid: true`, and one Brush Tool history step; the first stroke after
+activating the app committed. Pressure followed the ramp to within 0.026 of the
+injected value at each position (mean −0.002), in steps of 1/255. The canvas showed
+the expected tapered line. A tilted stroke (tiltX −40 → 40°, tiltY 25°, rotation
+0 → 320°) came back with the same tilt and rotation.
+
+Measured macOS gaps, as first found: only about 60 % of the samples reached the
+tool (one move per 16.7 ms frame for 8 ms input: AppKit coalesced the drags), and
+each move painted with the monitor's latest sample rather than its own (in the
+tilted stroke 31 of 47 moves carried the previous sample's pose).
+
+**Fixed the same day: paired AppKit packets.** The monitor now also turns every
+left-button tablet event into a packet (window number, window-content position,
+event timestamp, pressure, pose: `appkit::State::packet`) in the same bounded
+transport Windows Ink uses (`windows_ink::PenQueue`), and turns AppKit's mouse
+coalescing off while installed (restored on drop). The app routes them into the
+canvas's pen packets (`apps/prism/src/tablet.rs` › `connect_macos`; a viewport is
+bound to the one unclaimed window with pending packets the first time it gets
+pointer events). Brush, Pencil and Eraser paint from the packets, as on Windows;
+other tools keep following the mouse events. Re-measured with the same strokes:
+
+| | before | after |
+|---|---|---|
+| ramp moves reaching the brush (250 injected) | 148 | 250 |
+| ramp pressure error, max | 0.026 | 0.0058 |
+| tilted stroke: moves carrying their own pose | 14 / 47 | 80 / 80 |
+
+The Rectangular Marquee drawn with the synthetic pen still makes its selection
+(three runs on a fresh instance, also right after a packet brush stroke). Once, in
+an instance the maintainer had been drawing in with the mouse, two marquee strokes
+made no selection and no trace entries; this did not reproduce and its cause is
+unknown.
+
+Still open: Quartz carries mouse pressure in 8 bits (whether a physical tablet
+driver's events read finer in AppKit is not measured); a physical tablet on macOS
+has not been re-checked with the packet path; driving CLIP STUDIO PAINT or
+Photoshop on macOS with the synthetic pen is untested.
+
 ## G-pen comparison with CLIP STUDIO PAINT (2026-11-14)
 
 The same synthetic stroke drove CLIP STUDIO PAINT PRO and Prism: document x 200 → 1400 at a fixed
