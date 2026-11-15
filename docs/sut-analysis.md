@@ -1069,6 +1069,35 @@ each brush, CLIP STUDIO / Prism:
   drop give the 0.40 px. Both need a stroke that separates them better, such as a 4 px/ms stroke
   twice as long (the window full well before the lift) and a fast stroke that lifts at once.
 
+**Longer strokes (measured the same day).** The single-input copies of 밀리펜 again (deleted
+afterwards), stabilization 15, six strokes: 2 px/ms for 55 and for 25 samples, 1 px/ms for 55,
+3 px/ms for 37, 4 px/ms for 25 and 8 px/ms for 5. The window is full (15) from about the 43rd
+sample. Velocity input read through the size, CLIP STUDIO:
+
+| Pen speed | Unstabilized | Stabilized, window 6–8 | Stabilized, window 12.7 | Stabilized, window 15 |
+| --- | ---: | ---: | ---: | ---: |
+| 1 px/ms | not measured | 0.117 | 0.146 | 0.169 |
+| 2 px/ms | 0.25 | 0.249 | 0.285 | 0.30 |
+| 3 px/ms | not measured | 0.332 | 0.371 | (0.396 at 14.6) |
+| 4 px/ms | 0.415 | 0.418 | 0.486 | |
+
+- While the window is up to about 8.5 the stabilized input equals the unstabilized one (where
+  that was measured: 2 and 4 px/ms). It then
+  rises with the window, by 0.05–0.07 at 15 whatever the speed (not a fixed ratio: 1.44 at
+  1 px/ms, 1.2 at 2–4, against the value at window 6–8), and stays there once the window stops growing (2 px/ms: 0.30 from the
+  43rd to the 55th sample). Prism's weighted raw speed stays at the unstabilized value. No rule
+  is known; it starts where the window's growth falls below half a sample per input.
+- Pressure after pen-up: the same front-loaded drop on every stroke. The pressure weighted like
+  the velocity input fits two strokes better and three worse (replay 0.146 → 0.130 px mean; the
+  app 0.117), so it is not the rule either.
+- Pen-down pressure: with pressure alone on the size, fast strokes start thin in CLIP STUDIO
+  (8 px/ms: 8.89 px at x 380, 10.07 at 444; 4 px/ms: 9.40 at 380) and Prism does not. Taps
+  earlier the same day agree: a tap at pressure 1 drew exactly what a tap at 0.02 drew (25.73
+  units of coverage both; Prism 45.89 and 25.65). CLIP STUDIO appears to treat the pen-down
+  sample's pressure as 0 (or not to read it); with stabilization that 0 is averaged into the
+  first outputs. Measured with synthetic pens only, whose down frame carries the full pressure;
+  a real pen's down frame is usually light. Not modelled.
+
 ## Effector tilt response (2026-10-16)
 
 Same executable. Existing direct Ghidra outputs (`evidence/ghidra-effector.txt`,
