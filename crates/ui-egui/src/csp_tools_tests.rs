@@ -152,3 +152,40 @@ fn the_toolbar_lists_every_tool_once_in_photoshops_order() {
     assert!(chain.windows(2).all(|w| at(w[0]) < at(w[1])), "{order:?}");
     assert_eq!(order.last(), Some(&CspTool::Zoom));
 }
+
+/// The Clip Studio workspace keeps Photoshop's tool keys: V is Operation (Move), B the brushes,
+/// G Fill / Gradient, and Blend (Smudge) has none; Use Shift Key for Tool Switch is honoured.
+#[test]
+fn tool_keys_are_photoshops() {
+    assert_eq!(
+        [CspTool::MoveLayer, CspTool::Selection, CspTool::AutoSelect, CspTool::Eyedropper, CspTool::Eraser, CspTool::Text, CspTool::Figure, CspTool::Hand, CspTool::Zoom]
+            .map(CspTool::key),
+        ['V', 'M', 'W', 'I', 'E', 'T', 'U', 'H', 'Z']
+    );
+    assert!([CspTool::Pen, CspTool::Pencil, CspTool::Brush, CspTool::Airbrush, CspTool::Decoration].iter().all(|t| t.key() == 'B'));
+    assert_eq!((CspTool::Fill.key(), CspTool::Gradient.key(), CspTool::Blend.key()), ('G', 'G', '\0'));
+
+    let mut app = csp_app();
+    let ctx = egui::Context::default();
+    let press = |app: &mut PrismApp, key: egui::Key, modifiers: egui::Modifiers| {
+        let input = egui::RawInput { events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }], ..Default::default() };
+        let mut handled = false;
+        let _ = ctx.run_ui(input, |ui| handled = shortcut(app, ui.ctx()));
+        handled
+    };
+    select(&mut app, CspTool::Brush);
+    assert!(press(&mut app, egui::Key::V, egui::Modifiers::NONE));
+    assert_eq!((app.ui.csp_tool, app.ui.tool), (CspTool::MoveLayer, Tool::Move));
+    assert!(!press(&mut app, egui::Key::K, egui::Modifiers::NONE), "K is Clip Studio's key, not Photoshop's");
+    // B starts on the Brush, as in Photoshop, then cycles in toolbar order.
+    assert!(press(&mut app, egui::Key::B, egui::Modifiers::NONE));
+    assert_eq!(app.ui.csp_tool, CspTool::Brush);
+    press(&mut app, egui::Key::B, egui::Modifiers::NONE);
+    assert_eq!(app.ui.csp_tool, CspTool::Pen);
+    // With Use Shift Key for Tool Switch, B keeps the tool and ⇧B cycles.
+    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true);
+    press(&mut app, egui::Key::B, egui::Modifiers::NONE);
+    assert_eq!(app.ui.csp_tool, CspTool::Pen);
+    press(&mut app, egui::Key::B, egui::Modifiers::SHIFT);
+    assert_eq!(app.ui.csp_tool, CspTool::Pencil);
+}

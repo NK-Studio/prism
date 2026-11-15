@@ -74,9 +74,9 @@
       "do": [
         "RustRover: run \"Prism Publish Update (dry run)\" and check the printed feed, then run \"Prism Publish Update\".",
         "Terminal: `packaging/publish-update.sh` (add `--min-supported X.Y.Z` to send older versions to a manual download).",
-        "It signs the feed with ~/prism-update.key, pushes NK-Studio/prism-updates and waits until Vercel serves {version}."
+        "It signs the feed with ~/prism-update.key, uploads the .app.zip/.msi update packages (never the .dmg) to the GitHub Release v{version} (creating it from the tag), pushes NK-Studio/prism-updates and waits until Cloudflare serves {version}."
       ],
-      "verify": [{ "kind": "urlJson", "url": "https://prism-updates.vercel.app/stable/latest.json", "field": "version", "equals": "{version}" }]
+      "verify": [{ "kind": "urlJson", "url": "https://prism-updates.a62201631.workers.dev/stable/latest.json", "field": "version", "equals": "{version}" }]
     },
     {
       "id": "check-update",
@@ -85,7 +85,7 @@
       "do": [
         "On a Mac with the previous Prism (one that has in-app updates): Help › Check for Updates… finds {version}.",
         "Update → Restart to Update; Prism reopens and Help › About Prism shows {version}.",
-        "Skip for the first release with in-app updates: no installed copy can update yet."
+        "Skip for the first release with in-app updates: no installed copy can update yet. Also skip for the first release after 1.2.0: 1.2.0 reads the retired Vercel feed, so its users install that release by hand."
       ],
       "verify": []
     }

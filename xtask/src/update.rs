@@ -5,12 +5,17 @@
 //!     new minisign key pair; the public half goes to packaging/update/public.key (compiled into
 //!     the app), the secret half to the given path outside the repository (store it as the
 //!     PRISM_UPDATE_SECRET_KEY CI secret).
-//! cargo xtask update publish --site <vercel site checkout> --base-url https://prism-updates.vercel.app
-//!     [--dist dist/release] [--version X.Y.Z] [--min-supported X.Y.Z] [--notes-url URL]
-//!     [--download-url URL] [--secret PATH] [--keep 3]
-//!     copies this version's update packages to <site>/releases/<version>/, writes and signs
-//!     <site>/stable/latest.json, and removes all but the newest --keep version folders.
+//! cargo xtask update publish --site <update site checkout>
+//!     [--packages-url URL] [--dist dist/release] [--version X.Y.Z] [--min-supported X.Y.Z]
+//!     [--notes-url URL] [--download-url URL] [--secret PATH]
+//!     writes and signs <site>/stable/latest.json for this version's update packages, which are
+//!     served from --packages-url (default: this version's GitHub Release), and writes the site's
+//!     Cloudflare config if missing.
 //! ```
+//!
+//! The site serves only the feed: Cloudflare's static assets stop at 25 MiB per file, and the
+//! packages are larger, so they live on the GitHub Release (`{version}` in --packages-url is
+//! replaced by the version). The packages must be uploaded there before the feed goes live.
 //!
 //! The secret key comes from `--secret PATH` or the `PRISM_UPDATE_SECRET_KEY` environment
 //! variable (the key file's text). It is never written inside the repository.
@@ -33,7 +38,7 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     match args.first().copied() {
         Some("keygen") => keygen(root, args.get(1..).unwrap_or_default()),
         Some("publish") => publish(root, args.get(1..).unwrap_or_default()),
-        _ => Err("usage: cargo xtask update keygen --secret PATH | update publish --site DIR --base-url URL [...]".into()),
+        _ => Err("usage: cargo xtask update keygen --secret PATH | update publish --site DIR [--packages-url URL] [...]".into()),
     }
 }
 
@@ -97,11 +102,7 @@ fn secret_key(args: &[&str]) -> Result<minisign::SecretKey, String> {
 }
 
 fn publish(root: &Path, args: &[&str]) -> Result<(), String> {
-    let site = absolute(Path::new(flag(args, "--site").ok_or("--site DIR is required (the Vercel site checkout)")?))?;
-    let base = flag(args, "--base-url").ok_or("--base-url URL is required")?.trim_end_matches('/');
-    if !base.starts_with("https://") && !base.starts_with("http://localhost") && !base.starts_with("http://127.0.0.1") {
-        return Err("--base-url must be https".into());
-    }
+    let site = absolute(Path::new(flag(args, "--site").ok_or("--site DIR is required (the update site checkout)")?))?;
     let dist = match flag(args, "--dist") {
         Some(d) => absolute(Path::new(d))?,
         None => std::env::var("DIST").map(PathBuf::from).unwrap_or_else(|_| root.join("dist/release")),
@@ -111,11 +112,9 @@ fn publish(root: &Path, args: &[&str]) -> Result<(), String> {
         None => crate::version::read(&std::fs::read_to_string(root.join("Cargo.toml")).map_err(|e| e.to_string())?)?,
     };
     crate::version::validate(&version)?;
-    let keep: usize = flag(args, "--keep").map(str::parse).transpose().map_err(|e| format!("--keep: {e}"))?.unwrap_or(3).max(1);
+    let packages_url = packages_url(flag(args, "--packages-url").unwrap_or(DEFAULT_PACKAGES_URL), &version)?;
     let sk = secret_key(args)?;
 
-    let release_dir = site.join("releases").join(&version);
-    std::fs::create_dir_all(&release_dir).map_err(|e| e.to_string())?;
     let mut platforms = Map::new();
     for (suffix, key) in PACKAGES {
         let name = format!("prism-{version}-{suffix}");
@@ -124,8 +123,7 @@ fn publish(root: &Path, args: &[&str]) -> Result<(), String> {
             continue;
         }
         let bytes = std::fs::read(&src).map_err(|e| format!("{}: {e}", src.display()))?;
-        std::fs::copy(&src, release_dir.join(&name)).map_err(|e| e.to_string())?;
-        platforms.insert((*key).to_owned(), json!({"url": format!("{base}/releases/{version}/{name}"), "sha256": crate::sha256::hex(&bytes), "size": bytes.len()}));
+        platforms.insert((*key).to_owned(), json!({"url": format!("{packages_url}/{name}"), "sha256": crate::sha256::hex(&bytes), "size": bytes.len()}));
         eprintln!("  {key:<16} {name} ({} bytes)", bytes.len());
     }
     if platforms.is_empty() {
@@ -151,54 +149,63 @@ fn publish(root: &Path, args: &[&str]) -> Result<(), String> {
     std::fs::create_dir_all(&stable).map_err(|e| e.to_string())?;
     std::fs::write(stable.join("latest.json"), &text).map_err(|e| e.to_string())?;
     std::fs::write(stable.join("latest.json.minisig"), sig).map_err(|e| e.to_string())?;
-    write_vercel_config(&site)?;
-    prune(&site.join("releases"), keep)?;
-    eprintln!("wrote {} (signed); deploy the site to publish", stable.join("latest.json").display());
+    write_site_config(&site)?;
+    // Packages used to be served by the site itself; they now live on the GitHub Release.
+    let old_packages = site.join("releases");
+    if old_packages.is_dir() {
+        std::fs::remove_dir_all(&old_packages).map_err(|e| format!("{}: {e}", old_packages.display()))?;
+        eprintln!("  removed {} (packages are served from {packages_url})", old_packages.display());
+    }
+    eprintln!("wrote {} (signed); upload the packages to {packages_url}, then deploy the site", stable.join("latest.json").display());
     Ok(())
 }
 
-/// The feed must never be cached; the versioned packages never change.
-fn write_vercel_config(site: &Path) -> Result<(), String> {
-    let path = site.join("vercel.json");
-    if path.exists() {
-        return Ok(());
+/// Where the update packages are downloaded from: this version's GitHub Release.
+const DEFAULT_PACKAGES_URL: &str = "https://github.com/NK-Studio/prism/releases/download/v{version}";
+
+fn packages_url(template: &str, version: &str) -> Result<String, String> {
+    let url = template.replace("{version}", version).trim_end_matches('/').to_owned();
+    if !prism_updater_trusts(&url) {
+        return Err(format!("--packages-url must be https: {url}"));
     }
-    let cfg = json!({
-        "headers": [
-            {"source": "/stable/(.*)", "headers": [{"key": "Cache-Control", "value": "no-cache, max-age=0"}]},
-            {"source": "/releases/(.*)", "headers": [{"key": "Cache-Control", "value": "public, max-age=31536000, immutable"}]}
-        ]
-    });
-    std::fs::write(&path, serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())? + "\n").map_err(|e| e.to_string())
+    Ok(url)
 }
 
-/// Keeps the newest `keep` version folders under `releases/`.
-fn prune(releases: &Path, keep: usize) -> Result<(), String> {
-    let mut versions: Vec<(Vec<u64>, bool, PathBuf)> = std::fs::read_dir(releases)
-        .map_err(|e| e.to_string())?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            version_key(&name).map(|(nums, release)| (nums, release, e.path()))
-        })
-        .collect();
-    versions.sort_by(|a, b| (&b.0, b.1).cmp(&(&a.0, a.1)));
-    for (_, _, path) in versions.into_iter().skip(keep) {
-        eprintln!("  pruning {}", path.display());
-        std::fs::remove_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+/// Mirrors `prism_updater::manifest::is_trusted_url`: Prism refuses anything else.
+fn prism_updater_trusts(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("https://") || ["http://localhost:", "http://localhost/", "http://127.0.0.1:", "http://127.0.0.1/"].iter().any(|p| lower.starts_with(p))
+}
+
+/// Site files written once and then left alone (edit them in the site repository).
+/// Cloudflare Workers Builds deploys the site repository with `wrangler.jsonc`.
+const SITE_FILES: &[(&str, &str)] = &[
+    (
+        "wrangler.jsonc",
+        "// Cloudflare Workers Builds deploys this repository on push: a static site with the Prism\n\
+         // update feed (written by `cargo xtask update publish` in the Prism repository).\n\
+         {\n  \"name\": \"prism-updates\",\n  \"compatibility_date\": \"2026-11-01\",\n  \"assets\": {\n    \"directory\": \".\"\n  }\n}\n",
+    ),
+    (
+        // Not uploaded as assets (Cloudflare reads `_headers` itself).
+        ".assetsignore",
+        ".git\n.github\n.assetsignore\nwrangler.jsonc\nvercel.json\nREADME.md\n",
+    ),
+    (
+        // The feed must never be cached, so a new version reaches everyone at once.
+        "_headers",
+        "/stable/*\n  Cache-Control: no-cache, max-age=0\n",
+    ),
+];
+
+fn write_site_config(site: &Path) -> Result<(), String> {
+    for (name, text) in SITE_FILES {
+        let path = site.join(name);
+        if !path.exists() {
+            std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
     }
     Ok(())
-}
-
-/// Sort key for `X.Y.Z[-pre]`: numbers, then "is a final release" (1.2.0 > 1.2.0-rc.1).
-fn version_key(v: &str) -> Option<(Vec<u64>, bool)> {
-    let (core, pre) = match v.split_once('-') {
-        Some((c, p)) => (c, Some(p)),
-        None => (v, None),
-    };
-    let nums: Option<Vec<u64>> = core.split('.').map(|n| n.parse().ok()).collect();
-    nums.filter(|n| n.len() == 3).map(|n| (n, pre.is_none()))
 }
 
 fn today() -> String {
@@ -218,23 +225,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn versions_sort_newest_first() {
-        assert!(version_key("1.10.0") > version_key("1.9.3"));
-        assert!(version_key("1.2.0") > version_key("1.2.0-rc.1"));
-        assert_eq!(version_key("stable"), None);
-        assert_eq!(version_key("1.2"), None);
+    fn packages_come_from_the_github_release() {
+        assert_eq!(packages_url(DEFAULT_PACKAGES_URL, "1.3.0").unwrap(), "https://github.com/NK-Studio/prism/releases/download/v1.3.0");
+        assert_eq!(packages_url("https://example.com/p/{version}/", "2.0.0").unwrap(), "https://example.com/p/2.0.0");
+        assert!(packages_url("http://example.com/{version}", "1.0.0").is_err());
     }
 
     #[test]
-    fn prune_keeps_three() {
-        let dir = std::env::temp_dir().join(format!("xtask-prune-{}", std::process::id()));
-        for v in ["1.0.0", "1.1.0", "1.2.0-rc.1", "1.2.0", "1.10.0"] {
-            std::fs::create_dir_all(dir.join(v)).unwrap();
-        }
-        prune(&dir, 3).unwrap();
-        let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
-        left.sort();
-        assert_eq!(left, ["1.10.0", "1.2.0", "1.2.0-rc.1"]);
+    fn site_config_is_written_once() {
+        let dir = std::env::temp_dir().join(format!("xtask-site-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("_headers"), "custom\n").unwrap();
+        write_site_config(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("_headers")).unwrap(), "custom\n");
+        let wrangler = std::fs::read_to_string(dir.join("wrangler.jsonc")).unwrap();
+        assert!(wrangler.contains("\"name\": \"prism-updates\""));
+        let ignore = std::fs::read_to_string(dir.join(".assetsignore")).unwrap();
+        assert!(ignore.lines().any(|l| l == ".git"));
+        assert!(!dir.join("vercel.json").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

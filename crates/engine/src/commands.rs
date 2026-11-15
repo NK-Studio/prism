@@ -562,11 +562,14 @@ fn build() -> Vec<CommandSpec> {
             }
         ),
         // Layer
-        cmd!("layer.new.layer", "Layer…", ["Layer", "New"], Some("Cmd+Shift+N"), r##"{"name":str?,"into":bool=false (true: with a group active, the new layer goes to the top inside it, as CLIP STUDIO places it)}"##, has_doc, |s, p| {
+        cmd!("layer.new.layer", "Layer…", ["Layer", "New"], Some("Cmd+Shift+N"), r##"{"name":str?,"into":bool=false (true: with a group active, the new layer goes to the top inside it, as CLIP STUDIO places it),"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","clipped":bool=false (Use Previous Layer to Create Clipping Mask),"blend":"Multiply|…"="Normal","opacity":0..1=1,"fillNeutral":bool=false (fill with the blend mode's neutral colour: white, black or 50% gray; an error for modes without one)} (the New Layer dialog's options; no params: a plain transparent layer)"##, has_doc, |s, p| {
             let into = into_param("layer.new.layer", p)?;
+            let options = crate::new_layer::Options::from_params(p)?;
             let id = s.edit("New Layer", |doc, active| {
                 let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| doc.next_layer_name("Layer"));
-                let id = insert_new(doc, *active, into, Layer::raster(name, doc.pixel_format()));
+                let mut layer = Layer::raster(name, doc.pixel_format());
+                options.apply(doc, &mut layer);
+                let id = insert_new(doc, *active, into, layer);
                 *active = Some(id);
                 Ok(id)
             })?;

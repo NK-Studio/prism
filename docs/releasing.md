@@ -187,7 +187,8 @@ and lists the tarball, which checks the layout without a FreeBSD machine.
 
 ## In-app updates
 
-Installed copies find new versions through a signed feed on a Vercel site (`crates/updater`,
+Installed copies find new versions through a signed feed on a Cloudflare Workers static site
+(`https://prism-updates.a62201631.workers.dev`; `crates/updater`,
 `crates/ui-egui/src/update_ui.rs`). Help › Check for Updates… checks on demand. With
 *Preferences › Integrations › Check for updates* on (the default), Prism also checks once a day
 at launch. It announces a new version unless the user chose *Skip This Version*.
@@ -201,17 +202,29 @@ failure). Prism never patches files inside it, which would break the signature. 
 MSI (a major upgrade) is run with `msiexec /passive` after Prism quits. Portable copies, FreeBSD
 and copies that can't write their own folder get a download link instead.
 
-**Site layout** (the Vercel project, a separate repository):
+**Site layout** (`NK-Studio/prism-updates`, a separate repository deployed by Cloudflare Workers
+Builds on push):
 
 ```text
-stable/latest.json            the feed (never cached; vercel.json is written by the publish step)
+stable/latest.json            the feed (never cached: _headers)
 stable/latest.json.minisig    its signature
-releases/<version>/           update packages: prism-<v>-macos-<arch>.app.zip, prism-<v>-windows-<arch>.msi
+wrangler.jsonc, .assetsignore, _headers   written once by the publish step
 ```
 
-Only the newest three version folders are kept. To roll back, point `latest.json` at an older
-kept version (Prism never downgrades on its own, so this only stops further updates to the bad
-one). `min_supported` sends anything older to the download page.
+**Packages live on the GitHub Release**, not on the site: Cloudflare's static assets stop at
+25 MiB per file and the update packages are bigger. The feed points at
+`https://github.com/NK-Studio/prism/releases/download/v<version>/prism-<v>-macos-<arch>.app.zip`
+(and `prism-<v>-windows-<arch>.msi`); the updater follows GitHub's redirect and still checks the
+signed size and hash. Only the update packages go on the release, never the `.dmg` installers.
+
+**Copies from before the move.** Prism 1.2.0 and earlier have the old Vercel feed
+(`https://prism-updates.vercel.app/stable/latest.json`) compiled in, and that site no longer
+exists (retired 2026-11-16). They never hear of a new version: their users install the first
+release after 1.2.0 by hand, and from then on it updates through the Cloudflare feed.
+
+To roll back, point `latest.json` at an older version whose release still has its packages
+(Prism never downgrades on its own, so this only stops further updates to the bad one).
+`min_supported` sends anything older to the download page.
 
 **One-time setup:**
 
@@ -221,23 +234,27 @@ one). `min_supported` sends anything older to the download page.
    losing it means shipping a new public key by hand.
 2. Put the feed URL (`https://<site>/stable/latest.json`) in `packaging/update/feed-url.txt` and
    commit it. Builds without the key or the URL simply have updates turned off.
-3. Create the site repository, connect it to Vercel (deploys on push), and set
-   `vars.UPDATE_SITE_REPO`, `vars.UPDATE_BASE_URL` and `secrets.UPDATE_SITE_TOKEN` (a token that
-   can push to it) in the `release` environment.
+3. Create the site repository and connect it in the Cloudflare dashboard: Workers & Pages →
+   Create → Import a repository → `NK-Studio/prism-updates`, Worker name `prism-updates` (must
+   match `wrangler.jsonc`), no build command, deploy command `npx wrangler deploy`, production
+   branch `main`. Set `vars.UPDATE_SITE_REPO` and `secrets.UPDATE_SITE_TOKEN` (a token that can
+   push to it) in the `release` environment.
 
-**Each release:** after publishing the GitHub Release, run *Actions → Publish update* with the
-version. It copies the release's update packages into the site, signs the feed, prunes old
-versions and pushes; Vercel deploys. Locally the same step is:
+**Each release:** after publishing the GitHub Release with the update packages attached, run
+*Actions → Publish update* with the version. It signs the feed for the release's packages and
+pushes; Cloudflare deploys. Locally the same step is:
 
 ```sh
-cargo xtask update publish --site ../prism-updates --base-url https://<site> --secret ~/prism-update.key
+cargo xtask update publish --site ../prism-updates --secret ~/prism-update.key
 ```
 
-**Without GitHub Actions** (local builds): `packaging/publish-update.sh` does the same as the
-workflow from this machine. It clones `../prism-updates`, publishes `dist/release` with
-`~/prism-update.key`, force-pushes a single commit (as the `NK-Studio` gh account) and waits for
-the live feed. Add `--dry-run` to only print the feed. RustRover has *Prism Publish Update* and
-*Prism Publish Update (dry run)* for it.
+**Without GitHub Actions** (local builds): `packaging/publish-update.sh` does the same from this
+machine. It clones `../prism-updates`, signs the feed for `dist/release` with
+`~/prism-update.key`, uploads the update packages to the GitHub Release `v<version>` (creating it
+from the pushed tag) and checks they download, force-pushes a single commit (as the `NK-Studio`
+gh account) and waits for the live feed. Add `--dry-run` to only print the feed (nothing is
+uploaded or pushed). RustRover has *Prism Publish Update* and *Prism Publish Update (dry run)*
+for it.
 
 **Release checklist:** `cargo xtask release start X.Y.Z` walks a release step by step: version,
 commit, macOS build, smoke test, Windows build, tag, installers, feed, update check. The steps

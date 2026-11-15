@@ -108,6 +108,7 @@ pub mod native_menu;
 pub mod native_popup;
 pub mod home_ui;
 pub mod new_doc_ui;
+pub mod new_layer_ui;
 pub mod notices;
 mod opacity_keys;
 pub mod outline;
@@ -1311,6 +1312,10 @@ impl eframe::App for PrismApp {
             ui.disable();
         }
         let chrome = !self.ui.view.hides_chrome();
+        // The Home screen fills the window under the menu bar, like Photoshop's: no options bar,
+        // tools, panels or floating windows around it.
+        let home = home_ui::up(self);
+        let workspace = chrome && !home;
         if !chrome && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             let _ = menus::invoke(self, &ctx, "view.screenMode.standard", serde_json::json!({}));
         }
@@ -1326,43 +1331,43 @@ impl eframe::App for PrismApp {
             panels::title_bar(self, ui);
         }
         lap(&mut self.perf, "uiTitleBar");
-        if chrome && self.ui.panels.options_bar {
+        if workspace && self.ui.panels.options_bar {
             panels::options_bar(self, ui);
         }
         lap(&mut self.perf, "uiOptionsBar");
-        if chrome && self.ui.panels.status_bar {
+        if workspace && self.ui.panels.status_bar {
             panels::status_bar(self, ui);
         }
         // Window › Tools docks at the left edge, or between the canvas and the panel dock.
         let tools_work = ui.available_rect_before_wrap();
         let tools_dock = self.ui.tools.dock;
-        if chrome && self.ui.panels.toolbar && tools_dock == tools_window::ToolsDock::Left {
+        if workspace && self.ui.panels.toolbar && tools_dock == tools_window::ToolsDock::Left {
             panels::toolbar(self, ui);
         }
         lap(&mut self.perf, "uiBars");
         // Panel groups: the main dock, extra dock columns, floating windows (`dock_*`).
         dock_model::sync(&mut self.ui);
-        if chrome {
+        if workspace {
             dock_float::columns(self, ui, dock_model::Side::Left);
         }
         lap(&mut self.perf, "uiDockLeft");
-        if chrome && self.ui.panels.dock {
+        if workspace && self.ui.panels.dock {
             panels::right_dock(self, ui);
         }
         lap(&mut self.perf, "uiDock");
-        if chrome {
+        if workspace {
             dock_float::columns(self, ui, dock_model::Side::Right);
         }
         let tools_right = ui.available_rect_before_wrap().right();
         // Docked beside the panel groups, it falls back to the canvas' right while ⇧Tab hides them.
         let beside_hidden_dock = tools_dock == tools_window::ToolsDock::Panels && !self.ui.panels.dock;
-        if chrome && self.ui.panels.toolbar && (tools_dock == tools_window::ToolsDock::Right || beside_hidden_dock) {
+        if workspace && self.ui.panels.toolbar && (tools_dock == tools_window::ToolsDock::Right || beside_hidden_dock) {
             panels::toolbar(self, ui);
         }
-        if chrome {
+        if workspace {
             tools_window::track_drag(self, &ctx, tools_work, tools_right);
         }
-        if chrome {
+        if workspace {
             dock_float::columns(self, ui, dock_model::Side::Bottom);
             tool_sliders::docked(self, ui);
         }
@@ -1373,11 +1378,13 @@ impl eframe::App for PrismApp {
             canvas::document_area(self, ui);
         });
         lap(&mut self.perf, "uiCanvas");
-        panels::properties_window(self, &ctx);
-        lap(&mut self.perf, "uiPropertiesWindow");
-        brush_panel::window(self, &ctx);
-        lap(&mut self.perf, "uiBrushWindow");
-        if chrome {
+        if !home {
+            panels::properties_window(self, &ctx);
+            lap(&mut self.perf, "uiPropertiesWindow");
+            brush_panel::window(self, &ctx);
+            lap(&mut self.perf, "uiBrushWindow");
+        }
+        if workspace {
             tool_sliders::window(self, &ctx);
             tools_window::floating(self, &ctx);
             lap(&mut self.perf, "uiToolWindows");
@@ -1386,10 +1393,12 @@ impl eframe::App for PrismApp {
             dock_float::flyout(self, &ctx);
             dock_drag::finish(self, &ctx);
         }
-        preset_panels::windows(self, &ctx);
-        type_panels_ui::windows(self, &ctx);
-        analysis_ui::windows(self, &ctx);
-        timeline_ui::windows(self, &ctx);
+        if !home {
+            preset_panels::windows(self, &ctx);
+            type_panels_ui::windows(self, &ctx);
+            analysis_ui::windows(self, &ctx);
+            timeline_ui::windows(self, &ctx);
+        }
         workspace_ui::windows(self, &ctx);
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
@@ -1402,6 +1411,7 @@ impl eframe::App for PrismApp {
             camera_raw_ui::show(self, &ctx);
             wide_angle_ui::show(self, &ctx);
         }
+        // Floating document windows are separate OS windows: they stay, as their own windows.
         canvas::extra_windows(self, &ctx);
         // The main window's menus open above the floating document windows.
         doc_windows::raise_main_over_popups(self, &ctx);

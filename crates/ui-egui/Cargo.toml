@@ -35,6 +35,9 @@ egui = { workspace = true }
 # Native window references for parenting file dialogs to the originating viewport.
 winit = { version = "=0.30.13", default-features = false }
 egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
+# The tool cursors (`tool_cursor/art.rs`) rasterize their SVGs to OS cursor bitmaps. Already linked
+# through egui_extras' "svg" feature, at the same version.
+resvg = { version = "0.45", default-features = false }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

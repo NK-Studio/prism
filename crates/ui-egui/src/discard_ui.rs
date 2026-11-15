@@ -39,7 +39,14 @@ struct Entry {
     tries: u8,
     /// When it started to appear (`InputState::time`); `-inf` shows it at once.
     shown_at: Option<f64>,
+    /// The next document's question in a window already up: it fades in again without being
+    /// hidden first (see [`fade_window`]).
+    stay_up: bool,
 }
+
+/// The least opacity a prompt that stays up fades in from: a fully clear layered window lets
+/// clicks through to the window behind it.
+const STAY_UP_MIN_ALPHA: f32 = 0.02;
 
 fn index_of(app: &PrismApp, id: DocId) -> Option<usize> {
     app.session.documents().iter().position(|d| d.doc.id == id)
@@ -136,18 +143,46 @@ pub fn guard_window_close(app: &mut PrismApp, ctx: &egui::Context) {
     }
 }
 
+/// Commands that close several documents: each one closes as soon as it is answered, as in
+/// Photoshop, rather than all of them together once the last one is.
+fn closes_each(id: &str) -> bool {
+    matches!(id, "file.closeAll" | "file.closeOthers" | EXIT)
+}
+
 /// Moves on to the next document, or runs the parked action once none are left.
 fn advance(app: &mut PrismApp, ctx: &egui::Context) {
     let Some(p) = app.discard.as_mut() else { return };
-    if !p.docs.is_empty() {
-        p.docs.remove(0);
+    let answered = (!p.docs.is_empty()).then(|| p.docs.remove(0));
+    if p.docs.is_empty() {
+        return run_parked(app, ctx);
     }
-    if !p.docs.is_empty() {
-        // The next document is asked about in a prompt of its own: it appears afresh, animated.
-        p.entry = Entry::default();
+    if closes_each(&p.id)
+        && let Some(i) = answered.and_then(|doc| index_of(app, doc))
+    {
+        // Saved or not saved: the answered document closes now; the rest are still asked about.
+        if let Err(e) = crate::menus::invoke_unguarded(app, ctx, "file.close", json!({"document": i})) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        // The prompt moves to the main window if it was over the window that just closed.
+        if let Some(p) = app.discard.as_mut()
+            && p.window.is_some_and(|w| !app.ui.windows.iter().any(|x| x.id == w && x.open))
+        {
+            p.window = None;
+        }
+    }
+    if let Some(p) = app.discard.as_mut() {
+        // The next document is asked about in a prompt that eases in afresh. Its own window
+        // fades in again where it is, without being hidden and measured again first: hidden, the
+        // OS window lost the pointer over it, so clicking the next answer without moving the
+        // mouse (No, No, No…) did nothing.
+        p.entry = if ctx.embed_viewports() { Entry::default() } else { Entry { remeasured: true, stay_up: true, ..Entry::default() } };
         p.presented = false;
-        return;
     }
+}
+
+/// Runs the parked action once every document has been answered.
+fn run_parked(app: &mut PrismApp, ctx: &egui::Context) {
     let Some(Prompt { id, mut params, target, .. }) = app.discard.take() else { return };
     if id == EXIT {
         app.allow_close = true;
@@ -478,6 +513,23 @@ fn fade_window(app: &mut PrismApp, ctx: &egui::Context, id: egui::Id) -> f32 {
     let Some(p) = &mut app.discard else { return 1.0 };
     let e = &mut p.entry;
     let now = ctx.input(|i| i.time);
+    if e.stay_up {
+        // Already shown: fade in again from almost clear, never hidden in between.
+        crate::floating_window::hold(ctx, id, false);
+        let progress = eased_since(*e.shown_at.get_or_insert(now), now);
+        let alpha = progress.max(STAY_UP_MIN_ALPHA);
+        if e.alpha != Some(alpha)
+            && let Some(set) = app.services.window_opacity.as_mut()
+            && set(ctx, alpha)
+        {
+            e.alpha = Some(alpha);
+        }
+        if e.alpha.is_some_and(|a| a < 1.0) {
+            // Until it is opaque again (a failed step is retried, never left translucent).
+            ctx.request_repaint();
+        }
+        return progress;
+    }
     let size = ctx.data(|m| m.get_temp::<egui::Vec2>(id.with("size")));
     let settled = size.is_some_and(|s| ctx.input(|i| i.viewport().inner_rect).is_some_and(|r| (r.size() - s).length() < 2.0));
     let ready = settled && e.alpha == Some(0.0);
@@ -603,11 +655,80 @@ mod tests {
         let ctx = egui::Context::default();
         make_dirty(&mut app, 0);
         make_dirty(&mut app, 2);
+        let (first, rest) = (doc_id(&app, 0), [doc_id(&app, 1), doc_id(&app, 2)]);
         crate::menus::invoke(&mut app, &ctx, "file.closeAll", json!({})).unwrap();
         advance(&mut app, &ctx);
-        assert_eq!(app.session.documents().len(), 3, "still waiting on the second document");
+        // The answered document's tab goes at once; the others wait for the second answer.
+        assert!(index_of(&app, first).is_none());
+        assert_eq!(app.session.documents().iter().map(|d| d.doc.id).collect::<Vec<_>>(), rest);
         advance(&mut app, &ctx);
         assert!(app.session.documents().is_empty());
+    }
+
+    #[test]
+    fn its_own_window_stays_up_between_documents_so_repeated_clicks_land() {
+        let mut app = app_with_docs(3);
+        for i in 0..3 {
+            make_dirty(&mut app, i);
+        }
+        assert!(intercept(&mut app, "file.closeAll", &Value::Null));
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let id = egui::Id::new("discard-prompt");
+        // The first prompt has been laid out and has faded in.
+        if let Some(p) = app.discard.as_mut() {
+            p.entry = Entry { remeasured: true, alpha: Some(1.0), tries: 0, shown_at: Some(0.0), stay_up: false };
+        }
+        let size = egui::vec2(300.0, 120.0);
+        ctx.data_mut(|m| m.insert_temp(id.with("size"), size));
+        crate::floating_window::hold(&ctx, id, false);
+        let set = std::rc::Rc::new(std::cell::RefCell::new(Vec::<f32>::new()));
+        let log = set.clone();
+        app.services.window_opacity = Some(Box::new(move |_, a| {
+            log.borrow_mut().push(a);
+            true
+        }));
+        advance(&mut app, &ctx);
+        assert!(crate::floating_window::shown(&ctx, id), "never hidden in between");
+        // The second question fades in again, in the window that stayed up, never fully clear.
+        let seen: Vec<f32> = (0..=15).map(|i| fade_frame(&mut app, &ctx, 1.0 + f64::from(i) / 60.0, Some(size))).collect();
+        assert!(crate::floating_window::shown(&ctx, id), "still shown while it fades");
+        assert!(seen[0] < 0.5 && seen.windows(2).all(|w| w[0] <= w[1]), "{seen:?}");
+        assert_eq!(seen.last().copied(), Some(1.0));
+        let set = set.borrow();
+        assert!(set.iter().all(|&a| a >= STAY_UP_MIN_ALPHA), "clicks still land: {set:?}");
+        assert_eq!(set.last().copied(), Some(1.0), "left opaque: {set:?}");
+    }
+
+    #[test]
+    fn quitting_closes_each_answered_document_and_cancel_keeps_the_rest() {
+        let mut app = app_with_docs(3);
+        let ctx = egui::Context::default();
+        for i in 0..3 {
+            make_dirty(&mut app, i);
+        }
+        assert!(intercept(&mut app, EXIT, &Value::Null));
+        advance(&mut app, &ctx);
+        assert_eq!(app.session.documents().len(), 2);
+        assert_eq!(app.discard.as_ref().map(|p| p.docs.len()), Some(2));
+        // Cancel on the second: the remaining documents stay open, and Prism stays up.
+        app.discard = None;
+        assert_eq!(app.session.documents().len(), 2);
+        assert!(!app.allow_close);
+    }
+
+    #[test]
+    fn close_others_closes_each_answered_document_but_keeps_its_target() {
+        let mut app = app_with_docs(3);
+        let ctx = egui::Context::default();
+        make_dirty(&mut app, 1);
+        make_dirty(&mut app, 2);
+        let keep = doc_id(&app, 0);
+        crate::menus::invoke(&mut app, &ctx, "file.closeOthers", json!({"document": 0})).unwrap();
+        advance(&mut app, &ctx);
+        assert_eq!(app.session.documents().len(), 2);
+        advance(&mut app, &ctx);
+        assert_eq!(app.session.documents().iter().map(|d| d.doc.id).collect::<Vec<_>>(), [keep]);
     }
 
     #[test]
@@ -924,7 +1045,7 @@ mod tests {
             h.key_press(Key::Escape);
             h.run_steps(2);
             assert!(h.state().discard.is_none());
-            assert_eq!(h.state().session.documents().len(), 2, "Cancel closed nothing");
+            assert_eq!(h.state().session.documents().len(), 1, "N closed the first; Cancel kept the second");
         }
     }
 
@@ -947,7 +1068,7 @@ mod tests {
         h.key_press(Key::C);
         h.run_steps(2);
         assert!(h.state().discard.is_none());
-        assert_eq!(h.state().session.documents().len(), 2, "Cancel closed nothing");
+        assert_eq!(h.state().session.documents().len(), 1, "D closed the first; Cancel kept the second");
     }
 
     #[test]

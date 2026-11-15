@@ -1,5 +1,7 @@
-//! The Home screen, laid out like Photoshop's: New file and Open on the left, the recently
-//! opened Prism and Photoshop documents (`.prism`, `.psd`, `.psb`) as thumbnail cards on the right.
+//! The Home screen, laid out like Photoshop's: it fills the window under the menu bar (no options
+//! bar, tools or panels), with the app mark in a bar across the top, New file and Open on the
+//! left, and the recently opened Prism and Photoshop documents (`.prism`, `.psd`, `.psb`) as
+//! thumbnail cards in a centred grid.
 //! Thumbnails are read on a worker thread (`prism_io::thumbnail`), one file at a time, and cached
 //! per path until the file changes.
 
@@ -14,6 +16,12 @@ use crate::theme::Tokens;
 
 /// Width of the left column (New file, Open, Home).
 const SIDEBAR_W: f32 = 200.0;
+/// The bar across the top holding the app mark.
+const TOP_BAR_H: f32 = 52.0;
+/// Space between recent cards.
+const GAP: f32 = 12.0;
+/// The recent grid never grows wider than this many cards, so it stays centred on wide windows.
+const MAX_COLUMNS: usize = 7;
 /// A recent-file card and its thumbnail area.
 const CARD: egui::Vec2 = vec2(170.0, 176.0);
 const THUMB_H: f32 = 118.0;
@@ -21,6 +29,21 @@ const THUMB_H: f32 = 118.0;
 const THUMB_PX: u32 = 320;
 /// How often a cached thumbnail checks whether its file changed.
 const RECHECK: Duration = Duration::from_secs(2);
+
+/// Is the Home screen up? It shows over everything with no documents (Preferences › General ›
+/// Auto show the Home Screen) or after the Home button, but not while files are still opening
+/// (they have tabs before they have documents).
+pub fn up(app: &PrismApp) -> bool {
+    app.jobs.opens.is_empty() && app.ui.chrome.shows_home(app.session.documents().len(), app.session.prefs().general.auto_show_home_screen)
+}
+
+/// Leave the Home screen for the open documents (the app mark or Esc); nothing to go back to
+/// without any.
+fn leave(app: &mut PrismApp) {
+    if !app.session.documents().is_empty() {
+        app.ui.chrome.home = None;
+    }
+}
 
 /// Is `path` a document the Home screen lists (Prism's own and Photoshop's)?
 pub fn lists(path: &str) -> bool {
@@ -177,14 +200,30 @@ fn card(ui: &mut egui::Ui, path: &str) -> bool {
     resp.on_hover_text(path).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
+/// The bar across the top: the app mark, which returns to the open documents.
+fn top_bar(app: &mut PrismApp, ui: &mut egui::Ui, bar: Rect) {
+    let t = Tokens::get(ui.ctx());
+    ui.painter().rect_filled(bar, 0.0, t.dock);
+    let mark = Rect::from_center_size(pos2(bar.left() + 32.0, bar.center().y), vec2(32.0, 32.0));
+    let back = !app.session.documents().is_empty();
+    let resp = ui.interact(mark, ui.id().with("home-mark"), if back { Sense::click() } else { Sense::hover() });
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, back, tl!("Prism")));
+    match crate::panels::brand_texture(ui.ctx()) {
+        Some(tex) => {
+            ui.painter().image(tex.id(), mark, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        None => {
+            ui.painter().text(mark.center(), Align2::CENTER_CENTER, tl!("Prism"), crate::theme::semibold(14.0), t.text);
+        }
+    }
+    if back && resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+        leave(app);
+    }
+}
+
 fn sidebar(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     ui.add_space(30.0);
-    let title = ui.painter().layout_no_wrap(tl!("Prism").into(), crate::theme::semibold(26.0), t.text);
-    let (r, _) = ui.allocate_exact_size(title.size(), Sense::hover());
-    ui.painter().galley(r.min, title, t.text);
-    ui.label(RichText::new("NK Studio").size(11.5).color(t.text_faint));
-    ui.add_space(26.0);
     let new_tip = crate::shortcuts::command_label(app, "New document…", "file.new");
     if crate::widgets::primary_button(ui, tl!("New file"), 120.0).on_hover_text(new_tip).clicked() {
         let fields = app.new_document_fields();
@@ -206,14 +245,30 @@ fn sidebar(app: &mut PrismApp, ui: &mut egui::Ui) {
     ui.painter().text(pos2(row.left() + 36.0, row.center().y), Align2::LEFT_CENTER, tl!("Home"), crate::theme::semibold(13.0), t.text);
 }
 
+/// The recent grid's columns and its left edge, centred in `main` like Photoshop's.
+fn grid_layout(main: Rect) -> (usize, f32) {
+    let columns = ((main.width() + GAP) / (CARD.x + GAP)).floor().clamp(1.0, MAX_COLUMNS as f32) as usize;
+    let width = columns as f32 * (CARD.x + GAP) - GAP;
+    (columns, main.left() + ((main.width() - width) / 2.0).max(0.0))
+}
+
 /// The Home screen in `ui`'s remaining space.
 pub fn show(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let area = ui.available_rect_before_wrap();
     ui.painter().rect_filled(area, 0.0, t.canvas);
-    let side = Rect::from_min_max(area.min + vec2(24.0, 0.0), pos2(area.left() + SIDEBAR_W, area.bottom()));
+    // Esc goes back to the open documents, unless a dialog or text field has it.
+    if ui.ctx().memory(|m| m.focused().is_none()) && app.ui.dialogs.is_empty() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        leave(app);
+    }
+    let bar = Rect::from_min_size(area.min, vec2(area.width(), TOP_BAR_H));
+    top_bar(app, ui, bar);
+    let body = Rect::from_min_max(pos2(area.left(), bar.bottom()), area.max);
+    let side = Rect::from_min_max(body.min + vec2(24.0, 0.0), pos2(body.left() + SIDEBAR_W, body.bottom()));
     ui.scope_builder(egui::UiBuilder::new().max_rect(side), |ui| sidebar(app, ui));
-    let main = Rect::from_min_max(pos2(area.left() + SIDEBAR_W + 60.0, area.top() + 30.0), area.max - vec2(24.0, 0.0));
+    let main = Rect::from_min_max(pos2(body.left() + SIDEBAR_W + 40.0, body.top() + 34.0), body.max - vec2(SIDEBAR_W * 0.5, 0.0));
+    let (columns, left) = grid_layout(main);
+    let main = Rect::from_min_max(pos2(left, main.top()), pos2(main.right().max(left + CARD.x), main.bottom()));
     let recent = recent_documents(&app.ui.recent_files);
     let mut open = None;
     ui.scope_builder(egui::UiBuilder::new().max_rect(main), |ui| {
@@ -226,17 +281,16 @@ pub fn show(app: &mut PrismApp, ui: &mut egui::Ui) {
             return;
         }
         egui::ScrollArea::vertical().id_salt("home-recent").auto_shrink([false, false]).show(ui, |ui| {
-            let per_row = ((ui.available_width() + 12.0) / (CARD.x + 12.0)).floor().max(1.0) as usize;
-            for row in recent.chunks(per_row) {
+            for row in recent.chunks(columns) {
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 12.0;
+                    ui.spacing_mut().item_spacing.x = GAP;
                     for path in row {
                         if card(ui, path) {
                             open = Some(path.clone());
                         }
                     }
                 });
-                ui.add_space(12.0);
+                ui.add_space(GAP);
             }
         });
     });
@@ -295,6 +349,64 @@ mod tests {
         h.get_by_label("New file").click();
         h.run_steps(2);
         assert_eq!(h.state().ui.dialogs.first().map(|d| d.kind), Some(crate::state::DialogKind::NewDocument));
+    }
+
+    /// The whole app window, with `docs` new documents.
+    fn app_window(docs: usize) -> Harness<'static, PrismApp> {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
+            PrismApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
+            let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+            for _ in 0..docs {
+                app.run("file.new", serde_json::json!({"width": 400, "height": 300})).unwrap();
+            }
+            app
+        });
+        h.run_steps(4);
+        h
+    }
+
+    #[test]
+    fn home_fills_the_window_without_tools_or_panels() {
+        let mut h = app_window(0);
+        assert!(up(h.state()));
+        assert!(h.query_by_label("New file").is_some());
+        assert!(h.query_by_label("Layers").is_none(), "no panel dock around Home");
+        assert!(h.query_by_label("Home").is_none(), "no options bar (its first control is the Home button)");
+        // A new document leaves Home, and the workspace comes back.
+        h.state_mut().run("file.new", serde_json::json!({"width": 400, "height": 300})).unwrap();
+        h.run_steps(4);
+        assert!(!up(h.state()));
+        assert!(h.query_by_label("Layers").is_some() && h.query_by_label("Home").is_some());
+    }
+
+    #[test]
+    fn the_app_mark_and_esc_return_to_the_open_documents() {
+        let mut h = app_window(1);
+        assert!(!up(h.state()));
+        h.state_mut().ui.chrome.home = Some(1);
+        h.run_steps(3);
+        assert!(up(h.state()) && h.query_by_label("Layers").is_none());
+        h.get_by_label("Prism").click();
+        h.run_steps(3);
+        assert!(!up(h.state()), "the mark goes back to the document");
+        h.state_mut().ui.chrome.home = Some(1);
+        h.run_steps(2);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(!up(h.state()), "so does Esc");
+    }
+
+    #[test]
+    fn with_no_documents_home_stays_and_the_grid_stays_centred() {
+        let mut h = app_window(0);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(up(h.state()), "nothing to go back to");
+        let (columns, left) = grid_layout(Rect::from_min_size(pos2(100.0, 0.0), vec2(5000.0, 500.0)));
+        assert_eq!(columns, MAX_COLUMNS);
+        let width = MAX_COLUMNS as f32 * (CARD.x + GAP) - GAP;
+        assert!((left - (100.0 + (5000.0 - width) / 2.0)).abs() < 0.5);
+        assert_eq!(grid_layout(Rect::from_min_size(pos2(0.0, 0.0), vec2(50.0, 500.0))), (1, 0.0));
     }
 
     #[test]

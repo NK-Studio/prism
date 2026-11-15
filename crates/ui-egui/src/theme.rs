@@ -610,6 +610,9 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.animation_time = 0.0;
         // Thin overlay scrollbars that appear on hover (Photoshop/macOS style).
         s.spacing.scroll = if t.bevel { egui::style::ScrollStyle::solid() } else { egui::style::ScrollStyle::thin() };
+        // No fade at a scroll area's edges: Photoshop has none, and egui paints it in the
+        // enclosing frame's colour, a light band over darker grounds (File › New's cards).
+        s.spacing.scroll.fade.strength = 0.0;
         s.spacing.tooltip_width = 280.0;
     });
 }

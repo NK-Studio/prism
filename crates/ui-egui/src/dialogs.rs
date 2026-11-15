@@ -114,8 +114,8 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
         let title = display_title(d);
         let id = egui::Id::new(("dialog", d.id));
         // Opens centred, then its top-left stays put (offset from the window's top-left, moved by
-        // dragging the title bar; view state only, so egui memory): a dialog whose body grows, like
-        // Layer Style switching effects, extends down and right instead of re-centring.
+        // dragging the title bar; view state only, so egui memory): a dialog whose body grows
+        // extends down and right instead of re-centring.
         let pinned: Option<egui::Vec2> = ctx.data(|m| m.get_temp(id));
         let mut drag = egui::Vec2::ZERO;
         let mut drag_started = false;
@@ -137,7 +137,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
         }
         // The Save window and the setup breathe: wider padding on every side, shared by title,
         // body and buttons.
-        let padded = crate::save_ui::owns(&fields) || crate::first_run_ui::owns(&fields);
+        let padded = crate::save_ui::owns(&fields) || crate::first_run_ui::owns(&fields) || d.kind == DialogKind::NewDocument;
         if padded {
             let frame = if own_window { crate::floating_window::frame(ctx) } else { egui::Frame::popup(&ctx.global_style()) };
             modal = modal.frame(frame.inner_margin(egui::Margin { left: 22, right: 22, top: 16, bottom: 18 }));
@@ -177,7 +177,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 crate::about_ui::width(ctx)
             } else if d.kind == DialogKind::LayerStyle {
                 crate::layer_style::WIDTH
-            } else if d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
+            } else if d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) || crate::new_layer_ui::owns(&d.fields) {
                 600.0
             } else {
                 440.0
@@ -227,6 +227,8 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                     }
                 }
                 DialogKind::About => crate::about_ui::body(ui),
+                // Photoshop's New Layer keeps OK / Cancel in its own right-hand column too.
+                DialogKind::Command if crate::new_layer_ui::owns(&fields) => outcome = crate::new_layer_ui::body(ui, &mut fields),
                 DialogKind::Command if crate::fill_ui::owns(&fields) => crate::fill_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::rasterize_prompt::owns(&fields) => crate::rasterize_prompt::body(ui, &fields),
                 DialogKind::Command if crate::variables_ui::owns(&fields) => crate::variables_ui::body(app, ui, &mut fields),
@@ -259,7 +261,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                     ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
                 }
             }
-            if crate::color_picker_ui::owns(&fields) || d.kind == DialogKind::LayerStyle {
+            if crate::color_picker_ui::owns(&fields) || d.kind == DialogKind::LayerStyle || crate::new_layer_ui::owns(&fields) {
                 if outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     outcome = Some(true);
                 }
@@ -506,6 +508,7 @@ fn confirm_inner(app: &mut PrismApp, id: u64) -> Result<Value, String> {
             r
         }
         DialogKind::Command if d.fields.contains_key("__actions") => crate::actions::confirm(app, &d.fields),
+        DialogKind::Command if crate::new_layer_ui::owns(&d.fields) => crate::new_layer_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::fill_ui::owns(&d.fields) => crate::fill_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
         DialogKind::Command if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
@@ -609,6 +612,45 @@ mod tests {
             h.hover_at(margin);
             h.run_steps(1);
             assert!(free_pointer_over(&h.ctx, egui::Rect::from_min_size(egui::Pos2::ZERO, size)).is_none());
+        }
+    }
+
+    /// Photoshop's Layer Style dialog keeps one size whichever page is shown: picking another
+    /// effect in the list must not make the window taller or shorter, in English or Korean, and
+    /// every page must fit without scrolling.
+    #[test]
+    fn layer_style_keeps_its_size_on_every_page() {
+        use egui_kittest::Harness;
+
+        for code in ["en", "ko"] {
+            let lang = crate::i18n::Lang::from_code(code).expect("registered language");
+            let _language = crate::i18n::language_scope(lang);
+            let mut session = prism_engine::Session::new();
+            session.execute("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
+            session.execute("layer.new.layer", serde_json::json!({})).unwrap();
+            let app = PrismApp::new(session, crate::Services::default());
+            let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+            PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            crate::layer_style::open(h.state_mut(), None).unwrap();
+            let pages = crate::layer_style::add_every_page(&mut h.state_mut().ui.dialogs[0].fields);
+            assert!(pages.len() >= 14, "Styles, Blending Options, ten effects and the bevel's parts: {pages:?}");
+
+            let mut first: Option<egui::Rect> = None;
+            let mut too_tall = Vec::new();
+            for page in &pages {
+                h.state_mut().ui.dialogs[0].fields.insert("selected".into(), serde_json::json!(page));
+                h.run_steps(3);
+                let frame = rects(&h.ctx)[0];
+                let content = crate::layer_style::page_content_height(&h.ctx).unwrap();
+                if content > crate::layer_style::PAGE_H + 0.5 {
+                    too_tall.push(format!("{code} {page}: {content}"));
+                }
+                let first = *first.get_or_insert(frame);
+                assert!((frame.height() - first.height()).abs() < 0.5, "{code}: page {page} resized the dialog: {frame:?} vs {first:?}");
+                assert!((frame.width() - first.width()).abs() < 0.5, "{code}: page {page} resized the dialog: {frame:?} vs {first:?}");
+                assert_eq!(frame.min, first.min, "{code}: page {page} moved the dialog");
+            }
+            assert!(too_tall.is_empty(), "pages taller than {} scroll: {too_tall:?}", crate::layer_style::PAGE_H);
         }
     }
 
