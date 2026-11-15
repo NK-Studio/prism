@@ -175,7 +175,9 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 crate::new_doc_ui::WIDTH
             } else if about_overview {
                 crate::about_ui::width(ctx)
-            } else if d.kind == DialogKind::LayerStyle || d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
+            } else if d.kind == DialogKind::LayerStyle {
+                crate::layer_style::WIDTH
+            } else if d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
                 600.0
             } else {
                 440.0
@@ -251,12 +253,13 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 DialogKind::Command if fields.contains_key("__actions") => crate::actions::body(ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__form") => crate::view_cmds::form_body(ui, &mut fields),
                 DialogKind::Command => {}
-                DialogKind::LayerStyle => crate::layer_style::body(app, ui, &mut fields),
+                // Photoshop puts OK / Cancel in the dialog's own right-hand column.
+                DialogKind::LayerStyle => outcome = crate::layer_style::body(app, ui, &mut fields),
                 DialogKind::Error => {
                     ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
                 }
             }
-            if crate::color_picker_ui::owns(&fields) {
+            if crate::color_picker_ui::owns(&fields) || d.kind == DialogKind::LayerStyle {
                 if outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     outcome = Some(true);
                 }

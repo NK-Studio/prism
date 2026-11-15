@@ -73,16 +73,16 @@ pub fn effect_defaults(kind: &str) -> Value {
         "innerShadow" => {
             json!({"blend": "Multiply", "color": "#000000", "opacity": 75, "angle": 120, "useGlobalLight": true, "distance": 5, "choke": 0, "size": 5, "contour": "Linear", "noise": 0})
         }
-        "outerGlow" => json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "spread": 0, "size": 5, "range": 50, "contour": "Linear", "noise": 0}),
-        "innerGlow" => json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "source": "edge", "choke": 0, "size": 5, "contour": "Linear", "noise": 0}),
+        "outerGlow" => json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "spread": 0, "size": 5, "range": 50, "contour": "Linear", "noise": 0}),
+        "innerGlow" => json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "source": "edge", "choke": 0, "size": 5, "range": 50, "contour": "Linear", "noise": 0}),
         "stroke" => json!({"size": 3, "position": "outside", "blend": "Normal", "opacity": 100, "color": "#000000"}),
         "colorOverlay" => json!({"blend": "Normal", "color": "#ff0000", "opacity": 100}),
         "gradientOverlay" => {
-            json!({"blend": "Normal", "opacity": 100, "from": "#000000", "to": "#ffffff", "reverse": false, "style": "linear", "angle": 90, "scale": 100})
+            json!({"blend": "Normal", "opacity": 100, "from": "#000000", "to": "#ffffff", "reverse": false, "style": "linear", "angle": 90, "scale": 100, "dither": false})
         }
         "patternOverlay" => json!({"blend": "Normal", "opacity": 100, "pattern": "", "angle": 0, "scale": 100, "link": true}),
         "bevelEmboss" => {
-            json!({"style": "inner", "depth": 100, "direction": "up", "size": 5, "soften": 0, "angle": 120, "useGlobalLight": true, "altitude": 30})
+            json!({"style": "inner", "technique": "smooth", "depth": 100, "direction": "up", "size": 5, "soften": 0, "angle": 120, "useGlobalLight": true, "altitude": 30, "glossContour": "Linear", "contour": false, "contourName": "Linear", "contourRange": 50, "contourAntiAlias": false, "texture": false, "textureScale": 100, "textureDepth": 100, "textureInvert": false, "textureLink": true})
         }
         "satin" => json!({"blend": "Multiply", "color": "#000000", "opacity": 50, "angle": 19, "distance": 11, "size": 14, "invert": true}),
         _ => json!({}),
@@ -427,27 +427,58 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
             {
                 bv.gloss_contour = c;
             }
-            if let Some(x) = b_of(p, "contour") {
-                bv.contour = x.then(|| prism_doc::BevelContour {
-                    contour: builtin_contour(p.get("contourName").and_then(Value::as_str).unwrap_or("Linear")).unwrap_or(Contour::Linear),
-                    range: (f(p, "contourRange", 50.0) / 100.0).clamp(0.01, 1.0),
-                    anti_alias: false,
-                });
-            } else if let Some(c) = &mut bv.contour
-                && let Some(x) = builtin_contour(p.get("contourName").and_then(Value::as_str).unwrap_or(""))
-            {
-                c.contour = x;
+            // Contour: `contour` turns the element on or off; the other keys edit it in place, so
+            // an imported curve (not a built-in name) and its anti-aliasing survive an edit.
+            match b_of(p, "contour") {
+                Some(false) => bv.contour = None,
+                Some(true) if bv.contour.is_none() => bv.contour = Some(prism_doc::BevelContour::default()),
+                _ => {}
             }
-            if let Some(t) = p.get("texture").and_then(Value::as_str).filter(|t| !t.is_empty()) {
-                bv.texture = Some(prism_doc::BevelTexture {
-                    name: t.to_string(),
-                    id: t.to_string(),
-                    scale: (f(p, "textureScale", 100.0) / 100.0).clamp(0.01, 10.0),
-                    depth: (f(p, "textureDepth", 100.0) / 100.0).clamp(-10.0, 10.0),
-                    invert: b(p, "textureInvert", false),
-                    link: b(p, "textureLink", true),
-                    phase: (0.0, 0.0),
-                });
+            if let Some(c) = &mut bv.contour {
+                if let Some(x) = builtin_contour(p.get("contourName").and_then(Value::as_str).unwrap_or("")) {
+                    c.contour = x;
+                }
+                if let Some(x) = f_of(p, "contourRange") {
+                    c.range = (x / 100.0).clamp(0.01, 1.0);
+                }
+                if let Some(x) = b_of(p, "contourAntiAlias") {
+                    c.anti_alias = x;
+                }
+            }
+            // Texture: a pattern id or name turns it on (a new pattern restarts its phase);
+            // `false` or "" turns it off. The other keys edit it in place.
+            match p.get("texture") {
+                Some(Value::Bool(false)) => bv.texture = None,
+                Some(Value::String(t)) if t.is_empty() => bv.texture = None,
+                Some(Value::String(t)) => {
+                    let same = bv.texture.as_ref().is_some_and(|x| x.id == *t || x.name == *t);
+                    if !same {
+                        bv.texture = Some(prism_doc::BevelTexture {
+                            name: t.clone(),
+                            id: t.clone(),
+                            scale: 1.0,
+                            depth: 1.0,
+                            invert: false,
+                            link: true,
+                            phase: (0.0, 0.0),
+                        });
+                    }
+                }
+                _ => {}
+            }
+            if let Some(x) = &mut bv.texture {
+                if let Some(v) = f_of(p, "textureScale") {
+                    x.scale = (v / 100.0).clamp(0.01, 10.0);
+                }
+                if let Some(v) = f_of(p, "textureDepth") {
+                    x.depth = (v / 100.0).clamp(-10.0, 10.0);
+                }
+                if let Some(v) = b_of(p, "textureInvert") {
+                    x.invert = v;
+                }
+                if let Some(v) = b_of(p, "textureLink") {
+                    x.link = v;
+                }
             }
         }
     }
@@ -656,7 +687,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "bevelEmboss",
             "Bevel & Emboss…",
-            r##"{"style":"inner|outer|emboss|pillow|stroke","technique":"smooth|chiselHard|chiselSoft","contour":bool,"contourRange":1..100=50,"texture":pattern id|name?,"textureScale":1..1000=100,"textureDepth":-1000..1000=100,"textureInvert":bool,"textureLink":bool=true,"depth":1..1000=100,"direction":"up|down","size":px=5,"soften":px,"angle":deg,"altitude":deg,"add":bool}"##
+            r##"{"style":"inner|outer|emboss|pillow|stroke","technique":"smooth|chiselHard|chiselSoft","contour":bool,"contourName":name,"contourRange":1..100=50,"contourAntiAlias":bool,"texture":pattern id|name|false (false or "" turns it off),"textureScale":1..1000=100,"textureDepth":-1000..1000=100,"textureInvert":bool,"textureLink":bool=true,"depth":1..1000=100,"direction":"up|down","size":px=5,"soften":px,"angle":deg,"altitude":deg,"add":bool}"##
         ),
         style_cmd!("satin", "Satin…", r##"{"color":"#rrggbb","opacity":0..100=50,"blend":str,"angle":deg,"distance":px,"size":px,"invert":bool,"add":bool}"##),
         CommandSpec {
@@ -995,5 +1026,50 @@ mod tests {
         let entries: Vec<Value> = items.iter().map(|fx| json!({"kind": "stroke", "fx": serde_json::to_value(fx).unwrap(), "params": {}})).collect();
         s.execute("layer.layerStyle.replace", json!({"layer": id.0, "effects": entries})).unwrap();
         assert_eq!(px(&mut s, 24, 14), before, "both strokes render identically after the round trip");
+    }
+
+    /// The Layer Style dialog's Contour and Texture rows: on/off flags, in-place edits that keep
+    /// an imported curve and the pattern's phase, and `false` turning Texture off.
+    #[test]
+    fn bevel_contour_and_texture_turn_on_off_and_edit_in_place() {
+        let bevel = |fx: &Effect| match fx {
+            Effect::BevelEmboss(b) => b.clone(),
+            other => panic!("{other:?}"),
+        };
+        let mut fx = effect_from_params("bevelEmboss", &json!({})).unwrap();
+        assert!(bevel(&fx).contour.is_none() && bevel(&fx).texture.is_none());
+        overlay_effect(&mut fx, &json!({"contour": true, "contourName": "Cone", "contourRange": 70, "contourAntiAlias": true, "texture": "Bubbles", "textureScale": 50, "textureDepth": -200, "textureInvert": true, "textureLink": false}));
+        let b = bevel(&fx);
+        let c = b.contour.unwrap();
+        assert_eq!((c.range, c.anti_alias), (0.7, true));
+        assert!(matches!(c.contour, Contour::Custom { ref name, .. } if name == "Cone"));
+        let t = b.texture.unwrap();
+        assert_eq!((t.id.as_str(), t.scale, t.depth, t.invert, t.link), ("Bubbles", 0.5, -2.0, true, false));
+        // An imported curve and a moved pattern survive the dialog's apply of the same values.
+        if let Effect::BevelEmboss(b) = &mut fx {
+            b.contour = Some(prism_doc::BevelContour {
+                contour: Contour::Custom { name: "Imported".into(), points: vec![CurvePoint { input: 0.0, output: 0.3 }, CurvePoint { input: 1.0, output: 1.0 }] },
+                range: 0.7,
+                anti_alias: true,
+            });
+            if let Some(t) = &mut b.texture {
+                t.phase = (4.0, 9.0);
+            }
+        }
+        overlay_effect(&mut fx, &json!({"contour": true, "contourName": "Imported", "contourRange": 40, "texture": "Bubbles", "textureDepth": 300}));
+        let b = bevel(&fx);
+        assert!(matches!(&b.contour.as_ref().unwrap().contour, Contour::Custom { name, .. } if name == "Imported"));
+        assert_eq!(b.contour.as_ref().unwrap().range, 0.4);
+        assert_eq!(b.texture.as_ref().map(|t| (t.phase, t.depth)), Some(((4.0, 9.0), 3.0)));
+        // Another pattern starts at its origin; false / "" turn the elements off.
+        overlay_effect(&mut fx, &json!({"texture": "Clouds"}));
+        assert_eq!(bevel(&fx).texture.map(|t| (t.id, t.phase)), Some(("Clouds".into(), (0.0, 0.0))));
+        overlay_effect(&mut fx, &json!({"contour": false, "texture": false}));
+        assert!(bevel(&fx).contour.is_none() && bevel(&fx).texture.is_none());
+        overlay_effect(&mut fx, &json!({"texture": "Clouds"}));
+        overlay_effect(&mut fx, &json!({"texture": ""}));
+        assert!(bevel(&fx).texture.is_none());
+        // Odd values never panic.
+        overlay_effect(&mut fx, &json!({"contour": "yes", "contourRange": 1e308, "texture": 5, "textureScale": -1e308}));
     }
 }
