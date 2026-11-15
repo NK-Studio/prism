@@ -5,15 +5,17 @@
 # Usage: packaging/publish-update.sh [--version X.Y.Z] [--min-supported X.Y.Z] [--dry-run]
 #
 # The feed site (Cloudflare Workers, https://prism-updates.a62201631.workers.dev) serves only the
-# signed feed; the update packages are assets of the version's GitHub Release (Cloudflare's static
-# assets stop at 25 MiB per file). Steps:
+# signed feed; the update packages and the installers are assets of the version's public GitHub
+# Release (Cloudflare's static assets stop at 25 MiB per file). Steps:
 #
 # 1. Clones (or updates) the site repository next to this one (../prism-updates).
 # 2. cargo xtask update publish: writes and signs stable/latest.json for
 #    dist/release/prism-<v>-macos-*.app.zip and prism-<v>-windows-*.msi, pointing at
 #    https://github.com/NK-Studio/prism/releases/download/v<v>/.
-# 3. Uploads those packages to the GitHub Release v<v> (creating it from the pushed tag if needed;
-#    the .dmg installers are never uploaded) and checks each one downloads.
+# 3. Uploads those packages and the first-install DMG (dist/release/prism-<v>-macos-*.dmg) to the
+#    GitHub Release v<v> (creating it from the pushed tag if needed, with
+#    packaging/release/notes.md as its notes) and checks each one downloads. The feed's download
+#    link, for copies that can't update in place, is that release page.
 # 4. Commits the site as a single commit and pushes it over the old one. Cloudflare Workers Builds
 #    deploys on push.
 # 5. Waits for the live feed to report the new version.
@@ -36,7 +38,7 @@ while [ $# -gt 0 ]; do
     --version) VERSION="$2"; shift 2 ;;
     --min-supported) MIN_SUPPORTED="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
-    -h | --help) sed -n '2,27p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,29p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -55,8 +57,13 @@ command -v cargo >/dev/null || PATH="$HOME/.cargo/bin:$PATH"
 
 shopt -s nullglob
 PACKAGES=("$DIST/prism-$VERSION"-macos-*.app.zip "$DIST/prism-$VERSION"-windows-*.msi)
+INSTALLERS=("$DIST/prism-$VERSION"-macos-*.dmg)
 shopt -u nullglob
 [ ${#PACKAGES[@]} -gt 0 ] || { echo "error: no update packages for $VERSION in $DIST" >&2; exit 1; }
+[ ${#INSTALLERS[@]} -gt 0 ] ||
+  warn "no prism-$VERSION-macos-*.dmg in $DIST: new Mac users will have nothing to install from the release"
+# Everything that goes on the release: the update packages (also the Windows installers) and the DMG.
+UPLOADS=("${PACKAGES[@]}" ${INSTALLERS[@]+"${INSTALLERS[@]}"})
 
 # The chosen gh account's token, for this command only (no git or gh config changes).
 TOK=""
@@ -90,7 +97,8 @@ git -C "$SITE" reset -q --hard "origin/$BRANCH"
 git -C "$SITE" clean -qfdx
 
 args=(--site "$SITE" --packages-url "$PACKAGES_URL" --dist "$DIST" --version "$VERSION" --secret "$KEY"
-      --notes-url "https://github.com/$RELEASE_REPO/releases/tag/$TAG")
+      --notes-url "https://github.com/$RELEASE_REPO/releases/tag/$TAG"
+      --download-url "https://github.com/$RELEASE_REPO/releases/tag/$TAG")
 [ -n "$MIN_SUPPORTED" ] && args+=(--min-supported "$MIN_SUPPORTED")
 (cd "$ROOT" && cargo xtask update publish "${args[@]}")
 
@@ -98,7 +106,7 @@ echo "==> feed:"
 cat "$SITE/stable/latest.json"
 if [ "$DRY_RUN" = 1 ]; then
   echo "==> dry run: nothing uploaded or pushed ($SITE has the result); would upload:"
-  printf '    %s\n' "${PACKAGES[@]}"
+  printf '    %s\n' "${UPLOADS[@]}"
   exit 0
 fi
 
@@ -107,11 +115,11 @@ command -v gh >/dev/null || { echo "error: gh is needed to upload the packages t
 if ! gh_as release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
   echo "==> creating the GitHub Release $TAG"
   gh_as release create "$TAG" --repo "$RELEASE_REPO" --verify-tag --title "Prism $VERSION" \
-    --notes "In-app update packages for Prism $VERSION. Installed copies download these through Help > Check for Updates."
+    --notes "$(sed "s/{version}/$VERSION/g" "$ROOT/packaging/release/notes.md")"
 fi
-echo "==> uploading ${#PACKAGES[@]} package(s) to $RELEASE_REPO $TAG"
-gh_as release upload "$TAG" --repo "$RELEASE_REPO" --clobber "${PACKAGES[@]}"
-for p in "${PACKAGES[@]}"; do
+echo "==> uploading ${#UPLOADS[@]} file(s) to $RELEASE_REPO $TAG"
+gh_as release upload "$TAG" --repo "$RELEASE_REPO" --clobber "${UPLOADS[@]}"
+for p in "${UPLOADS[@]}"; do
   url="$PACKAGES_URL/$(basename "$p")"
   curl -fsSIL -o /dev/null "$url" || { echo "error: $url doesn't download (is the release still a draft?)" >&2; exit 1; }
   echo "    ok: $url"

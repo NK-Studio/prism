@@ -215,7 +215,11 @@ wrangler.jsonc, .assetsignore, _headers   written once by the publish step
 25 MiB per file and the update packages are bigger. The feed points at
 `https://github.com/NK-Studio/prism/releases/download/v<version>/prism-<v>-macos-<arch>.app.zip`
 (and `prism-<v>-windows-<arch>.msi`); the updater follows GitHub's redirect and still checks the
-signed size and hash. Only the update packages go on the release, never the `.dmg` installers.
+signed size and hash. The same public release carries the first-install `.dmg`
+(`prism-<v>-macos-<arch>.dmg`: open it and drag Prism onto Applications), so new users and copies
+that can't update in place (the feed's `download_url` is the release page) download it there.
+`packaging/publish-update.sh` uploads both and, when it creates the release, takes its notes from
+`packaging/release/notes.md`.
 
 **Copies from before the move.** Prism 1.2.0 and earlier have the old Vercel feed
 (`https://prism-updates.vercel.app/stable/latest.json`) compiled in, and that site no longer

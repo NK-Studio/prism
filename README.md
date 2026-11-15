@@ -290,7 +290,7 @@ sha256-verified. Fetch them with `cargo xtask corpus --all` and run the tests wi
 
 ## Downloads
 
-Prism release artifacts will be published on [GitHub Releases](https://github.com/NK-Studio/prism/releases). This new repository does not yet have a release.
+Prism releases are published on [GitHub Releases](https://github.com/NK-Studio/prism/releases). On a Mac, download `prism-<ver>-macos-aarch64.dmg`, open it and drag **Prism** onto the **Applications** folder next to it. Installed copies update themselves through *Help › Check for Updates…*.
 
 **Want a specific build or format?** On GitHub, the [latest release](https://github.com/NK-Studio/prism/releases/latest) has every build listed below, and [all releases](https://github.com/NK-Studio/prism/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
 
@@ -308,8 +308,9 @@ Release signing depends on the credentials configured by this repository's maint
 
 | Build | File | Notes |
 |---|---|---|
-| App, universal (Apple silicon + Intel) | `prism-<ver>-macos-universal.dmg` | Signed and notarized |
-| Command-line tool, universal | `prism-cli-<ver>-macos-universal.zip` | Signed and notarized |
+| App, Apple silicon | `prism-<ver>-macos-aarch64.dmg` | Drag-to-Applications installer |
+| In-app update package | `prism-<ver>-macos-aarch64.app.zip` | Downloaded by *Check for Updates*; not needed to install |
+| Command-line tool, universal (CI builds) | `prism-cli-<ver>-macos-universal.zip` | Signed and notarized |
 
 ### FreeBSD
 
