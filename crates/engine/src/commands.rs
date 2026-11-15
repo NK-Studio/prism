@@ -363,7 +363,7 @@ fn build() -> Vec<CommandSpec> {
             "New…",
             ["File"],
             Some("Cmd+N"),
-            r##"{"width":u32=1920,"height":u32=1080,"mode":"rgb|gray|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":ppi=72,"name":str}"##,
+            r##"{"width":u32=1920,"height":u32=1080,"mode":"rgb|gray|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":ppi=72,"name":str,"artboards":bool=false (one "Artboard 1" covering the canvas, holding "Layer 1"; the background fills the board),"profile":"none|working|<profile>"="none" (none = Don't Color Manage; working = the Color Settings working space of the mode)}"##,
             always,
             |s, p| {
                 use crate::document_preset_cmds::{MAX_DIMENSION, MAX_RESOLUTION, background_color, color_mode, sample_type};
@@ -398,6 +398,35 @@ fn build() -> Vec<CommandSpec> {
                     }
                 };
                 doc.resolution_dpi = res;
+                doc.icc_profile = match p.get("profile").and_then(Value::as_str).unwrap_or("none") {
+                    "none" | "" => None,
+                    spec => {
+                        let prof = s.color.resolve(spec, None, Some(mode))?;
+                        if prof.color_space != crate::color_cmds::mode_space(mode) {
+                            return Err(EngineError::BadParams {
+                                cmd: "file.new".into(),
+                                msg: format!("profile `{}` is {:?}; the document is {mode:?}", prof.description, prof.color_space),
+                            });
+                        }
+                        Some(prof.to_bytes())
+                    }
+                };
+                if p.get("artboards").and_then(Value::as_bool) == Some(true) {
+                    let bg = match p.get("background").and_then(Value::as_str).unwrap_or("white") {
+                        "transparent" => prism_doc::ArtboardBackground::Transparent,
+                        "black" => prism_doc::ArtboardBackground::Black,
+                        "white" => prism_doc::ArtboardBackground::White,
+                        "backgroundColor" => {
+                            let c = background_color(p, s.tools.background, "file.new")?;
+                            prism_doc::ArtboardBackground::Custom(Color::rgba(c[0], c[1], c[2], 1.0))
+                        }
+                        other => {
+                            let c = parse_hex(other).unwrap_or([1.0; 4]);
+                            prism_doc::ArtboardBackground::Custom(Color::rgba(c[0], c[1], c[2], c[3]))
+                        }
+                    };
+                    crate::artboard_cmds::make_document_artboard(&mut doc, bg);
+                }
                 let i = s.add_document(doc, None);
                 Ok(json!({ "document": i }))
             }

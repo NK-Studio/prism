@@ -53,6 +53,7 @@ pub mod sut;
 pub mod svg;
 mod text_import;
 pub mod text_styles_map;
+pub mod thumbnail;
 pub mod tiff_layers;
 pub mod vector_map;
 

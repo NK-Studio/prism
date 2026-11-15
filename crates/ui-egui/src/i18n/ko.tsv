@@ -3648,3 +3648,28 @@ hand	Grip	꽉 쥐기
 	Posed the picked figure	선택한 인형에 포즈를 적용했습니다
 	With a figure picked on the canvas (click it with the Move tool), poses that figure instead	캔버스에서 인형을 선택해 두면(이동 도구로 클릭) 새 레이어 대신 그 인형에 포즈를 적용합니다
 	Opened a 3D character: pose it with the Move tool	3D 캐릭터를 열었습니다. 이동 도구로 자세를 바꿀 수 있습니다
+	Advanced Options	고급 옵션
+	Artboards	아트보드
+	Color Profile	색상 프로파일
+	Delete Preset	사전 설정 삭제
+	Documents you create appear here.	만든 문서가 여기에 표시됩니다.
+	Don't Color Manage	색상 관리 안 함
+	New file	새 파일
+	Prism and Photoshop files you open appear here.	연 프리즘 파일과 Photoshop 파일이 여기에 표시됩니다.
+	SAVE DOCUMENT PRESET	문서 사전 설정 저장
+	SAVED BLANK DOCUMENT PRESETS ({n})	저장된 빈 문서 사전 설정 ({n})
+	Save Document Preset	문서 사전 설정 저장
+	Save Preset	사전 설정 저장
+	Saved {n}	저장됨 {n}
+	Square Pixels	정사각형 픽셀
+	Working {kind}: {profile}	작업 {kind}: {profile}
+	YOUR RECENT ITEMS ({n})	최근 항목 ({n})
+	Landscape, 3 x 2	가로, 3 x 2
+	Portrait, 2 x 3	세로, 2 x 3
+	Portrait, 8 x 10	세로, 8 x 10
+	Web Medium	웹 중형
+	Web Small	웹 소형
+	1000 pixel grid	1000픽셀 격자
+	2000 pixel grid	2000픽셀 격자
+	Mobile Design	모바일 디자인
+	Desktop HD Design	데스크톱 HD 디자인

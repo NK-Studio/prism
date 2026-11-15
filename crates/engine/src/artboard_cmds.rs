@@ -206,6 +206,16 @@ fn set_artboard(l: &mut Layer, a: Artboard) {
     l.clipped = false;
 }
 
+/// File › New with Artboards: the canvas becomes "Artboard 1" holding an empty "Layer 1", with
+/// the chosen Background Contents as the board's background (no Background layer).
+pub(crate) fn make_document_artboard(doc: &mut Document, background: ArtboardBackground) {
+    let rect = Rect::from_xywh(0, 0, doc.size.width, doc.size.height);
+    let layer = Layer::raster("Layer 1", doc.pixel_format());
+    let mut g = Layer::group("Artboard 1", vec![layer]);
+    set_artboard(&mut g, Artboard { rect, background, preset: String::new() });
+    doc.layers = vec![g];
+}
+
 fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "layer.new.artboard";
     let d = s.active().ok_or(EngineError::NoDocument)?;

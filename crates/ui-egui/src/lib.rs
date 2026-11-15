@@ -106,6 +106,7 @@ pub mod move_ui;
 mod native_dialogs;
 pub mod native_menu;
 pub mod native_popup;
+pub mod home_ui;
 pub mod new_doc_ui;
 pub mod notices;
 mod opacity_keys;
@@ -1753,6 +1754,7 @@ impl PrismApp {
         if let Some(c) = self.session.clipboard.as_ref().filter(|c| !c.bounds.is_empty()) {
             crate::new_doc_ui::set_clipboard(&mut f, c.bounds.width(), c.bounds.height());
         }
+        crate::new_doc_ui::select_first_recent(&mut f, &self.session.presets.recent_documents);
         f
     }
 
