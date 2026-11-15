@@ -594,9 +594,12 @@ impl DabBuilder {
             let diameter = spray.map_or(area_diameter, |spray| spray.size * scalar(&spray.size_dynamic, s, r(stream::SPRAY_SIZE)) * taper(Taper::SpraySize));
             // CSP "at least 1 pixel": a sub-pixel dab (pressure, taper) is laid and spaced as 1 px.
             let diameter = if b.csp_at_least_1px && diameter.is_finite() { diameter.max(1.0) } else { diameter };
-            // The step's first dab sets the spacing to the next step.
+            // The step's first dab sets the spacing to the next step (CSP: times the spacing's
+            // pen response).
             if step.is_none() {
-                step = Some(self.step_after(diameter));
+                let k = b.csp_spacing_dynamic.as_ref().map_or(1.0, |d| scalar(d, s, r(stream::SPACING)));
+                let k = if k.is_finite() { f64::from(k.clamp(0.01, 1.0)) } else { 1.0 };
+                step = Some((self.step_after(diameter) * k).max(MIN_DAB_STEP));
             }
             let mut angle = b.angle;
             let mut roundness = b.roundness.clamp(0.01, 1.0);
@@ -715,6 +718,8 @@ impl DabBuilder {
                     (m.density * scalar(&m.density_dynamic, s, r(stream::PAINT_DENSITY))).clamp(0.0, 1.0),
                 )
             });
+            let thickness = b.csp_thickness_dynamic.as_ref().map_or(1.0, |t| scalar(&t.dynamic, s, r(stream::THICKNESS)));
+            let thickness = if thickness.is_finite() { thickness.clamp(0.0, 1.0) } else { 1.0 };
             out.push(Dab {
                 center: c,
                 radius,
@@ -734,6 +739,7 @@ impl DabBuilder {
                 paint_amount,
                 paint_density,
                 ribbon: None,
+                thickness,
             });
         }
         step.unwrap_or(MIN_DAB_STEP)
@@ -795,6 +801,7 @@ impl DualBuilder {
                 paint_amount: 1.0,
                 paint_density: 1.0,
                 ribbon: None,
+                thickness: 1.0,
             });
         }
         self.step()

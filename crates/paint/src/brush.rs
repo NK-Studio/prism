@@ -633,6 +633,13 @@ pub struct BrushSettings {
     /// (measured, docs/sut-analysis.md › Gray brush tips).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub csp_tip_grays: Vec<bool>,
+    /// Imported CSP spacing by pen input (`BrushIntervalEffector`): each step's spacing is
+    /// `spacing` times the response (at most 1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_spacing_dynamic: Option<Dynamic>,
+    /// Imported CSP thickness by pen input (`BrushThicknessEffector`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_thickness_dynamic: Option<crate::csp_tip::CspThickness>,
     /// Imported CSP Erase blending mode: the brush erases with whichever tool runs it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub csp_erase: bool,
@@ -728,6 +735,8 @@ impl Default for BrushSettings {
             csp_tip_order: None,
             csp_tip_colors: Vec::new(),
             csp_tip_grays: Vec::new(),
+            csp_spacing_dynamic: None,
+            csp_thickness_dynamic: None,
             csp_erase: false,
             csp_stroke: None,
             csp_size_by_view: false,

@@ -233,6 +233,10 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
                 let [x, y] = b.csp_tip_scale.unwrap_or([1.0, 1.0]);
                 let thickness = if vertical { y } else { x };
                 b.csp_tip_scale = Some(if picked { [1.0, thickness] } else { [thickness, 1.0] });
+                // The pen's thickness response follows the axis.
+                if let Some(t) = b.csp_thickness_dynamic.as_mut() {
+                    t.vertical = picked;
+                }
             }
         }
         1071 => {
@@ -825,6 +829,9 @@ fn in_out_length(ui: &mut egui::Ui, id: u32, label: &str, m: &SutBrushMetadata, 
 /// The thickness axis: the brush's own (only one axis below 1 is squashed), else the imported
 /// `BrushVerticalThicknes`.
 fn thickness_vertical(m: &SutBrushMetadata, b: &BrushSettings) -> bool {
+    if let Some(t) = &b.csp_thickness_dynamic {
+        return t.vertical;
+    }
     match b.csp_tip_scale {
         Some([x, y]) if x != y && (x == 1.0 || y == 1.0) => x == 1.0,
         _ => source(m, "BrushVerticalThicknes") != 0.0,

@@ -58,6 +58,16 @@ impl CspTipOrder {
     }
 }
 
+/// CSP thickness by pen input (`BrushThicknessEffector`): each dab scales the thickness axis of
+/// `BrushSettings::csp_tip_scale` (its height when `vertical`, else its width) by the response
+/// (at most 1).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CspThickness {
+    pub dynamic: crate::brush::Dynamic,
+    pub vertical: bool,
+}
+
 /// The straight RGB colours (8 bits a channel, row-major) of a colour tip, painted instead of the
 /// brush colour; the tip's own [`GrayTile`] stays its shape (alpha).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

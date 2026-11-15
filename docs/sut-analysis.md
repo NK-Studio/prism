@@ -2037,6 +2037,13 @@ alone). Sub-colour share per pixel, solved against the white paper:
   (spacing by pressure, minimum 40 %: CLIP STUDIO spaces the 0.3 row about twice as densely) and
   `BrushThicknessEffector` (thickness by pressure, minimum 75 %). Locally 15 sub tools use an
   active spacing effector and 22 a thickness effector; neither is imported or warned about.
+  **Imported since 2026-11-15:** `cspSpacingDynamic` scales each step's spacing by the response
+  (at most 1), `cspThicknessDynamic` (with the axis, `BrushVerticalThicknes`) scales the thickness
+  axis of `cspTipScale` per dab (at most 1). The other inputs of these effectors warn like the other
+  pressure effectors (velocity 0x40 on 세모네모펜, Crystal sparkles and R4_SPARKS; R4_SPARKS 2's
+  thickness tilt limits are out of range). Chainmail 2 2-C rendered again: ink runs crossed by four
+  scan lines over doc x 600–1000 at constant pressure 0.3 are 37/27/36/26 (CLIP STUDIO 36/23/37/27;
+  21 each at pressure 1 in both), band height 170 px in both.
 - **Taps.** A single-sample pen tap paints a dab in CLIP STUDIO, at a lower effective pressure
   (sub share 0.21 for a tap at 1.0, 0.46 at 0.3). In the live Prism app the same tap leaves a
   history step but no pixels; `paint.stroke` with one point does paint (`local_csp_render_one`).

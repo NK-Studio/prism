@@ -53,7 +53,7 @@ pub use csp_in_out::{CspInOut, CspInOutMode, CspInOutParam, CspInOutTarget};
 pub use csp_mixing::CspColorMixing;
 pub use csp_spray::CspSpray;
 pub use csp_stabilizer::CspStabilizer;
-pub use csp_tip::{CspTipColor, CspTipOrder};
+pub use csp_tip::{CspThickness, CspTipColor, CspTipOrder};
 pub use csp_water_edge::CspWaterEdge;
 pub use mixer::MixerSettings;
 pub use pressure_curve::PressureCurve;
@@ -130,6 +130,8 @@ pub struct Dab {
     /// CSP Ribbon: this dab is a slice of the tip laid along the path (`center` and `radius`
     /// then describe the slice roughly, for colour pick-up).
     pub ribbon: Option<csp_ribbon::RibbonSlice>,
+    /// CSP thickness by pen input: the factor (0..1) on the thickness axis of the tip scale.
+    pub thickness: f32,
 }
 
 impl Dab {
@@ -154,6 +156,7 @@ impl Dab {
             paint_amount: 1.0,
             paint_density: 1.0,
             ribbon: None,
+            thickness: 1.0,
         }
     }
 }

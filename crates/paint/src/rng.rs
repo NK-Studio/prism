@@ -63,6 +63,8 @@ pub mod stream {
     pub const PAINT_DENSITY: u64 = 26;
     pub const TIP: u64 = 27;
     pub const SPRAY_ANGLE: u64 = 28;
+    pub const THICKNESS: u64 = 29;
+    pub const SPACING: u64 = 30;
 }
 
 /// Seed derived from arbitrary bytes (FNV-1a then mixed), for commands without an explicit seed.

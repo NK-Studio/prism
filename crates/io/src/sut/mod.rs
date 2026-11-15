@@ -333,6 +333,10 @@ fn read_tool(node: &Row, r: &Row, materials: &dyn Fn() -> Result<Vec<Row>, Strin
         ));
     }
     b.spacing = spacing(r, &mut warnings);
+    // Spacing (1040) and thickness (1050) by pen input: the value times the effector's response.
+    b.csp_spacing_dynamic = pressure_effector(r, "BrushIntervalEffector", &mut warnings);
+    b.csp_thickness_dynamic = pressure_effector(r, "BrushThicknessEffector", &mut warnings)
+        .map(|dynamic| prism_paint::CspThickness { dynamic, vertical: enabled(r, "BrushVerticalThicknes") });
     b.csp_stabilizer = stabilizer(r, &mut warnings);
     b.csp_correction = true;
     b.csp_in_out = in_out(r, &mut warnings);

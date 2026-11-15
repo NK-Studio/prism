@@ -379,6 +379,29 @@ fn effector_blob(supported: u32, active: u32) -> Vec<u8> {
     blob
 }
 #[test]
+fn spacing_and_thickness_effectors_import_their_pressure_response() {
+    let mut pressure = effector_blob(0x1f0, 0x10);
+    pressure[12..16].copy_from_slice(&40u32.to_be_bytes());
+    let fields = [
+        ("BrushIntervalEffector", Value::Blob(pressure.clone())),
+        ("BrushThicknessEffector", Value::Blob(pressure)),
+        ("BrushVerticalThicknes", Value::Integer(1)),
+    ];
+    let imported = read_sut(&variant_fields_fixture(&fields), "SUT", &prism_raster::Interrupt::NONE).unwrap();
+    let b = &imported.presets[0].brush;
+    let spacing = b.csp_spacing_dynamic.as_ref().expect("spacing response");
+    assert_eq!(spacing.control, prism_paint::Control::PenPressure);
+    assert!((spacing.minimum - 0.4).abs() < 1e-6);
+    let thickness = b.csp_thickness_dynamic.as_ref().expect("thickness response");
+    assert!(thickness.vertical && (thickness.dynamic.minimum - 0.4).abs() < 1e-6);
+    assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+    // An effector with no input stays off.
+    let off = [("BrushIntervalEffector", Value::Blob(effector_blob(0x1f0, 0))), ("BrushThicknessEffector", Value::Blob(effector_blob(0x1f0, 0)))];
+    let b = read_sut(&variant_fields_fixture(&off), "SUT", &prism_raster::Interrupt::NONE).unwrap().presets.remove(0).brush;
+    assert_eq!((b.csp_spacing_dynamic, b.csp_thickness_dynamic), (None, None));
+}
+
+#[test]
 fn pressure_effectors_require_supported_and_active_flags() {
     for (supported, active, expected) in [(0x1f0, 0, false), (0x1f0, 0x10, true), (0x1e0, 0x10, false), (0x1f0, 0x20, false)] {
         let blob = Value::Blob(effector_blob(supported, active));

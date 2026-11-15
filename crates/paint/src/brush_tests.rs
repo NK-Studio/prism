@@ -108,6 +108,51 @@ fn csp_sub_color_follows_pen_pressure() {
 }
 
 #[test]
+fn csp_spacing_follows_pen_pressure() {
+    // Spacing 10 % at full pressure, down to 40 % of it with no pressure (Chainmail 2-C).
+    let b = BrushSettings {
+        size: 20.0,
+        spacing: 0.1,
+        csp_spacing_dynamic: Some(Dynamic { minimum: 0.4, ..Dynamic::controlled(Control::PenPressure) }),
+        ..brush()
+    };
+    let count = |p: f32| dabs_of(&b, &[StrokePoint::new(0.0, 10.0, p), StrokePoint::new(400.0, 10.0, p)]).len() as f32;
+    let (full, light) = (count(1.0), count(0.3));
+    // 400 px at 2 px a dab, and at 2 × (0.4 + 0.6 × 0.3) = 1.16 px.
+    assert!((full - 201.0).abs() <= 2.0, "{full}");
+    assert!((light / full - 1.0 / 0.58).abs() < 0.05, "{light} / {full}");
+    // Hostile minimums and pressures keep a positive step.
+    let hostile = BrushSettings { csp_spacing_dynamic: Some(Dynamic { minimum: f32::NAN, ..Dynamic::controlled(Control::PenPressure) }), ..b };
+    let n = dabs_of(&hostile, &[StrokePoint::new(0.0, 10.0, f32::NAN), StrokePoint::new(40.0, 10.0, -3.0)]).len();
+    assert!(n > 0 && n < 10_000, "{n}");
+}
+
+#[test]
+fn csp_thickness_follows_pen_pressure_on_its_axis() {
+    let solid = TipShape::Sampled(GrayTile::from_fn(40, 40, |_, _| 1.0));
+    let width_height = |vertical: bool, p: f32| {
+        let b = BrushSettings {
+            size: 40.0,
+            tip: solid.clone(),
+            csp_tip_scale: Some([1.0, 1.0]),
+            csp_thickness_dynamic: Some(crate::CspThickness { dynamic: Dynamic::controlled(Control::PenPressure), vertical }),
+            ..brush()
+        };
+        let mut s = Surface::new(PixelFormat::RGBA32F);
+        render_stroke(&mut s, &b, &[StrokePoint::new(50.0, 50.0, p)], None, false, 1.0);
+        let inked = |x: i32, y: i32| s.rgba(x, y)[3] > 0.5;
+        ((0..100).filter(|x| inked(*x, 50)).count(), (0..100).filter(|y| inked(50, *y)).count())
+    };
+    let (w, h) = width_height(false, 1.0);
+    assert!((38..=42).contains(&w) && (38..=42).contains(&h), "{w}×{h}");
+    // A quarter of the pressure: a quarter of the width, the height unchanged; and the reverse.
+    let (w, h) = width_height(false, 0.25);
+    assert!((9..=11).contains(&w) && (38..=42).contains(&h), "{w}×{h}");
+    let (w, h) = width_height(true, 0.25);
+    assert!((38..=42).contains(&w) && (9..=11).contains(&h), "{w}×{h}");
+}
+
+#[test]
 fn csp_fixed_sub_color_renders_at_every_depth() {
     let b = BrushSettings { size: 10.0, color: [1.0, 0.0, 0.0, 1.0], background: [0.0, 0.0, 1.0, 1.0], csp_sub_color: Some(0.25), ..brush() };
     for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {

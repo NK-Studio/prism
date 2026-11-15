@@ -407,7 +407,14 @@ impl BrushContext {
         if dual {
             return [1.0; 2];
         }
-        self.brush.csp_tip_scale.map_or([1.0; 2], |scale| {
+        self.brush.csp_tip_scale.map_or([1.0; 2], |mut scale| {
+            // Thickness by pen input scales the thickness axis of this dab.
+            if let Some(t) = &self.brush.csp_thickness_dynamic {
+                let k = if d.thickness.is_finite() { d.thickness.clamp(0.0, 1.0) } else { 1.0 };
+                if let Some(axis) = scale.get_mut(usize::from(t.vertical)) {
+                    *axis *= k;
+                }
+            }
             // CSP keeps the thickness axis radius at least one pixel, without
             // restricting expansion to the base radius.
             let floor = (1.0 / d.radius.max(0.5)).min(1.0);
