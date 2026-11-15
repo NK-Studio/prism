@@ -3591,3 +3591,4 @@ cspTool	Space evenly	균등 배치
 	Auto action	오토 액션
 	Imported {n} auto actions from CLIP STUDIO; {ready} can play now	클립 스튜디오에서 오토 액션 {n}개를 가져왔습니다. {ready}개는 바로 재생할 수 있습니다
 	Imports into the Actions panel; steps Prism cannot run yet stay in the action and must be disabled before it plays	액션 패널로 가져옵니다. 프리즘이 아직 실행하지 못하는 단계는 액션에 남으며, 재생하려면 그 단계를 꺼야 합니다
+	Pressure curve imported from CLIP STUDIO	CLIP STUDIO에서 가져온 필압 곡선

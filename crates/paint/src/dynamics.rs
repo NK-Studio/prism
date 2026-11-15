@@ -459,17 +459,25 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     }
 }
 
+/// CLIP STUDIO's sub-colour blend for one dab: the amount times its pen input response (the
+/// per-dab evaluator multiplies a colour amount by its effector's output).
+fn csp_sub_amount(b: &BrushSettings, s: &StepInput, seed: u64, index: u64) -> f32 {
+    let amount = b.csp_sub_color.filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
+    let response = b.csp_sub_color_dynamic.as_ref().map_or(1.0, |d| scalar(d, s, rand01(seed, index, stream::FG_BG)));
+    Some(amount * response).filter(|t| t.is_finite()).map_or(amount, |t| t.clamp(0.0, 1.0))
+}
+
 /// Colour Dynamics for one dab (or once per stroke, with `index = 0`).
 pub fn dynamic_color(b: &BrushSettings, s: &StepInput, seed: u64, index: u64) -> [f32; 4] {
     let cd = &b.color_dynamics;
     let (fg, bg) = (b.color, b.background);
     if !cd.enabled {
-        let t = b.csp_sub_color.filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
+        let t = csp_sub_amount(b, s, seed, index);
         return std::array::from_fn(|i| fg[i] + (bg[i] - fg[i]) * t);
     }
     let r = |st: u64| rand01(seed, index, st);
     let base = if cd.fg_bg.control != Control::Off { 1.0 - dynamic_control(&cd.fg_bg, s) } else { 0.0 };
-    let fixed = b.csp_sub_color.filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
+    let fixed = csp_sub_amount(b, s, seed, index);
     let base = fixed + (1.0 - fixed) * base;
     let t = (base + (1.0 - base) * cd.fg_bg.jitter.clamp(0.0, 1.0) * r(stream::FG_BG)).clamp(0.0, 1.0);
     let rgb = [fg[0] + (bg[0] - fg[0]) * t, fg[1] + (bg[1] - fg[1]) * t, fg[2] + (bg[2] - fg[2]) * t];

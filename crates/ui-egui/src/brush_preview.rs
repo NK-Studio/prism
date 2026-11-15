@@ -92,6 +92,7 @@ pub fn preview_sig(b: &BrushSettings) -> u64 {
             b.csp_ribbon,
             b.csp_correction,
             b.csp_sub_color,
+            &b.csp_sub_color_dynamic,
         ),
     );
     js(&mut h, &(b.csp_darken_tips, b.csp_flow_by_spacing, b.csp_post_correction, b.csp_refer_layer));

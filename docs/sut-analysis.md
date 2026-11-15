@@ -1970,6 +1970,35 @@ brightness jitter `|v|/100` (±), foreground/background jitter the sub-colour am
 CLIP STUDIO's range is one-sided; other inputs on a jitter warn; a jitter without the random input
 is a constant shift Prism can't apply (warning, dropped). Erasing brushes skip colour jitter.
 
+2026-11-15: the sub-colour blend without the random input is the blend itself (`cspSubColor`), and
+with pen pressure or tilt on its effector (0x44c) it is scaled per dab by that response
+(`cspSubColorDynamic`: the amount times minimum + (1 − minimum)·curve(pressure), as the evaluator
+multiplies a value by its effector's output). Chainmail 2 2-C and Chainmail Interlocked 2-C use
+pressure with a falling curve (100 % at pressure 0, 0 from 0.39): a light touch paints the sub
+colour, a firm one the main colour. They import without warnings. The SUT panel's Sub color row
+switches the pressure response and edits its minimum, and draws the imported curve read-only.
+
+**Per-stroke sub colour has no input.** CLIP STUDIO's tool database (`Variant`) has
+`BrushSubColorEffector` but no effector column for `BrushStrokeSubColor` (0x4fa) or the other
+per-stroke amounts, so per-stroke colour change is random only; there is no pressure to import.
+
+**Measured against CLIP STUDIO PAINT 5.0.4 (2026-11-15).** Chainmail 2 2-C at size 170, main
+(190,100,100), sub (39,35,153), white 1600×900 canvas, both at 57.4 % view; one synthetic Windows
+Ink stroke (doc x 150→1450, pressure 0→1 linear, 8 ms samples) in each app, CLIP STUDIO on Tablet
+PC for the run. Sub-colour share per pixel (median, solved against white for coverage):
+
+| Pressure | 0.05 | 0.15 | 0.25 | 0.35 | 0.45 | 0.55 | 0.75 | 0.95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CLIP STUDIO | 0.59 | 0.46 | 0.36 | 0.29 | 0.22 | 0.18 | 0.10 | 0.08 |
+| Prism | 0.55 | 0.42 | 0.31 | 0.22 | 0.15 | 0.10 | 0.03 | 0.00 |
+| amount × curve | 0.54 | 0.38 | 0.22 | 0.06 | 0 | 0 | 0 | 0 |
+
+Direction and scale match: the sub colour at a light touch, the main colour as pressure rises.
+Both trail the curve (stabilization 7 and overlapping tips 170 px wide). CLIP STUDIO trails a
+little further and keeps sub-coloured parts where tips overlap (upper quartile 0.19 at pressure
+0.95, Prism 0.00); with "Blend brush tips with Darken" a darker earlier tip survives. Why its
+earlier tips persist longer (pressure smoothing, tip spacing at the start) is not measured.
+
 ### Smaller brush options
 
 - `BrushContinuousPlot` (0x413, Continuous spraying): Build-up on, at Prism's default rate (CLIP

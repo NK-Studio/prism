@@ -600,6 +600,10 @@ pub struct BrushSettings {
     /// CSP's fixed sub-color contribution when no input effector is active (0..1).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csp_sub_color: Option<f32>,
+    /// The pen input that scales `csp_sub_color` per dab (CLIP STUDIO multiplies the amount by
+    /// its effector's output: pressure, tilt); `None` keeps the amount constant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_sub_color_dynamic: Option<Dynamic>,
     /// Imported CSP color mixing (amount/density of paint, color stretch): picks up the colour
     /// under the brush as it moves.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -709,6 +713,7 @@ impl Default for BrushSettings {
             smoothing: Smoothing::default(),
             csp_correction: false,
             csp_sub_color: None,
+            csp_sub_color_dynamic: None,
             csp_stabilizer: None,
             csp_in_out: None,
             csp_mixing: None,

@@ -66,7 +66,7 @@ below already renders; only the editable control is missing.
 | ~~P3~~ done 2026-11-04 (from D) | 102 | `TextureCompositeMode` | Texture blending mode | 1 | `texture.csp_mode` | list of the CSP texture modes |
 | ~~P3~~ done 2026-11-04 (from D) | 113 | `TextureReverseDensity` | Reverse density | 1 | `texture.invert` | checkbox in the texture block |
 | ~~P3~~ done 2026-11-04 (from D) | 114 | `TextureStressDensity` | Emphasize density | 1 | `texture.csp_emphasize` (+0.5 contrast at render time; approximation, warns) | checkbox; faithful effect stays open |
-| ~~P3~~ done 2026-11-04 (from D) | 1101 | `BrushSubColor` | Sub color (brush tip color change) | 1 | `csp_sub_color` (fixed) or `color_dynamics.fg_bg.jitter` (random) | slider 0–100 % beside 1103–1107 |
+| ~~P3~~ done 2026-11-04 (from D) | 1101 | `BrushSubColor` | Sub color (brush tip color change) | 1 | `csp_sub_color` (fixed; scaled by pen pressure/tilt through `csp_sub_color_dynamic` since 2026-11-15, its pressure switch and minimum editable in the panel) or `color_dynamics.fg_bg.jitter` (random) | slider 0–100 % beside 1103–1107 |
 
 P1 status (2026-11-04): all six rows have Tool Property controls (`sut_panel::control`);
 hardness re-derives automatic spacing, direction keeps a ribbon's quarter turns in sync, particle

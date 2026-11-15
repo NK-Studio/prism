@@ -102,6 +102,42 @@ fn number(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::Rang
     ui.add(egui::Slider::new(value, range).suffix(unit)).labelled_by(label.id).changed()
 }
 
+/// Change brush tip color (1102) is on: per-tip Color Dynamics or a fixed sub colour.
+fn tip_color_on(b: &BrushSettings) -> bool {
+    (b.color_dynamics.enabled && b.color_dynamics.per_tip) || b.csp_sub_color.is_some()
+}
+
+/// The sub colour's pen pressure response: on/off, its minimum and (read-only) the imported
+/// pressure curve, drawn as CLIP STUDIO's effector graph (pressure across, amount up).
+fn sub_color_pressure(ui: &mut egui::Ui, b: &mut BrushSettings) {
+    use prism_engine::paint::{Control, Dynamic};
+    let has_amount = b.csp_sub_color.is_some();
+    let mut pressure = b.csp_sub_color_dynamic.as_ref().is_some_and(|d| d.control == Control::PenPressure);
+    if ui.add_enabled(has_amount, egui::Checkbox::new(&mut pressure, tl!("Pen Pressure"))).changed() {
+        b.csp_sub_color_dynamic = pressure.then(|| Dynamic::controlled(Control::PenPressure));
+    }
+    let Some(d) = b.csp_sub_color_dynamic.as_mut().filter(|d| d.control == Control::PenPressure) else { return };
+    let mut minimum = if d.minimum.is_finite() { (d.minimum * 100.0).clamp(0.0, 100.0) } else { 0.0 };
+    if number(ui, "Minimum", &mut minimum, 0.0..=100.0, " %") {
+        d.minimum = (minimum / 100.0).clamp(0.0, 1.0);
+    }
+    let Some(curve) = &d.pressure_curve else { return };
+    let t = Tokens::get(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(vec2(120.0, 60.0), Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
+    let points: Vec<egui::Pos2> = (0..=32)
+        .map(|i| {
+            let x = i as f32 / 32.0;
+            let y = curve.sample(x);
+            let y = if y.is_finite() { y.clamp(0.0, 1.0) } else { 0.0 };
+            egui::pos2(rect.left() + x * rect.width(), rect.bottom() - y * rect.height())
+        })
+        .collect();
+    painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, t.accent)));
+    response.on_hover_text(tl!("Pressure curve imported from CLIP STUDIO"));
+}
+
 fn unsupported(ui: &mut egui::Ui, label: &str, value: String, conditional: bool) {
     ui.add_enabled_ui(false, |ui| {
         ui.label(tl!(label));
@@ -323,16 +359,18 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
             }
         }
         1101 => {
-            // A fixed sub-colour blend (`csp_sub_color`); a random one is the colour jitter's.
-            let cd = &b.color_dynamics;
-            let on = cd.enabled && cd.per_tip;
+            // A fixed sub-colour blend (`csp_sub_color`), optionally scaled by pen pressure
+            // (`csp_sub_color_dynamic`); a random one is the colour jitter's.
+            let on = tip_color_on(b);
             let fixed = b.csp_sub_color.filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
             let mut percent = fixed * 100.0;
-            let changed = ui.add_enabled_ui(on, |ui| number(ui, label, &mut percent, 0.0..=100.0, " %")).inner;
-            if changed {
-                let v = (percent / 100.0).clamp(0.0, 1.0);
-                b.csp_sub_color = (v > 0.0).then_some(v);
-            }
+            ui.add_enabled_ui(on, |ui| {
+                if number(ui, label, &mut percent, 0.0..=100.0, " %") {
+                    let v = (percent / 100.0).clamp(0.0, 1.0);
+                    b.csp_sub_color = (v > 0.0).then_some(v);
+                }
+                sub_color_pressure(ui, b);
+            });
             if !on {
                 ui.small(tl!("Turn on Change brush tip color to use it"));
             }
@@ -461,12 +499,17 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
             None => unsupported(ui, label, format!("{:.0}", source(m, key)), true),
         },
         1102 => {
-            // Per-tip colour jitter (CSP's per-stroke variation, 1270, is separate).
-            let cd = &mut b.color_dynamics;
-            let mut on = cd.enabled && cd.per_tip;
+            // Per-tip colour jitter (CSP's per-stroke variation, 1270, is separate). A fixed
+            // sub colour alone (Color Dynamics off) is part of it too, as in CLIP STUDIO.
+            let mut on = tip_color_on(b);
             if ui.checkbox(&mut on, tl!(label)).changed() {
+                let cd = &mut b.color_dynamics;
                 cd.enabled = on;
                 cd.per_tip = true;
+                if !on {
+                    b.csp_sub_color = None;
+                    b.csp_sub_color_dynamic = None;
+                }
             }
             if !b.csp_tip_colors.is_empty() {
                 ui.small(tl!("Colour tips keep their own colours"));
@@ -1223,6 +1266,55 @@ mod tests {
         h.run_steps(2);
         crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
             for label in ["Post correction level", "Smooths the line after the pen is lifted"] {
+                assert_ne!(tl!(label), label, "{label}");
+            }
+        });
+    }
+
+    #[test]
+    fn sub_color_pressure_response_is_shown_and_edited() {
+        use prism_engine::paint::{Control, Dynamic, PressureCurve};
+        for hostile in [false, true] {
+            let mut h = harness();
+            {
+                let app = h.state_mut();
+                let b = &mut app.session.tools.brush;
+                // Chainmail 2-C: a fixed sub colour with a pressure response, Color Dynamics off.
+                b.color_dynamics.enabled = false;
+                b.csp_sub_color = Some(1.0);
+                b.csp_sub_color_dynamic = Some(Dynamic {
+                    minimum: if hostile { f32::NAN } else { 0.2 },
+                    pressure_curve: Some(PressureCurve::new(vec![[0.0, 0.62], [0.39, 0.0], [1.0, 0.0]]).unwrap()),
+                    ..Dynamic::controlled(Control::PenPressure)
+                });
+                let brush = b.clone();
+                let preset = app.session.tools.presets.last_mut().unwrap();
+                preset.brush = brush;
+                preset.sut.as_mut().unwrap().original.visible = vec![1102, 1101];
+            }
+            h.run_steps(3);
+            // The imported sub colour counts as Change brush tip color: the rows are live.
+            assert!(h.query_by_label_contains("Turn on Change brush tip color").is_none(), "hostile={hostile}");
+            h.get_by_role_and_label(egui::accesskit::Role::Slider, "Sub color");
+            h.get_by_role_and_label(egui::accesskit::Role::Slider, "Minimum");
+            h.get_by_label("Pen Pressure").click();
+            h.run_steps(2);
+            assert_eq!(h.state().session.tools.brush.csp_sub_color_dynamic, None);
+            assert!(h.query_by_role_and_label(egui::accesskit::Role::Slider, "Minimum").is_none());
+            h.get_by_label("Pen Pressure").click();
+            h.run_steps(2);
+            let d = h.state().session.tools.brush.csp_sub_color_dynamic.clone().expect("pressure back on");
+            assert_eq!((d.control, d.pressure_curve), (Control::PenPressure, None));
+            assert_eq!(h.state().session.journal.last().unwrap().0, "tools.setBrush");
+            // Switching Change brush tip color off removes the sub colour with its response.
+            h.get_by_label("Change brush tip color").click();
+            h.run_steps(2);
+            let b = &h.state().session.tools.brush;
+            assert_eq!((b.csp_sub_color, b.csp_sub_color_dynamic.is_some()), (None, false));
+            assert!(h.query_by_label_contains("Turn on Change brush tip color").is_some());
+        }
+        crate::i18n::with_language(crate::i18n::Lang::from_pref("ko"), || {
+            for label in ["Pen Pressure", "Minimum", "Pressure curve imported from CLIP STUDIO"] {
                 assert_ne!(tl!(label), label, "{label}");
             }
         });

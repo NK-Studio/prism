@@ -80,6 +80,34 @@ fn csp_fixed_sub_color_is_seed_independent_and_survives_serialization() {
 }
 
 #[test]
+fn csp_sub_color_follows_pen_pressure() {
+    let pressure = Dynamic { minimum: 0.2, ..Dynamic::controlled(Control::PenPressure) };
+    let b = BrushSettings {
+        color: [1.0, 0.0, 0.0, 1.0],
+        background: [0.0, 0.0, 1.0, 1.0],
+        csp_sub_color: Some(0.5),
+        csp_sub_color_dynamic: Some(pressure),
+        ..brush()
+    };
+    let restored: BrushSettings = serde_json::from_value(serde_json::to_value(&b).unwrap()).unwrap();
+    assert_eq!(restored, b);
+    // The blend is 0.5 × (0.2 + 0.8 × pressure): 0.1 at no pressure, 0.5 at full pressure.
+    for (p, t) in [(0.0, 0.1), (0.5, 0.3), (1.0, 0.5)] {
+        let out = dabs_of(&restored, &[StrokePoint::new(10.0, 10.0, p), StrokePoint::new(30.0, 10.0, p)]);
+        assert!(!out.is_empty());
+        for dab in out {
+            for (actual, expected) in dab.color.iter().zip([1.0 - t, 0.0, t, 1.0]) {
+                assert!((actual - expected).abs() < 1e-5, "pressure {p}: {:?}", dab.color);
+            }
+        }
+    }
+    // A rising stroke moves from the main colour towards the sub colour.
+    let out = dabs_of(&b, &[StrokePoint::new(10.0, 10.0, 0.0), StrokePoint::new(60.0, 10.0, 1.0)]);
+    let blue: Vec<f32> = out.iter().map(|d| d.color[2]).collect();
+    assert!(blue.windows(2).all(|w| w[1] >= w[0] - 1e-6) && blue.last() > blue.first(), "{blue:?}");
+}
+
+#[test]
 fn csp_fixed_sub_color_renders_at_every_depth() {
     let b = BrushSettings { size: 10.0, color: [1.0, 0.0, 0.0, 1.0], background: [0.0, 0.0, 1.0, 1.0], csp_sub_color: Some(0.25), ..brush() };
     for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
