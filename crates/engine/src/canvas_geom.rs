@@ -84,6 +84,10 @@ pub(crate) fn transform_layer_geometry(l: &mut Layer, a: &Affine, content: bool,
         let p = map_pt(a, [x, y]);
         l.effects.reference = Some((p[0], p[1]));
     }
+    // A 3D figure layer's scene follows its pixels (Image Size, rotations, flips, Canvas Size).
+    if content && let Some(scene) = &mut l.figure {
+        scene.placement = a.mul(&scene.placement);
+    }
     if !content {
         // Free Transform doesn't warp fill caches: drop it, the fill re-renders from its model.
         l.fill_cache = None;
@@ -184,6 +188,11 @@ pub(crate) enum Refresh {
 pub(crate) fn refresh(doc: &mut Document, what: Refresh) {
     fn rec(snapshot: &Document, layers: &mut [Layer], what: Refresh) {
         for l in layers {
+            // Resampled figure pixels re-render sharp from the moved scene; a failed render keeps them.
+            if what == Refresh::All && l.figure.is_some() {
+                let _ = crate::figure_cmds::render_into(snapshot, l, false);
+                continue;
+            }
             match &mut l.content {
                 LayerContent::Group(g) => rec(snapshot, &mut g.children, what),
                 LayerContent::Shape(sh) => crate::vector_cmds::refresh_shape(snapshot, sh),

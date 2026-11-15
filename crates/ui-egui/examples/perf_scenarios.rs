@@ -812,6 +812,29 @@ fn algorithm_scenarios(b: &mut Bench, sz: &Sizes) {
             Err(e) => b.errors.push((names[0].into(), e)),
         }
     }
+    // 3D figure layers: a full-quality render and one draft step of a camera drag, on a 24 MP
+    // 16-bit document where the figure fills 80 % of the height.
+    let figure = ["3D figure render 24 MP 16-bit", "3D figure camera drag step (draft) 24 MP"];
+    if figure.iter().any(|n| b.wanted(n)) {
+        let (w, h) = sz.big_photo;
+        let mut s = Session::new();
+        match exec(&mut s, "file.new", json!({"width": w, "height": h, "depth": 16, "background": "white"})).and_then(|_| exec(&mut s, "layer.figure.new", json!({}))) {
+            Ok(_) => {
+                b.time(figure[0], &mut s, reps, false, |_, s, _| {
+                    let t = Instant::now();
+                    exec(s, "layer.figure.setLook", json!({"outline": true}))?;
+                    Ok(ms(t))
+                });
+                let steps = b.reps;
+                b.time(figure[1], &mut s, steps, false, |_, s, i| {
+                    let t = Instant::now();
+                    exec(s, "layer.figure.setCamera", json!({"orbitBy": [2.0, 0.0], "draft": true, "coalesce": format!("perf-orbit-{i}")}))?;
+                    Ok(ms(t))
+                });
+            }
+            Err(e) => b.errors.push((figure[0].into(), e)),
+        }
+    }
     let cmyk = "brush dab on A4 300 ppi CMYK + refresh";
     if b.wanted(cmyk) {
         let (w, h) = sz.a4;

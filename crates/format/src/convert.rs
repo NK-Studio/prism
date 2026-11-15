@@ -200,6 +200,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         advanced: l.advanced,
         video: l.video.as_ref().map(|v| video_m(v, sink)),
         special_rulers: l.special_rulers.clone(),
+        figure: l.figure.clone(),
         reference: l.reference,
     }
 }
@@ -504,6 +505,13 @@ impl Loader<'_> {
                 Some(r) => {
                     r.validate().map_err(|e| FormatError::corrupt(format!("layer {:?}: {e}", m.name)))?;
                     Some(r.clone())
+                }
+                None => None,
+            },
+            figure: match &m.figure {
+                Some(f) => {
+                    f.validate().map_err(|e| FormatError::corrupt(format!("layer {:?}: {e}", m.name)))?;
+                    Some(f.clone())
                 }
                 None => None,
             },

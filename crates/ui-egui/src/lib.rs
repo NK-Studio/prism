@@ -143,6 +143,7 @@ mod sizing;
 pub mod slice_ui;
 pub mod smart_ui;
 pub mod snap_ui;
+pub mod figure_ui;
 pub mod special_ruler_ui;
 pub mod state;
 pub mod stroke_constraint;
@@ -516,6 +517,9 @@ pub struct PrismApp {
     /// that keys its coalesced edits.
     pub(crate) ruler_drag: Option<special_ruler_ui::handles::RulerDrag>,
     pub(crate) ruler_handle_seq: u64,
+    /// A 3D figure gesture in progress (figure_ui), and the counter keying its coalesced edits.
+    pub(crate) figure_drag: Option<figure_ui::FigureDrag>,
+    pub(crate) figure_seq: u64,
     /// Crop tool gesture in progress (see `crop_ui`).
     pub(crate) crop: crop_ui::CropState,
     pub(crate) arrow_handle_runtime: arrow_handles_ui::Runtime,
@@ -638,6 +642,8 @@ impl PrismApp {
             guide_drag: None,
             ruler_drag: None,
             ruler_handle_seq: 0,
+            figure_drag: None,
+            figure_seq: 0,
             crop: Default::default(),
             shape_corner_runtime: Default::default(),
             arrow_handle_runtime: Default::default(),

@@ -1,0 +1,155 @@
+//! CLIP STUDIO pose materials (`data/material_0.pose` of a `pose` material): a C2F container
+//! holding a SQLite database whose `File` row carries an XML `.pep`:
+//! `<celsysdocument><pose version="…"><node name="root_group_" rotquat="w x y z" trans="x y z">`
+//! with the figure's joints nested inside. `trans` is the joint's position in its parent's frame
+//! (centimetres, Y up) and `rotquat` its local rotation, so the file holds both the pose and the
+//! bone lengths. The material name is `Material.MaterialName`. Evidence: docs/sut-analysis.md ›
+//! Pose materials.
+use super::sqlite::{Database, Value};
+use prism_doc::figure::{Figure, Joint, MAX_DEPTH, MAX_JOINTS, MAX_NAME, normalize_quat};
+
+type Result<T> = std::result::Result<T, String>;
+
+/// Largest `.pep` read (a 67-joint pose is about 17 KB).
+const PEP_LIMIT: usize = 1 << 20;
+
+/// Read a pose material (`.pose`, plain SQLite or in its C2F envelope) or a bare `.pep` XML file.
+/// `fallback_name` names the figure when the file carries no name.
+pub fn read(bytes: &[u8], fallback_name: &str, ctl: &prism_raster::Interrupt) -> Result<Figure> {
+    ctl.check().map_err(|e| e.to_string())?;
+    if bytes.len() > 64 << 20 {
+        return Err("CLIP STUDIO pose exceeds 64 MiB".into());
+    }
+    let decoded;
+    let plain = if bytes.starts_with(crate::csp_container::MAGIC) {
+        decoded = crate::csp_container::decode(bytes, ctl)?;
+        &decoded[..]
+    } else {
+        bytes
+    };
+    let (xml, name) = if plain.starts_with(b"SQLite format 3\0") {
+        let db = Database::new(plain)?;
+        let name = db.table("Material").ok().and_then(|rows| rows.first().and_then(|r| r.get("MaterialName").and_then(Value::text).map(str::to_string)));
+        let files = db.table("File").map_err(|e| format!("not a CLIP STUDIO pose ({e})"))?;
+        let data = files.iter().find_map(|r| r.get("FileData").and_then(Value::blob)).ok_or("the CLIP STUDIO pose holds no pose data")?;
+        (data.to_vec(), name)
+    } else {
+        (plain.to_vec(), None)
+    };
+    let mut figure = read_pep(&xml)?;
+    figure.name = clean(name.as_deref().unwrap_or(""), fallback_name);
+    ctl.check().map_err(|e| e.to_string())?;
+    Ok(figure)
+}
+
+fn clean(s: &str, fallback: &str) -> String {
+    let s: String = s.chars().filter(|c| !c.is_control()).take(MAX_NAME).collect();
+    let s = s.trim();
+    if s.is_empty() { fallback.chars().take(MAX_NAME).collect() } else { s.to_string() }
+}
+
+fn numbers<const N: usize>(node: roxmltree::Node, attr: &str) -> Result<[f64; N]> {
+    let text = node.attribute(attr).ok_or_else(|| format!("pose joint without `{attr}`"))?;
+    let mut out = [0.0; N];
+    let mut parts = text.split_ascii_whitespace();
+    for v in &mut out {
+        *v = parts.next().and_then(|p| p.parse::<f64>().ok()).filter(|v| v.is_finite() && v.abs() <= 1e6).ok_or_else(|| format!("pose joint `{attr}` is not {N} numbers"))?;
+    }
+    if parts.next().is_some() {
+        return Err(format!("pose joint `{attr}` is not {N} numbers"));
+    }
+    Ok(out)
+}
+
+/// A `.pep` document: its `<pose>` element's single top `<node>` tree.
+pub fn read_pep(bytes: &[u8]) -> Result<Figure> {
+    if bytes.len() > PEP_LIMIT {
+        return Err("CLIP STUDIO pose data exceeds 1 MiB".into());
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| "CLIP STUDIO pose data is not UTF-8 text")?;
+    let doc = roxmltree::Document::parse(text).map_err(|e| format!("CLIP STUDIO pose data is not readable XML ({e})"))?;
+    let pose = doc.descendants().find(|n| n.has_tag_name("pose")).ok_or("CLIP STUDIO pose data has no <pose>")?;
+    let mut tops = pose.children().filter(|n| n.has_tag_name("node"));
+    let top = tops.next().ok_or("CLIP STUDIO pose has no joints")?;
+    if tops.next().is_some() {
+        return Err("CLIP STUDIO pose has more than one root joint".into());
+    }
+    let mut count = 0usize;
+    let root = joint(top, 0, &mut count)?;
+    Ok(Figure { name: String::new(), source: None, root })
+}
+
+fn joint(node: roxmltree::Node, depth: usize, count: &mut usize) -> Result<Joint> {
+    *count += 1;
+    if *count > MAX_JOINTS {
+        return Err(format!("CLIP STUDIO pose has more than {MAX_JOINTS} joints"));
+    }
+    if depth > MAX_DEPTH {
+        return Err(format!("CLIP STUDIO pose joints nest deeper than {MAX_DEPTH}"));
+    }
+    let name: String = node.attribute("name").unwrap_or("").chars().filter(|c| !c.is_control()).take(MAX_NAME).collect();
+    let rotation = normalize_quat(numbers::<4>(node, "rotquat")?);
+    let offset = numbers::<3>(node, "trans")?;
+    let mut children = Vec::new();
+    for c in node.children().filter(|n| n.has_tag_name("node")) {
+        children.push(joint(c, depth + 1, count)?);
+    }
+    Ok(Joint { name, rotation, offset, children })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    pub(crate) const PEP: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<celsysdocument version="1.0.0">
+  <info author="" comment="" tool="test"/>
+  <pose alias_name="" bone_mapping_version="0" search_tags="" version="1.0.14">
+    <node id="-1" name="root_group_" rotquat="1 0 0 0" trans="0 0 0">
+      <node id="-1" name="hips_bb_" rotquat="0.70710678 0 0 0.70710678" trans="0 96 0">
+        <node id="-1" name="spine_bb_" rotquat="1 0 0 0" trans="10 0 0"/>
+      </node>
+    </node>
+  </pose>
+</celsysdocument>"#;
+
+    #[test]
+    fn a_pep_becomes_a_joint_tree() {
+        let f = read_pep(PEP.as_bytes()).unwrap();
+        assert_eq!(f.root.name, "root_group_");
+        let hips = f.root.find("hips_bb_").unwrap();
+        assert_eq!(hips.offset, [0.0, 96.0, 0.0]);
+        assert!((hips.rotation[0] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-6, "normalised");
+        assert_eq!(f.root.find("spine_bb_").unwrap().offset, [10.0, 0.0, 0.0]);
+        let named = read(PEP.as_bytes(), "Pose 1", &prism_raster::Interrupt::NONE).unwrap();
+        assert_eq!(named.name, "Pose 1", "a bare .pep takes the fallback name");
+    }
+
+    #[test]
+    fn malformed_poses_are_errors_never_panics() {
+        let bad = [
+            "",
+            "<pose/>",
+            "not xml",
+            r#"<pose><node name="a" rotquat="1 0 0" trans="0 0 0"/></pose>"#,
+            r#"<pose><node name="a" rotquat="1 0 0 0" trans="0 0 x"/></pose>"#,
+            r#"<pose><node name="a" rotquat="1 0 0 0" trans="0 0 1e400"/></pose>"#,
+            r#"<pose><node name="a" rotquat="1 0 0 0 5" trans="0 0 0"/></pose>"#,
+            r#"<pose><node name="a" rotquat="1 0 0 0" trans="0 0 0"/><node name="b" rotquat="1 0 0 0" trans="0 0 0"/></pose>"#,
+        ];
+        for b in bad {
+            assert!(read_pep(b.as_bytes()).is_err(), "{b}");
+        }
+        // Too deep, and too many joints.
+        let deep = format!("<pose>{}{}</pose>", r#"<node name="j" rotquat="1 0 0 0" trans="0 1 0">"#.repeat(MAX_DEPTH + 3), "</node>".repeat(MAX_DEPTH + 3));
+        assert!(read_pep(deep.as_bytes()).is_err());
+        let wide = format!(r#"<pose><node name="r" rotquat="1 0 0 0" trans="0 0 0">{}</node></pose>"#, r#"<node name="c" rotquat="1 0 0 0" trans="0 1 0"/>"#.repeat(MAX_JOINTS + 1));
+        assert!(read_pep(wide.as_bytes()).is_err());
+        // A zero quaternion becomes the identity rather than an error.
+        let zero = r#"<pose><node name="a" rotquat="0 0 0 0" trans="0 0 0"/></pose>"#;
+        assert_eq!(read_pep(zero.as_bytes()).unwrap().root.rotation, [1.0, 0.0, 0.0, 0.0]);
+        for b in [&b"SQLite format 3\0junk"[..], b"\x89C2F\r\n\x1a\nbroken"] {
+            assert!(read(b, "x", &prism_raster::Interrupt::NONE).is_err());
+        }
+    }
+}

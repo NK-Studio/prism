@@ -407,6 +407,9 @@ impl Ex {
         if l.special_rulers.as_ref().is_some_and(|r| !r.is_empty()) {
             self.warnings.push(format!("layer \"{}\": special rulers are kept only in .prism files", l.name));
         }
+        if l.figure.is_some() {
+            self.warnings.push(format!("layer \"{}\": the 3D figures are kept only in .prism files (the PSD keeps their pixels)", l.name));
+        }
         let mut raw: Vec<([u8; 4], Vec<u8>)> = l.psd_blocks.iter().filter(|(k, _)| !REGENERATED.contains(&k)).map(|(k, d)| (*k, d.to_vec())).collect();
         // A stale multi-effects block would override the regenerated lfx2.
         if effects_unchanged(l) == Some(false) {

@@ -4371,6 +4371,7 @@ name = "prism-algo"
 version = "1.2.0"
 dependencies = [
  "prism-color",
+ "prism-doc",
  "prism-geom",
  "prism-raster",
  "rayon",
@@ -4583,6 +4584,7 @@ dependencies = [
  "prism-vector",
  "proptest",
  "resvg",
+ "roxmltree",
  "serde_json",
  "thiserror 2.0.21",
 ]

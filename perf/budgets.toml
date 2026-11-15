@@ -448,3 +448,19 @@ id = "P48"
 title = "Full refresh of a 14000×14000 document"
 bench = "large_image_bench"
 row = "full refresh"
+
+[[scenario]]
+id = "P49"
+title = "3D figure layer: full-quality render, 24 MP 16-bit"
+bench = "perf_scenarios"
+row = "3D figure render 24 MP 16-bit"
+budget_ms = 1500
+enforce = false  # new 2026-11-15; not in the baseline yet
+
+[[scenario]]
+id = "P50"
+title = "3D figure layer: one draft step of a camera drag, 24 MP"
+bench = "perf_scenarios"
+row = "3D figure camera drag step (draft) 24 MP"
+budget_ms = 50
+enforce = false  # new 2026-11-15; not in the baseline yet

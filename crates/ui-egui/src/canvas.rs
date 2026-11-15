@@ -2697,6 +2697,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         if app.ui.view.extras {
             let layer = app.session.documents().get(idx).and_then(|st| st.active_layer);
             crate::special_ruler_ui::draw(app, &painter, &xf, &doc, layer);
+            crate::figure_ui::draw(app, &painter, &xf);
         }
         draw_drag_preview(app, &painter, &xf);
         crate::zoom_tool::draw(&ctx, &painter);
@@ -2724,7 +2725,9 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
             let d = xf.to_doc(p);
             crate::rulers::guide_at(app, d[0], d[1])
         });
-        let ruler_cursor = response.hover_pos().and_then(|p| crate::special_ruler_ui::handles::cursor(app, xf.to_doc(p)));
+        let ruler_cursor = response
+            .hover_pos()
+            .and_then(|p| crate::special_ruler_ui::handles::cursor(app, xf.to_doc(p)).or_else(|| crate::figure_ui::cursor(app, xf.to_doc(p))));
         if let Some(c) = ruler_cursor {
             let c = response.hover_pos().map_or(c, |p| crate::cursor_pack::stock(&ctx, p, c));
             ui.ctx().set_cursor_icon(c);
@@ -3464,6 +3467,10 @@ pub fn tool_event(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) {
     }
     // Special ruler handles (Move tool on a ruler layer, as CLIP STUDIO's Operation tool).
     if crate::special_ruler_ui::handles::pointer(app, ev, mods) {
+        return;
+    }
+    // 3D figure layers (Move tool): pose joints, orbit and move the camera.
+    if crate::figure_ui::pointer(app, ev, mods) {
         return;
     }
     if app.ui.transform.is_none() && crate::type_transform::pointer(app, ev, mods) {

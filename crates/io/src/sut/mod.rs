@@ -9,6 +9,7 @@ pub mod color_set;
 pub mod gradient_material;
 pub mod layer_material;
 pub mod library;
+pub mod pose;
 mod material;
 mod sqlite;
 use crate::abr_map::AbrImport;

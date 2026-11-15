@@ -169,7 +169,7 @@ fn dropping_a_material_uses_it_where_it_lands() {
     // A layer material needs a document; nothing happens without one.
     let ctx = egui::Context::default();
     let mut a = app();
-    let ruler = MaterialDrag { uuid: "r".into(), name: "Isometric ruler".into(), layer: true, action: false, gradient: false, color_set: false };
+    let ruler = MaterialDrag { uuid: "r".into(), name: "Isometric ruler".into(), layer: true, action: false, gradient: false, color_set: false, pose: false };
     use_material(&mut a, &ctx, &ruler, None);
     assert!(a.session.active().is_none());
     // With one, the import runs (the test folder has no CLIP STUDIO data, so it reports why).
@@ -178,7 +178,7 @@ fn dropping_a_material_uses_it_where_it_lands() {
     use_material(&mut a, &ctx, &ruler, None);
     assert_eq!(a.session.active().unwrap().doc.layers.len(), layers);
     // A brush goes to the brush import with this panel's folder.
-    let brush = MaterialDrag { uuid: "a".into(), name: "Ink pen".into(), layer: false, action: false, gradient: false, color_set: false };
+    let brush = MaterialDrag { uuid: "a".into(), name: "Ink pen".into(), layer: false, action: false, gradient: false, color_set: false, pose: false };
     let presets = a.session.tools.presets.len();
     use_material(&mut a, &ctx, &brush, None);
     assert_eq!(a.session.tools.presets.len(), presets, "nothing to import from the test folder");
@@ -574,4 +574,36 @@ fn local_colour_sets_list_and_import() {
         eprintln!("group {} ({}): {:?}", g.name, g.items.len(), g.items.iter().take(3).map(|i| i.name.clone()).collect::<Vec<_>>());
     }
     assert!(app.ui.csp_library.selected.is_empty());
+}
+
+#[test]
+fn poses_have_their_own_filter_and_need_a_document() {
+    let mut app = app();
+    let mut l = listing();
+    l["poses"] = json!([
+        {"uuid": "p1", "name": "Pair pose 1", "kind": "pose", "catalog": "Pair", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": ["ダウンロード:Pair-1"]},
+        {"uuid": "p2", "name": "Pair pose 2", "kind": "pose", "catalog": "Pair", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": ["ダウンロード:Pair-1"]}
+    ]);
+    app.ui.csp_library.listing = Some(l.clone());
+    let mut h = harness(app);
+    assert!(h.query_by_label("Pair pose 1").is_some(), "All lists poses too");
+    h.state_mut().ui.csp_library.filter = KindFilter::Poses;
+    h.run_steps(2);
+    assert!(h.query_by_label("Ink pen").is_none() && h.query_by_label("Pair pose 2").is_some());
+    assert!(!in_library(h.state(), &l["poses"][0]));
+
+    // No document: nothing happens but a message; with one, an unreadable folder is reported
+    // and the poses stay selected.
+    let mut a = super::tests::app();
+    a.ui.csp_library.listing = Some(l);
+    a.ui.csp_library.selected = vec!["p1".into(), "p2".into()];
+    import_selected(&mut a);
+    assert!(a.ui.status_error);
+    assert_eq!(a.ui.csp_library.selected.len(), 2);
+    a.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let layers = a.session.active().unwrap().doc.layers.len();
+    import_selected(&mut a);
+    assert_eq!(a.session.active().unwrap().doc.layers.len(), layers);
+    assert!(a.ui.status_error);
+    assert_eq!(a.ui.csp_library.selected.len(), 2);
 }

@@ -82,6 +82,12 @@ pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -
 pub(crate) fn check_pixels_unlocked(doc: &Document, id: LayerId) -> Result<()> {
     let locks = doc.effective_locks(id);
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    if l.figure.is_some() {
+        return Err(EngineError::Other(format!(
+            "\"{}\" is a 3D figure layer: rasterize it first (Layer › Rasterize › Layer) to edit its pixels",
+            l.name
+        )));
+    }
     if locks.pixels || locks.all {
         return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
     }
@@ -1207,6 +1213,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::laf_import_cmds::specs());
     v.extend(crate::laf_step_cmds::specs());
     v.extend(crate::csp_gradient_cmds::specs());
+    v.extend(crate::figure_cmds::specs());
     v.extend(crate::atn_import_cmds::specs());
     v
 }
@@ -1300,6 +1307,10 @@ pub(crate) fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
         && m.linked
     {
         m.surface = translate_surface(&m.surface, dx, dy);
+    }
+    // A 3D figure layer's pixels move as they are; its scene moves along so re-renders line up.
+    if let Some(scene) = &mut l.figure {
+        prism_algo::figure3d::pan(scene, [f64::from(dx), f64::from(dy)]);
     }
     match &mut l.content {
         LayerContent::Raster(s) => *s = translate_surface(s, dx, dy),

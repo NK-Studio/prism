@@ -75,10 +75,19 @@ fn list(_s: &mut Session, p: &Value) -> Result<Value> {
             json!({ "uuid": c.uuid, "name": c.name, "kind": "color_set", "catalog": c.catalog, "status": c.status.id(), "guidance": c.status.guidance(), "thumbnail": thumbnail, "tags": c.tags, "folders": c.folders, "favorite": c.favorite })
         })
         .collect();
+    // Poses become figures of a 3D figure layer with layer.figure.new / layer.figure.addPose.
+    let poses: Vec<Value> = lib
+        .poses
+        .iter()
+        .map(|c| {
+            let thumbnail = c.thumbnail.as_ref().map(|p| p.display().to_string());
+            json!({ "uuid": c.uuid, "name": c.name, "kind": "pose", "catalog": c.catalog, "status": c.status.id(), "guidance": c.status.guidance(), "thumbnail": thumbnail, "tags": c.tags, "folders": c.folders, "favorite": c.favorite })
+        })
+        .collect();
     let catalogs: Vec<Value> =
         lib.catalogs.iter().map(|c| json!({ "name": c.name, "thumbnail": c.thumbnail.as_ref().map(|p| p.display().to_string()), "tags": c.tags })).collect();
     Ok(
-        json!({ "root": lib.root.display().to_string(), "brushes": brushes, "layers": layers, "actions": actions, "gradients": gradients, "colorSets": color_sets, "catalogs": catalogs, "count": brushes.len(), "ready": ready, "notices": lib.notices }),
+        json!({ "root": lib.root.display().to_string(), "brushes": brushes, "layers": layers, "actions": actions, "gradients": gradients, "colorSets": color_sets, "poses": poses, "catalogs": catalogs, "count": brushes.len(), "ready": ready, "notices": lib.notices }),
     )
 }
 
@@ -168,7 +177,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "List CLIP STUDIO Downloaded Brushes",
             menu: &[],
             shortcut: None,
-            params: r#"{"root":"CLIP STUDIO user data folder"?=platform default} → {root, brushes:[{uuid,name,kind,catalog,status,source,guidance,thumbnail:path?,tags:[user tag],folders:[CLIP STUDIO folder path "root:sub:…"],favorite}], layers:[{uuid,name,kind:"image",catalog,status,guidance,thumbnail:path?,tags,folders,favorite,ruler:bool,tiling:bool}] (add with layer.cspMaterial.import), actions:[{uuid,name,kind:"auto_action",catalog,status,guidance,thumbnail:path?,tags,folders,favorite}] (import with actions.importLaf {"uuid"}), gradients:[{uuid,name,kind:"gradation|gradation_set",catalog,status,guidance,thumbnail:path?,tags,folders,favorite}] (import with gradient.presets.importCsp {"uuid"}), colorSets:[{uuid,name,kind:"color_set",catalog,status,guidance,thumbnail:path?,tags,folders,favorite}] (import with swatches.importCsp {"uuid"}), catalogs:[{name,thumbnail:path?,tags:[user tag]}], count, ready, notices}"#,
+            params: r#"{"root":"CLIP STUDIO user data folder"?=platform default} → {root, brushes:[{uuid,name,kind,catalog,status,source,guidance,thumbnail:path?,tags:[user tag],folders:[CLIP STUDIO folder path "root:sub:…"],favorite}], layers:[{uuid,name,kind:"image",catalog,status,guidance,thumbnail:path?,tags,folders,favorite,ruler:bool,tiling:bool}] (add with layer.cspMaterial.import), actions:[{uuid,name,kind:"auto_action",catalog,status,guidance,thumbnail:path?,tags,folders,favorite}] (import with actions.importLaf {"uuid"}), gradients:[{uuid,name,kind:"gradation|gradation_set",catalog,status,guidance,thumbnail:path?,tags,folders,favorite}] (import with gradient.presets.importCsp {"uuid"}), colorSets:[{uuid,name,kind:"color_set",catalog,status,guidance,thumbnail:path?,tags,folders,favorite}] (import with swatches.importCsp {"uuid"}), poses:[{uuid,name,kind:"pose",catalog,status,guidance,thumbnail:path?,tags,folders,favorite}] (add with layer.figure.new {"uuids"} or layer.figure.addPose {"uuid"}), catalogs:[{name,thumbnail:path?,tags:[user tag]}], count, ready, notices}"#,
             enabled: |_| Ok(()),
             run: list,
             journal: false,

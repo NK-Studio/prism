@@ -178,7 +178,16 @@ pub(crate) fn transform_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut L
     }
     // With a selection only the selected pixels move, and so only the same region of a linked
     // mask (#205). Groups, type, shapes and smart objects move whole.
-    let mask_sel = doc_sel.filter(|_| !matches!(l.content, LayerContent::Group(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_)));
+    let mask_sel = doc_sel.filter(|_| l.figure.is_none() && !matches!(l.content, LayerContent::Group(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_)));
+    // A 3D figure layer moves whole and keeps an affine map in its scene (it re-renders in
+    // `refresh_text`); Distort and Perspective would bend the figure, which a render can't do.
+    let doc_sel = if l.figure.is_some() { None } else { doc_sel };
+    if let Some(scene) = &mut l.figure {
+        let Some(a) = affine else {
+            return Err(EngineError::Other("Distort and Perspective need a rasterized 3D figure (Layer › Rasterize › Layer)".into()));
+        };
+        scene.placement = a.mul(&scene.placement);
+    }
     match &mut l.content {
         LayerContent::Group(g) => {
             for c in g.children.iter_mut() {
@@ -310,6 +319,11 @@ pub fn split_selected(surf: &Surface, sel: &Surface) -> (Surface, Surface) {
 }
 
 pub(crate) fn refresh_text(doc: &Document, l: &mut Layer) {
+    if l.figure.is_some() {
+        // The warped pixels stay if the render fails.
+        let _ = crate::figure_cmds::render_into(doc, l, false);
+        return;
+    }
     match &mut l.content {
         LayerContent::Text(t) => crate::type_cmds::refresh(doc, t),
         LayerContent::Shape(sh) => crate::vector_cmds::refresh_shape(doc, sh),

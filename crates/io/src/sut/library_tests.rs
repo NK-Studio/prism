@@ -549,3 +549,74 @@ fn a_colour_set_reads_its_colours_in_palette_order() {
         assert!(read(&bytes, &prism_raster::Interrupt::NONE).is_err());
     }
 }
+
+#[test]
+fn a_pose_material_reads_its_figure() {
+    use crate::sut::pose::read;
+    let pep = r#"<?xml version="1.0" encoding="UTF-8"?><celsysdocument><pose version="1.0.14"><node name="root_group_" rotquat="1 0 0 0" trans="1 2 3"><node name="hips_bb_" rotquat="1 0 0 0" trans="0 96 0"/></node></pose></celsysdocument>"#;
+    let db = database(
+        &[
+            ("Material", "CREATE TABLE Material(_PW_ID INTEGER PRIMARY KEY AUTOINCREMENT, MaterialName TEXT DEFAULT NULL)", vec![vec![int(1), text("Pose A")]]),
+            ("File", "CREATE TABLE File(_PW_ID INTEGER PRIMARY KEY AUTOINCREMENT, MainId INTEGER DEFAULT NULL, FileName TEXT DEFAULT NULL, FileData BLOB DEFAULT NULL)", vec![vec![int(1), int(1), text("a.pep"), Value::Blob(pep.as_bytes().to_vec())]]),
+        ],
+        false,
+    );
+    let f = read(&crate::csp_container::plain_fixture(&db), "fallback", &prism_raster::Interrupt::NONE).unwrap();
+    assert_eq!(f.name, "Pose A");
+    assert_eq!(f.root.offset, [1.0, 2.0, 3.0]);
+    assert_eq!(f.root.find("hips_bb_").unwrap().offset, [0.0, 96.0, 0.0]);
+    let no_file = database(&[("Material", "CREATE TABLE Material(_PW_ID INTEGER PRIMARY KEY AUTOINCREMENT, MaterialName TEXT DEFAULT NULL)", vec![vec![int(1), text("x")]])], false);
+    assert!(read(&no_file, "x", &prism_raster::Interrupt::NONE).is_err());
+}
+
+/// Render every local pose collection into one PNG per collection, with Prism's standing figure
+/// for comparison: `PRISM_LOOK_OUT=<dir> cargo test -p prism-io --lib local_poses -- --ignored`.
+#[test]
+#[ignore = "reads the local CLIP STUDIO folder and writes PNGs"]
+fn local_poses_render() {
+    use prism_algo::figure3d::{RenderOptions, frame, render};
+    use prism_doc::figure::{FigureScene, standing_figure};
+    let out = std::path::PathBuf::from(std::env::var_os("PRISM_LOOK_OUT").unwrap_or_else(|| "target/csp-poses".into()));
+    std::fs::create_dir_all(&out).unwrap();
+    let root = std::env::var_os("PRISM_TEST_CSP_ROOT").map(std::path::PathBuf::from).or_else(default_root).unwrap();
+    let lib = list(&root).unwrap();
+    let mut by_catalog: Vec<(String, Vec<prism_doc::figure::Figure>)> = Vec::new();
+    for p in &lib.poses {
+        let (catalog, figure) = import_pose(&root, &p.uuid, &prism_raster::Interrupt::NONE).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+        eprintln!("{} [{}]: {} joints", p.name, catalog, figure.root.walk().len());
+        match by_catalog.iter_mut().find(|(c, _)| *c == catalog) {
+            Some((_, v)) => v.push(figure),
+            None => by_catalog.push((catalog, vec![figure])),
+        }
+    }
+    // The first collection from several sides, to compare with CLIP STUDIO's thumbnail.
+    if let Some((_, figures)) = by_catalog.first().cloned() {
+        for f in &figures {
+            let posed = prism_algo::figure3d::skeleton::pose(f);
+            let hips = prism_algo::figure3d::skeleton::find(&posed, "hips_bb_").map(|h| h.pos);
+            eprintln!("{}: facing {:?} hips {:?}", f.name, prism_algo::figure3d::facing(f), hips);
+        }
+        for (k, yaw) in [-60.0f64, -30.0, 30.0, 60.0, 120.0, 180.0].into_iter().enumerate() {
+            let mut scene = FigureScene { figures: figures.clone(), ..Default::default() };
+            frame(&mut scene, [300.0, 225.0], 400.0, true).unwrap();
+            prism_algo::figure3d::orbit(&mut scene, yaw, 10.0);
+            frame(&mut scene, [300.0, 225.0], 400.0, false).unwrap();
+            let s = render(&scene, prism_color::PixelFormat::RGBA8, prism_geom::Rect::new(0, 0, 600, 450), RenderOptions { draft: true }, &prism_raster::Interrupt::NONE).unwrap();
+            let data: Vec<u8> = s.read_region(prism_geom::Rect::new(0, 0, 600, 450)).iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+            let im = prism_codecs::Image::from_raw(600, 450, prism_codecs::ChannelLayout::Rgba, prism_codecs::SampleType::U8, data).unwrap();
+            std::fs::write(out.join(format!("view{k}.png")), prism_codecs::encode(&im, prism_codecs::Format::Png, &prism_codecs::EncodeOptions::default()).unwrap()).unwrap();
+        }
+    }
+    by_catalog.push(("standing".into(), vec![standing_figure()]));
+    for (i, (name, figures)) in by_catalog.into_iter().enumerate() {
+        let mut scene = FigureScene { figures, ..Default::default() };
+        frame(&mut scene, [300.0, 225.0], 400.0, true).unwrap();
+        let s = render(&scene, prism_color::PixelFormat::RGBA8, prism_geom::Rect::new(0, 0, 600, 450), RenderOptions::default(), &prism_raster::Interrupt::NONE).unwrap();
+        let r = prism_geom::Rect::new(0, 0, 600, 450);
+        let data: Vec<u8> = s.read_region(r).iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+        let im = prism_codecs::Image::from_raw(600, 450, prism_codecs::ChannelLayout::Rgba, prism_codecs::SampleType::U8, data).unwrap();
+        let png = prism_codecs::encode(&im, prism_codecs::Format::Png, &prism_codecs::EncodeOptions::default()).unwrap();
+        std::fs::write(out.join(format!("pose{i}.png")), png).unwrap();
+        eprintln!("pose{i}.png = {name}");
+    }
+}

@@ -559,6 +559,11 @@ fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
 
 /// Rasterize one layer; `only` restricts it to one kind. Returns false when there was nothing to do.
 fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) -> Result<bool> {
+    // Layer › Rasterize › Layer / All Layers also turn 3D figure layers into plain pixels.
+    if only.is_none() && s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| l.figure.is_some()) {
+        s.execute("layer.rasterize.figure", json!({"layer": id.0, "coalesce": key}))?;
+        return Ok(true);
+    }
     let Some(kind) = kind_of(s, id).filter(|k| only.is_none_or(|o| o == *k)) else { return Ok(false) };
     match kind {
         "type" => {

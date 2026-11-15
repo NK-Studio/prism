@@ -2422,7 +2422,7 @@ pub fn properties_window(app: &mut PrismApp, ctx: &egui::Context) {
     let Some(layer) = st.doc.layer(id) else { return };
     // Annotation arrows need their post-creation controls in Studio themes too.
     let arrow = matches!(&layer.content, LayerContent::Shape(sh) if matches!(sh.live, Some(prism_doc::LiveShape::Arrow { .. })));
-    if !arrow && !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
+    if !arrow && layer.figure.is_none() && !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
         return;
     }
     let layer = layer.clone();
@@ -2489,6 +2489,9 @@ pub fn properties_window(app: &mut PrismApp, ctx: &egui::Context) {
                     adjustment_controls(app, ui, id, adj);
                 } else if arrow {
                     crate::vector_ui::shape_properties(app, ui, id);
+                } else if layer.figure.is_some() {
+                    crate::figure_ui::properties(app, ui, &layer);
+                    layer_controls(app, ui, &layer);
                 } else {
                     layer_controls(app, ui, &layer);
                 }
@@ -2589,6 +2592,10 @@ fn properties_body(app: &mut PrismApp, ui: &mut egui::Ui) {
     } else {
         if matches!(layer.content, LayerContent::Fill(prism_doc::Fill::Gradient { .. })) {
             crate::gradient_ui::properties(app, ui, layer);
+            ui.add_space(6.0);
+        }
+        if layer.figure.is_some() {
+            crate::figure_ui::properties(app, ui, layer);
             ui.add_space(6.0);
         }
         layer_controls(app, ui, layer);

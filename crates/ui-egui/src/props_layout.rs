@@ -32,6 +32,9 @@ pub fn kind_icon(content: &LayerContent) -> &'static str {
 
 /// "Type Layer", "Curves", "Artboard"…
 pub fn kind_label(layer: &Layer) -> String {
+    if layer.figure.is_some() {
+        return "3D Figure Layer".to_string();
+    }
     match &layer.content {
         LayerContent::Adjustment(a) => a.label().to_string(),
         LayerContent::Group(g) if g.artboard.is_some() => "Artboard".to_string(),
@@ -44,7 +47,8 @@ pub fn header(ui: &mut egui::Ui, layer: &Layer) {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
     let icon_r = Rect::from_center_size(pos2(r.left() + 10.0, r.center().y), vec2(20.0, 20.0));
-    crate::icons::paint(ui, icon_r, kind_icon(&layer.content), 15.0, t.icon);
+    let icon = if layer.figure.is_some() { "figure" } else { kind_icon(&layer.content) };
+    crate::icons::paint(ui, icon_r, icon, 15.0, t.icon);
     let kind = kind_label(layer);
     let kind_g = ui.painter().layout_no_wrap(tl!(&kind).to_owned(), egui::FontId::proportional(11.0), t.text_faint);
     let kind_w = kind_g.size().x;

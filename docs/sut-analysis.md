@@ -2461,3 +2461,28 @@ a synthetic database.
   (`swatches.importCsp`); unnamed colours take their hex value as the name. Both local sets (Hue
   Shifting Palette 15, Retro24 Pixel Art Palette 24) match their thumbnails colour for colour and
   in order, and the first matches the user's CLIP STUDIO Color Set palette.
+
+## Pose materials (2026-11-15)
+
+Read-only inspection of the two local `pose` materials (百合ポーズ１ and ２ of one collection);
+no executable code was decompiled and no CLIP STUDIO figure model is used: Prism poses its own
+procedural mannequin. Reader: `crates/io/src/sut/pose.rs` (tests use synthetic data); renderer
+`crates/algo/src/figure3d/`; commands `crates/engine/src/figure_cmds.rs`.
+
+- `data/material_0.pose` is a C2F container holding SQLite with `Material` (`MaterialName`, often
+  the default "新規ポーズ_0", so Prism names figures after the catalog entry) and `File`, whose
+  `FileData` is an XML `.pep`: `<celsysdocument><pose version="1.0.14" bone_mapping_version="0">`
+  with one `<node name="root_group_" rotquat="w x y z" trans="x y z">` tree of 67 nodes: hips,
+  three spine joints, neck, head, shoulders, arms, forearms, hands with five four-joint fingers,
+  up legs, legs, feet, toes and `*_end_bb_` tips.
+- Observed: `trans` is the joint's position in its parent's frame in centimetres (hips about
+  96 cm up, Y up); children lie along the parent's local ±X (left side +, right side −), so bone
+  lengths come from the file. `rotquat` is the full local rotation, `w` first: the root rotations
+  `0.906 0.210 0.354 −0.094` and `0.643 0 −0.766 0` keep both figures upright only read that way.
+- Verified against CLIP STUDIO's thumbnail: rendered from the side of the line between the two
+  figures, Prism's pair shows the same composition (facing each other, heads together, one arm on
+  the other's shoulder, the other hand at the waist). A figure facing +Z has its left on +X, so
+  its front is (left hip − right hip) × up; the pair faces each other under that rule.
+- Inferred, not verified: `bone_mapping_version` 0 means CLIP STUDIO's standard figure
+  skeleton; other skeletons (versions, custom 3D models) are read the same way and posed by
+  joint name, which may not match their meshes.

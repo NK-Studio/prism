@@ -37,6 +37,8 @@ pub enum KindFilter {
     Gradients,
     /// Colour sets: they import into the Swatches panel.
     ColorSets,
+    /// 3D figure poses: they become 3D figure layers.
+    Poses,
 }
 
 /// How the materials are laid out.
@@ -151,10 +153,11 @@ struct MaterialDrag {
     action: bool,
     gradient: bool,
     color_set: bool,
+    pose: bool,
 }
 
 fn materials(listing: &Value) -> impl Iterator<Item = &Value> {
-    ["brushes", "layers", "actions", "gradients", "colorSets"].into_iter().flat_map(|k| listing[k].as_array().into_iter().flatten())
+    ["brushes", "layers", "actions", "gradients", "colorSets", "poses"].into_iter().flat_map(|k| listing[k].as_array().into_iter().flatten())
 }
 
 fn is_ready(b: &Value) -> bool {
@@ -185,6 +188,11 @@ fn is_color_set(b: &Value) -> bool {
     b["kind"] == "color_set"
 }
 
+/// A 3D figure pose, added to the document as a 3D figure layer.
+fn is_pose(b: &Value) -> bool {
+    b["kind"] == "pose"
+}
+
 fn is_ruler(b: &Value) -> bool {
     is_layer(b) && b["ruler"] == true
 }
@@ -196,7 +204,7 @@ fn group_of(b: &Value) -> &str {
 
 /// Is a material of this name already in the brush library, in its collection's group?
 fn in_library(app: &PrismApp, b: &Value) -> bool {
-    if is_layer(b) || is_action(b) || is_gradient(b) || is_color_set(b) {
+    if is_layer(b) || is_action(b) || is_gradient(b) || is_color_set(b) || is_pose(b) {
         return false;
     }
     let (Some(name), group) = (b["name"].as_str(), group_of(b)) else { return false };
@@ -220,12 +228,13 @@ fn tags_of<'a>(listing: &'a Value, b: &'a Value) -> Vec<&'a str> {
 fn passes(state: &CspLibraryState, filter: KindFilter, listing: &Value, b: &Value) -> bool {
     let kind_ok = match filter {
         KindFilter::All => true,
-        KindFilter::Brushes => !is_sub_tool(b) && !is_layer(b) && !is_action(b) && !is_gradient(b) && !is_color_set(b),
+        KindFilter::Brushes => !is_sub_tool(b) && !is_layer(b) && !is_action(b) && !is_gradient(b) && !is_color_set(b) && !is_pose(b),
         KindFilter::SubTools => is_sub_tool(b),
         KindFilter::Layers => is_layer(b),
         KindFilter::Actions => is_action(b),
         KindFilter::Gradients => is_gradient(b),
         KindFilter::ColorSets => is_color_set(b),
+        KindFilter::Poses => is_pose(b),
     };
     if !kind_ok || !tree::contains(state.folder.as_deref(), b) {
         return false;
@@ -308,6 +317,11 @@ fn import_selected(app: &mut PrismApp) {
         app.ui.csp_library.listing.as_ref().map(|l| materials(l).filter(|b| keep(b)).filter_map(|b| b["uuid"].as_str().map(str::to_string)).collect()).unwrap_or_default()
     };
     let (layer_ids, action_ids, gradient_ids, color_set_ids) = (ids_of(app, is_layer), ids_of(app, is_action), ids_of(app, is_gradient), ids_of(app, is_color_set));
+    let pose_ids = ids_of(app, is_pose);
+    let (poses, selected): (Vec<String>, Vec<String>) = selected.into_iter().partition(|id| pose_ids.contains(id));
+    if !poses.is_empty() {
+        add_poses(app, &poses, None);
+    }
     let (color_sets, selected): (Vec<String>, Vec<String>) = selected.into_iter().partition(|id| color_set_ids.contains(id));
     if !color_sets.is_empty() {
         import_color_sets(app, &color_sets);
@@ -354,6 +368,10 @@ fn use_material(app: &mut PrismApp, ctx: &egui::Context, drag: &MaterialDrag, ta
     }
     if drag.color_set {
         import_color_sets(app, std::slice::from_ref(&drag.uuid));
+        return;
+    }
+    if drag.pose {
+        add_poses(app, std::slice::from_ref(&drag.uuid), target.map(|d| [d.at[0].round(), d.at[1].round()]));
         return;
     }
     let root = app.ui.csp_library.root.clone();
@@ -446,6 +464,48 @@ fn add_layers(app: &mut PrismApp, uuids: &[String]) {
     app.ui.status_error = added == 0;
     notices::io_warnings(app, tl!("Added from CLIP STUDIO"), &warnings);
     app.ui.csp_library.selected.retain(|id| !uuids.contains(id));
+}
+
+/// Add poses to the document as 3D figure layers: poses of one collection together become one
+/// layer (CLIP STUDIO's paired poses keep their places), centred on `at` or the canvas.
+fn add_poses(app: &mut PrismApp, uuids: &[String], at: Option<[f64; 2]>) {
+    if app.session.active().is_none() {
+        notices::error(app, tl!("Open or create a document first: poses are added to it as 3D figure layers").to_string());
+        return;
+    }
+    let catalog_of = |app: &PrismApp, id: &str| -> String {
+        app.ui.csp_library.listing.as_ref().and_then(|l| materials(l).find(|b| b["uuid"] == id).map(|b| group_of(b).to_string())).unwrap_or_default()
+    };
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for id in uuids {
+        let c = catalog_of(app, id);
+        match groups.iter_mut().find(|(g, _)| *g == c) {
+            Some((_, v)) => v.push(id.clone()),
+            None => groups.push((c, vec![id.clone()])),
+        }
+    }
+    let root = app.ui.csp_library.root.clone();
+    let (mut layers, mut warnings, mut done) = (0, Vec::new(), Vec::new());
+    for (_, ids) in groups {
+        let mut p = json!({ "uuids": ids });
+        if let Some(root) = &root {
+            p["root"] = json!(root);
+        }
+        if let Some(at) = at {
+            p["at"] = json!(at);
+        }
+        match app.run("layer.figure.new", p) {
+            Ok(_) => {
+                layers += 1;
+                done.extend(ids);
+            }
+            Err(e) => warnings.push(format!("{}: {e}", tl!("Not added"))),
+        }
+    }
+    app.ui.status = crate::i18n::fmt(tl!("Added {n} 3D figure layers; pose them with the Move tool"), &[("n", &layers.to_string())]);
+    app.ui.status_error = layers == 0;
+    notices::io_warnings(app, tl!("Imported from CLIP STUDIO"), &warnings);
+    app.ui.csp_library.selected.retain(|id| !done.contains(id));
 }
 
 /// Import colour sets into the Swatches panel, one group each, and show it.
@@ -700,7 +760,7 @@ fn header(app: &mut PrismApp, ui: &mut egui::Ui, t: &Tokens, action: &mut Action
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
         let count = |f: KindFilter| state.listing.as_ref().map_or(0, |l| materials(l).filter(|b| passes(state, f, l, b)).count());
-        let counts = [KindFilter::All, KindFilter::Brushes, KindFilter::SubTools, KindFilter::Layers, KindFilter::Actions, KindFilter::Gradients, KindFilter::ColorSets].map(count);
+        let counts = [KindFilter::All, KindFilter::Brushes, KindFilter::SubTools, KindFilter::Layers, KindFilter::Actions, KindFilter::Gradients, KindFilter::ColorSets, KindFilter::Poses].map(count);
         let kinds = [
             (KindFilter::All, tl!("All")),
             (KindFilter::Brushes, tl!("Brushes")),
@@ -709,6 +769,7 @@ fn header(app: &mut PrismApp, ui: &mut egui::Ui, t: &Tokens, action: &mut Action
             (KindFilter::Actions, tl!("Auto actions")),
             (KindFilter::Gradients, tl!("Gradients")),
             (KindFilter::ColorSets, tl!("Color sets")),
+            (KindFilter::Poses, tl!("Poses")),
         ];
         for ((f, label), n) in kinds.into_iter().zip(counts) {
             if widgets::pill_tab(ui, &format!("{label} {n}"), state.filter == f).clicked() {
@@ -1111,6 +1172,8 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
         ("blend", tl!("Gradient"))
     } else if is_color_set(b) {
         ("swatch-book", tl!("Color set"))
+    } else if is_pose(b) {
+        ("figure", tl!("Pose"))
     } else {
         ("brush", tl!("Brush"))
     };
@@ -1177,6 +1240,8 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
             ui.label(tl!("Imports into the Gradients panel, for the Gradient tool and gradient maps"));
         } else if is_color_set(b) {
             ui.label(tl!("Imports into the Swatches panel as one group"));
+        } else if is_pose(b) {
+            ui.label(tl!("Adds a 3D figure layer in this pose; poses of one collection selected together share a layer"));
         }
         if owned {
             ui.label(tl!("Already in the brush library; importing again replaces it"));
@@ -1195,7 +1260,7 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
         }
     }
     // Drag onto a canvas, or double-click: use it (see `use_material`).
-    let drag = MaterialDrag { uuid: uuid.to_string(), name: name.to_string(), layer: is_layer(b), action: is_action(b), gradient: is_gradient(b), color_set: is_color_set(b) };
+    let drag = MaterialDrag { uuid: uuid.to_string(), name: name.to_string(), layer: is_layer(b), action: is_action(b), gradient: is_gradient(b), color_set: is_color_set(b), pose: is_pose(b) };
     if ready && resp.dragged() {
         resp.dnd_set_drag_payload(drag.clone());
     }
