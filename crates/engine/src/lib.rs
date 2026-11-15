@@ -57,6 +57,8 @@ pub mod image_cmds;
 pub mod inspect;
 pub mod jobs;
 mod laf_import_cmds;
+mod laf_mapping;
+pub mod laf_step_cmds;
 pub mod layer_copy_cmds;
 pub mod layer_label_cmds;
 pub mod layer_menu_cmds;
@@ -467,6 +469,9 @@ impl Session {
     fn precondition(&self, spec: &commands::CommandSpec, params: &Value) -> std::result::Result<(), String> {
         if spec.id == "layer.delete" {
             return layer_multi_cmds::delete_enabled(self, params);
+        }
+        if spec.id == "select.deselect" && params.get("ifAny").and_then(Value::as_bool) == Some(true) {
+            return self.active().map(|_| ()).ok_or_else(|| "no document open".into());
         }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }

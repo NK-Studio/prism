@@ -1545,7 +1545,7 @@ by the common Photoshop-style action model. Set names, enabled flags, dialog fla
 and source-step identities are now retained. Clear Outside Selection is one atomic
 Prism command, so the three source steps remain three steps rather than five. Unknown
 commands/parameters still reject the complete import. See [Actions](actions.md) and
-the separate [Photoshop investigation](actions-analysis.md).
+the separate [Photoshop investigation](actions-analysis.md). (Superseded 2026-11-15: unknown steps import as blocking placeholders; see [Auto actions](#auto-actions-value-types-and-step-mapping-2026-11-15).)
 
 ### Product behavior and limits
 
@@ -2171,3 +2171,120 @@ color picked nothing up in the same setup.
 Inference: the fade's curve (the quarter sine of the other modes). Unknown: the amount of
 Emphasize density (CSP calls it emphasizing the texture's contrast; not measurable with a
 mouse), Running color, Brightness correction.
+
+## Auto actions: value types and step mapping (2026-11-15)
+
+All 13 auto-action sets in the local library (65 actions, 792 steps) were read without
+running CLIP STUDIO: the C2F container was decoded as documented above and the value stream
+parsed by an independent script, then by `prism_io::laf`. Before this, 12 of 13 failed with
+"unsupported value type 19" (one with 20). No executable was analysed for this work; values
+come from the files and the meaning of each step from its observed parameters.
+
+### Auto-action value types
+
+| Tag | Layout | Evidence |
+|---|---|---|
+| 6 | UTF-8 string, length-prefixed integer | names, layer names (`下描き`, `_M`) |
+| 7 | bytes, length-prefixed integer (≤ 644 bytes seen) | `colortype`, gradient-map `gradation`; kept as `{"$bytes": hex}` |
+| 17 | unsigned integer: byte count then big-endian bytes | flags, counts |
+| 19 | signed integer, value ≥ 0, same layout | `hue 180`, `steps 20`, colour channels |
+| 20 | signed integer, value < 0, stores the magnitude | `saturation` 20 01 64 = −100 in "make white transparent"; colour channel 20 01 01 = −1 = 0xFFFFFFFF (white) |
+| 21 | f64: byte 8 then eight big-endian bytes | lengths (`40 59 00…` = 100.0), scales, rotation |
+| 72 / 73 | array / object (unchanged) | |
+
+Colour channels are 32-bit, all ones = full: `-858993460` is 0xCCCCCCCC (0.8 gray),
+`3813008197` 0xE345E345. Lengths are `{unit, value}`; unit 0 is pixels (the canvas sizes and
+layer moves match the canvases they build). Unit 2 (mm, `input100` 14.1 with "mm") is not
+mapped.
+
+### Step mapping
+
+`crates/engine/src/laf_mapping.rs` maps 50 of the 68 step kinds seen, each only when every
+parameter is understood; anything else stays in the action as `actions.unsupportedLafStep`
+with its source parameters, and playback refuses that action before its first step (the
+Photoshop-import rule). Labels CLIP STUDIO users add between actions (no steps, repeated
+names such as dashes) now import; a repeated name gets " (2)".
+
+Observed, with the evidence that fixed the meaning:
+
+- Canvas size `basepoint` is 1-based (1 top left, 5 centre): the 1280 px checkerboard
+  action grows a 10 px canvas from the top left and moves copies right and down.
+- Transform `positiontype` is 0-based (0 top left, 4 centre): a scale with move −0.5 uses 0,
+  rotations about the middle use 4. `transformtype` 0 and 1 are the Transform tool
+  property's modes; a mode-1 step may carry a scale too (Isometric 30° L: `scalex` 58 with
+  `rotation` −30), so both are read as one affine scale-then-rotate.
+- Transform `rotation` is in degrees, positive **clockwise on screen**, and a step's scale is
+  applied along the frame's own axes before its rotation. Observed in CLIP STUDIO PAINT
+  (2026-11-15, Edit › Transform on a 1600×900 filled layer, Tool property *Rotation angle*):
+  +23.4° turned the rectangle clockwise; with W 6 % and +23.4° the result was a narrow
+  rectangle turned clockwise, not a parallelogram, so scale comes first. The downloaded
+  Isometric 30° L/R actions agree: −45°/+45° then 58 % with ∓30° gives vertical edges and
+  30° slopes, a left face for L and a right face for R only under that convention.
+- `remainoriginal` 1 keeps the source under the moved copy (seamless tile actions).
+- Composite mode codes are the brush blending mode codes (`prism_paint::csp_blend`); 30 is
+  Through (folders).
+- `selectfromlayerstatusmultiply` intersects; `layername` names the source layer.
+- Recorded drag moves carry fractions (511.87 for a 512 px move); they round to whole pixels.
+- Level Correction (`layeractionlevelnew`, `layeractionlevelsettings`) stores per channel
+  `input {low, mid, high}` and `output {low, high}` on the tone curve's 0..65535 scale. Evidence:
+  the normal-map action sets its layer to Multiply (code 2), which halves the neutral 0.5 to 0.25,
+  then a level layer with red and green input high 32638 (127/255) brings it back to 0.5; read
+  on a 0..32768 scale that level would do almost nothing. `mid` sits at the middle (16318 for
+  0..32638, one unit low) in every local step.
+- A Gradient Map layer's `gradation` bytes are the gradient tool's `GradationData` layout (see
+  Gradient data) with a four-word header (16 bytes: header size, stop record size 28, stop count,
+  curve point size 16; no trailing two words). The CMYK separation set's four maps decode to
+  K (36, 24, 21), cyan (0, 161, 233), magenta (230, 0, 127) and yellow (255, 242, 0), each to
+  white over 11 straight stops: the inks the action's name promises.
+- Convert Layer (`layeractionconvert`): `layerkind` 2 is an image material layer (the set named
+  "画像素材化", make an image material, uses it, and the misregistration set converts its plates
+  with it and says to tile them by hand), 0 a raster layer (the CMY/K separation actions run tone
+  curves and Convert brightness to opacity on the result, which only a raster layer takes).
+  `leaveoriginal` keeps the source, `layername` and `compositemode` set the result. `colortype`
+  `00000000 00000001 00000001` with `channelorder` 33 is in every colour action;
+  `00000001 00000001 00000000` with 1 only in the brush-material variant (likely Gray; refused).
+  Prism converts to a pixel layer or a smart object (its nearest to an image material layer;
+  no tiling). Layer kind 1 and the other values are not seen.
+- With a folder selected, a new raster layer or folder goes inside it at the top: the CMY/K
+  separation actions make a folder, add a layer, then select the layer below it inside the folder
+  (the converted copy); the manual does not say. Prism's `layer.new.layer`/`layer.new.group` take
+  `into`.
+- `selectactiondeselect` runs before anything is selected in Pixel Perfect Outline, so it maps to
+  `select.deselect {"ifAny": true}`, which does nothing without a selection.
+- `layeractionsetuselayercolor` `use` 0 turns Layer Color off; Prism layers have no layer colour,
+  so the step is skipped with a note (`use` 1 is refused).
+
+Inferred, not verified against CLIP STUDIO output:
+
+- Convert brightness to opacity: alpha × (1 − Rec. 601 luma), colour black. CLIP STUDIO's
+  own feature is documented as monochrome output, and the colour-separation actions refill
+  colour after it with transparency locked; the luma weights are not known.
+- `detailpaint` (Edit › Fill with options) fills the whole layer or selection; its
+  target-colour and colour-margin options have no seed point in an action and are ignored.
+- A level `mid` off the middle becomes a Photoshop gamma `ln r / ln 0.5` (`r` its place between
+  low and high), the gamma that sends that input to the middle of the output; no local step has
+  one.
+- Hue/Saturation/Luminosity uses Photoshop's Lightness; Brightness/Contrast clamps contrast to
+  Prism's −50..100; transform quality 1 = nearest, others bicubic.
+
+Not mapped: transform modes other than 0 and 1 (none in the local files), and 18 kinds:
+layer colour (`setlayermaincolor`, `setuselayercolor`), tone (`setusetone`, `settoneline`,
+`settoneangle`), border effect (`setuseedge`, `setedgecolor`, `setedgewidth`), draft layer,
+conversion to Gray or to other layer kinds, new layer with expression colour (`rasterdetailnew`), bordering,
+select colour, gradient maps whose stops follow the drawing colours or are not opaque, two
+filter plug-ins named by GUID, and lengths in millimetres.
+
+### Local result
+
+All 13 files import; 47 of 65 actions are ready (9 of them labels without steps). Of the 38
+ready actions with steps, 32 play to the end on a 64 px test drawing
+(`every_local_downloaded_laf_imports`, ignored test; until 2026-11-15 it ignored a step failure
+reported in `failed`, so earlier "all play" counts were too high). Six of the seven that stop
+need what the drawing lacks: a selection (2) or layers named in the author's file ("RorC",
+"GorM", "Layer 1 2 2"; 4). Colored Outline clears outside the selection on the Tone Curve layer
+it has just made; Prism applies that to the layer's mask (adding one), as Photoshop's Delete
+does with an adjustment layer targeted. Inference: CLIP STUDIO limits the correction layer the
+same way (the action would otherwise do nothing there); not compared with its output. The checkerboard and seamless-tile actions produce the expected tiles, and the
+four Isometric actions turn a 100 px square into the top face (142×82, a tan 30° ratio), the
+left and right faces and the 2:1 diamond; no result has been compared pixel for pixel with
+CLIP STUDIO.

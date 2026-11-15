@@ -460,3 +460,22 @@ fn folders_favourites_and_own_materials_are_listed_but_installed_defaults_are_no
     assert_eq!(lib.layers[1].folders[1].chars().count(), MAX_FOLDER_CHARS);
     assert!(lib.layers.iter().all(|l| l.status == Status::Missing), "no files were written");
 }
+
+#[test]
+fn auto_actions_are_listed_and_read_by_id() {
+    let f = folder("actions");
+    let lib = list(&f.0).unwrap();
+    let got: Vec<_> = lib.actions.iter().map(|a| (a.name.as_str(), a.catalog.as_str(), a.status)).collect();
+    assert_eq!(got, [("An action", "Collection", Status::Missing)]);
+    assert!(action_bytes(&f.0, "uuid-action").unwrap_err().contains("missing"));
+    let file = f.0.join(MATERIALS).join("01").join("02").join("collection").join("uuid-action").join("data").join("material_0.laf");
+    write(file, b"laf bytes");
+    let lib = list(&f.0).unwrap();
+    assert_eq!(lib.actions[0].status, Status::Ready(CacheSource::MaterialFile));
+    assert_eq!(action_bytes(&f.0, "uuid-action").unwrap(), ("An action".to_string(), b"laf bytes".to_vec()));
+    // Only auto actions: a brush or image id is not one.
+    for uuid in ["uuid-ready", "uuid-image", "", "../uuid-action"] {
+        assert!(action_bytes(&f.0, uuid).is_err(), "{uuid}");
+    }
+    assert!(lib.brushes.iter().all(|b| b.kind != "auto_action"));
+}

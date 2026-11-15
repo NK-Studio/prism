@@ -63,7 +63,7 @@ pub enum Status {
     NoCache,
     /// The material is not stored below the local material folder.
     UnsupportedLocation,
-    /// A layer material whose file is not on disk.
+    /// A layer material or auto action whose file is not on disk.
     Missing,
 }
 
@@ -96,6 +96,10 @@ impl Status {
 pub const TOOL_KINDS: [&str; 2] = ["brush", "other_tool"];
 /// The catalog's material kinds that are layer materials (images, special rulers).
 pub const LAYER_KINDS: [&str; 1] = ["image"];
+/// The catalog's material kind of auto-action sets (`data/material_0.laf`).
+pub const ACTION_KINDS: [&str; 1] = ["auto_action"];
+/// Largest auto-action file read (the LAF reader's own limit).
+const ACTION_LIMIT: u64 = 8 << 20;
 
 /// One downloaded sub-tool material.
 #[derive(Clone, Debug, PartialEq)]
@@ -138,6 +142,21 @@ pub struct LibraryLayer {
     pub info: MaterialInfo,
 }
 
+/// One downloaded auto-action set: it imports into the Actions panel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryAction {
+    pub uuid: String,
+    pub name: String,
+    /// The downloaded collection it belongs to (empty when unknown).
+    pub catalog: String,
+    pub status: Status,
+    pub thumbnail: Option<PathBuf>,
+    pub tags: Vec<String>,
+    /// As [`LibraryBrush::folders`].
+    pub folders: Vec<String>,
+    pub favorite: bool,
+}
+
 /// One downloaded collection (catalog) and its cover image (`thumbnail/catalogThumb.png`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Catalog {
@@ -154,6 +173,8 @@ pub struct Library {
     pub brushes: Vec<LibraryBrush>,
     /// Downloaded layer materials, in catalog order.
     pub layers: Vec<LibraryLayer>,
+    /// Downloaded auto-action sets, in catalog order.
+    pub actions: Vec<LibraryAction>,
     /// The collections the brushes and layer materials belong to, in catalog order.
     pub catalogs: Vec<Catalog>,
     /// Folder-wide notices (license terms, stale snapshot, missing PAINT data).
@@ -214,8 +235,22 @@ pub fn list(root: &Path) -> Result<Library> {
             }
         })
         .collect();
+    let actions = snap
+        .action_entries
+        .iter()
+        .map(|e| LibraryAction {
+            uuid: e.uuid.clone(),
+            name: e.name.clone(),
+            catalog: e.catalog.clone(),
+            status: snap.action_status(e),
+            thumbnail: image(format!("{}:thumbnail:thumbnail.png", e.folder())),
+            tags: e.tags.clone(),
+            folders: e.folders.clone(),
+            favorite: e.favorite,
+        })
+        .collect();
     let mut catalogs: Vec<Catalog> = Vec::new();
-    for e in snap.entries.iter().chain(&snap.layer_entries).filter(|e| !e.catalog.is_empty()) {
+    for e in snap.entries.iter().chain(&snap.layer_entries).chain(&snap.action_entries).filter(|e| !e.catalog.is_empty()) {
         if !catalogs.iter().any(|c| c.name == e.catalog) {
             catalogs.push(Catalog {
                 name: e.catalog.clone(),
@@ -224,7 +259,7 @@ pub fn list(root: &Path) -> Result<Library> {
             });
         }
     }
-    Ok(Library { root: root.to_path_buf(), brushes, layers, catalogs, notices: snap.notices })
+    Ok(Library { root: root.to_path_buf(), brushes, layers, actions, catalogs, notices: snap.notices })
 }
 
 /// Largest preview image read by [`thumbnail_bytes`].
@@ -287,6 +322,19 @@ pub fn import_layer(root: &Path, uuid: &str, ctl: &prism_raster::Interrupt) -> R
     Ok((entry.name.clone(), material, info))
 }
 
+/// The name and file bytes of one downloaded auto-action set, by material UUID, for
+/// [`crate::laf::read_laf`]. Nothing is parsed or run here.
+pub fn action_bytes(root: &Path, uuid: &str) -> Result<(String, Vec<u8>)> {
+    let snap = Snapshot::read(root)?;
+    let entry = snap.action_entries.iter().find(|e| e.uuid == uuid).ok_or_else(|| format!("no downloaded CLIP STUDIO auto action has the id {uuid}"))?;
+    let status = snap.action_status(entry);
+    if !matches!(status, Status::Ready(_)) {
+        return Err(format!("{}: {}", entry.name, status.guidance().unwrap_or("not ready")));
+    }
+    let path = snap.action_file(entry).ok_or("the downloaded auto-action file is no longer available; refresh and try again")?;
+    Ok((entry.name.clone(), read_limited(&path, ACTION_LIMIT)?))
+}
+
 /// Read a layer material file (`data/material_0.layer`), or the material folder holding one.
 /// The material's `icedata/layerData.xml` beside `data/` is read when present.
 pub fn read_layer_file(path: &Path, ctl: &prism_raster::Interrupt) -> Result<(LayerMaterial, MaterialInfo)> {
@@ -331,6 +379,7 @@ struct Snapshot {
     materials: PathBuf,
     entries: Vec<Entry>,
     layer_entries: Vec<Entry>,
+    action_entries: Vec<Entry>,
     caches: Vec<(CacheSource, Vec<Row>, Vec<Row>)>,
     notices: Vec<String>,
 }
@@ -392,6 +441,7 @@ impl Snapshot {
         drop(bytes);
         let entries = catalog_entries(&modifiers, &meta, &tags, &folders, &TOOL_KINDS);
         let layer_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &LAYER_KINDS);
+        let action_entries = catalog_entries(&modifiers, &meta, &tags, &folders, &ACTION_KINDS);
 
         let mut caches = Vec::new();
         match paint_folder(root) {
@@ -421,7 +471,7 @@ impl Snapshot {
         if stale {
             notices.push("CLIP STUDIO appears to be running or has unsaved database changes; the newest downloads may be missing until it is closed".into());
         }
-        Ok(Self { materials: root.join(MATERIALS), entries, layer_entries, caches, notices })
+        Ok(Self { materials: root.join(MATERIALS), entries, layer_entries, action_entries, caches, notices })
     }
 
     fn tool(&self, source: CacheSource, uuid: &str) -> Option<(&Row, &Row)> {
@@ -452,6 +502,21 @@ impl Snapshot {
             return Status::Downloading;
         }
         self.layer_file(e).map_or(Status::Missing, |_| Status::Ready(CacheSource::MaterialFile))
+    }
+
+    fn action_status(&self, e: &Entry) -> Status {
+        if !e.local {
+            return Status::UnsupportedLocation;
+        }
+        if e.pending {
+            return Status::Downloading;
+        }
+        self.action_file(e).map_or(Status::Missing, |_| Status::Ready(CacheSource::MaterialFile))
+    }
+
+    fn action_file(&self, e: &Entry) -> Option<PathBuf> {
+        let root = std::fs::canonicalize(&self.materials).ok()?;
+        resolve(&root, &format!("{}:data:material_0.laf", e.folder())).ok()
     }
 
     fn layer_file(&self, e: &Entry) -> Option<PathBuf> {

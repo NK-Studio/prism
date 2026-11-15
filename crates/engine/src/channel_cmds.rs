@@ -754,6 +754,20 @@ fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("channel").is_none() {
         return Err(bad(cmd, "missing `channel`"));
     }
+    // `layerName` picks the source layer by name (CLIP STUDIO auto actions name it).
+    let named;
+    let p = match p.get("layerName") {
+        None => p,
+        Some(_) => {
+            let name = crate::laf_step_cmds::name_param(cmd, p, "layerName")?;
+            let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+            let id = crate::laf_step_cmds::find_by_name(doc, &name).ok_or_else(|| bad(cmd, format!("no layer named \"{name}\"")))?;
+            let mut q = p.clone();
+            q["layer"] = json!(id.0);
+            named = q;
+            &named
+        }
+    };
     // Composite and colour channels load their luminosity / values, as ⌘-clicking them does.
     let plane = source(s, p, cmd, true)?.into_iter().next().ok_or_else(|| bad(cmd, "the channel has no pixels"))?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
@@ -1529,7 +1543,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Load Selection…",
             ["Select"],
             None,
-            r##"{"channel":index|name|"composite"|"red|green|blue|…"|"transparency"|"mask"|"vectorMask"|"quickMask"|"selection","layer":id?,"document":index?,"invert":bool=false,"operation":"new|add|subtract|intersect"="new"}"##,
+            r##"{"channel":index|name|"composite"|"red|green|blue|…"|"transparency"|"mask"|"vectorMask"|"quickMask"|"selection","layer":id?,"layerName":str? (the topmost layer with that name; instead of layer),"document":index?,"invert":bool=false,"operation":"new|add|subtract|intersect"="new"}"##,
             has_doc,
             load_selection
         ),

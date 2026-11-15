@@ -169,7 +169,7 @@ fn dropping_a_material_uses_it_where_it_lands() {
     // A layer material needs a document; nothing happens without one.
     let ctx = egui::Context::default();
     let mut a = app();
-    let ruler = MaterialDrag { uuid: "r".into(), name: "Isometric ruler".into(), layer: true };
+    let ruler = MaterialDrag { uuid: "r".into(), name: "Isometric ruler".into(), layer: true, action: false };
     use_material(&mut a, &ctx, &ruler, None);
     assert!(a.session.active().is_none());
     // With one, the import runs (the test folder has no CLIP STUDIO data, so it reports why).
@@ -178,7 +178,7 @@ fn dropping_a_material_uses_it_where_it_lands() {
     use_material(&mut a, &ctx, &ruler, None);
     assert_eq!(a.session.active().unwrap().doc.layers.len(), layers);
     // A brush goes to the brush import with this panel's folder.
-    let brush = MaterialDrag { uuid: "a".into(), name: "Ink pen".into(), layer: false };
+    let brush = MaterialDrag { uuid: "a".into(), name: "Ink pen".into(), layer: false, action: false };
     let presets = a.session.tools.presets.len();
     use_material(&mut a, &ctx, &brush, None);
     assert_eq!(a.session.tools.presets.len(), presets, "nothing to import from the test folder");
@@ -418,4 +418,33 @@ fn render_the_material_palette() {
     h.set_size(egui::vec2(760.0, 620.0));
     h.run_steps(30);
     h.render().unwrap().save(out.join("palette-wide.png")).unwrap();
+}
+
+#[test]
+fn auto_actions_have_their_own_filter_and_import_into_the_actions_panel() {
+    let mut app = app();
+    let mut l = listing();
+    l["actions"] = json!([
+        {"uuid": "act", "name": "Outline set", "kind": "auto_action", "catalog": "Pack", "status": "ready", "guidance": null, "thumbnail": null, "tags": [], "folders": ["ダウンロード:Pack-1:Brushes"]}
+    ]);
+    app.ui.csp_library.listing = Some(l.clone());
+    let mut h = harness(app);
+    assert!(h.query_by_label("Outline set").is_some(), "All lists auto actions too");
+    h.state_mut().ui.csp_library.filter = KindFilter::Actions;
+    h.run_steps(2);
+    assert!(h.query_by_label("Ink pen").is_none() && h.query_by_label("Outline set").is_some());
+    h.state_mut().ui.csp_library.filter = KindFilter::Brushes;
+    h.run_steps(2);
+    assert!(h.query_by_label("Outline set").is_none() && h.query_by_label("Ink pen").is_some());
+    assert!(!in_library(h.state(), &l["actions"][0]));
+
+    // The material cannot be read from this folder: the failure is reported, nothing imported,
+    // and the selection stays for a second try.
+    let mut a = super::tests::app();
+    a.ui.csp_library.listing = Some(l);
+    a.ui.csp_library.selected = vec!["act".into()];
+    import_selected(&mut a);
+    assert!(a.session.actions.list.is_empty());
+    assert!(a.ui.status_error);
+    assert_eq!(a.ui.csp_library.selected, ["act"]);
 }

@@ -64,7 +64,7 @@ fn step_key(s: &Session, what: &str) -> String {
 /// and transparency stays locked when the layer locks it. When `p` targets an alpha channel, the
 /// Quick Mask or the layer mask (`Session::execute` fills that in from the Channels panel), that
 /// grayscale surface is rewritten instead, as the core filters do (#935).
-fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
+pub(crate) fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
     let id = layer_param(s, &Value::Null)?;
     let channel = crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels;
     s.edit(label, |doc, _| {

@@ -55,8 +55,10 @@ combined with the policy of the request that resumes it.
 - `actions.insertStop {action,after?,message,allowContinue}` inserts a pause.
 - `actions.play {action,from?}` can return `paused` instead of completion.
   `actions.resume {params?}` continues; `actions.cancel {}` discards it.
-- `actions.importLaf {path|data,replace?}` imports a supported CSP action set without
-  executing it. Restricted callers use inline `data`.
+- `actions.importLaf {path|data|uuid,root?,replace?}` imports a CSP action set without
+  executing it: a file, inline `data` (restricted callers), or a downloaded set by its id
+  from `brush.cspLibrary.list` `actions`. Like ATN import it reports each action's `ready`
+  state, `unsupportedEnabled`, `unsupportedKinds` and `blockedReason`.
 - `actions.importAtn {path|data,replace?}` imports Photoshop version-16 ATN sets.
   The response reports each action's `ready` state, `unsupportedEnabled` count,
   and a `blockedReason` when a direct or nested imported step prevents playback.
@@ -110,6 +112,8 @@ structural coverage are documented in [ATN analysis](atn-analysis.md).
 This is independently implemented behavior, not Photoshop code or a complete
 Photoshop clone. Full Photoshop event coverage, `.atn` export, empty sets, button mode, timed playback,
 conditional actions and editing complex command parameters in the Actions form
-are not implemented. LAF supports the verified transparency/clear-outside/deselect
-subset; other commands fail the entire import with an explicit error. CSP and
-Photoshop pixel equivalence is not claimed.
+are not implemented. LAF maps 50 of the 68 CSP step kinds seen in downloaded sets
+([SUT analysis › Auto actions](sut-analysis.md#auto-actions-value-types-and-step-mapping-2026-11-15));
+the rest import as `actions.unsupportedLafStep` placeholders that block playback until
+disabled or replaced, as unsupported ATN steps do. CSP and Photoshop pixel equivalence is
+not claimed.
