@@ -108,6 +108,37 @@ fn csp_sub_color_follows_pen_pressure() {
 }
 
 #[test]
+fn csp_speed_scales_by_on_screen_speed() {
+    use crate::brush::CspSpeed;
+    let falling = PressureCurve::new(vec![[0.0, 1.0], [1.0, 0.0]]).unwrap();
+    let v = CspSpeed { minimum: 0.6, curve: Some(falling) };
+    for (speed, expected) in [(0.0, 1.0), (2.0, 0.9), (4.0, 0.8), (8.0, 0.6), (50.0, 0.6), (-3.0, 1.0)] {
+        assert!((v.multiplier(speed) - expected).abs() < 1e-6, "{speed}: {}", v.multiplier(speed));
+    }
+    // Hostile values stay within 0..1.
+    for speed in [f32::NAN, f32::INFINITY] {
+        assert!((v.multiplier(speed) - 1.0).abs() < 1e-6);
+    }
+    let hostile = CspSpeed { minimum: f32::NAN, curve: None };
+    assert!((0.0..=1.0).contains(&hostile.multiplier(3.0)));
+    // A stroke: the dab diameter shrinks with the on-screen speed (document speed × zoom).
+    let mut b = BrushSettings { size: 20.0, spacing: 0.25, ..brush() };
+    b.shape_dynamics.enabled = true;
+    b.shape_dynamics.size.csp_speed = Some(v);
+    let diameter = |doc_px_per_ms: f64, zoom: f32| {
+        let pts: Vec<_> = (0..40).map(|i| StrokePoint { time: f64::from(i) * 8.0, ..StrokePoint::new(10.0 + f64::from(i) * 8.0 * doc_px_per_ms, 50.0, 1.0) }).collect();
+        let mut g = crate::dynamics::DabGenerator::new(&b, zoom);
+        let (mut dabs, mut dual) = (Vec::new(), Vec::new());
+        g.push(&pts, &mut dabs, &mut dual);
+        g.finish(&mut dabs, &mut dual);
+        dabs.get(dabs.len() / 2).map(|d| 2.0 * d.radius).unwrap()
+    };
+    assert!((diameter(0.0, 1.0) - 20.0).abs() < 0.1, "{}", diameter(0.0, 1.0));
+    assert!((diameter(4.0, 1.0) - 16.0).abs() < 0.1, "{}", diameter(4.0, 1.0));
+    assert!((diameter(4.0, 2.0) - 12.0).abs() < 0.1, "twice the zoom, twice the on-screen speed: {}", diameter(4.0, 2.0));
+}
+
+#[test]
 fn csp_spacing_follows_pen_pressure() {
     // Spacing 10 % at full pressure, down to 40 % of it with no pressure (Chainmail 2-C).
     let b = BrushSettings {

@@ -1411,6 +1411,13 @@ impl StrokeRenderer {
         self
     }
 
+    /// Physical screen pixels per view point, for CSP's velocity input (see
+    /// [`DabGenerator::with_pixels_per_point`]).
+    pub fn with_pixels_per_point(mut self, ppp: f32) -> Self {
+        self.generator = self.generator.with_pixels_per_point(ppp);
+        self
+    }
+
     /// Keep a copy of every primary dab (for tests and sequential tools).
     pub fn record_dabs(mut self) -> Self {
         self.all_dabs = Some(Vec::new());

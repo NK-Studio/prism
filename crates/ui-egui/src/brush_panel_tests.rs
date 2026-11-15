@@ -32,6 +32,7 @@ fn edit_section(i: usize, b: &mut BrushSettings) {
         pressure_curve: None,
         csp_tilt: None,
         csp_random: None,
+        csp_speed: None,
     };
     match i {
         0 => {

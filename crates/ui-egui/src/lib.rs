@@ -399,6 +399,8 @@ pub struct PrismApp {
     press_stroke: bool,
     /// End of the last painting stroke: ⇧-click draws a straight line from it (#178).
     last_stroke_end: Option<(DocId, [f64; 2])>,
+    /// Physical pixels per point of the last frame: strokes send it for CSP's velocity input.
+    pub(crate) pixels_per_point: f32,
     /// Control+Alt-drag brush resize in progress (`brush_resize`, #231).
     pub(crate) brush_resize: Option<brush_resize::Resize>,
     /// A ⌘⌥⌃-click layer pick is in progress; its drag and release are swallowed (`quick_pick`).
@@ -590,6 +592,7 @@ impl PrismApp {
             defer_live_stroke: false,
             press_stroke: false,
             last_stroke_end: None,
+            pixels_per_point: 1.0,
             brush_resize: None,
             quick_pick: false,
             brush_resize_armed: false,
@@ -1257,6 +1260,7 @@ impl eframe::App for PrismApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.pixels_per_point = ctx.pixels_per_point();
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
         if !self.fonts_ready {

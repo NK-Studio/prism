@@ -46,7 +46,7 @@ pub mod sut_catalog;
 pub mod tile;
 
 pub use brush::{
-    BrushPreset, BrushSettings, CSP_ANTI_ALIAS_MAX, ColorDynamics, Control, CspDualAdd, CspStrokeMode, CspTextureMode, CspTilt, DualBrush, Dynamic,
+    BrushPreset, BrushSettings, CSP_ANTI_ALIAS_MAX, ColorDynamics, Control, CspDualAdd, CspSpeed, CspStrokeMode, CspTextureMode, CspTilt, DualBrush, Dynamic,
     MAX_BRUSH_SIZE, MAX_SCATTER, MaskMode, Pattern, PatternStyle, Pose, Scattering, SectionLocks, ShapeDynamics, Smoothing, Texture, TipShape, Transfer,
 };
 pub use csp_in_out::{CspInOut, CspInOutMode, CspInOutParam, CspInOutTarget};

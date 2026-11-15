@@ -104,7 +104,7 @@ implementation does not establish exact Photoshop fidelity for ABR brushes.
 | Color mixing type 2 | 5 | Approximated with blending; `mod.rs::color_mixing` |
 | Missing dual-tip assets | 2 | 2026-11-04: dual brush kept with the present tips (round tip when none), with a warning; 2026-11-15: with none, an adding dual brush (both lightning brushes) is left off instead of painting round discs |
 | Dual input/random dynamics and rotation | 1 | Ignored; `io/src/sut/dual.rs` |
-| Size effector control 0x40 | 1 | Additional control unsupported; `io/src/sut/effector.rs` |
+| Size effector control 0x40 | 1 | Velocity input, imported since 2026-11-15 (`Dynamic.csp_speed`, measured against CLIP STUDIO); `io/src/sut/effector.rs` |
 | Watercolor-edge units | 1 | Value used in pixels; 2026-11-15: unit 2 is pixels (measured), no longer warns; `mod.rs` |
 | Emphasize texture density | 1 | Approximated by contrast; `mod.rs` |
 | Start/end fade type 2 | 1 | Unsupported; `mod.rs` |

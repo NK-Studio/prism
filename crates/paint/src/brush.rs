@@ -107,23 +107,59 @@ pub struct Dynamic {
     /// minimum (0..1) and 1, on top of any pressure or tilt response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csp_random: Option<f32>,
+    /// CSP's velocity control (effector input 0x40): the value is also scaled by the stroke's
+    /// on-screen speed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_speed: Option<CspSpeed>,
 }
 
 impl Default for Dynamic {
     fn default() -> Self {
-        Self { jitter: 0.0, control: Control::Off, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None }
+        Self::controlled(Control::Off)
     }
 }
 
 impl Dynamic {
     pub const fn controlled(control: Control) -> Self {
-        Self { jitter: 0.0, control, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None }
+        Self { jitter: 0.0, control, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None, csp_speed: None }
     }
     pub const fn jitter(jitter: f32) -> Self {
-        Self { jitter, control: Control::Off, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None }
+        Self { jitter, control: Control::Off, fade_steps: 25, minimum: 0.0, pressure_curve: None, csp_tilt: None, csp_random: None, csp_speed: None }
     }
     pub fn is_active(&self) -> bool {
-        self.jitter > 0.0 || self.control != Control::Off || self.csp_tilt.is_some() || self.csp_random.is_some()
+        self.jitter > 0.0 || self.control != Control::Off || self.csp_tilt.is_some() || self.csp_random.is_some() || self.csp_speed.is_some()
+    }
+}
+
+/// On-screen speed, in screen pixels per millisecond, at which CSP's velocity input reaches 1
+/// (measured, docs/sut-analysis.md › Effector velocity input: linear from 0).
+pub const CSP_SPEED_FULL: f32 = 8.0;
+
+/// CSP's velocity response (effector control 0x40): `minimum + (1 − minimum) · curve(v)` with `v`
+/// the on-screen speed over [`CSP_SPEED_FULL`], clamped to 0..1. The stored curves fall from 1 at
+/// rest to 0 at full speed, so a fast stroke reaches the minimum.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CspSpeed {
+    pub minimum: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curve: Option<PressureCurve>,
+}
+
+impl Default for CspSpeed {
+    fn default() -> Self {
+        Self { minimum: 1.0, curve: None }
+    }
+}
+
+impl CspSpeed {
+    /// The factor at `speed` screen pixels per millisecond (1 for a hostile or missing speed).
+    pub fn multiplier(&self, speed: f32) -> f32 {
+        let v = if speed.is_finite() { (speed / CSP_SPEED_FULL).clamp(0.0, 1.0) } else { 0.0 };
+        let c = self.curve.as_ref().map_or(v, |c| c.sample(v));
+        let m = if self.minimum.is_finite() { self.minimum.clamp(0.0, 1.0) } else { 1.0 };
+        let k = m + (1.0 - m) * if c.is_finite() { c.clamp(0.0, 1.0) } else { 1.0 };
+        k.clamp(0.0, 1.0)
     }
 }
 

@@ -329,7 +329,13 @@ fn live_stroke(app: &PrismApp, idx: usize) -> Option<&LiveStroke> {
 /// `paint.stroke` params for a Brush/Eraser drag (shared by the live preview and the commit). The
 /// stroke smoothing is the session brush's (the options bar's Smoothing %).
 fn stroke_params(app: &PrismApp, drag: &Drag, points: &[Vec<f64>]) -> serde_json::Value {
-    let mut p = json!({ "points": points, "erase": drag.erase, "zoom": app.current_zoom(), "target": paint_target(app) });
+    let mut p = json!({
+        "points": points,
+        "erase": drag.erase,
+        "zoom": app.current_zoom(),
+        "pixelsPerPoint": app.pixels_per_point,
+        "target": paint_target(app),
+    });
     if drag.connects_previous {
         // The connecting line is an explicit endpoint gesture. Apply the override
         // to both live and committed parameters, without changing the user's brush.

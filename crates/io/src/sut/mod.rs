@@ -215,6 +215,9 @@ fn pressure_effector(r: &Row, k: &str, warnings: &mut Vec<String>) -> Option<Dyn
             if let Some(error) = e.tilt_error {
                 warnings.push(format!("SUT {k} tilt response could not be read ({error}); it is disabled"));
             }
+            if let Some(error) = e.speed_error {
+                warnings.push(format!("SUT {k} velocity response could not be read ({error}); it is disabled"));
+            }
             e.dynamic
         }
         Err(error) => {

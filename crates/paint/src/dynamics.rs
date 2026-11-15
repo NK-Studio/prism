@@ -171,6 +171,9 @@ pub struct StepInput {
     pub step: u64,
     /// Path distance from the stroke's first point to this step (CSP start and end).
     pub distance: f64,
+    /// On-screen speed of the segment this step lies on, in screen pixels per millisecond (0 at
+    /// rest or without timestamps; CSP's velocity input).
+    pub speed: f32,
 }
 
 /// Walks a polyline and emits steps, each as far from the last as the step's own callback says (the
@@ -199,6 +202,10 @@ pub struct PathWalker {
     /// The first step waits for the path to move (a CSP tip turned by the line's direction):
     /// a stroke that never moves lays nothing.
     wait_for_direction: bool,
+    /// Screen pixels per document pixel, for the on-screen speed.
+    zoom: f64,
+    /// On-screen speed of the current segment (screen pixels per ms).
+    speed_now: f32,
 }
 
 impl PathWalker {
@@ -217,7 +224,15 @@ impl PathWalker {
             travelled: 0.0,
             in_place: true,
             wait_for_direction: false,
+            zoom: 1.0,
+            speed_now: 0.0,
         }
+    }
+
+    /// The view zoom (screen pixels per document pixel) the stroke is drawn at: speeds are on-screen.
+    pub fn with_zoom(mut self, zoom: f32) -> Self {
+        self.zoom = if zoom.is_finite() && zoom > 0.0 { f64::from(zoom).clamp(1e-3, 1e3) } else { 1.0 };
+        self
     }
 
     /// Lay the first step only once the path has moved; a stroke that never moves lays nothing.
@@ -240,7 +255,14 @@ impl PathWalker {
 
     /// Emit a step; returns the path distance `out` asks for to the next one.
     fn emit(&mut self, point: StrokePoint, distance: f64, out: &mut impl FnMut(StepInput) -> f64) -> f64 {
-        let s = StepInput { point, direction: self.dir, initial_direction: self.initial_dir.unwrap_or(self.dir), step: self.step, distance };
+        let s = StepInput {
+            point,
+            direction: self.dir,
+            initial_direction: self.initial_dir.unwrap_or(self.dir),
+            step: self.step,
+            distance,
+            speed: self.speed_now,
+        };
         self.step += 1;
         out(s)
     }
@@ -254,6 +276,14 @@ impl PathWalker {
         };
         let (dx, dy) = (p.x - a.x, p.y - a.y);
         let len = (dx * dx + dy * dy).sqrt();
+        // The segment's on-screen speed (kept across segments without a duration).
+        let seg_dt = p.time - a.time;
+        if seg_dt > 0.0 && seg_dt.is_finite() && len.is_finite() {
+            let v = len * self.zoom / seg_dt;
+            self.speed_now = if v.is_finite() { v.min(1e6) as f32 } else { 0.0 };
+        } else if len <= 1e-9 {
+            self.speed_now = 0.0;
+        }
         if len > 1e-9 {
             self.dir = (-dy).atan2(dx) as f32;
             if self.initial_dir.is_none() {
@@ -406,7 +436,12 @@ fn scalar(d: &Dynamic, s: &StepInput, r: f32) -> f32 {
     if !d.is_active() {
         return 1.0;
     }
-    jittered(d, dynamic_control(d, s), r) * csp_tilt(d, s) * csp_random(d, r)
+    jittered(d, dynamic_control(d, s), r) * csp_tilt(d, s) * csp_speed(d, s) * csp_random(d, r)
+}
+
+/// The CSP velocity response's factor at step `s` (1 when the control is off).
+fn csp_speed(d: &Dynamic, s: &StepInput) -> f32 {
+    d.csp_speed.as_ref().map_or(1.0, |v| v.multiplier(s.speed))
 }
 
 fn csp_tilt(d: &Dynamic, s: &StepInput) -> f32 {
@@ -502,7 +537,7 @@ pub fn dab_diameter(b: &BrushSettings, s: &StepInput, r: f32) -> f32 {
     } else {
         1.0
     };
-    (b.size * if sd.enabled { jittered(&sd.size, cv, r) * csp_tilt(&sd.size, s) * csp_random(&sd.size, r) } else { cv }).min(crate::brush::MAX_BRUSH_SIZE)
+    (b.size * if sd.enabled { jittered(&sd.size, cv, r) * csp_tilt(&sd.size, s) * csp_speed(&sd.size, s) * csp_random(&sd.size, r) } else { cv }).min(crate::brush::MAX_BRUSH_SIZE)
 }
 
 /// Builds the primary dabs of a step (Shape Dynamics, Scattering, Transfer, Color, Texture depth).
@@ -840,6 +875,15 @@ pub struct DabGenerator {
 }
 
 impl DabGenerator {
+    /// Physical screen pixels per view point (HiDPI): CSP's velocity input is the speed in screen
+    /// pixels, while `zoom` is in view points. Only the speed uses it.
+    pub fn with_pixels_per_point(mut self, ppp: f32) -> Self {
+        let ppp = if ppp.is_finite() && ppp > 0.0 { ppp.clamp(0.1, 10.0) } else { 1.0 };
+        self.walker = self.walker.with_zoom(self.zoom * ppp);
+        self.dual_walker = self.dual_walker.map(|w| w.with_zoom(self.zoom * ppp));
+        self
+    }
+
     pub fn new(brush: &BrushSettings, zoom: f32) -> Self {
         let brush = brush.bounded_for_render();
         let interval = brush.build_up.then(|| 1000.0 / f64::from(brush.build_up_rate.clamp(0.1, 1000.0)));
@@ -852,8 +896,9 @@ impl DabGenerator {
             // CLIP STUDIO lays nothing for a tap with such a brush (measured,
             // docs/sut-analysis.md › 가을낙엽).
             walker: if brush.spacing_enabled { PathWalker::new(interval) } else { PathWalker::new(interval).speed_spacing(SPEED_SPACING_MS) }
-                .wait_for_direction(brush.csp_follows_line()),
-            dual_walker: dual_on.then(|| PathWalker::new(None).wait_for_direction(brush.csp_follows_line())),
+                .wait_for_direction(brush.csp_follows_line())
+                .with_zoom(zoom),
+            dual_walker: dual_on.then(|| PathWalker::new(None).wait_for_direction(brush.csp_follows_line()).with_zoom(zoom)),
             builder: DabBuilder::new(&brush),
             dual: dual_on.then(|| DualBuilder::new(&brush)),
             scratch: Vec::new(),

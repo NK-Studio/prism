@@ -773,6 +773,46 @@ path, not pixel identity; tilt mapping itself is not part of this change.
 Images: `target/rea-tools/csp/water-edge-live-comparison.png` and the three
 `prism-*water-edge*.png` renders.
 
+## Effector velocity input (2026-11-15)
+
+**Layout (from the tilt trace above).** Control `0x40` takes its minimum from header word 20
+(`+0x20`) and its response from the third curve block (length in word 44). Every local velocity
+curve is the default `(0,1) (1,0)`: the value falls from full at rest to the minimum at full speed.
+
+**Measured: what speed reaches 1.** CLIP STUDIO PAINT 5.0.4 on Tablet PC, 밀리펜 (size 10, no
+stabilization, `BrushSizeEffector` pressure minimum 80 % and velocity minimum 60 %), synthetic pen
+strokes at pressure 1 and constant speed, line width as coverage summed per column over the middle
+of each stroke, velocity input `v = (1 − width ratio) / 0.4`:
+
+| Screen px/ms | 0.75 | 1 | 1.5 | 2 | 3 | 4 | 5 | 6 | 8 | 12 | 16 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `v`, view 57.4 %, 8 ms samples | 0.13 | 0.15 | 0.19 | 0.19 | 0.30 | 0.50 | 0.56 | 0.73 | 1.05 | 1.20 | 1.12 |
+| `v`, view 100 %, 8 ms samples | | | | 0.29 | | 0.51 | | 0.88 | 1.02 | | |
+| `v`, view 100 %, 16 ms samples | | 0.15 | | 0.32 | | 0.52 | | | | | |
+
+- The same on-screen speed gives the same input at 57.4 % and 100 % view: the speed is in screen
+  pixels, not canvas pixels (canvas pixels would have put the 57.4 % row near 0.9 at 4 px/ms).
+- Twice the distance per sample at twice the interval gives the same input: it is a speed in time,
+  not a distance per sample.
+- A line through the origin fits all 16 points with `v = speed / 7.8` (RMS 0.05); Prism uses
+  `speed / 8` (`CSP_SPEED_FULL`, RMS 0.052), clamped to 0..1.
+
+**Prism.** `Dynamic.cspSpeed { minimum, curve }` multiplies the value by
+`minimum + (1 − minimum) · curve(v)`, like `cspTilt`. `PathWalker` gives each step its segment's
+speed in document pixels per ms times the zoom; the UI sends `pixelsPerPoint` with each stroke so
+the speed is in physical screen pixels as in CLIP STUDIO (the zoom is in view points). Without
+timestamps (`paint.stroke` points with equal times) the speed is 0 and the value stays full.
+The same 16 strokes in the app at the same on-screen scale (zoom 0.383 × 1.5 pixels per point),
+width relative to the slowest stroke:
+
+| Screen px/ms | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 16 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CLIP STUDIO | 0.941 | 0.924 | 0.881 | 0.799 | 0.777 | 0.711 | 0.581 | 0.554 |
+| Prism | 0.965 | 0.920 | 0.840 | 0.805 | 0.738 | 0.697 | 0.557 | 0.529 |
+
+Not measured: whether CLIP STUDIO smooths the speed over several samples (single strokes at a
+constant speed cannot show it) and how a stabilizer's catch-up feeds it.
+
 ## Effector tilt response (2026-10-16)
 
 Same executable. Existing direct Ghidra outputs (`evidence/ghidra-effector.txt`,
@@ -790,7 +830,7 @@ values need not be ordered and the response is independent of pen pressure.
 Grainy's `BrushSizeEffector` has `A = 50`, `B = 100` and the curve
 `(0,1) (0.5,1) (0.8,0) (1,0)`. The importer now maps active `0x20` onto the
 existing `Dynamic.cspTilt` (input 1 = vertical pen or mouse, 0 = horizontal);
-`CspTilt` no longer requires `minimum <= maximum`. Speed (`0x40`) and random
+`CspTilt` no longer requires `minimum <= maximum`. Speed (`0x40`, imported since 2026-11-15, see Effector velocity input) and random
 (`0x80`) still warn. The exact native altitude input for physical pens is not
 traced here; the mouse value is supported by the comparison below.
 

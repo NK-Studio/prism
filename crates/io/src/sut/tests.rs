@@ -523,9 +523,50 @@ fn tilt_effector_control_maps_to_an_independent_csp_tilt_response() {
     assert!(warnings.iter().any(|w| w.contains("tilt response could not be read")), "{warnings:?}");
     let (dynamics, _) = size(tilt_effector(0x30, Some(&pressure), None, 40, 100));
     assert!(dynamics.size.csp_tilt.is_none());
-    // Speed and random controls still warn.
-    let (_, warnings) = size(tilt_effector(0x70, Some(&pressure), Some(&tilt), 40, 100));
-    assert!(warnings.iter().any(|w| w.contains("additional input controls (0x40)")), "{warnings:?}");
+    // Velocity without its curve block is skipped like tilt, without a warning.
+    let (dynamics, warnings) = size(tilt_effector(0x70, Some(&pressure), Some(&tilt), 40, 100));
+    assert!(dynamics.size.csp_speed.is_none());
+    assert!(!warnings.iter().any(|w| w.contains("additional input controls")), "{warnings:?}");
+}
+
+/// A 48-byte-header effector with a pressure block and a velocity (third) block.
+fn speed_effector(active: u32, minimum: u32, speed: &[[f64; 2]]) -> Vec<u8> {
+    let mut blob = effector_blob(0x1f0, active);
+    blob[12..16].copy_from_slice(&80u32.to_be_bytes());
+    blob[20..24].copy_from_slice(&minimum.to_be_bytes());
+    let (p, v) = (curve_block(&[[0.0, 0.0], [1.0, 1.0]]), curve_block(speed));
+    blob[32..36].copy_from_slice(&(p.len() as u32).to_be_bytes());
+    blob[44..48].copy_from_slice(&(v.len() as u32).to_be_bytes());
+    blob.extend(p);
+    blob.extend(v);
+    blob
+}
+
+#[test]
+fn velocity_effector_control_maps_to_a_csp_speed_response() {
+    let falling = [[0.0, 1.0], [1.0, 0.0]];
+    let size = |blob: Vec<u8>| {
+        let bytes = fixture_with_effectors(true, Value::Blob(texture_refs("second.layer", 1)), Value::Blob(blob), Value::Null);
+        let imported = read_sut(&bytes, "SUT", &prism_raster::Interrupt::NONE).unwrap();
+        (imported.presets[0].brush.shape_dynamics.clone(), imported.warnings)
+    };
+    // 밀리펜's size: pressure (minimum 80 %) and velocity (minimum 60 %, falling curve).
+    let (dynamics, warnings) = size(speed_effector(0x50, 60, &falling));
+    assert!(dynamics.enabled && dynamics.size.control == Control::PenPressure);
+    let speed = dynamics.size.csp_speed.clone().expect("velocity response");
+    assert!((speed.minimum - 0.6).abs() < 1e-6);
+    assert!((speed.multiplier(0.0) - 1.0).abs() < 1e-6, "at rest");
+    assert!((speed.multiplier(4.0) - 0.8).abs() < 1e-6, "half of full speed");
+    assert!((speed.multiplier(100.0) - 0.6).abs() < 1e-6, "past full speed");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    // Velocity alone is a dynamic without pen pressure.
+    let (dynamics, _) = size(speed_effector(0x40, 30, &falling));
+    assert_eq!(dynamics.size.control, Control::Off);
+    assert!(dynamics.size.csp_speed.is_some());
+    // An out-of-range minimum warns and drops only the velocity response.
+    let (dynamics, warnings) = size(speed_effector(0x50, 900, &falling));
+    assert!(dynamics.size.csp_speed.is_none() && dynamics.size.control == Control::PenPressure);
+    assert!(warnings.iter().any(|w| w.contains("velocity response could not be read")), "{warnings:?}");
 }
 
 #[test]

@@ -10,7 +10,7 @@ use prism_doc::LayerContent;
 use prism_geom::Rect;
 use prism_paint::mixer::{MixerSettings, apply_mixer_stroke};
 use prism_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement};
-use prism_paint::{BrushPreset, BrushSettings, GrayTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke};
+use prism_paint::{BrushPreset, BrushSettings, GrayTile, Stroke, StrokePoint, StrokeRenderer, TipShape};
 use prism_raster::Surface;
 use serde_json::{Value, json};
 
@@ -276,6 +276,12 @@ fn damage_json(s: &mut Session, dmg: Rect) -> Value {
 
 /// The target layer (`None` for a channel), brush and zoom of a stroke. On a mask or channel the
 /// eraser paints the background colour (Photoshop).
+/// Physical screen pixels per view point the stroke was drawn at (`pixelsPerPoint`, default 1):
+/// CSP's velocity input is the on-screen speed.
+fn pixels_per_point(p: &Value) -> f32 {
+    num(p, "pixelsPerPoint").filter(|v| v.is_finite() && *v > 0.0).map_or(1.0, |v| v.clamp(0.1, 10.0))
+}
+
 fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option<prism_doc::LayerId>, BrushSettings, f32)> {
     let gray = is_mask_target(p) || crate::channel_cmds::is_channel_target(p);
     let id = if crate::channel_cmds::is_channel_target(p) { None } else { Some(layer_id(s, p)?) };
@@ -293,11 +299,24 @@ fn erase_locked(brush: &mut BrushSettings, lock: bool, bg: [f32; 4]) {
 }
 
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
+/// [`prism_paint::render_stroke`] at `ppp` physical pixels per view point (CSP's velocity input).
+fn render_on_screen(surf: &mut Surface, brush: &BrushSettings, pts: &[StrokePoint], sel: Option<&Surface>, lock: bool, zoom: f32, ppp: f32) -> prism_geom::Rect {
+    if pts.is_empty() {
+        return prism_geom::Rect::EMPTY;
+    }
+    let pre = surf.clone();
+    let mut r = StrokeRenderer::new(brush, Some(surf.format()), zoom).with_full_path(pts).with_mixing_source(&pre).with_pixels_per_point(ppp);
+    r.push(pts);
+    r.finish();
+    r.composite(&pre, surf, sel, lock, true)
+}
+
 fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
     let bg = s.tools.background;
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry_path.clone());
     let (id, brush, zoom) = stroke_target(s, p, brush)?;
+    let ppp = pixels_per_point(p);
     // CSP post correction: the committed line is smoothed once more (the live stroke is not).
     let pts = match brush.csp_post_correction {
         Some(level) => prism_paint::csp_post_correction::apply(level, zoom, &pts),
@@ -316,18 +335,20 @@ fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
             let reflected = axis.reflect_points(&pts);
             if crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, &reflected) {
                 let pre = surf.clone();
-                let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_full_path(&pts).with_mixing_source(&pre);
+                let mut original =
+                    StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_full_path(&pts).with_mixing_source(&pre).with_pixels_per_point(ppp);
                 original.push(&pts);
                 original.finish();
-                let mut mirror = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_full_path(&reflected).with_mixing_source(&pre);
+                let mut mirror =
+                    StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_full_path(&reflected).with_mixing_source(&pre).with_pixels_per_point(ppp);
                 mirror.push(&reflected);
                 mirror.finish();
                 original.composite_union(&mirror, &pre, surf, sel.as_ref(), lock)
             } else {
-                render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+                render_on_screen(surf, &brush, &pts, sel.as_ref(), lock, zoom, ppp)
             }
         } else {
-            render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+            render_on_screen(surf, &brush, &pts, sel.as_ref(), lock, zoom, ppp)
         };
         Ok(damage)
     })?;
@@ -417,6 +438,7 @@ impl LiveStroke {
         let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
         let (seed, fg) = (brush.seed, brush.color);
         let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
+        let ppp = pixels_per_point(p);
         let mut doc = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
@@ -424,11 +446,11 @@ impl LiveStroke {
         if pencil && flag(p, "autoErase", false) {
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
         }
-        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_mixing_source(surf);
+        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_mixing_source(surf).with_pixels_per_point(ppp);
         let mirror = s
             .active()
             .and_then(|st| st.symmetry_path.clone())
-            .map(|axis| (axis, StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_mixing_source(surf)));
+            .map(|axis| (axis, StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_mixing_source(surf).with_pixels_per_point(ppp)));
         let pre = surf.clone();
         let mut live = Self {
             doc: std::sync::Arc::new(doc),
