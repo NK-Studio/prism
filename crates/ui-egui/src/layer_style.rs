@@ -755,12 +755,48 @@ fn save_new_style(app: &mut PrismApp, f: &Map<String, Value>) {
 /// The dialog's layout in points, in Photoshop's proportions: the effect list, the selected
 /// page, and the column of OK / Cancel / New Style… / Preview with the style swatch.
 const LIST_W: f32 = 210.0;
-const LIST_H: f32 = 420.0;
+/// The page column's fixed height. Photoshop's dialog keeps one size whichever page is shown:
+/// this fits the tallest page (Blending Options with Blend If) and shorter pages leave the rest
+/// blank, so picking another effect never resizes the window. A page that would still not fit
+/// (a larger UI font) scrolls instead of growing the dialog.
+pub(crate) const PAGE_H: f32 = 620.0;
+/// The effect list's frame, gap and toolbar under its rows: the list's rows fill the rest of
+/// the page height, so the list and the page end on one line.
+const LIST_CHROME: f32 = 30.0;
 const PAGE_W: f32 = 404.0;
 const SIDE_W: f32 = 118.0;
 const ROW_H: f32 = 26.0;
 /// The right-aligned label column of a page row ("Blend Mode:").
 const LABEL_W: f32 = 100.0;
+/// Where the dialog keeps how tall the selected page's content is (view state, egui memory).
+fn page_content_id() -> egui::Id {
+    egui::Id::new("layer-style-page-content-h")
+}
+
+/// How tall the last drawn page's content was; above [`PAGE_H`] it scrolls.
+#[cfg(test)]
+pub(crate) fn page_content_height(ctx: &egui::Context) -> Option<f32> {
+    ctx.data(|d| d.get_temp(page_content_id()))
+}
+
+/// Adds an instance of every effect kind and returns every page id the list can select: Styles,
+/// Blending Options, each instance and the bevel's Contour and Texture.
+#[cfg(test)]
+pub(crate) fn add_every_page(f: &mut Map<String, Value>) -> Vec<String> {
+    for &(kind, _) in KINDS {
+        add_instance(f, kind);
+    }
+    let mut pages = vec![STYLES_PAGE.to_string(), BLENDING.to_string()];
+    for e in effects_of(f) {
+        let (Some(id), Some(kind)) = (e.get("id").and_then(Value::as_str), e.get("kind").and_then(Value::as_str)) else { continue };
+        pages.push(id.to_string());
+        if kind == "bevelEmboss" {
+            pages.extend(BEVEL_PARTS.iter().map(|p| format!("{id}#{}", p.0)));
+        }
+    }
+    pages
+}
+
 /// The dialog's content width: the three columns and the gaps between them.
 pub const WIDTH: f32 = LIST_W + PAGE_W + SIDE_W + 40.0;
 
@@ -1049,7 +1085,8 @@ fn list_toolbar(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
 }
 
 /// Photoshop's titled group box: an etched frame whose title sits in a gap of its top edge.
-/// An empty title draws no frame.
+/// An empty title draws no frame. `min_h` is the least height the box takes in all, its title
+/// and the gap under it included (0 = as tall as its rows).
 fn group_box<R>(ui: &mut egui::Ui, title: &str, min_h: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
     if title.is_empty() {
@@ -1057,11 +1094,15 @@ fn group_box<R>(ui: &mut egui::Ui, title: &str, min_h: f32, add: impl FnOnce(&mu
     }
     let galley = ui.painter().layout_no_wrap(tl!(title).to_string(), egui::FontId::proportional(12.5), t.text);
     let half = (galley.size().y / 2.0).round();
+    // Title half, the frame's top and bottom margins, the item gap after the frame and the
+    // gap added under it.
+    let chrome = half + 14.0 + 8.0 + ui.spacing().item_spacing.y + 6.0;
+    let content_min = (min_h - chrome).max(0.0);
     ui.add_space(half);
     let width = ui.available_width();
     let inner = egui::Frame::NONE.inner_margin(egui::Margin { left: 10, right: 10, top: 14, bottom: 8 }).show(ui, |ui| {
         ui.set_width((width - 20.0).max(40.0));
-        ui.set_min_height(min_h);
+        ui.set_min_height(content_min);
         add(ui)
     });
     let r = inner.response.rect;
@@ -1124,25 +1165,23 @@ pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -
     let mut new_style = false;
     let mut outcome = None;
     let invalid = validate_params(f).err();
-    // The list reaches down to the page's bottom, as in Photoshop, when a page (Blending Options)
-    // is taller than the list: last frame's page height minus the list's toolbar and frame.
-    let page_h_id = ui.id().with("layer-style-page-h");
-    let list_h = ui.data(|d| d.get_temp::<f32>(page_h_id)).map_or(LIST_H, |h| (h - 30.0).clamp(LIST_H, 2000.0));
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             name_row(ui, f);
             ui.add_space(8.0);
+            // Both columns have fixed sizes: the list and the page end on one line and the
+            // dialog keeps its size whichever page is selected.
             ui.horizontal_top(|ui| {
-                effect_list(ui, f, &selected, list_h);
+                effect_list(ui, f, &selected, PAGE_H - LIST_CHROME);
                 ui.add_space(12.0);
-                let page_rect = ui
-                    .vertical(|ui| {
-                        ui.set_width(PAGE_W);
+                ui.vertical(|ui| {
+                    ui.set_width(PAGE_W);
+                    ui.set_height(PAGE_H);
+                    let out = egui::ScrollArea::vertical().id_salt("layer-style-page").max_height(PAGE_H).auto_shrink([false, false]).show(ui, |ui| {
                         page(app, ui, f, &selected, invalid.as_deref(), &mut style_click);
-                    })
-                    .response
-                    .rect;
-                ui.data_mut(|d| d.insert_temp(page_h_id, page_rect.height()));
+                    });
+                    ui.data_mut(|d| d.insert_temp(page_content_id(), out.content_size.y));
+                });
             });
         });
         ui.add_space(14.0);
@@ -1260,8 +1299,8 @@ fn preview_swatch(app: &PrismApp, ui: &mut egui::Ui, f: &Map<String, Value>) {
 /// groups, with Make Default / Reset to Default under an effect's.
 fn page(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str, invalid: Option<&str>, style_click: &mut Option<String>) {
     let t = Tokens::get(ui.ctx());
-    // As tall as the list and its toolbar, so the box doesn't jump between pages.
-    let min_h = LIST_H + 4.0;
+    // The page's box fills the fixed page height, whatever the page shows.
+    let min_h = PAGE_H;
     if selected == STYLES_PAGE {
         group_box(ui, "Styles", min_h, |ui| styles_gallery(app, ui, style_click));
         return;
@@ -1327,7 +1366,9 @@ fn page(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, selec
 fn styles_gallery(app: &PrismApp, ui: &mut egui::Ui, style_click: &mut Option<String>) {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
-    egui::ScrollArea::vertical().max_height(LIST_H).id_salt("layer-style-presets-main").show(ui, |ui| {
+    // The swatches scroll inside the page's box: its content height, set by `group_box`.
+    let height = ui.min_rect().height().max(ROW_H);
+    egui::ScrollArea::vertical().max_height(height).auto_shrink([false, true]).id_salt("layer-style-presets-main").show(ui, |ui| {
         for group in &app.session.presets.styles {
             ui.label(RichText::new(&group.name).size(12.0).color(t.text_dim));
             ui.add_space(3.0);

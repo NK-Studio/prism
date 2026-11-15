@@ -4722,6 +4722,7 @@ dependencies = [
  "prism-text",
  "prism-vector",
  "rayon",
+ "resvg",
  "serde",
  "serde_json",
  "sys-locale",

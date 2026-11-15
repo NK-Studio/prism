@@ -402,7 +402,7 @@ pub fn handle(app: &mut PrismApp, ctx: &egui::Context) {
     // Tool keys; pressing the key of the current group cycles within it. With Preferences ›
     // Tools › Use Shift Key for Tool Switch, only ⇧+key cycles and the plain key keeps the
     // group's current tool.
-    // The Clip Studio workspace uses CSP's tool keys.
+    // The Clip Studio workspace's tools take the same Photoshop keys and rules.
     if crate::csp_tools::active(app) {
         if crate::csp_tools::shortcut(app, ctx) {
             return;

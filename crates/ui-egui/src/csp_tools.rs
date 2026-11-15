@@ -102,23 +102,11 @@ impl CspTool {
         }
     }
 
-    /// Clip Studio Paint's default single-key shortcut.
+    /// Its single-key shortcut: Photoshop's key for the tool it runs on (Operation is V like
+    /// Move, the brushes are B, Fill and Gradient are G, …), so Photoshop's keys work in this
+    /// workspace too. `'\0'` = none (Blend, as Photoshop's Smudge has none).
     pub fn key(self) -> char {
-        match self {
-            CspTool::Zoom => 'Z',
-            CspTool::Hand => 'H',
-            CspTool::MoveLayer => 'K',
-            CspTool::Selection => 'M',
-            CspTool::AutoSelect => 'W',
-            CspTool::Eyedropper => 'I',
-            CspTool::Pen | CspTool::Pencil => 'P',
-            CspTool::Brush | CspTool::Airbrush | CspTool::Decoration => 'B',
-            CspTool::Eraser => 'E',
-            CspTool::Blend => 'J',
-            CspTool::Fill | CspTool::Gradient => 'G',
-            CspTool::Figure => 'U',
-            CspTool::Text => 'T',
-        }
+        self.backing().key()
     }
 
     /// The toolbar glyph: Prism's solid tool artwork (`assets/icons/tools/`), one per tool.
@@ -232,13 +220,19 @@ pub fn select(app: &mut PrismApp, tool: CspTool) {
     }
 }
 
-/// CSP single-key shortcuts: a key shared by several tools cycles through them.
+/// The workspace's single-key shortcuts, with Photoshop's rules: a key shared by several tools
+/// cycles through them in toolbar order (B: Brush, Pen, Pencil, …); with Preferences › Tools ›
+/// Use Shift Key for Tool Switch only ⇧+key cycles and the plain key keeps the group's tool.
 pub fn shortcut(app: &mut PrismApp, ctx: &egui::Context) -> bool {
-    for tool in CspTool::ALL {
+    let shift_switch = app.session.prefs().tools.use_shift_key_for_tool_switch;
+    let order: Vec<CspTool> = SECTIONS.iter().flat_map(|s| s.iter().copied()).collect();
+    for &tool in &order {
         let Some(k) = egui::Key::from_name(&tool.key().to_string()) else { continue };
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k)) {
-            let group: Vec<CspTool> = CspTool::ALL.iter().copied().filter(|t| t.key() == tool.key()).collect();
+        let cycle_shift = shift_switch && ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, k));
+        if cycle_shift || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k)) {
+            let group: Vec<CspTool> = order.iter().copied().filter(|t| t.key() == tool.key()).collect();
             let next = match group.iter().position(|t| *t == app.ui.csp_tool) {
+                Some(_) if shift_switch && !cycle_shift => app.ui.csp_tool,
                 Some(i) => group.get((i + 1) % group.len()).copied().unwrap_or(tool),
                 None => tool,
             };
@@ -266,7 +260,10 @@ pub fn toolbar_slots(app: &mut PrismApp, ui: &mut egui::Ui, double: bool, bx: f3
         for row in section.chunks(if double { 2 } else { 1 }) {
             ui.horizontal(|ui| {
                 for &tool in row {
-                    let tip = format!("{}  ({})", tl!(tool.label()), tool.key());
+                    let tip = match tool.key() {
+                        '\0' => tl!(tool.label()).to_string(),
+                        key => format!("{}  ({key})", tl!(tool.label())),
+                    };
                     let on = app.ui.csp_tool == tool && !crate::transform_tool::modal(app);
                     let resp = icons::button(ui, tool.icon(), bx, on, &tip);
                     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, tl!(tool.label())));

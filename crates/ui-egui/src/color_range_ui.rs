@@ -660,22 +660,18 @@ pub fn canvas_eyedropper(app: &mut PrismApp, ctx: &egui::Context, over: egui::Po
             _ => 1017,
         }
     };
-    let imported = crate::cursor_pack::show(ctx, over, asset, egui::CursorIcon::Crosshair);
-    if let Some(icon) = imported {
-        ctx.set_cursor_icon(icon);
-    } else if precise {
-        ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
-    } else {
-        // The tip of the icon's pipette is at (2, 22) of its 24-unit box (as the Color Picker's).
-        crate::icons::cursor(ctx, "pipette", over, vec2(2.0, 22.0) / 24.0, 20.0);
-        ctx.set_cursor_icon(egui::CursorIcon::None);
-    }
+    // The add and subtract samplers share the pipette unless a local pack has their own.
+    let painter = crate::canvas::cursor_painter(ctx);
+    let stock = egui::CursorIcon::Crosshair;
+    let own = crate::tool_cursor::standard(&painter, over, asset, stock);
+    let icon = own.or_else(|| crate::tool_cursor::standard(&painter, over, 1017, stock));
+    ctx.set_cursor_icon(icon.unwrap_or(stock));
     let badge = match tool {
         "add" => "+",
         "subtract" => "−",
         _ => "",
     };
-    if !badge.is_empty() && (imported.is_none() || precise) {
+    if !badge.is_empty() && (own.is_none() || precise) {
         let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("pc-color-range-badge")));
         let at = over + vec2(20.0, -4.0);
         p.text(at + vec2(1.0, 1.0), egui::Align2::CENTER_CENTER, badge, crate::theme::semibold(13.0), Color32::from_black_alpha(200));

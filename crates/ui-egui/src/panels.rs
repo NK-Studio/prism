@@ -1819,9 +1819,12 @@ fn layers(app: &mut PrismApp, ui: &mut egui::Ui) {
                 actions.push(("layer.delete".into(), json!({})));
             }
             actions.extend(footer_drop(ui, &trash, footer_drag, "layer.delete"));
-            let new_layer = icons::button(ui, "square-plus", 26.0, false, &crate::shortcuts::tip_label(app, "Create a new layer", "layer.new.layer"));
+            // The button makes the layer straight away (the ⌥⇧⌘N command); ⌥-click asks in the
+            // New Layer dialog first, as in Photoshop (a null param runs it like its menu item).
+            let new_layer = icons::button(ui, "square-plus", 26.0, false, &crate::shortcuts::tip_label(app, "Create a new layer", crate::new_layer_ui::NO_DIALOG));
             if new_layer.clicked() {
-                actions.push(("layer.new.layer".into(), json!({})));
+                let ask = ui.input(|i| i.modifiers.alt);
+                actions.push(("layer.new.layer".into(), if ask { Value::Null } else { json!({}) }));
             }
             actions.extend(footer_drop(ui, &new_layer, footer_drag, "layer.duplicate"));
             let group = icons::button(ui, "folder", 26.0, false, tl!("Create a new group"));

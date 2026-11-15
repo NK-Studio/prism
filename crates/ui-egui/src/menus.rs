@@ -43,6 +43,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("view.show.targetPath", "Target Path", &["View", "Show"], Some("Cmd+Shift+H")),
     ("view.screenMode.cycle", "Cycle Screen Mode", &[], Some("F")),
     ("edit.freeTransformCopy", "Free Transform a Copy", &[], Some("Cmd+Alt+T")),
+    (crate::new_layer_ui::NO_DIALOG, "New Layer Without Dialog", &[], Some("Cmd+Alt+Shift+N")),
     ("type.editText", "Edit Type", &[], None),
     ("view.zoomIn", "Zoom In", &["View"], Some("Cmd+=")),
     ("view.zoomOut", "Zoom Out", &["View"], Some("Cmd+-")),
@@ -246,6 +247,10 @@ pub(crate) fn invoke_unguarded(app: &mut PrismApp, ctx: &egui::Context, id: &str
             let d = app.ui.open_dialog(DialogKind::NewDocument, fields);
             Ok(json!({"dialog": d}))
         }
+        // Layer › New › Layer… from the menu or ⇧⌘N: the New Layer dialog (with params: the engine).
+        crate::new_layer_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => crate::new_layer_ui::open(app).map(|d| json!({"dialog": d})),
+        // ⌥⇧⌘N: the layer straight away with the defaults, as Photoshop skips the dialog.
+        crate::new_layer_ui::NO_DIALOG => app.run(crate::new_layer_ui::COMMAND, json!({})),
         "file.open" => {
             if let Some(path) = params.get("path").and_then(Value::as_str) {
                 open_path(app, path)
@@ -561,6 +566,7 @@ pub fn is_enabled(app: &PrismApp, id: &str) -> bool {
             app.session.active().is_some()
         }
         "edit.freeTransformCopy" => app.ui.transform.is_none() && app.session.active().and_then(|s| s.active_layer).is_some(),
+        crate::new_layer_ui::NO_DIALOG => app.session.is_enabled(crate::new_layer_ui::COMMAND),
         "edit.freeTransform"
         | "edit.transform.scale"
         | "edit.transform.rotate"
@@ -1223,6 +1229,9 @@ pub fn apply_workspace(app: &mut PrismApp) {
     p.history = history;
     p.properties = props;
     p.character = false;
+    // Tool Sliders is a Clip Studio panel: the Clip Studio layout opens it, Photoshop's presets
+    // (Essentials and the rest) leave it out. Window › Tool Sliders still toggles it in either.
+    p.tool_sliders = style == WorkspaceStyle::ClipStudio;
     if style == WorkspaceStyle::ClipStudio {
         crate::csp_tools::apply_workspace_layout(app);
     }

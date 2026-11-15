@@ -374,13 +374,13 @@ pub(crate) fn stroke_command(tool: Tool) -> &'static str {
 }
 
 /// Windows' crosshair cursor inverts the pixels under it, so over mid-grey (the pasteboard, many
-/// photos) it vanishes (#737). Use a black-and-white bitmap, carried by the OS on Windows so
+/// photos) it vanishes (#737). Use our black-and-white crosshair, carried by the OS on Windows so
 /// its movement does not wait for the canvas to render.
 fn visible_crosshair(icon: egui::CursorIcon, painter: &egui::Painter, p: Pos2, draw: bool) -> egui::CursorIcon {
     if !draw || icon != egui::CursorIcon::Crosshair {
         return icon;
     }
-    crate::tool_cursor::crosshair(painter, p, 8.0, 2.0)
+    crate::tool_cursor::cross(painter, p)
 }
 
 /// The Pencil's cursor at `doc` (document pixels): the whole-pixel square its dab fills
@@ -1404,7 +1404,7 @@ fn documents(app: &mut PrismApp, ui: &mut egui::Ui) {
     let n = app.session.documents().len();
     // Files opening in the background (#210) have tabs before they have documents.
     let opening = !app.jobs.opens.is_empty();
-    if !opening && app.ui.chrome.shows_home(n, app.session.prefs().general.auto_show_home_screen) {
+    if crate::home_ui::up(app) {
         crate::home_ui::show(app, ui);
         return;
     }
@@ -2300,12 +2300,12 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
             let d = xf.unmap_vec(d) / view.zoom;
             view.center[0] -= d.x;
             view.center[1] -= d.y;
-            ctx.set_cursor_icon(ctx.pointer_hover_pos().map_or(egui::CursorIcon::Grabbing, |p| crate::cursor_pack::stock(&ctx, p, egui::CursorIcon::Grabbing)));
+            ctx.set_cursor_icon(ctx.pointer_hover_pos().map_or(egui::CursorIcon::Grabbing, |p| crate::tool_cursor::hand(&cursor_painter(&ctx), p, true)));
         } else if free_hover && (space_pan || hand) {
-            ctx.set_cursor_icon(ctx.pointer_hover_pos().map_or(egui::CursorIcon::Grab, |p| crate::cursor_pack::stock(&ctx, p, egui::CursorIcon::Grab)));
+            ctx.set_cursor_icon(ctx.pointer_hover_pos().map_or(egui::CursorIcon::Grab, |p| crate::tool_cursor::hand(&cursor_painter(&ctx), p, false)));
         } else if picking && let Some(p) = crate::dialogs::free_pointer_over(&ctx, rect) {
             if app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise {
-                ctx.set_cursor_icon(crate::cursor_pack::show(&ctx, p, 1025, egui::CursorIcon::Crosshair).unwrap_or(egui::CursorIcon::Crosshair));
+                ctx.set_cursor_icon(crate::tool_cursor::standard(&cursor_painter(&ctx), p, 1025, egui::CursorIcon::Crosshair).unwrap_or(egui::CursorIcon::Crosshair));
             } else {
                 ctx.set_cursor_icon(pipette_cursor(&ctx, p));
             }
@@ -2336,6 +2336,10 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
             let d = xf.unmap_vec(response.drag_delta()) / view.zoom;
             view.center[0] -= d.x;
             view.center[1] -= d.y;
+        }
+        // The tool cursors below are skipped while panning: the closed hand from here.
+        if let Some(p) = response.hover_pos().or_else(|| response.interact_pointer_pos()) {
+            ctx.set_cursor_icon(crate::tool_cursor::hand(&painter, p, true));
         }
     } else if primary {
         let mods = ui.input(|i| i.modifiers);
@@ -2692,7 +2696,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Crop).and_then(|p| crate::crop_ui::cursor(app, xf.to_doc(p))) {
             let c = response.hover_pos().map_or(c, |p| {
                 if c == egui::CursorIcon::Crosshair && app.session.prefs().cursors.other != prism_engine::prefs::OtherCursor::Precise {
-                    crate::cursor_pack::show(&ctx, p, 1027, c).unwrap_or(c)
+                    crate::tool_cursor::standard(&painter, p, 1027, c).unwrap_or(c)
                 } else {
                     crate::cursor_pack::stock(&ctx, p, c)
                 }
@@ -2786,13 +2790,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
                     egui::CursorIcon::Crosshair
                 }
                 Tool::Move => crate::tool_cursor::move_tool(&painter, p, app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move) && response.dragged()),
-                Tool::Hand => {
-                    if response.dragged() {
-                        egui::CursorIcon::Grabbing
-                    } else {
-                        egui::CursorIcon::Grab
-                    }
-                }
+                Tool::Hand => crate::tool_cursor::hand(&painter, p, response.dragged()),
                 Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
                 // The magnifying glass, for the Zoom tool and the temporary zoom keys alike.
                 Tool::Zoom => crate::tool_cursor::zoom(&painter, p, zoom_out(alt)),
@@ -2854,7 +2852,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
             } else {
                 Some(crate::cursor_pack::tool_asset(tool, badge, zoom_out(held.alt), response.dragged()))
             };
-            let icon = if icon != egui::CursorIcon::None { asset.and_then(|a| crate::cursor_pack::show(&ctx, p, a, icon)).unwrap_or(icon) } else { icon };
+            let icon = if icon != egui::CursorIcon::None { asset.and_then(|a| crate::tool_cursor::standard(&painter, p, a, icon)).unwrap_or(icon) } else { icon };
             let icon = visible_crosshair(icon, &painter, p, cfg!(target_os = "windows"));
             ui.ctx().set_cursor_icon(icon);
             // Selection tools: + / − / × badge for the effective mode (#170). A gesture keeps the
@@ -2887,6 +2885,11 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
     }
     crate::rotate_view::overlay(app, &ctx, &painter, &xf, &mut view, &response);
     view
+}
+
+/// Where a tool's cursor is drawn above every window when the OS can't show its bitmap.
+pub(crate) fn cursor_painter(ctx: &egui::Context) -> egui::Painter {
+    ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("tool cursor")))
 }
 
 /// Zoom to `new_zoom` about the pointer `p`. By default the document point under it stays under
@@ -3305,15 +3308,10 @@ fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
     mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket)
 }
 
-/// The sampling cursor: a pipette whose tip is the sampled pixel. Draws it at `p` and returns the
-/// OS cursor to set (hidden).
+/// The sampling cursor: a pipette whose tip is the sampled pixel. Requests it at `p` and returns
+/// the OS cursor to set.
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
-    if let Some(icon) = crate::cursor_pack::show(ctx, p, 1017, egui::CursorIcon::Crosshair) {
-        return icon;
-    }
-    // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
-    crate::icons::cursor(ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);
-    egui::CursorIcon::None
+    crate::tool_cursor::standard(&cursor_painter(ctx), p, 1017, egui::CursorIcon::Crosshair).unwrap_or(egui::CursorIcon::Crosshair)
 }
 
 /// Decided when the press starts, so ⌥ pressed or released mid-stroke never switches between

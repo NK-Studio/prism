@@ -122,21 +122,16 @@ fn ordinary_brush_cursor_is_not_part_of_the_canvas_draw_list() {
 #[test]
 #[ignore = "writes target/tool-cursor-preview.png for visual inspection"]
 fn write_cursor_preview() {
-    let cases = [
+    let mut cases = vec![
         (Shape::Circle { radius: 20.0, centre: false }, 1.0),
         (Shape::Circle { radius: 20.0, centre: false }, 1.5),
         (Shape::Circle { radius: 20.0, centre: true }, 2.0),
         (Shape::Crosshair { length: 8.0, gap: 2.0 }, 2.0),
         (Shape::Crosshair { length: 6.0, gap: 0.0 }, 2.0),
-        (Shape::Move, 1.0),
-        (Shape::Move, 1.5),
-        (Shape::Move, 2.0),
-        (Shape::Zoom { out: false }, 1.0),
-        (Shape::Zoom { out: true }, 1.0),
-        (Shape::Zoom { out: false }, 1.5),
-        (Shape::Zoom { out: false }, 2.0),
-        (Shape::Zoom { out: true }, 2.0),
     ];
+    for scale in [1.0, 1.5, 2.0] {
+        cases.extend(Art::ALL.map(|art| (Shape::Art(art), scale)));
+    }
     let (width, height) = (600_usize, cases.len() * 100);
     let mut rgba = vec![255; width * height * 4];
     for (col, background) in [0_u8, 128, 255].into_iter().enumerate() {
@@ -153,8 +148,9 @@ fn write_cursor_preview() {
             for (i, pixel) in image.rgba.as_chunks::<4>().0.iter().enumerate() {
                 let at = ((y0 + i / side) * width + x0 + i % side) * 4;
                 let a = f32::from(pixel[3]) / 255.0;
-                let value = (f32::from(pixel[0]) * a + f32::from(background) * (1.0 - a)).round() as u8;
-                rgba[at..at + 3].fill(value);
+                for c in 0..3 {
+                    rgba[at + c] = (f32::from(pixel[c]) * a + f32::from(background) * (1.0 - a)).round() as u8;
+                }
             }
         }
     }
@@ -213,7 +209,8 @@ fn brush_hover_uses_an_os_bitmap_that_survives_motion_but_not_tool_or_panel_chan
 
     h.state_mut().ui.tool = crate::Tool::Hand;
     h.run_steps(2);
-    assert!(h.output().platform_output.cursor_image.is_none());
+    let hand = h.output().platform_output.cursor_image.clone().expect("the Hand tool's own hand, not the brush tip");
+    assert!(!Arc::ptr_eq(&hand.rgba, &initial.rgba));
     assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Grab);
 
     h.state_mut().ui.tool = crate::Tool::Brush;
@@ -248,14 +245,14 @@ fn painting_preference_and_zoom_change_the_native_cursor_without_changing_pointe
 #[test]
 fn move_bitmap_is_bounded_and_hotspot_is_the_arrow_tip_at_fractional_dpi() {
     for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
-        let img = rasterize(Shape::Move, scale).unwrap();
+        let img = rasterize(Shape::Art(Art::Move), scale).unwrap();
         assert_eq!(img.rgba.len(), usize::from(img.size[0]) * usize::from(img.size[1]) * 4);
-        assert_eq!(img.hotspot, [(2.0 * scale).round() as u16; 2]);
+        assert_eq!(img.hotspot, [(3.2 * scale).floor() as u16, (2.5 * scale).floor() as u16]);
         assert!(alpha(&img, img.hotspot[0], img.hotspot[1]) > 0);
         assert_eq!(alpha(&img, img.size[0] - 1, img.size[1] - 1), 0);
     }
     for scale in [0.0, -1.0, f32::NAN, f32::INFINITY, 10000.0] {
-        assert!(rasterize(Shape::Move, scale).is_none());
+        assert!(rasterize(Shape::Art(Art::Move), scale).is_none());
     }
 }
 
@@ -273,7 +270,7 @@ fn native_move_cursor_uses_the_backends_coordinate_units_at_each_dpi() {
         let image = output.platform_output.cursor_image.unwrap();
         let expected = if cfg!(target_os = "macos") { 1.0 } else { scale };
         assert_eq!(image.size, [(32.0 * expected).ceil() as u16; 2]);
-        assert_eq!(image.hotspot, [(2.0 * expected).round() as u16; 2]);
+        assert_eq!(image.hotspot, [(3.2 * expected).floor() as u16, (2.5 * expected).floor() as u16]);
     }
 }
 
@@ -282,7 +279,7 @@ fn painted_move_cursor_keeps_its_point_size_at_each_dpi() {
     let ctx = egui::Context::default();
     for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
         ctx.set_pixels_per_point(scale);
-        let output = frame(&ctx, |ui| paint(ui.painter(), egui::pos2(20.0, 20.0), Shape::Move));
+        let output = frame(&ctx, |ui| paint(ui.painter(), egui::pos2(20.0, 20.0), Shape::Art(Art::Move)));
         let bounds = output
             .shapes
             .iter()
@@ -291,7 +288,7 @@ fn painted_move_cursor_keeps_its_point_size_at_each_dpi() {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(bounds.min, egui::pos2(18.0, 18.0));
+        assert_eq!(bounds.min, egui::pos2(17.0, 18.0), "the arrow's tip on the pointer");
         assert_eq!(bounds.size(), vec2(32.0, 32.0));
     }
 }
@@ -329,16 +326,16 @@ fn ink(image: &CustomCursorImage, x: u16, y: u16) -> bool {
 #[test]
 fn zoom_bitmap_is_a_glass_with_a_plus_or_minus_about_its_hotspot_at_each_dpi() {
     for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
-        let plus = rasterize(Shape::Zoom { out: false }, scale).unwrap();
-        let minus = rasterize(Shape::Zoom { out: true }, scale).unwrap();
+        let plus = rasterize(Shape::Art(Art::ZoomIn), scale).unwrap();
+        let minus = rasterize(Shape::Art(Art::ZoomOut), scale).unwrap();
         for img in [&plus, &minus] {
-            assert_eq!(img.size, [(24.0 * scale).ceil() as u16; 2]);
+            assert_eq!(img.size, [(32.0 * scale).ceil() as u16; 2]);
             assert_eq!(img.rgba.len(), usize::from(img.size[0]) * usize::from(img.size[1]) * 4);
-            assert_eq!(img.hotspot, [(9.0 * scale).round() as u16; 2]);
+            assert_eq!(img.hotspot, [(12.0 * scale).floor() as u16; 2]);
             let [x, y] = img.hotspot;
             assert!(ink(img, x, y), "the sign crosses the lens centre");
             assert!(ink(img, x + (2.0 * scale) as u16, y), "both signs have the horizontal bar");
-            assert!(ink(img, x + (6.5 * scale) as u16, y), "the lens ring");
+            assert!(ink(img, x + (7.2 * scale) as u16, y), "the lens ring");
             assert!(ink(img, x + (9.0 * scale) as u16, y + (9.0 * scale) as u16), "the handle");
             // The corners off the glass's diagonal stay clear.
             assert_eq!(alpha(img, img.size[0] - 1, 0), 0);
@@ -348,12 +345,12 @@ fn zoom_bitmap_is_a_glass_with_a_plus_or_minus_about_its_hotspot_at_each_dpi() {
             assert!(img.rgba[lens] > 230 && img.rgba[lens + 3] > 230);
         }
         let [x, y] = plus.hotspot;
-        let up = y - (2.0 * scale) as u16;
+        let up = y - (2.5 * scale) as u16;
         assert!(ink(&plus, x, up), "zoom in: the vertical bar");
         assert!(!ink(&minus, x, up), "zoom out: no vertical bar");
     }
     for scale in [0.0, -1.0, f32::NAN, f32::INFINITY, 10000.0] {
-        assert!(rasterize(Shape::Zoom { out: false }, scale).is_none());
+        assert!(rasterize(Shape::Art(Art::ZoomIn), scale).is_none());
     }
 }
 
@@ -379,6 +376,236 @@ fn zoom_cursor_is_an_os_bitmap_with_the_stock_zoom_cursor_as_its_fallback() {
 }
 
 #[test]
+fn hand_bitmap_is_an_open_hand_that_closes_while_dragging_at_each_dpi() {
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        let open = rasterize(Shape::Art(Art::Hand), scale).unwrap();
+        let closed = rasterize(Shape::Art(Art::HandClosed), scale).unwrap();
+        for img in [&open, &closed] {
+            assert_eq!(img.size, [(32.0 * scale).ceil() as u16; 2]);
+            assert_eq!(img.rgba.len(), usize::from(img.size[0]) * usize::from(img.size[1]) * 4);
+            assert_eq!(img.hotspot, [(16.0 * scale).floor() as u16, (17.0 * scale).floor() as u16]);
+            // The palm under the hotspot is light, so the hand reads on a dark image.
+            let [x, y] = img.hotspot;
+            let palm = (usize::from(y + (3.0 * scale) as u16) * usize::from(img.size[0]) + usize::from(x)) * 4;
+            assert!(img.rgba[palm] > 230 && img.rgba[palm + 3] > 230, "light palm at {scale}");
+            assert_eq!(alpha(img, img.size[0] - 1, 0), 0, "the corner stays clear");
+        }
+        // Inside the middle finger: up when open, curled into the fist when closed.
+        let (x, tip) = ((15.55 * scale) as u16, (7.5 * scale) as u16);
+        assert!(alpha(&open, x, tip) > 230, "open: the raised finger at {scale}");
+        assert_eq!(alpha(&closed, x, tip), 0, "closed: the finger curled down at {scale}");
+    }
+    for scale in [0.0, -1.0, f32::NAN, f32::INFINITY, 10000.0] {
+        assert!(rasterize(Shape::Art(Art::Hand), scale).is_none());
+    }
+}
+
+/// Every drawing, at every DPI: it parses, its hotspot is inside it, it has dark ink with a light
+/// halo beside it (so it reads on black and on white), and the box's edge cuts nothing but the
+/// halo's soft tail.
+#[test]
+fn every_drawing_rasterizes_with_ink_a_halo_and_a_hotspot_at_each_dpi() {
+    for art in Art::ALL {
+        for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+            let img = rasterize(Shape::Art(art), scale).unwrap_or_else(|| panic!("{art:?} at {scale}"));
+            let side = img.size[0];
+            assert_eq!(img.size, [(32.0 * scale).ceil() as u16; 2], "{art:?}");
+            assert_eq!(img.rgba.len(), usize::from(side).pow(2) * 4, "{art:?}");
+            assert!(img.hotspot[0] < side && img.hotspot[1] < side, "{art:?}");
+            let pixels = img.rgba.as_chunks::<4>().0;
+            let dark = pixels.iter().filter(|p| p[3] > 230 && p[0] < 40).count();
+            let light = pixels.iter().filter(|p| p[3] > 120 && p[0] > 200).count();
+            assert!(dark as f32 > 12.0 * scale * scale, "{art:?} at {scale}: {dark} dark pixels");
+            assert!(light > dark / 3, "{art:?} at {scale}: {light} light pixels around {dark} dark ones");
+            // Colour is straight, never premultiplied: no grey fringe where the halo fades out.
+            assert!(pixels.iter().filter(|p| p[3] > 0 && p[3] < 60).all(|p| p[0] > 200), "{art:?} at {scale}");
+            for i in 0..side {
+                for (x, y) in [(i, 0), (i, side - 1), (0, i), (side - 1, i)] {
+                    assert!(alpha(&img, x, y) < 64, "{art:?} at {scale}: clipped at ({x}, {y})");
+                }
+            }
+        }
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::MAX, 10000.0, 64.0] {
+            assert!(rasterize(Shape::Art(art), scale).is_none(), "{art:?} at {scale}");
+        }
+    }
+}
+
+#[test]
+fn hotspots_are_on_the_part_of_the_drawing_that_points() {
+    let at = |art: Art, scale: f32| {
+        let img = rasterize(Shape::Art(art), scale).unwrap();
+        let [x, y] = img.hotspot;
+        let i = (usize::from(y) * usize::from(img.size[0]) + usize::from(x)) * 4;
+        [img.rgba[i], img.rgba[i + 3]]
+    };
+    for scale in [1.0, 2.0] {
+        // Tips, centres and the baseline tick are ink (a tip covers part of its pixel at 1x).
+        for art in [Art::Arrow, Art::Move, Art::Lasso, Art::LassoPolygon, Art::Cross, Art::CrossRect, Art::Crop, Art::Text, Art::TextVertical, Art::Convert] {
+            let [value, alpha] = at(art, scale);
+            assert!(alpha > 200 && value < 140, "{art:?} at {scale}: {value} {alpha}");
+        }
+        // The nib's, the white arrow's, the wand's and the pipette's ends are opaque (line or fill).
+        for art in [Art::ArrowWhite, Art::Pen, Art::PenNew, Art::PenAdd, Art::PenDelete, Art::PenClose, Art::Wand, Art::Eyedropper] {
+            assert!(at(art, scale)[1] > 200, "{art:?} at {scale}");
+        }
+    }
+}
+
+#[test]
+fn roles_map_to_their_drawings_and_selection_modes_share_one() {
+    use crate::{state::Tool, tool_feedback::Badge};
+    let role = |tool, badge| Art::for_role(crate::cursor_pack::tool_asset(tool, badge, false, false));
+    for badge in [None, Some(Badge::Add), Some(Badge::Subtract), Some(Badge::Intersect)] {
+        assert_eq!(role(Tool::RectMarquee, badge), Some(Art::Cross));
+        assert_eq!(role(Tool::EllipseMarquee, badge), Some(Art::Cross));
+        assert_eq!(role(Tool::Lasso, badge), Some(Art::Lasso));
+        assert_eq!(role(Tool::PolygonLasso, badge), Some(Art::LassoPolygon));
+        assert_eq!(role(Tool::MagicWand, badge), Some(Art::Wand));
+        assert_eq!(role(Tool::ObjectSelection, badge), Some(Art::CrossRect));
+    }
+    for (tool, art) in [
+        (Tool::Move, Art::Move),
+        (Tool::Crop, Art::Crop),
+        (Tool::Eyedropper, Art::Eyedropper),
+        (Tool::Type, Art::Text),
+        (Tool::VerticalType, Art::TextVertical),
+        (Tool::Pen, Art::PenNew),
+        (Tool::PathSelection, Art::Arrow),
+        (Tool::DirectSelection, Art::ArrowWhite),
+        (Tool::Rectangle, Art::Cross),
+        (Tool::Hand, Art::Hand),
+        (Tool::RotateView, Art::Hand),
+        (Tool::Zoom, Art::ZoomIn),
+    ] {
+        assert_eq!(role(tool, None), Some(art), "{tool:?}");
+    }
+    assert_eq!(Art::for_role(crate::cursor_pack::tool_asset(Tool::Zoom, None, true, false)), Some(Art::ZoomOut));
+    assert_eq!(Art::for_role(crate::cursor_pack::tool_asset(Tool::Hand, None, false, true)), Some(Art::HandClosed));
+    // Tools without a drawing keep the crosshair; hostile ids are nothing.
+    for id in [crate::cursor_pack::tool_asset(Tool::Gradient, None, false, false), 0, 1, u32::MAX] {
+        assert_eq!(Art::for_role(id), None, "{id}");
+    }
+}
+
+#[test]
+fn a_role_with_a_drawing_is_an_os_bitmap_with_the_tools_stock_cursor_as_its_fallback() {
+    let ctx = egui::Context::default();
+    ctx.add_plugin(CursorLifecycle);
+    for (role, stock) in [(1450, CursorIcon::Crosshair), (1462, CursorIcon::Text), (1063, CursorIcon::Crosshair), (1017, CursorIcon::Crosshair)] {
+        let output = frame(&ctx, |ui| {
+            let icon = standard(ui.painter(), egui::pos2(40.0, 40.0), role, stock).expect("a drawing");
+            ui.ctx().set_cursor_icon(icon);
+        });
+        let image = output.platform_output.cursor_image.expect("carried by the OS on every platform");
+        assert_eq!(image.size, [32, 32]);
+        assert_eq!(output.platform_output.cursor_icon, stock, "role {role}");
+        assert!(output.shapes.iter().all(|s| matches!(s.shape, egui::Shape::Noop)), "not in the canvas draw list");
+    }
+    // No drawing: the caller keeps its stock cursor, and no stale bitmap is left behind.
+    let output = frame(&ctx, |ui| {
+        assert_eq!(standard(ui.painter(), egui::pos2(40.0, 40.0), 1009, CursorIcon::Crosshair), None);
+        ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+    });
+    assert!(output.platform_output.cursor_image.is_none());
+    assert_eq!(output.platform_output.cursor_icon, CursorIcon::Crosshair);
+    // A widget over the canvas still wins.
+    let panel = frame(&ctx, |ui| {
+        let icon = standard(ui.painter(), egui::pos2(40.0, 40.0), 1450, CursorIcon::Crosshair).unwrap();
+        ui.ctx().set_cursor_icon(icon);
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    });
+    assert!(panel.platform_output.cursor_image.is_none());
+    assert_eq!(panel.platform_output.cursor_icon, CursorIcon::PointingHand);
+}
+
+/// Each tool's drawing reaches the OS from the real canvas, with the tool's stock cursor behind it.
+#[test]
+#[cfg(target_os = "windows")]
+fn tools_show_their_drawings_on_the_canvas() {
+    use crate::Tool;
+    let mut h = harness();
+    let bitmap = |art: Art| rasterize(Shape::Art(art), 1.0).unwrap().rgba;
+    for (tool, art, stock) in [
+        (Tool::RectMarquee, Art::Cross, CursorIcon::Crosshair),
+        (Tool::Lasso, Art::Lasso, CursorIcon::Crosshair),
+        (Tool::PolygonLasso, Art::LassoPolygon, CursorIcon::Crosshair),
+        (Tool::MagicWand, Art::Wand, CursorIcon::Crosshair),
+        (Tool::ObjectSelection, Art::CrossRect, CursorIcon::Crosshair),
+        (Tool::Eyedropper, Art::Eyedropper, CursorIcon::Crosshair),
+        (Tool::Type, Art::Text, CursorIcon::Text),
+        (Tool::Pen, Art::PenNew, CursorIcon::Crosshair),
+        (Tool::PathSelection, Art::Arrow, CursorIcon::Default),
+        (Tool::DirectSelection, Art::ArrowWhite, CursorIcon::Default),
+        (Tool::Rectangle, Art::Cross, CursorIcon::Crosshair),
+        // No drawing of its own: the same crosshair, not Windows' inverting one.
+        (Tool::Gradient, Art::Cross, CursorIcon::Crosshair),
+        (Tool::Move, Art::Move, CursorIcon::Default),
+        (Tool::Hand, Art::Hand, CursorIcon::Grab),
+        (Tool::Zoom, Art::ZoomIn, CursorIcon::ZoomIn),
+    ] {
+        h.state_mut().ui.tool = tool;
+        h.run_steps(3);
+        let image = h.output().platform_output.cursor_image.clone().unwrap_or_else(|| panic!("{tool:?}: no OS bitmap"));
+        assert_eq!(image.size, [32, 32], "{tool:?}");
+        assert!(image.rgba == bitmap(art), "{tool:?} shows {art:?}");
+        assert_eq!(image.hotspot, art.hotspot().map(|h| h.floor() as u16), "{tool:?}");
+        assert_eq!(h.output().platform_output.cursor_icon, stock, "{tool:?}");
+    }
+    // Preferences > Cursors > Other Cursors > Precise: the crosshair for every tool but the views'.
+    h.state_mut().run("prefs.set", json!({"path": "cursors.other", "value": "precise"})).unwrap();
+    for tool in [Tool::Lasso, Tool::MagicWand, Tool::Eyedropper, Tool::Type, Tool::Move, Tool::Pen] {
+        h.state_mut().ui.tool = tool;
+        h.run_steps(3);
+        let image = h.output().platform_output.cursor_image.clone().unwrap_or_else(|| panic!("{tool:?}: no OS bitmap"));
+        assert!(image.rgba == bitmap(Art::Cross), "{tool:?}: precise");
+    }
+    h.state_mut().ui.tool = Tool::Zoom;
+    h.run_steps(3);
+    assert!(h.output().platform_output.cursor_image.clone().unwrap().rgba == bitmap(Art::ZoomIn), "the glass stays");
+}
+
+#[test]
+fn hand_cursor_is_an_os_bitmap_with_the_stock_grab_cursor_as_its_fallback() {
+    let ctx = egui::Context::default();
+    ctx.add_plugin(CursorLifecycle);
+    for (dragging, stock) in [(false, CursorIcon::Grab), (true, CursorIcon::Grabbing)] {
+        let output = frame(&ctx, |ui| {
+            let icon = hand(ui.painter(), egui::pos2(40.0, 40.0), dragging);
+            ui.ctx().set_cursor_icon(icon);
+        });
+        assert!(output.platform_output.cursor_image.is_some(), "not winit's four-way Grab arrow");
+        assert_eq!(output.platform_output.cursor_icon, stock);
+    }
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn hand_tool_shows_the_hand_on_the_canvas() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::Tool::Hand;
+    h.run_steps(2);
+    let open = h.output().platform_output.cursor_image.clone().expect("the Hand tool draws its own cursor");
+    assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Grab);
+    assert_eq!(open.size, [32, 32]);
+    // Pressed and dragged: the closed hand, all the way through the drag.
+    let p = h.state().last_canvas_rect.center();
+    let button = |pressed: bool, pos| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.event(button(true, p));
+    h.run_steps(1);
+    for i in 1..=6 {
+        h.event(Event::PointerMoved(p + vec2(8.0 * i as f32, 5.0 * i as f32)));
+        h.run_steps(1);
+        let closed = h.output().platform_output.cursor_image.clone().unwrap_or_else(|| panic!("step {i}: no hand while dragging: {:?}", h.output().platform_output.cursor_icon));
+        assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Grabbing, "step {i}");
+        assert_ne!(closed.rgba, open.rgba, "step {i}: the closed hand");
+    }
+    h.event(button(false, p + vec2(48.0, 30.0)));
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_image.clone().map(|c| c.rgba), Some(open.rgba), "open again once released");
+}
+
+#[test]
 #[cfg(target_os = "windows")]
 fn zoom_tool_and_the_temporary_zoom_keys_show_the_glass_on_the_canvas() {
     let key = |pressed: bool, modifiers: Modifiers| Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers };
@@ -388,7 +615,7 @@ fn zoom_tool_and_the_temporary_zoom_keys_show_the_glass_on_the_canvas() {
     h.run_steps(2);
     let plus = h.output().platform_output.cursor_image.clone().expect("the Zoom tool draws its own cursor");
     assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::ZoomIn);
-    assert_eq!(plus.size, [24, 24]);
+    assert_eq!(plus.size, [32, 32]);
 
     // Ctrl+Space over the Brush: the glass; with Alt as well, the minus.
     h.state_mut().ui.tool = crate::Tool::Brush;

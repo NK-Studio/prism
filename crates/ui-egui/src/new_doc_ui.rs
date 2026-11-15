@@ -12,16 +12,30 @@ use prism_engine::document_preset_cmds::{DocumentPreset, DocumentSettings};
 use crate::theme::Tokens;
 use crate::widgets;
 
-/// The dialog's content width (Photoshop's New Document is about this wide).
-pub const WIDTH: f32 = 1020.0;
-/// Width of the preset grid on the left.
-const GRID_W: f32 = 704.0;
-/// Width of Preset Details on the right.
-const DETAILS_W: f32 = 270.0;
-/// Height of the scrolling preset grid.
-const GRID_H: f32 = 540.0;
 /// A preset card (four to a row).
-const CARD: egui::Vec2 = vec2(170.0, 176.0);
+const CARD: egui::Vec2 = vec2(158.0, 172.0);
+/// The gap between cards, across and down.
+const CARD_GAP: f32 = 8.0;
+/// Padding inside the dark grid ground, on every side.
+const GRID_PAD: f32 = 20.0;
+/// Room kept right of the cards for the grid's scrollbar, so it never covers a card.
+const GRID_BAR: f32 = 12.0;
+/// Width of the preset grid on the left: four cards, their gaps, the padding and the scrollbar.
+const GRID_W: f32 = 2.0 * GRID_PAD + 4.0 * CARD.x + 3.0 * CARD_GAP + GRID_BAR;
+/// The grid's heading row ("BLANK DOCUMENT PRESETS (14)") and the space under it.
+const HEADING_H: f32 = 26.0;
+/// Height of the scrolling preset grid: the heading and three whole rows of cards, so the
+/// view ends between rows instead of cutting a card's text.
+const GRID_H: f32 = HEADING_H + 3.0 * CARD.y + 2.0 * CARD_GAP;
+/// Between the grid and Preset Details.
+const COLUMN_GAP: f32 = 24.0;
+/// Width of Preset Details on the right.
+const DETAILS_W: f32 = 276.0;
+/// The horizontal gap between controls in a Preset Details row.
+const FIELD_GAP: f32 = 6.0;
+/// The dialog's content width: the grid, the gap and Preset Details, so the details' right edge
+/// lines up with Create / Close.
+pub const WIDTH: f32 = GRID_W + COLUMN_GAP + DETAILS_W;
 
 /// A blank-document preset: (name, width, height, ppi, unit). Width and height are in `unit`
 /// (`px`, `in`, `cm`, `mm`), as Photoshop shows them ("8.5 x 11 in @ 300 ppi").
@@ -620,20 +634,26 @@ fn scales(presets: &[Preset]) -> Vec<f32> {
 /// A row-major grid of cards, four to a row.
 fn grid<T>(ui: &mut egui::Ui, items: &[T], mut each: impl FnMut(&mut egui::Ui, usize, &T)) {
     for (row, chunk) in items.chunks(4).enumerate() {
+        if row > 0 {
+            ui.add_space(CARD_GAP);
+        }
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().item_spacing.x = CARD_GAP;
             for (k, item) in chunk.iter().enumerate() {
                 each(ui, row * 4 + k, item);
             }
         });
-        ui.add_space(4.0);
     }
 }
 
+/// The grid's heading, in a row of fixed height so three rows of cards fill the view exactly.
 fn heading(ui: &mut egui::Ui, text: &str, n: usize) {
     let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(crate::i18n::fmt(text, &[("n", &n.to_string())])).size(12.0).color(t.text_dim).strong());
-    ui.add_space(8.0);
+    let label = RichText::new(crate::i18n::fmt(text, &[("n", &n.to_string())])).size(12.0).color(t.text_dim).strong();
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), HEADING_H), egui::Layout::left_to_right(egui::Align::Min), |ui| {
+        ui.set_min_height(HEADING_H);
+        ui.label(label);
+    });
 }
 
 fn recent_cards(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
@@ -847,7 +867,7 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
     } else {
         ui.horizontal(|ui| {
             let mut name = get_s(f, "name", tl!("Untitled-1"));
-            let edit = egui::TextEdit::singleline(&mut name).desired_width(DETAILS_W - 40.0).font(egui::FontId::proportional(14.0)).frame(egui::Frame::NONE);
+            let edit = egui::TextEdit::singleline(&mut name).desired_width(DETAILS_W - 26.0 - 2.0 * FIELD_GAP).font(egui::FontId::proportional(14.0)).frame(egui::Frame::NONE);
             let r = ui.add(edit);
             ui.painter().line_segment([r.rect.left_bottom() + vec2(0.0, 3.0), r.rect.right_bottom() + vec2(0.0, 3.0)], Stroke::new(1.0, t.field_border));
             if r.changed() {
@@ -859,12 +879,12 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
                 f.remove("__presetError");
             }
         });
-        ui.add_space(12.0);
+        ui.add_space(16.0);
     }
     let ppi = get_f(f, "resolution", 72.0);
     let mut unit = get_s(f, "__unit", "px");
     let field_w = 96.0;
-    let menu_w = DETAILS_W - field_w - 12.0;
+    let menu_w = DETAILS_W - field_w - FIELD_GAP;
     small_label(ui, tl!("Width"));
     ui.horizontal(|ui| {
         let mut w = shown_size(f, "width", 1920.0, &unit, ppi);
@@ -878,7 +898,7 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             f.remove("__recent");
         }
     });
-    ui.add_space(4.0);
+    ui.add_space(10.0);
     ui.horizontal(|ui| {
         // Left-aligned column heads over the field, the Orientation buttons and the checkbox.
         let head = |ui: &mut egui::Ui, text: &str, w: f32| {
@@ -911,7 +931,7 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             f.remove("__recent");
         }
     });
-    ui.add_space(4.0);
+    ui.add_space(10.0);
     small_label(ui, tl!("Resolution"));
     ui.horizontal(|ui| {
         let per_cm = get_s(f, "__resUnit", "in") == "cm";
@@ -926,7 +946,7 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             f.remove("__recent");
         }
     });
-    ui.add_space(4.0);
+    ui.add_space(10.0);
     small_label(ui, tl!("Color Mode"));
     ui.horizontal(|ui| {
         let mut mode = get_s(f, "mode", "rgb");
@@ -936,7 +956,7 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             ("cmyk".to_string(), tl!("CMYK Color")),
             ("lab".to_string(), tl!("Lab Color")),
         ];
-        if widgets::dropdown(ui, "nd-mode", &mut mode, &modes, DETAILS_W - 112.0) {
+        if widgets::dropdown(ui, "nd-mode", &mut mode, &modes, DETAILS_W - 100.0 - FIELD_GAP) {
             f.insert("mode".into(), json!(mode));
             // A profile of the old mode's colour space can't tag the new one.
             let p = get_s(f, "profile", "none");
@@ -956,7 +976,7 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             f.remove("__recent");
         }
     });
-    ui.add_space(4.0);
+    ui.add_space(10.0);
     small_label(ui, tl!("Background Contents"));
     ui.horizontal(|ui| {
         let mut bg = get_s(f, "background", "white");
@@ -966,7 +986,7 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             ("backgroundColor".to_string(), tl!("Background Color")),
             ("transparent".to_string(), tl!("Transparent")),
         ];
-        if widgets::dropdown(ui, "nd-bg", &mut bg, &opts, DETAILS_W - 44.0) {
+        if widgets::dropdown(ui, "nd-bg", &mut bg, &opts, DETAILS_W - 32.0 - FIELD_GAP) {
             f.insert("background".into(), json!(bg));
             f.remove("__savedPreset");
             f.remove("__recent");
@@ -976,7 +996,7 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
         }
         background_swatch(app, ui, f);
     });
-    ui.add_space(8.0);
+    ui.add_space(16.0);
     // Advanced Options: open by default, like Photoshop.
     let open = f.get("__advanced").and_then(Value::as_bool).unwrap_or(true);
     let header = ui.add(
@@ -986,7 +1006,7 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
         f.insert("__advanced".into(), json!(!open));
     }
     if open {
-        ui.add_space(6.0);
+        ui.add_space(10.0);
         small_label(ui, tl!("Color Profile"));
         let mode = get_s(f, "mode", "rgb");
         let opts = profile_options(app, &mode);
@@ -1000,7 +1020,7 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             f.remove("__savedPreset");
             f.remove("__recent");
         }
-        ui.add_space(4.0);
+        ui.add_space(10.0);
         small_label(ui, tl!("Pixel Aspect Ratio"));
         // Prism's pixels are always square.
         let mut par = "square".to_string();
@@ -1086,9 +1106,11 @@ pub fn body(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         // Left: the cards, on a darker ground.
-        let (left, _) = ui.allocate_exact_size(vec2(GRID_W, GRID_H + 24.0), Sense::hover());
-        ui.painter().rect_filled(left, 0.0, t.canvas);
-        let mut grid_ui = ui.new_child(egui::UiBuilder::new().max_rect(left.shrink2(vec2(16.0, 14.0))).layout(egui::Layout::top_down(egui::Align::Min)));
+        let (left, _) = ui.allocate_exact_size(vec2(GRID_W, GRID_H + 2.0 * GRID_PAD), Sense::hover());
+        ui.painter().rect_filled(left, t.radius, t.canvas);
+        // The cards keep GRID_PAD on every side; the scrollbar sits in the right padding.
+        let inner = Rect::from_min_max(left.min + vec2(GRID_PAD, GRID_PAD), left.max - vec2(GRID_PAD - GRID_BAR, GRID_PAD));
+        let mut grid_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)));
         egui::ScrollArea::vertical().id_salt(("nd-grid", cat.as_str())).max_height(GRID_H).auto_shrink([false, false]).show(&mut grid_ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             match cat.as_str() {
@@ -1100,17 +1122,20 @@ pub fn body(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                 }
             }
         });
-        // Right: Preset Details (nothing on an empty Saved tab, like Photoshop).
-        ui.add_space(18.0);
+        // Right: Preset Details (nothing on an empty Saved tab, like Photoshop), its heading level
+        // with the grid's.
+        ui.add_space(COLUMN_GAP);
         ui.vertical(|ui| {
             ui.set_width(DETAILS_W);
-            ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
-            ui.add_space(14.0);
+            ui.spacing_mut().item_spacing = vec2(FIELD_GAP, 4.0);
+            ui.add_space(GRID_PAD);
             if can_create(f) {
                 details(app, ui, f);
             }
         });
     });
+    // Create / Close sit clear of the grid, as in Photoshop.
+    ui.add_space(10.0);
 }
 
 #[cfg(test)]

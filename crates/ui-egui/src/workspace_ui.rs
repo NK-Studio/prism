@@ -491,6 +491,25 @@ mod tests {
     }
 
     #[test]
+    fn clip_studio_opens_tool_sliders_and_photoshop_presets_leave_them_out() {
+        let (mut app, ctx) = app();
+        let inv = |app: &mut PrismApp, id: &str, p: Value| crate::menus::invoke(app, &ctx, id, p);
+        // The Clip Studio layout opens Tool Sliders (and Reset brings it back); Essentials doesn't.
+        assert!(!app.ui.panels.tool_sliders);
+        inv(&mut app, "window.workspace.select", json!({"name": CLIP_STUDIO})).unwrap();
+        assert!(app.ui.panels.tool_sliders);
+        app.ui.panels.tool_sliders = false;
+        inv(&mut app, "window.workspace.resetWorkspace", json!({})).unwrap();
+        assert!(app.ui.panels.tool_sliders);
+        inv(&mut app, "window.workspace.essentials", json!({})).unwrap();
+        assert!(!app.ui.panels.tool_sliders);
+        // Reset Essentials takes it out again after it was opened from the Window menu.
+        app.ui.panels.tool_sliders = true;
+        inv(&mut app, "window.workspace.resetWorkspace", json!({})).unwrap();
+        assert!(!app.ui.panels.tool_sliders);
+    }
+
+    #[test]
     fn new_select_delete_workspaces() {
         let (mut app, ctx) = app();
         let inv = |app: &mut PrismApp, id: &str, p: Value| crate::menus::invoke(app, &ctx, id, p);
