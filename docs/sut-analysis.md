@@ -985,6 +985,32 @@ CLIP STUDIO's widths read as brush sizes and compared with offline replays of th
   at x 564) and matches after that: CLIP STUDIO's start burst (Stroke start), delayed by the
   stabilizer. Not modelled.
 
+**Pressure and velocity apart (measured the same day).** A copy of 밀리펜 (deleted afterwards,
+밀리펜 itself untouched) with Stabilization 15 and its size effector on velocity only, then on
+pressure only; the same five strokes, sizes read through the width as above:
+
+| Velocity only, x | 788 | 812 | 860 | 980 | 1100 | 1172 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.5 → 8 px/ms, CLIP STUDIO | 7.33 | 7.25 | 7.25 | 7.25 | 7.25 | 7.25 |
+| same, Prism | 7.97 | 7.86 | 7.63 | 7.08 | 6.67 | 6.69 |
+
+- With velocity only the line keeps one width from the pen-up point (x ≈ 812, the same place in
+  both apps) to its end, in every stroke: the catch-up adds no speed, and the velocity input
+  stays at its value when the pen lifted. Prism's catch-up samples carry averaged times and read
+  the stroke's own speed (thinning on to 6.67).
+- With pressure only the two apps agree to 0.1 px on average (0.094 px), including the pen-up
+  drain: the window (15) and the release at pressure 0 are right. CLIP STUDIO starts thinning
+  about one sample (8–12 px) sooner after pen-up.
+- What differs is the speed before the pen lifts in the slow → fast stroke: CLIP STUDIO reads
+  0.69 at the lift, Prism 0.54. A uniform 15-sample window ramps 9/15 of the way in the 9 fast
+  samples; CLIP STUDIO about 0.79 of the way, as a 12-sample window would, yet its lift point and
+  its pressure drain match 15. The 4 px/ms stroke also reads faster stabilized (0.48) than
+  unstabilized (0.42), likely CLIP STUDIO's start burst carried by the averaged times. Not
+  explained.
+- Tried in the app: freezing Prism's velocity at the lift (pen-up samples at the lift's time)
+  makes it worse while the ramp differs (velocity only 0.154 → 0.175 px, 밀리펜 0.178 → 0.205),
+  because Prism lifts at a lower speed. Not shipped; it belongs with a fix for the ramp.
+
 ## Effector tilt response (2026-10-16)
 
 Same executable. Existing direct Ghidra outputs (`evidence/ghidra-effector.txt`,
