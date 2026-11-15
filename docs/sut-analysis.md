@@ -1043,6 +1043,32 @@ Still open: with 밀리펜 the 4 px/ms end reads 0.34 → 0.40 (CLIP STUDIO drai
 one sample sooner after pen-up, and its 4 px/ms speed reads 0.48 stabilized against 0.42
 unstabilized). Unstabilized strokes are unchanged.
 
+**The 4 px/ms end (same day, no change).** Sizes along the 4 px/ms stroke (25 samples) with
+each brush, CLIP STUDIO / Prism:
+
+| x | 540–680 | 756 | 852 | 972 | 1020 | 1092 | 1140 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| velocity only | 8.34 / 8.29 | 8.26 / 8.28 | 8.17 / 8.29 | 8.05 / 8.28 | 8.05 / 8.28 | 8.05 / 8.28 | 8.05 / 8.28 |
+| pressure only | 10.09 / 10.03 | 10.09 / 10.03 | 10.09 / 10.03 | 9.99 / 10.03 | 9.26 / 9.45 | 8.65 / 8.74 | 8.33 / 8.29 |
+| 밀리펜 | 8.35 / 8.29 | 8.25 / 8.30 | 8.17 / 8.29 | 8.02 / 8.30 | 7.44 / 7.91 | 6.84 / 7.30 | 6.65 / 6.94 |
+
+- Velocity: after the start burst CLIP STUDIO reads the pen's speed (8.34, as unstabilized
+  4 px/ms strokes do to their end), then speeds up slowly from x ≈ 700 to the lift (0.415 → 0.49)
+  and holds that. x ≈ 700 is where the window has grown to 8.5 and starts growing by less than
+  half a sample per input, but no rule tried reproduces the rise: averaging the raw speeds
+  (uniform or weighted) gives a constant for a constant pen; the path's speed with raw times
+  starts at three quarters and rises only to the pen's; a velocity window always as long as the
+  level only lowers the start. Unstabilized strokes of 20–25 samples stay flat, so it is the
+  stabilizer, not the stroke's length.
+- Pressure: after pen-up CLIP STUDIO drops sooner and then more slowly (9.26 against 9.45 at
+  x 1020, 8.65 against 8.74 at 1092) and ends the same. Averaging the pressure with the
+  velocity's weights, `(level − k) / level`, reproduces that on the 4 px/ms, 8 px/ms and slow
+  strokes (replay: 0.132 → 0.082, 0.201 → 0.102, 0.162 → 0.144 px) but doubles the slow → fast
+  end (0.100 → 0.220), where CLIP STUDIO drains less than either model. Not shipped.
+- On 밀리펜 the two add up: 0.07 of velocity input (about 0.3 px at this size) and the earlier
+  drop give the 0.40 px. Both need a stroke that separates them better, such as a 4 px/ms stroke
+  twice as long (the window full well before the lift) and a fast stroke that lifts at once.
+
 ## Effector tilt response (2026-10-16)
 
 Same executable. Existing direct Ghidra outputs (`evidence/ghidra-effector.txt`,
