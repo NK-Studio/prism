@@ -112,7 +112,8 @@ fn csp_speed_scales_by_on_screen_speed() {
     use crate::brush::CspSpeed;
     let falling = PressureCurve::new(vec![[0.0, 1.0], [1.0, 0.0]]).unwrap();
     let v = CspSpeed { minimum: 0.6, curve: Some(falling) };
-    for (speed, expected) in [(0.0, 1.0), (2.0, 0.9), (4.0, 0.8), (8.0, 0.6), (50.0, 0.6), (-3.0, 1.0)] {
+    let full = crate::brush::CSP_SPEED_FULL;
+    for (speed, expected) in [(0.0, 1.0), (0.2 * full, 0.92), (0.5 * full, 0.8), (full, 0.6), (50.0, 0.6), (-3.0, 1.0)] {
         assert!((v.multiplier(speed) - expected).abs() < 1e-6, "{speed}: {}", v.multiplier(speed));
     }
     // Hostile values stay within 0..1.
@@ -134,8 +135,9 @@ fn csp_speed_scales_by_on_screen_speed() {
         dabs.get(dabs.len() / 2).map(|d| 2.0 * d.radius).unwrap()
     };
     assert!((diameter(0.0, 1.0) - 20.0).abs() < 0.1, "{}", diameter(0.0, 1.0));
-    assert!((diameter(4.0, 1.0) - 16.0).abs() < 0.1, "{}", diameter(4.0, 1.0));
-    assert!((diameter(4.0, 2.0) - 12.0).abs() < 0.1, "twice the zoom, twice the on-screen speed: {}", diameter(4.0, 2.0));
+    let half = f64::from(full) / 2.0;
+    assert!((diameter(half, 1.0) - 16.0).abs() < 0.1, "{}", diameter(half, 1.0));
+    assert!((diameter(half, 2.0) - 12.0).abs() < 0.1, "twice the zoom, twice the on-screen speed: {}", diameter(half, 2.0));
 }
 
 /// CLIP STUDIO's velocity input at an input point is the mean speed of the two segments before
@@ -182,11 +184,8 @@ fn csp_speed_is_averaged_over_two_segments_and_interpolated() {
     // The first fast point averages the slow segment with the fast one; the next reaches 8.
     assert!((at(80.0) - 4.25).abs() < 1e-6, "{seen:?}");
     assert!((at(144.0) - 8.0).abs() < 1e-6, "{seen:?}");
-    // Halfway along the first fast segment: past halfway, 1 − 0.5^1.5 of the change (CLIP STUDIO
-    // rises faster just after an input point).
-    let eased = 1.0 - 0.5f32.powf(1.5);
-    assert!((at(48.0) - (0.5 + (4.25 - 0.5) * eased)).abs() < 1e-5, "{seen:?}");
-    assert!(at(32.0) > 0.5 + (4.25 - 0.5) * 0.25 && at(64.0) < 4.25, "{seen:?}");
+    // Halfway along the first fast segment: halfway between the two ends.
+    assert!((at(48.0) - (0.5 + 4.25) / 2.0).abs() < 1e-6, "{seen:?}");
 }
 
 #[test]

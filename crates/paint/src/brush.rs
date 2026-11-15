@@ -132,8 +132,9 @@ impl Dynamic {
 }
 
 /// On-screen speed, in screen pixels per millisecond, at which CSP's velocity input reaches 1
-/// (measured, docs/sut-analysis.md › Effector velocity input: linear from 0).
-pub const CSP_SPEED_FULL: f32 = 8.0;
+/// (measured, docs/sut-analysis.md › Effector velocity input › Line width to brush size: linear
+/// from 0, 0.5 / 2 / 4 / 8 / 16 px/ms read 0.04 / 0.25 / 0.42 / 0.86 / 1).
+pub const CSP_SPEED_FULL: f32 = 9.3;
 
 /// CSP's velocity response (effector control 0x40): `minimum + (1 − minimum) · curve(v)` with `v`
 /// the on-screen speed over [`CSP_SPEED_FULL`], clamped to 0..1. The stored curves fall from 1 at

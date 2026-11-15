@@ -794,8 +794,10 @@ of each stroke, velocity input `v = (1 − width ratio) / 0.4`:
   pixels, not canvas pixels (canvas pixels would have put the 57.4 % row near 0.9 at 4 px/ms).
 - Twice the distance per sample at twice the interval gives the same input: it is a speed in time,
   not a distance per sample.
-- A line through the origin fits all 16 points with `v = speed / 7.8` (RMS 0.05); Prism uses
-  `speed / 8` (`CSP_SPEED_FULL`, RMS 0.052), clamped to 0..1.
+- A line through the origin fits all 16 points with `v = speed / 7.8` (RMS 0.05); Prism used
+  `speed / 8` (`CSP_SPEED_FULL`, RMS 0.052), clamped to 0..1. Superseded: `v` here reads the
+  width as linear in the brush size, which it is not; read through the size, full speed is
+  9.3 px/ms (see Line width to brush size below).
 
 **Prism.** `Dynamic.cspSpeed { minimum, curve }` multiplies the value by
 `minimum + (1 − minimum) · curve(v)`, like `cspTilt`. `PathWalker` gives each step its segment's
@@ -903,7 +905,8 @@ at the down position). `v` from the width against a 0.5 px/ms stroke, at the fir
   (a stall when the stroke starts, then a burst), not a rule of the effector; Prism does not
   reproduce it. Inference, not traced.
 - Within a segment CLIP STUDIO's value rises a little faster just after a point than a straight
-  line (about +0.1 in the first 8–16 px of a stroke); see Between input points.
+  line (about +0.1 in the first 8–16 px of a stroke); with `v` read through the brush size this
+  is the width's curve, not the input (see Between input points: withdrawn).
 
 Mean difference from CLIP STUDIO over 34 points of each stroke (`v` capped at 1): the first seven
 strokes 0.076 before, 0.048 after (resting 40 ms then 8 px/ms 0.184 → 0.031, 16 ms samples
@@ -911,34 +914,54 @@ strokes 0.076 before, 0.048 after (resting 40 ms then 8 px/ms 0.184 → 0.031, 1
 averaged, 0.043 with distance over time (16 ms samples 0.119 → 0.042–0.044). The stabilized
 strokes above are unchanged.
 
-**Between input points (measured the same day).** Along a segment CLIP STUDIO's value moves
-faster just after the first point than a straight line between the two points' values: after
-80 ms of rest and then 8 px/ms, the first segment (0 → 0.51) reads 0.32 halfway (a line: 0.25)
-and the second (0.51 → 0.96) 0.82 halfway (a line: 0.74). Fitted against the 19 measured strokes
-(the 14 stroke starts and the five speed steps of Smoothing), with the model's values compared
-with CLIP STUDIO directly:
+**Between input points: withdrawn.** A fit of the shape between two input points (with `v`
+read from the width as above) favoured `1 − (1 − f)^1.5` over a straight line (19 strokes:
+0.040 → 0.032), and Prism shipped it briefly. Read through the brush size (next section) the
+straight line fits best (the 10 strokes without the start burst: 0.021 for a line, 0.023 for
+`^1.5`); the faster rise just after a point was the width's own curve, so Prism interpolates
+linearly again.
 
-| Weight of the change at fraction `f` | Mean difference, 19 strokes | 10 without the start burst (5 rested starts, 5 steps) | 5 speed steps |
+**Line width to brush size (measured the same day).** Strokes of one size at a time, made with
+pressure 1 or 0.02 and 0.5, 4 and 16 px/ms (밀리펜, 100 % view, the tool unchanged), and lone
+taps. Width (coverage summed down a column) in pixels:
+
+| Stroke | Brush size | CLIP STUDIO | Prism before |
 | --- | ---: | ---: | ---: |
-| `f` (a straight line) | 0.040 | 0.026 | 0.017 |
-| `1 − (1 − f)^1.25` | 0.034 | 0.022 | 0.016 |
-| `1 − (1 − f)^1.5` | 0.032 | 0.022 | 0.017 |
-| `1 − (1 − f)^1.75` | 0.032 | 0.023 | 0.019 |
+| pressure 1, 0.5 px/ms | 9.8 | 8.64 | 8.56 |
+| pressure 0.02, 0.5 px/ms | 7.8 | 6.60 | 6.54 |
+| pressure 1, 16 px/ms | 6.0 | 4.64 | 4.57 |
+| pressure 0.02, 16 px/ms | 4.8 | 3.28 | 3.26 |
+| pressure 1, 4 px/ms | | 7.15 | 6.83 |
+| pressure 0.02, 4 px/ms | | 5.33 | 5.11 |
 
-Prism uses `1 − (1 − f)^1.5` (`CSP_SPEED_EASE`). The shape is fitted, not traced. In the app
-the same strokes compare as follows, each app's widths scaled so that its 0.5 px/ms line reads
-0.06 and its full-speed line 1:
+- At the same brush size the two apps draw the same width (within 0.08 px down to 4.8 px), so
+  Prism's thin fast lines were not a rendering difference. Only the 4 px/ms rows differ: Prism
+  read a higher velocity input there.
+- The width is not linear in the size: it runs about 1.2–1.4 px below it (9.8 → 8.6, 6 → 4.6,
+  4.8 → 3.3), so `v = (1 − width ratio) / 0.4` overstates fast strokes (16 px/ms read 1.15).
+  Every `v` in the tables above is that proxy.
+- Read through the size instead (a quadratic fit of width against size from Prism's own
+  strokes of known size, RMS 0.04 px), CLIP STUDIO's velocity input is 0.04 / 0.25 / 0.42 / 0.86
+  / 1.0 at 0.5 / 2 / 4 / 8 / 16 px/ms: linear from 0 and full at 9.3 px/ms (through the origin;
+  2 px/ms is 0.035 above it). `CSP_SPEED_FULL` is 9.3 (was 8).
+- Re-checked on true values: distance over time with an 8 ms rest still fits the stroke starts
+  better than the mean of speeds (19 strokes: 0.030 against 0.039).
 
-| Strokes | Straight line | Eased |
-| --- | ---: | ---: |
-| 14 stroke starts | 0.045 | 0.038 |
-| 5 speed steps | 0.023 | 0.023 |
-| all 19 | 0.039 | 0.034 |
+The same strokes in the app, mean width difference from CLIP STUDIO per column (px):
 
-Unscaled, the app moves less (all 19: 0.038 → 0.039; speed steps 0.029 → 0.036). Prism's line
-at full speed is about 8 % thinner than CLIP STUDIO's (`v` 1.15 against 1.02 at a 6 px width),
-so a value that rises sooner also thins sooner. That width difference is separate from the
-velocity input and still open.
+| Strokes | Full at 8, eased | Full at 9.5 | Full at 9.3 |
+| --- | ---: | ---: | ---: |
+| 7 confirming starts | 0.242 | 0.212 | 0.177 |
+| 7 first starts | 0.336 | 0.239 | 0.200 |
+| 5 speed steps | 0.310 | 0.115 | 0.111 |
+| 6 single-size strokes | 0.216 | 0.075 | 0.078 |
+| 5 stabilized strokes | 0.242 | 0.254 | 0.227 |
+| all 30 | 0.270 | 0.182 | 0.160 |
+
+Still open: the stabilized ramps and pen-up catch-up read slower in Prism than in CLIP STUDIO on
+true values (slow → fast at x 728: 0.43 against 0.56; 4 px/ms at x 1100: 0.70 against 0.80); the
+stabilizer analysis above was done
+with the width proxy.
 
 ## Effector tilt response (2026-10-16)
 

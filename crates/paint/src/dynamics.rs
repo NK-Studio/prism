@@ -181,11 +181,6 @@ pub struct StepInput {
 /// docs/sut-analysis.md › Effector velocity input › Stroke start).
 pub const CSP_REST_MS: f64 = 8.0;
 
-/// Between two input points CLIP STUDIO's velocity input moves faster just after the first point:
-/// a step at fraction `f` of the segment gets `1 − (1 − f)^1.5` of the change (fitted to 19
-/// measured strokes, docs/sut-analysis.md › Effector velocity input › Between input points).
-pub const CSP_SPEED_EASE: f32 = 1.5;
-
 /// Walks a polyline and emits steps, each as far from the last as the step's own callback says (the
 /// spacing of the dab it laid), plus airbrush steps in time.
 #[derive(Clone, Debug)]
@@ -282,7 +277,7 @@ impl PathWalker {
             initial_direction: self.initial_dir.unwrap_or(self.dir),
             step: self.step,
             distance,
-            speed: self.seg_from + (self.seg_to - self.seg_from) * (1.0 - (1.0 - f).powf(CSP_SPEED_EASE)),
+            speed: self.seg_from + (self.seg_to - self.seg_from) * f,
         };
         self.step += 1;
         out(s)

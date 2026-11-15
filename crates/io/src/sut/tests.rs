@@ -556,7 +556,8 @@ fn velocity_effector_control_maps_to_a_csp_speed_response() {
     let speed = dynamics.size.csp_speed.clone().expect("velocity response");
     assert!((speed.minimum - 0.6).abs() < 1e-6);
     assert!((speed.multiplier(0.0) - 1.0).abs() < 1e-6, "at rest");
-    assert!((speed.multiplier(4.0) - 0.8).abs() < 1e-6, "half of full speed");
+    let half = prism_paint::brush::CSP_SPEED_FULL / 2.0;
+    assert!((speed.multiplier(half) - 0.8).abs() < 1e-6, "half of full speed");
     assert!((speed.multiplier(100.0) - 0.6).abs() < 1e-6, "past full speed");
     assert!(warnings.is_empty(), "{warnings:?}");
     // Velocity alone is a dynamic without pen pressure.
