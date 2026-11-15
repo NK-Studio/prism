@@ -2,7 +2,7 @@
 //! and limits are recorded in docs/sut-analysis.md.
 //!
 //! Each raw input sample enters a history; the brush follows the average of the newest `W`
-//! samples (position and pressure), where `W` is fractional: the next older sample contributes
+//! samples (position, pressure and time), where `W` is fractional: the next older sample contributes
 //! with the remaining weight. Missing history, and samples older than one second, are replaced by
 //! the oldest sample still used. `W` starts small at pen-down and grows towards the
 //! stabilization level; with Adjust by speed it instead follows the pointer speed, shrinking for
@@ -138,13 +138,19 @@ impl Stabilizer {
     /// Pen-up has two phases: initial repeats, then a bounded release-pressure drain until
     /// the filtered motion settles or pressure reaches zero. Omitting the second phase can
     /// leave a short flick halfway to the cursor when its window is smaller than stickiness.
+    ///
+    /// After a moving stroke the repeats are the pen's release sample: the last position and
+    /// time with pressure 0. A pressure-sized line thins over the catch-up, and with the time
+    /// averaged the catch-up keeps the stroke's speed (CLIP STUDIO with a synthetic pen,
+    /// docs/sut-analysis.md › Effector velocity input).
     pub fn finish(&mut self, out: &mut Vec<StrokePoint>) {
         let Some(last) = self.history.back().copied().filter(|_| self.active() && self.drawing) else { return };
         self.releasing = true;
         let moved = self.history.iter().any(|p| p.x != last.x || p.y != last.y);
         let repeats = (self.window.floor() as i64 - i64::from(self.cfg.stickiness)).clamp(0, i64::from(MAX_LEVEL));
+        let release = if moved { StrokePoint { pressure: 0.0, ..last } } else { last };
         for _ in 0..repeats {
-            let p = self.push(last);
+            let p = self.push(release);
             out.push(p);
         }
         // A stationary click retains its contact pressure and dot size.
@@ -253,12 +259,14 @@ impl Stabilizer {
         }
     }
 
-    /// Fractional moving average over the newest `window` samples.
+    /// Fractional moving average over the newest `window` samples. Time is averaged with the
+    /// same weights, so the brush's speed is its own: steady input keeps its speed while the
+    /// window grows, and the pen-up catch-up moves in time instead of all at once.
     fn average(&self, p: StrokePoint) -> StrokePoint {
         let w = (self.window * self.rate_scale).max(1.0);
         let whole = w.floor() as usize;
         let n = self.history.len();
-        let (mut x, mut y, mut pressure) = (0.0f64, 0.0f64, 0.0f64);
+        let (mut x, mut y, mut pressure, mut time) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
         let mut used = p;
         let mut exhausted = false;
         // The i-th newest sample, if it exists and is recent enough.
@@ -273,6 +281,7 @@ impl Stabilizer {
             x += used.x;
             y += used.y;
             pressure += f64::from(used.pressure);
+            time += used.time;
         }
         let frac = w - whole as f64;
         if frac > 0.0 {
@@ -280,8 +289,9 @@ impl Stabilizer {
             x += older.x * frac;
             y += older.y * frac;
             pressure += f64::from(older.pressure) * frac;
+            time += older.time * frac;
         }
-        StrokePoint { x: x / w, y: y / w, pressure: (pressure / w) as f32, ..p }
+        StrokePoint { x: x / w, y: y / w, pressure: (pressure / w) as f32, time: time / w, ..p }
     }
 }
 

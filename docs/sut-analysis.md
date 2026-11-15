@@ -834,8 +834,46 @@ Prism's `PathWalker` keeps the last segment speed and the input at the last poin
 gets the mean of its segment's speed and the previous one, and a step at fraction `f` of a segment
 gets `from + (to − from)·f`. A move without timestamps reuses the previous segment's speed. Prism's
 values above 1 at full speed are the width difference already seen at constant speed (Prism's lines
-end slightly thinner at small sizes), not the speed. Not measured: a stabilizer's catch-up samples,
-and whether the mean is of speeds or of distance over time when the sample intervals differ.
+end slightly thinner at small sizes), not the speed. Not measured: whether the mean is of speeds or
+of distance over time when the sample intervals differ.
+
+**With stabilization (measured the same day).** 밀리펜 with Stabilization 15 (no Adjust by speed,
+stickiness 0), 100 % view, five strokes from x 360: 4 px/ms and 8 px/ms throughout, 0.5 then
+8 px/ms (switch at x 600), 8 then 0.5 px/ms (switch at x 936), and 0.5 px/ms. Each raw stroke ends
+at x 1128–1176 and its pen-up frame (pressure 0) follows 8 ms later. `v` from the width as above,
+which also counts thinning from pressure (pressure minimum 80 %):
+
+| Stroke, x | CLIP STUDIO | Prism before | Prism after |
+| --- | --- | --- | --- |
+| 4 px/ms, 600 / 900 / 1050 / 1100 / 1150 | 0.40 / 0.48 / 0.77 / 0.88 / 0.95 | 0.38 / 0.42 / 0.43 / 0.43 / 0.43 | 0.51 / 0.51 / 0.71 / 0.82 / 0.95 |
+| 8 px/ms, 480 / 600 / 900 / 1050 / 1120 | 0.95 / 1.07 / 0.96 / 1.26 / 1.36 | 0.75 / 0.83 / 0.81 / 0.84 / 0.95 | 1.09 / 1.10 / 1.10 / 1.37 / 1.45 |
+| 0.5 → 8, 664 / 800 / 900 / 1000 | 0.40 / 0.77 / 0.91 / 0.98 | 0.36 / 0.67 / 0.73 / 0.73 | 0.37 / 0.66 / 0.95 / 1.24 |
+| 8 → 0.5, 700 / 900 / 936 / 1170 | 0.98 / 0.35 / 0.23 / 0.43 | 0.80 / 0.34 / 0.17 / 0.01 | 1.11 / 0.46 / 0.24 / 0.41 |
+| 0.5 px/ms, 1140 / 1150 / 1158 | 0.23 / 0.37 / 0.56 | 0.00 / 0.00 / 0.13 | 0.13 / 0.33 / 0.53 |
+
+Mean difference from CLIP STUDIO over all 42 points (`v` capped at 1): 0.159 before, 0.041 after.
+
+- The input is the speed of the stabilized brush, not of the pen: the 8 → 0.5 stroke slows before
+  the raw switch reaches the brush (0.35 at x 900), as the averaged position does.
+- At a steady speed the brush keeps the pen's speed even while the window grows (8 px/ms reads
+  about 1 throughout). Averaging the position alone moves it at three quarters of the speed while
+  the window ramps up by half a sample per input (Prism before: 0.75–0.84). Averaging the sample
+  times with the same weights as the positions gives the pen's speed and matches every row.
+- The pen-up catch-up thins the end of the line: a slow stroke, where the speed changes little,
+  still thins over its last 20–30 px (0.5 px/ms row). Feeding the release sample again with
+  pressure 0 (the pen-up frame's pressure) matches it; with the last contact pressure the end
+  stays full until the last pixels (Prism before).
+- With the times averaged and the release sample carrying the last contact time, the catch-up
+  moves at the stroke's own speed (4 px/ms reads 0.5 plus the pressure thinning, 8 px/ms the
+  thinnest line the pressure minimum allows). Catch-up samples with a fixed 8 ms interval would
+  slow down towards the end, and samples all at one time would keep the last speed; both fit
+  worse in an offline replay of the same strokes.
+
+Prism: `Stabilizer::average` averages `time` like `x`, `y` and pressure, and after a moving stroke
+`finish` feeds `{ pressure: 0, ..last }` (a stationary click keeps its pressure). Remaining
+differences: the first 40–100 px of a stroke (CLIP STUDIO is slower there) and Prism's line
+already being slightly thinner at full speed. Not measured: Adjust by speed, stickiness above 0,
+and whether a mouse's release sample also has pressure 0 (Prism applies it to every pointer).
 
 ## Effector tilt response (2026-10-16)
 
@@ -918,9 +956,9 @@ no proprietary code or pseudocode is copied into the implementation.
 
 Prism now independently adds a bounded release drain (at most 202 extra samples),
 pressure-zero interpolation and deceleration termination, keeping stationary dot
-pressure and making finish idempotent. The source's initial release-packet pressure
-and device-type scaling remain unverified; initial repeats still retain the last
-contact pressure. Threshold distances use document pixels × zoom in Prism, pending
+pressure and making finish idempotent. The device-type scaling remains unverified.
+The initial repeats of a moving stroke carry pressure 0 since 2026-11-15 (measured with a
+synthetic pen, see Effector velocity input › With stabilization). Threshold distances use document pixels × zoom in Prism, pending
 physical-pen comparison. The full live-preview policy is also not a CSP pixel oracle.
 See [matched settings, timings and capture limits](brush-latency.md).
 
