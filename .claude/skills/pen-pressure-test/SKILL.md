@@ -102,19 +102,33 @@ cargo run -p prism-tablet --example pen_inject -- --window Prism --file trace.js
 The same stroke can drive another app as an observation oracle (clean-room rules in AGENTS.md
 apply: compare outputs only). Drive the other app's UI with **cua-driver** (load the `cua-driver`
 skill), not computer-use. Ask the user before changing its preferences or tools, and leave them as
-found. Keep oracle renders in the scratchpad or `target/` (never committed).
+found, except the tablet service (step 1). Keep oracle renders in the scratchpad or `target/` (never
+committed).
 
 CLIP STUDIO PAINT, as done on 2026-11-14 (`docs/pen-input-validation.md` › G-pen comparison):
 
-1. **Tablet service.** This machine uses **Wintab**, which ignores synthetic pens: the stroke draws
-   at constant width as if from a mouse. With the user's OK, open Preferences (`Ctrl+K`) › Tablet ›
-   **Tablet PC** › OK. It applies without a restart. Switch back to Wintab afterwards and confirm
-   `Tablet` in a *copy* of `%APPDATA%/CELSYSUserData/CELSYS/CLIPStudioPaintVer1_5_0/Preference/Config.sqlite`
-   matches the copy taken before (`ContextKind 1000`).
+1. **Tablet service: keep it on Tablet PC.** Wintab ignores synthetic pens (the stroke draws at
+   constant width, as from a mouse). The maintainer chose (2026-11-15) to leave CLIP STUDIO on
+   **Tablet PC** permanently for ongoing brush work: don't switch it back to Wintab after a test.
+   Check it first from a *copy* of
+   `%APPDATA%/CELSYSUserData/CELSYS/CLIPStudioPaintVer1_5_0/Preference/Config.sqlite`: table
+   `Tablet`, fourth column `1001` = Tablet PC, `1000` = Wintab. Only if it reads `1000`, open
+   Preferences (`Ctrl+K`, foreground) › Tablet › **Tablet PC** › OK (applies without a restart).
+   Saving Preferences renumbers the `Gesture` rows; that is not a change.
 2. **Canvas.** `Ctrl+N` (foreground). Its number fields accept only `type_text` with `delay_ms`
    after a double-click; separate `press_key` digits leak to the main window as tool shortcuts.
 3. **Brush.** Pick the same sub tool in both apps. Prism: `ui.cspTool {"tool":"pen","subTool":"G펜"}`
-   loads CSP's own sub tool; then match the size the user's CSP shows (`ui.set {brushSize}`).
+   loads a sub tool Prism already has as a preset (it does not read CSP's live tool DB); then match
+   the size the user's CSP shows (`ui.set {brushSize}`). For a downloaded material not in Prism yet,
+   the control channel refuses `brush.cspLibrary.*` (ambient paths): copy its
+   `CLIPStudioCommon/Material/<…>/<material uuid>/data/material_0.tool` into `$S` as `name.sut`, then
+   `app.open {"path":"name.sut"}` (a path *relative* to `$S`; absolute paths are rejected) and
+   `engine.execute tools.setBrush {"preset": "<name>"}`. The catalog
+   (`CLIPStudioCommon/MaterialDB/CatalogMaterial.cmdb`, table `MaterialModifier`, column `Path`) gives
+   the folder. In CSP, drag the material from the Material palette onto the sub tool palette
+   (cua-driver `drag`, foreground) and delete that sub tool afterwards (trash button, foreground).
+   Colours: Prism `tools.setColors {"foreground","background"}` (the background is CSP's sub colour);
+   in CSP pick swatches from the Color Set palette and read the exact RGB on the Color Slider.
 4. **Same physical scale.** Prism `ui.set {"zoom": cspZoom / pixelsPerPoint}` (`ui.inspect` › `window`).
    Find each canvas origin from a native-resolution screenshot (the white rectangle), then inject the
    same doc-coordinate file with `--origin <client x,y> --scale <zoom>` into each app. Inject one
@@ -125,18 +139,26 @@ CLIP STUDIO PAINT, as done on 2026-11-14 (`docs/pen-input-validation.md` › G-p
    `(255-G)/(255-G_ink)` down the column), extent and peak, and calibrate with a constant-width
    stroke.
 6. **Isolate dab vs line.** A gap in line width can come from the dab itself or from how
-   overlapping dabs build up. Measure one dab too: on Wintab a one-sample `--file` is a full-size
-   mouse click, so no preference change is needed.
+   overlapping dabs build up. Measure one dab too: a one-sample `--file` at pressure 1 (on Tablet
+   PC it carries the sample's pressure).
 7. **cua-driver pixel coordinates** are relative to that window's *most recent* screenshot. After
    a native-resolution capture (`max_image_dimension: 0`), take a scaled read again before
    clicking by pixels from a scaled image. A mismatched click selected a different tool once.
-8. **No pressure input?** A brush without pressure dynamics (e.g. 가을낙엽_낙엽) can be compared with
-   CLIP STUDIO left on Wintab: strokes arrive as full-pressure mouse input and no preference changes.
+8. **No pressure input?** A brush without pressure dynamics (e.g. 가을낙엽_낙엽) compares the same way;
+   inject at pressure 1 so both apps see full pressure.
    Read big colour-tip brushes with `brush.get {"images": false}`; for offline renders of a local
    material use the ignored test `local_csp_render_one` (`crates/engine/tests/csp_library_local.rs`).
    Worked example: `docs/sut-analysis.md` › 가을낙엽_낙엽 against CLIP STUDIO PAINT.
-9. **Restore.** Close the test canvas with Do Not Save, reselect the user's sub tool, set the tablet
-   service back.
+9. **Restore.** Close the test canvas with Do Not Save, reselect the user's sub tool and colours,
+   delete any sub tool you added. Leave the tablet service on Tablet PC.
+10. **Pitfalls seen.** Shortcuts sent in the background (`Ctrl+K` via PostMessage) can reach CSP as a
+    bare key and switch tools (`K`): send them `foreground`, then check the active tool. Another
+    Prism (the user's own build) may be open with the same "Prism" title: `pen_inject` takes the
+    frontmost exact match, so bring the test instance to the front (cua-driver `bring_to_front`)
+    before injecting, stop only the process whose path is under `target/agent-pen`, and check with
+    `ui.penTrace` that the stroke reached it. Measuring colour, solve each pixel against the paper
+    colour for coverage rather than taking the darkest pixels (they favour the darker colour).
+    Worked example: `docs/sut-analysis.md` › Colour jitter (Chainmail 2 2-C, 2026-11-15).
 
 ## Cleanup
 
