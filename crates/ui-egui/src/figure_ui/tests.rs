@@ -212,31 +212,36 @@ fn clicking_a_hand_picks_it_for_hand_poses() {
     let hand = find(&app, "righthand_bb_");
     click_at(&mut app, [hand.x, hand.y]);
     assert_eq!(steps, crate::figure_ui::tests::steps(&app), "a click poses nothing");
-    let pick = picked_hand(&app, layer).expect("the right hand is picked");
-    assert!(!pick.left && pick.figure == 0);
-    assert_eq!(inspect_pick(&app)["left"], json!(false));
+    let pick = picked(&app, layer).expect("the right hand is picked");
+    assert!(pick.hand == Some(false) && pick.figure == 0);
+    assert_eq!(inspect_pick(&app)["hand"], json!("right"));
     // The hand setup and hand poses go to that hand only.
     let pad = HandPad { weights: [0.0, 0.0, 1.0], ..Default::default() };
     run_hand(&mut app, &pad, layer.0, false);
     assert!(rot(&app, "righthandmiddle2_bb_")[0] < 0.9);
     assert_eq!(rot(&app, "lefthandmiddle2_bb_"), [1.0, 0.0, 0.0, 0.0], "the left hand stays");
-    // A click on another joint, or on empty canvas, drops the pick; a finger picks its hand.
+    // A click on another joint picks the whole figure (both hands again); a finger picks its
+    // hand; empty canvas drops the pick.
     let knee = find(&app, "leftleg_bb_");
     click_at(&mut app, [knee.x, knee.y]);
-    assert!(picked_hand(&app, layer).is_none());
+    let pick = picked(&app, layer).expect("the figure is picked");
+    assert!(pick.hand.is_none() && pick.figure == 0);
+    assert!(inspect_pick(&app)["hand"].is_null());
+    run_hand(&mut app, &HandPad { weights: [0.0, 1.0, 0.0], ..Default::default() }, layer.0, false);
+    assert!(rot(&app, "lefthandmiddle2_bb_") != [1.0, 0.0, 0.0, 0.0] && rot(&app, "righthandmiddle2_bb_")[0] > 0.95, "both hands of the picked figure");
     app.ui.views[0].zoom = 8.0;
     let tip = find(&app, "lefthandindex4_bb_");
     click_at(&mut app, [tip.x, tip.y]);
-    assert!(picked_hand(&app, layer).unwrap().left, "a finger picks its hand");
+    assert_eq!(picked(&app, layer).unwrap().hand, Some(true), "a finger picks its hand");
     app.ui.views[0].zoom = 1.0;
     click_at(&mut app, [5.0, 5.0]);
-    assert!(picked_hand(&app, layer).is_none() && inspect_pick(&app).is_null());
+    assert!(picked(&app, layer).is_none() && inspect_pick(&app).is_null());
     // A drag still poses (and picks nothing).
     let (elbow, wrist) = (find(&app, "rightforearm_bb_"), find(&app, "righthand_bb_"));
     drag(&mut app, [wrist.x, wrist.y], [elbow.x - (wrist.y - elbow.y), elbow.y], egui::Modifiers::NONE);
-    assert!(picked_hand(&app, layer).is_none());
+    assert!(picked(&app, layer).is_none());
     assert!(crate::figure_ui::tests::steps(&app) > steps);
     // A pick on another layer counts for nothing here.
-    app.figure_hand = Some(HandPick { layer: LayerId(9999), figure: 0, left: true });
-    assert!(picked_hand(&app, layer).is_none());
+    app.figure_pick = Some(FigurePick { layer: LayerId(9999), figure: 0, hand: Some(true) });
+    assert!(picked(&app, layer).is_none());
 }

@@ -648,8 +648,32 @@ fn a_picked_hand_takes_the_hand_pose_alone() {
     assert_eq!(p["at"], json!([10.0, 20.0]));
     assert!(p.get("side").is_none(), "both hands of the figure nearest the drop");
     let layer = a.session.active().unwrap().active_layer.unwrap();
-    a.figure_hand = Some(crate::figure_ui::HandPick { layer, figure: 0, left: false });
+    a.figure_pick = Some(crate::figure_ui::FigurePick { layer, figure: 0, hand: Some(false) });
     let (_, p) = hand_pose_command(&a, &ids, Some([10.0, 20.0]));
     assert_eq!((p["side"].as_str(), p["figure"].as_u64()), (Some("right"), Some(0)));
     assert!(p.get("at").is_none(), "the pick wins over the drop point");
+}
+
+#[test]
+fn a_picked_figure_takes_a_whole_pose() {
+    let mut a = super::tests::app();
+    a.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let one = vec!["p1".to_string()];
+    assert!(pose_on_pick_command(&a, &one).is_none(), "no figure layer: a new layer");
+    a.run("layer.figure.new", json!({})).unwrap();
+    assert!(pose_on_pick_command(&a, &one).is_none(), "nothing picked: a new layer");
+    let layer = a.session.active().unwrap().active_layer.unwrap();
+    a.figure_pick = Some(crate::figure_ui::FigurePick { layer, figure: 0, hand: None });
+    let (cmd, p) = pose_on_pick_command(&a, &one).unwrap();
+    assert_eq!(cmd, "layer.figure.applyPose");
+    assert_eq!((p["uuid"].as_str(), p["figure"].as_u64(), p["layer"].as_u64()), (Some("p1"), Some(0), Some(layer.0)));
+    // A picked hand counts as its figure too; several poses still make a layer of their own.
+    a.figure_pick = Some(crate::figure_ui::FigurePick { layer, figure: 0, hand: Some(true) });
+    assert!(pose_on_pick_command(&a, &one).is_some());
+    assert!(pose_on_pick_command(&a, &["p1".to_string(), "p2".to_string()]).is_none());
+    // A picked figure (no hand) takes hand poses on both hands.
+    a.figure_pick = Some(crate::figure_ui::FigurePick { layer, figure: 0, hand: None });
+    let (_, p) = hand_pose_command(&a, &one, Some([1.0, 2.0]));
+    assert_eq!(p["figure"].as_u64(), Some(0));
+    assert!(p.get("side").is_none() && p.get("at").is_none());
 }

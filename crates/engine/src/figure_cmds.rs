@@ -22,6 +22,7 @@ const REACH: &str = "layer.figure.reachTo";
 const RESET: &str = "layer.figure.resetPose";
 const HAND: &str = "layer.figure.setHand";
 const HAND_POSE: &str = "layer.figure.applyHandPose";
+const POSE: &str = "layer.figure.applyPose";
 const LOOK: &str = "layer.figure.setLook";
 const RASTERIZE: &str = "layer.rasterize.figure";
 /// Largest `.pose` / `.pep` file read.
@@ -424,6 +425,13 @@ fn locked_fingers(p: &Value, cmd: &str) -> Result<[bool; 5]> {
     Ok(locked)
 }
 
+/// The figure of the layer named by `p` with a joint nearest document point `pt`.
+fn figure_at(s: &Session, p: &Value, pt: [f64; 2]) -> Result<Option<usize>> {
+    let id = layer_param(s, p)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    Ok(joints(&st.doc, id).into_iter().map(|j| (j.figure, (j.doc[0] - pt[0]).hypot(j.doc[1] - pt[1]))).filter(|(_, d)| d.is_finite()).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(f, _)| f))
+}
+
 /// CLIP STUDIO's hand pose materials: pose the hands of a figure layer's figures.
 fn apply_hand_pose_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     use figure3d::hand::Side;
@@ -432,11 +440,7 @@ fn apply_hand_pose_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let only = match (p.get("figure"), at) {
         (Some(_), _) => Some(figure_index(p, n, HAND_POSE)?),
         // Dropped on the canvas: the figure with a joint nearest the drop point.
-        (None, Some(pt)) => {
-            let id = layer_param(s, p)?;
-            let st = s.active().ok_or(EngineError::NoDocument)?;
-            joints(&st.doc, id).into_iter().map(|j| (j.figure, (j.doc[0] - pt[0]).hypot(j.doc[1] - pt[1]))).filter(|(_, d)| d.is_finite()).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(f, _)| f)
-        }
+        (None, Some(pt)) => figure_at(s, p, pt)?,
         (None, None) => None,
     };
     let side = match text(p, "side", HAND_POSE)?.unwrap_or("both") {
@@ -468,6 +472,39 @@ fn apply_hand_pose_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         if posed == 0 {
             return Err(bad(HAND_POSE, last_err.unwrap_or_else(|| "no figure to pose".into())));
         }
+        Ok(())
+    })
+}
+
+/// A whole-figure pose material on one figure, as CLIP STUDIO applies one to a selected figure:
+/// the figure keeps where it stands and which way it faces (its root joint) and takes every joint
+/// below from the pose, bone lengths included.
+fn apply_pose_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let n = scene_len(s, p)?;
+    let at = numbers::<2>(p, "at", POSE, 1e7)?;
+    let index = match (p.get("figure"), at) {
+        (Some(_), _) => figure_index(p, n, POSE)?,
+        (None, Some(pt)) => figure_at(s, p, pt)?.ok_or_else(|| bad(POSE, "the layer has no figure to pose"))?,
+        (None, None) if n == 1 => 0,
+        (None, None) => return Err(bad(POSE, "the layer holds several figures: pass `figure` (or `at`)")),
+    };
+    let (bodies, hands) = split_poses(poses_from(p, POSE)?);
+    if let Some(h) = hands.first() {
+        return Err(bad(POSE, format!("{} is a hand pose: apply it with {HAND_POSE}", h.name)));
+    }
+    let [pose] = bodies.as_slice() else { return Err(bad(POSE, "pass one whole-figure pose: `uuid`, `path` or `data`")) };
+    edit_scene(s, p, POSE, "Apply Pose", |scene| {
+        let f = scene.figures.get_mut(index).ok_or_else(|| bad(POSE, "no such figure"))?;
+        let (offset, rotation) = (f.root.offset, f.root.rotation);
+        let mut root = pose.root.clone();
+        if !root.name.eq_ignore_ascii_case(&f.root.name) {
+            // A pose rooted elsewhere (at the hips, say) hangs under the figure's own root.
+            root = prism_doc::figure::Joint { name: f.root.name.clone(), rotation: [1.0, 0.0, 0.0, 0.0], offset: [0.0; 3], children: vec![root] };
+        }
+        root.offset = offset;
+        root.rotation = rotation;
+        f.root = root;
+        f.source = pose.source.clone();
         Ok(())
     })
 }
@@ -629,6 +666,13 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"layer":id?,"uuid":hand pose id from brush.cspLibrary.list poses (hand set)?|"uuids":[id]?|"path":".pose or .pep"?|"data":base64?,"root"?,"figure":index? (default every figure)|"at":[x,y] document px? (the figure nearest),"side":"both"|"left"|"right"="both","locked":[finger]?,"draft":bool=false} (CLIP STUDIO hand pose materials: the fingers turn as in the pose, mirrored for the other hand; a left and a right pose each go to their own hand)"#,
             has_figure,
             apply_hand_pose_cmd
+        ),
+        spec!(
+            POSE,
+            "Apply Pose",
+            r#"{"layer":id?,"uuid":pose id from brush.cspLibrary.list poses?|"path":".pose or .pep"?|"data":base64?,"root"?,"figure":index? (default the only figure)|"at":[x,y] document px? (the figure nearest),"draft":bool=false} (a whole-figure CLIP STUDIO pose on one figure: it keeps its place and facing, every joint below takes the pose)"#,
+            has_figure,
+            apply_pose_cmd
         ),
         spec!(RESET, "Reset Pose", r#"{"layer":id?,"figure":index? (default every figure)} (Prism's standing pose where the figure stands)"#, has_figure, reset),
         spec!(LOOK, "3D Figure Look", r##"{"layer":id?,"color":"#rrggbb"|[r,g,b]?,"outline":bool?,"outlineWidth":0..64?}"##, has_figure, set_look),

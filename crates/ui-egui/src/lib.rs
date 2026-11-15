@@ -520,9 +520,10 @@ pub struct PrismApp {
     /// A 3D figure gesture in progress (figure_ui), and the counter keying its coalesced edits.
     pub(crate) figure_drag: Option<figure_ui::FigureDrag>,
     pub(crate) figure_seq: u64,
-    /// The hand picked on a 3D figure layer (click its dots): hand poses and Properties › Hand
-    /// Pose go to that hand only, as with a hand selected in CLIP STUDIO.
-    pub(crate) figure_hand: Option<figure_ui::HandPick>,
+    /// The figure (and maybe one of its hands) picked on a 3D figure layer by clicking its dots:
+    /// poses go to that figure, hand poses and Properties › Hand Pose to that hand, as with a
+    /// selection in CLIP STUDIO.
+    pub(crate) figure_pick: Option<figure_ui::FigurePick>,
     /// Crop tool gesture in progress (see `crop_ui`).
     pub(crate) crop: crop_ui::CropState,
     pub(crate) arrow_handle_runtime: arrow_handles_ui::Runtime,
@@ -647,7 +648,7 @@ impl PrismApp {
             ruler_handle_seq: 0,
             figure_drag: None,
             figure_seq: 0,
-            figure_hand: None,
+            figure_pick: None,
             crop: Default::default(),
             shape_corner_runtime: Default::default(),
             arrow_handle_runtime: Default::default(),

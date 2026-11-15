@@ -2789,6 +2789,11 @@ Prism's hand shapes are its own angles (`crates/algo/src/figure3d/hand.rs`).
   joint. Prism rebuilds the chains by name (`hand → 0 → 1 → 2 → 3`), places the palm by the
   knuckles' rest positions (offsets added along the chain), and on a figure without palm bones
   folds each palm bone's turn into its knuckle (both frames lie along the hand at rest).
+- Observed, whole-figure poses on a placed figure (scratch canvas, Ver.2 drawing figure moved and
+  turned with its object launcher, 百合ポーズ１ dropped on it, three facings): the figure stays
+  where it was and keeps its own facing; the pose file's `root_group_` turn (−100° about Y here)
+  is not applied, only the joints below it. Prism's `layer.figure.applyPose` does the same: the
+  figure's root joint stays, everything below is the pose's (bone lengths included).
 - Compared with CLIP STUDIO on its own base left hand model: "Thumbs Up: Upright", "Finger Count:
   3" and "Point at something" give the same finger shapes in Prism (raised and folded fingers,
   thumb direction and bend); applied by id through `layer.figure.applyHandPose` in the app they

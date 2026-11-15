@@ -490,6 +490,18 @@ fn add_poses(app: &mut PrismApp, uuids: &[String], at: Option<[f64; 2]>) {
     if uuids.is_empty() {
         return;
     }
+    // One pose with a figure picked on the active layer: that figure takes it, as in CLIP STUDIO.
+    if let Some((cmd, p)) = pose_on_pick_command(app, &uuids) {
+        match app.run(cmd, p) {
+            Ok(_) => {
+                app.ui.status = tl!("Posed the picked figure").to_string();
+                app.ui.status_error = false;
+                app.ui.csp_library.selected.retain(|id| !uuids.contains(id));
+            }
+            Err(e) => notices::error(app, format!("{}: {e}", tl!("Not added"))),
+        }
+        return;
+    }
     let catalog_of = |app: &PrismApp, id: &str| -> String {
         app.ui.csp_library.listing.as_ref().and_then(|l| materials(l).find(|b| b["uuid"] == id).map(|b| group_of(b).to_string())).unwrap_or_default()
     };
@@ -539,6 +551,18 @@ fn apply_hand_poses(app: &mut PrismApp, uuids: &[String], at: Option<[f64; 2]>) 
     }
 }
 
+/// `layer.figure.applyPose` for a single whole-figure pose when a figure of the active layer is
+/// picked; `None` otherwise (the poses make a new figure layer).
+fn pose_on_pick_command(app: &PrismApp, uuids: &[String]) -> Option<(&'static str, Value)> {
+    let [uuid] = uuids else { return None };
+    let pick = app.session.active().and_then(|st| st.active_layer).and_then(|l| crate::figure_ui::picked(app, l))?;
+    let mut p = json!({ "uuid": uuid, "layer": pick.layer.0, "figure": pick.figure });
+    if let Some(root) = &app.ui.csp_library.root {
+        p["root"] = json!(root);
+    }
+    Some(("layer.figure.applyPose", p))
+}
+
 /// The command that puts hand poses `uuids` on the document, and its params: onto the active 3D
 /// figure layer's hand picked on the canvas, else the figure nearest `at` (both hands), else a
 /// new figure layer.
@@ -551,11 +575,13 @@ fn hand_pose_command(app: &PrismApp, uuids: &[String], at: Option<[f64; 2]>) -> 
     if let Some(at) = at {
         p["at"] = json!(at);
     }
-    // A hand picked on the canvas takes the pose alone, as in CLIP STUDIO.
-    let pick = app.session.active().and_then(|st| st.active_layer).and_then(|l| crate::figure_ui::picked_hand(app, l));
+    // A figure or hand picked on the canvas takes the pose alone, as in CLIP STUDIO.
+    let pick = app.session.active().and_then(|st| st.active_layer).and_then(|l| crate::figure_ui::picked(app, l));
     if on_figure && let Some(pick) = pick {
         p["figure"] = json!(pick.figure);
-        p["side"] = json!(pick.side());
+        if let Some(side) = pick.side() {
+            p["side"] = json!(side);
+        }
         if let Some(o) = p.as_object_mut() {
             o.remove("at");
         }
@@ -1301,6 +1327,7 @@ fn material(app: &mut PrismApp, ui: &mut egui::Ui, rect: Rect, b: &Value, listin
             ui.label(tl!("Poses the hands of the active 3D figure layer; without one, adds a 3D figure with these hands"));
         } else if is_pose(b) {
             ui.label(tl!("Adds a 3D figure layer in this pose; poses of one collection selected together share a layer"));
+            ui.label(tl!("With a figure picked on the canvas (click it with the Move tool), poses that figure instead"));
         }
         if owned {
             ui.label(tl!("Already in the brush library; importing again replaces it"));

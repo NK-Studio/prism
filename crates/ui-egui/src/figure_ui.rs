@@ -4,10 +4,10 @@
 //! joints show as dots, and a hand's finger joints too once that hand is [`FINGER_HAND_MIN`]
 //! screen points long (zoom in on it). Drag a dot: turn the bone ending there in the picture plane
 //! (⇧: twist it about itself; ⌘/Ctrl on a hand, a foot or a fingertip: reach it there with
-//! two-bone IK). A click (no drag) on a hand's dot or one of its fingers picks that hand: hand pose
-//! materials and Properties › Hand Pose then go to it alone, as with a hand selected in CLIP
-//! STUDIO; a click elsewhere, or on another joint, drops the pick (both hands again). Drag anywhere
-//! else:
+//! two-bone IK). A click (no drag) on a figure's dot picks that figure, and on a hand's dot or one
+//! of its fingers that hand: pose materials then go to the picked figure, hand poses and
+//! Properties › Hand Pose to the picked hand (both hands of a picked figure), as with a selection
+//! in CLIP STUDIO; a click on empty canvas drops the pick. Drag anywhere else:
 //! orbit the camera (⇧: move the figures, ⌥: dolly). Every move runs one `layer.figure.*` command
 //! with `draft: true` under one `coalesce` key, and the release re-renders at full quality into
 //! the same history step, so a gesture undoes in one go and replays like any command.
@@ -84,29 +84,39 @@ pub struct FigureDrag {
     grabbed: Option<(usize, String)>,
 }
 
-/// A picked hand: which figure of which layer, and which side.
+/// A picked figure of a layer, and maybe one of its hands (`Some(left)`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HandPick {
+pub struct FigurePick {
     #[serde(serialize_with = "layer_id")]
     pub layer: LayerId,
     pub figure: usize,
-    pub left: bool,
+    #[serde(serialize_with = "hand_side")]
+    pub hand: Option<bool>,
 }
 
 fn layer_id<S: serde::Serializer>(id: &LayerId, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_u64(id.0)
 }
 
-impl HandPick {
-    pub fn side(&self) -> &'static str {
-        if self.left { "left" } else { "right" }
+fn hand_side<S: serde::Serializer>(hand: &Option<bool>, s: S) -> Result<S::Ok, S::Error> {
+    match hand {
+        Some(true) => s.serialize_str("left"),
+        Some(false) => s.serialize_str("right"),
+        None => s.serialize_none(),
     }
 }
 
-/// The hand picked on layer `layer`, if it still names one of its figures.
-pub fn picked_hand(app: &PrismApp, layer: LayerId) -> Option<HandPick> {
-    let pick = app.figure_hand.clone().filter(|p| p.layer == layer)?;
+impl FigurePick {
+    /// `"left"` / `"right"` for a picked hand.
+    pub fn side(&self) -> Option<&'static str> {
+        self.hand.map(|left| if left { "left" } else { "right" })
+    }
+}
+
+/// The pick on layer `layer`, if it still names one of its figures.
+pub fn picked(app: &PrismApp, layer: LayerId) -> Option<FigurePick> {
+    let pick = app.figure_pick.clone().filter(|p| p.layer == layer)?;
     let st = app.session.active()?;
     let scene = figure_layer(&st.doc, layer)?.figure.as_ref()?;
     (pick.figure < scene.figures.len()).then_some(pick)
@@ -125,19 +135,20 @@ fn hand_of(joint: &str) -> Option<bool> {
     }
 }
 
-/// A click on the editor: pick the hand under it, or drop the pick.
+/// A click on the editor: pick the figure (or hand) under it, or drop the pick.
 fn click(app: &mut PrismApp, layer: LayerId, grabbed: Option<(usize, String)>) {
-    let pick = grabbed.and_then(|(figure, joint)| hand_of(&joint).map(|left| HandPick { layer, figure, left }));
-    if pick == app.figure_hand || (pick.is_none() && app.figure_hand.is_none()) {
+    let pick = grabbed.map(|(figure, joint)| FigurePick { layer, figure, hand: hand_of(&joint) });
+    if pick == app.figure_pick || (pick.is_none() && app.figure_pick.is_none()) {
         return;
     }
     app.ui.status = match &pick {
-        Some(p) if p.left => tl!("Left hand picked: hand poses and Hand Pose go to it; click elsewhere for both hands").to_string(),
-        Some(_) => tl!("Right hand picked: hand poses and Hand Pose go to it; click elsewhere for both hands").to_string(),
-        None => tl!("Both hands").to_string(),
+        Some(p) if p.hand == Some(true) => tl!("Left hand picked: hand poses and Hand Pose go to it; click elsewhere for both hands").to_string(),
+        Some(p) if p.hand == Some(false) => tl!("Right hand picked: hand poses and Hand Pose go to it; click elsewhere for both hands").to_string(),
+        Some(_) => tl!("Figure picked: poses from the CLIP STUDIO panel go to it; click empty canvas to drop the pick").to_string(),
+        None => tl!("Nothing picked").to_string(),
     };
     app.ui.status_error = false;
-    app.figure_hand = pick;
+    app.figure_pick = pick;
 }
 
 /// `Some((hand, segment))` for a finger joint such as `lefthandindex3_bb_`: the hand joint's name
@@ -378,13 +389,22 @@ pub fn draw(app: &PrismApp, painter: &egui::Painter, xf: &crate::canvas::ViewXfo
         Mode::Reach { figure, joint } => Some((*figure, joint.clone(), false)),
         _ => None,
     });
-    // The picked hand: a ring round its wrist, its finger dots filled.
-    let picked = app.session.active().and_then(|st| st.active_layer).and_then(|l| picked_hand(app, l));
-    let in_pick = |h: &Handle| picked.as_ref().is_some_and(|p| p.figure == h.figure && hand_of(&h.joint) == Some(p.left));
-    if let Some(p) = &picked
-        && let Some(w) = all.iter().find(|h| h.figure == p.figure && h.joint.eq_ignore_ascii_case(&format!("{}hand_bb_", p.side())))
-    {
-        painter.circle_stroke(xf.to_screen(w.x as f32, w.y as f32), 10.0, Stroke::new(2.0, color));
+    // The pick: a picked figure's bones drawn bold; a picked hand gets a ring round its wrist and
+    // its finger dots filled.
+    let picked = app.session.active().and_then(|st| st.active_layer).and_then(|l| picked(app, l));
+    let in_pick = |h: &Handle| picked.as_ref().is_some_and(|p| p.figure == h.figure && p.hand.is_some() && hand_of(&h.joint) == p.hand);
+    if let Some(p) = &picked {
+        if let Some(side) = p.side() {
+            if let Some(w) = all.iter().find(|h| h.figure == p.figure && h.joint.eq_ignore_ascii_case(&format!("{side}hand_bb_"))) {
+                painter.circle_stroke(xf.to_screen(w.x as f32, w.y as f32), 10.0, Stroke::new(2.0, color));
+            }
+        } else {
+            for h in all.iter().filter(|h| h.figure == p.figure) {
+                if let Some(q) = h.parent.as_ref().and_then(|n| all.iter().find(|o| o.figure == h.figure && &o.joint == n)) {
+                    painter.line_segment([xf.to_screen(q.x as f32, q.y as f32), xf.to_screen(h.x as f32, h.y as f32)], Stroke::new(2.5, color));
+                }
+            }
+        }
     }
     // Far dots first, so the ones in front are drawn over them.
     let mut order: Vec<&Handle> = all.iter().collect();
@@ -408,9 +428,10 @@ pub fn inspect(app: &PrismApp) -> Value {
     json!(current(app))
 }
 
-/// The picked hand for `ui.inspect` › `figureHand` (`null` when both hands).
+/// The pick for `ui.inspect` › `figurePick`: `{layer, figure, hand: "left" | "right" | null}`, or
+/// `null` when nothing is picked.
 pub fn inspect_pick(app: &PrismApp) -> Value {
-    app.session.active().and_then(|st| st.active_layer).and_then(|l| picked_hand(app, l)).map_or(Value::Null, |p| json!(p))
+    app.session.active().and_then(|st| st.active_layer).and_then(|l| picked(app, l)).map_or(Value::Null, |p| json!(p))
 }
 
 /// Run a Properties edit: live drafts while a slider drags, the final render on release.
@@ -569,9 +590,11 @@ pub fn pad_state(ctx: &egui::Context, layer: u64) -> HandPad {
 /// picked on the canvas narrows it to that figure's hand.
 fn run_hand(app: &mut PrismApp, pad: &HandPad, layer: u64, draft: bool) {
     let mut p = pad.params(layer);
-    if let Some(pick) = picked_hand(app, LayerId(layer)) {
+    if let Some(pick) = picked(app, LayerId(layer)) {
         p["figure"] = json!(pick.figure);
-        p["side"] = json!(pick.side());
+        if let Some(side) = pick.side() {
+            p["side"] = json!(side);
+        }
     }
     p["coalesce"] = json!(format!("figure-hand-{layer}-{}", pad.seq));
     p["draft"] = json!(draft);
@@ -591,18 +614,17 @@ fn hand_section(app: &mut PrismApp, ui: &mut egui::Ui, layer: u64) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut pad = pad_state(ui.ctx(), layer);
     let before = pad;
-    // A hand picked on the canvas decides the side (and the figure).
-    let pick = picked_hand(app, LayerId(layer));
-    let side_now = pick.as_ref().map_or(pad.side, |p| if p.left { 1 } else { 2 });
+    // A hand picked on the canvas decides the side (and a picked figure the figure).
+    let pick = picked(app, LayerId(layer));
+    let side_now = pick.as_ref().and_then(|p| p.hand).map_or(pad.side, |left| if left { 1 } else { 2 });
     ui.horizontal_wrapped(|ui| {
         for (k, (_, label)) in SIDES.iter().enumerate() {
             if widgets::pill_tab(ui, hand_label(label), side_now == k).clicked() {
                 pad.side = k;
-                // Choosing here replaces the canvas pick: one side of the same figure, or both.
-                app.figure_hand = match (&pick, k) {
-                    (Some(p), 1 | 2) => Some(HandPick { left: k == 1, ..p.clone() }),
-                    _ => None,
-                };
+                // Choosing here replaces a picked hand: one side of the same figure, or both.
+                if let Some(p) = &pick {
+                    app.figure_pick = Some(FigurePick { hand: matches!(k, 1 | 2).then_some(k == 1), ..p.clone() });
+                }
             }
         }
     });

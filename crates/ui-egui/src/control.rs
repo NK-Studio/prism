@@ -1151,7 +1151,7 @@ pub fn inspect(app: &PrismApp, ctx: &egui::Context) -> Value {
         "arrowHandles": crate::arrow_handles_ui::inspect(app),
         "specialRulerHandles": crate::special_ruler_ui::handles::current(app),
         "figureHandles": crate::figure_ui::inspect(app),
-        "figureHand": crate::figure_ui::inspect_pick(app),
+        "figurePick": crate::figure_ui::inspect_pick(app),
         "layerMenu": app.ui.layer_menu,
         "brushPicker": app.ui.brush_picker.map(|pos| json!({
             "pos": pos,

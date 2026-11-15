@@ -249,3 +249,38 @@ fn hand_poses_pose_the_hands_of_a_figure_layer() {
     s.execute(HAND_POSE, json!({"data": data, "at": head})).unwrap();
     assert!(rot(&s, pair, "lefthandmiddle2_bb_")[0] < 0.9, "the standing figure, nearest the point");
 }
+
+#[test]
+fn a_pose_goes_onto_one_figure_where_it_stands() {
+    let mut s = session(200, 300);
+    let id = LayerId(s.execute(NEW, json!({})).unwrap()["layer"].as_u64().unwrap());
+    let fig = |s: &Session, i: usize| layer(s, id).figure.unwrap().figures[i].clone();
+    // Put the figure somewhere else first: its root keeps that.
+    s.execute(JOINT, json!({"joint": "root_group_", "rotation": [0.92387953, 0.0, 0.38268343, 0.0]})).ok();
+    let before = fig(&s, 0);
+    let data = prism_paint::tile::b64_encode(PEP.as_bytes());
+    let steps = s.active().unwrap().history.entries().len();
+    s.execute(POSE, json!({"data": data})).unwrap();
+    assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+    let after = fig(&s, 0);
+    assert_eq!((after.root.offset, after.root.rotation), (before.root.offset, before.root.rotation), "it stays where it stood");
+    assert!(after.root.find("head_end_bb_").is_some() && after.root.find("lefthand_bb_").is_none(), "the joints are the pose's");
+    assert_eq!(after.root.find("hips_bb_").unwrap().offset, [0.0, 90.0, 0.0]);
+    assert!(s.undo());
+    assert!(fig(&s, 0).root.find("lefthand_bb_").is_some());
+    // Two figures: name one (or a point); a hand pose or two poses are refused.
+    s.execute(ADD, json!({"data": data})).unwrap();
+    assert!(s.execute(POSE, json!({"data": data})).is_err(), "which figure?");
+    s.execute(POSE, json!({"data": data, "figure": 0})).unwrap();
+    assert!(fig(&s, 0).root.find("lefthand_bb_").is_none());
+    let hand = prism_paint::tile::b64_encode(HAND_PEP.as_bytes());
+    for bad in [json!({"data": hand, "figure": 0}), json!({"figure": 0}), json!({"data": data, "figure": 7}), json!({"data": "%%%", "figure": 0}), json!({"data": data, "at": ["x", 1]})] {
+        assert!(s.execute(POSE, bad.clone()).is_err(), "{bad}");
+    }
+    // A pose rooted at the hips hangs under the figure's own root.
+    let hips_only = r#"<pose><node name="hips_bb_" rotquat="1 0 0 0" trans="0 80 0"><node name="spine_bb_" rotquat="1 0 0 0" trans="0 20 0"/></node></pose>"#;
+    s.execute(POSE, json!({"data": prism_paint::tile::b64_encode(hips_only.as_bytes()), "figure": 1})).unwrap();
+    let f = fig(&s, 1);
+    assert_eq!(f.root.name, "root_group_");
+    assert_eq!(f.root.children.first().map(|c| c.name.as_str()), Some("hips_bb_"));
+}

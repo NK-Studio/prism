@@ -3643,4 +3643,7 @@ hand	Grip	꽉 쥐기
 	Poses the hands of the active 3D figure layer; without one, adds a 3D figure with these hands	활성 3D 인형 레이어의 손에 적용합니다. 없으면 이 손 모양으로 3D 인형을 추가합니다
 	Left hand picked: hand poses and Hand Pose go to it; click elsewhere for both hands	왼손을 선택했습니다. 손 포즈와 손 포즈 설정이 이 손에만 적용됩니다. 다른 곳을 클릭하면 양손으로 돌아갑니다
 	Right hand picked: hand poses and Hand Pose go to it; click elsewhere for both hands	오른손을 선택했습니다. 손 포즈와 손 포즈 설정이 이 손에만 적용됩니다. 다른 곳을 클릭하면 양손으로 돌아갑니다
-	Both hands	양손
+	Figure picked: poses from the CLIP STUDIO panel go to it; click empty canvas to drop the pick	인형을 선택했습니다. CLIP STUDIO 패널의 포즈가 이 인형에 적용됩니다. 빈 곳을 클릭하면 선택이 풀립니다
+	Nothing picked	선택 해제
+	Posed the picked figure	선택한 인형에 포즈를 적용했습니다
+	With a figure picked on the canvas (click it with the Move tool), poses that figure instead	캔버스에서 인형을 선택해 두면(이동 도구로 클릭) 새 레이어 대신 그 인형에 포즈를 적용합니다
