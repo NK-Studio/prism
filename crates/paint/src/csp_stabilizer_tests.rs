@@ -251,3 +251,51 @@ fn pen_up_catch_up_drains_pressure_and_keeps_moving_in_time() {
         prev = *p;
     }
 }
+
+#[test]
+fn velocity_input_rises_sooner_than_the_path_and_holds_at_pen_up() {
+    let cfg = CspStabilizer { level: 15, ..Default::default() };
+    // Off: no velocity input of its own.
+    let mut off = Stabilizer::new(&CspStabilizer::default(), 1.0);
+    off.push(pt(0.0, 0.0, 1.0, 0.0));
+    assert_eq!(off.speed(), None);
+    // 60 samples at 0.5 px/ms, then 9 at 8 px/ms (CLIP STUDIO's slow → fast stroke).
+    let mut s = Stabilizer::new(&cfg, 1.0);
+    let (mut x, mut out) = (0.0, Vec::new());
+    for i in 0..70 {
+        if i > 0 {
+            x += if i <= 60 { 4.0 } else { 64.0 };
+        }
+        out.push(s.push(pt(x, 0.0, 1.0, f64::from(i) * 8.0)));
+    }
+    let speed = s.speed().unwrap();
+    // The raw speeds weighted (15 − k) / 15 by age: the 9 fast samples hold 0.8 of the weight
+    // (the first fast point's two-segment speed is 4.25).
+    let w = |k: usize| (15.0 - k as f64) / 15.0;
+    let total: f64 = (0..15).map(w).sum();
+    let expected = ((0..8).map(|k| 8.0 * w(k)).sum::<f64>() + 4.25 * w(8) + (9..15).map(|k| 0.5 * w(k)).sum::<f64>()) / total;
+    assert!((speed - expected).abs() < 1e-9, "{speed} vs {expected}");
+    // The stabilized path moves slower than that: a uniform window has let in 9/15 of the step.
+    let path = (out[69].x - out[68].x) / (out[69].time - out[68].time);
+    assert!(path < speed - 1.0, "path {path} px/ms, input {speed}");
+    // Pen-up: the catch-up holds the value.
+    let mut tail = Vec::new();
+    s.finish(&mut tail);
+    assert!(!tail.is_empty());
+    assert_eq!(s.speed(), Some(speed));
+}
+
+#[test]
+fn velocity_input_follows_a_steady_pen() {
+    let mut s = Stabilizer::new(&CspStabilizer { level: 10, ..Default::default() }, 1.0);
+    for i in 0..40 {
+        s.push(pt(f64::from(i) * 24.0, 0.0, 1.0, f64::from(i) * 8.0));
+    }
+    assert!((s.speed().unwrap() - 3.0).abs() < 1e-9, "{:?}", s.speed());
+    // Untimed input reads rest, not infinity.
+    let mut untimed = Stabilizer::new(&CspStabilizer { level: 10, ..Default::default() }, 1.0);
+    for i in 0..10 {
+        untimed.push(pt(f64::from(i) * 24.0, 0.0, 1.0, 0.0));
+    }
+    assert_eq!(untimed.speed(), Some(0.0));
+}

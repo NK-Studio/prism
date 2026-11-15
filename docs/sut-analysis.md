@@ -1011,6 +1011,38 @@ pressure only; the same five strokes, sizes read through the width as above:
   makes it worse while the ramp differs (velocity only 0.154 → 0.175 px, 밀리펜 0.178 → 0.205),
   because Prism lifts at a lower speed. Not shipped; it belongs with a fix for the ramp.
 
+**Stabilized velocity (same day).** Candidate filters for the velocity input, replayed against
+the velocity-only strokes (mean size difference in px; the input held from the lift on):
+
+| Velocity input | Mean | 0.5 → 8 ramp, end | 8 → 0.5 drop |
+| --- | ---: | --- | ---: |
+| speed of the stabilized path (shipped) | 0.199 | 0.52, 0.71 | 0.06 |
+| raw speeds, uniform over the window | 0.211 | 0.52, 0.71 | 0.15 |
+| raw speeds, weights `(W − k) / W` | 0.105 | 0.12, 0.03 | 0.19 |
+| raw speeds, weights `(level − k) / level` | 0.095 | 0.12, 0.03 | 0.07 |
+| the larger of the path speed and `(W − k) / W` | 0.092 | 0.12, 0.03 | 0.06 |
+
+`W` is the current window, `k` a sample's age (0 = newest) and the raw speed each sample's
+two-segment speed (distance over time with the 8 ms rest, as unstabilized). The single filter
+weighted by the level fits as well as the two-filter maximum, and it is what Prism uses
+(`Stabilizer::speed`): the k-th newest raw speed weighs `(level − k) / level`, over the same
+fractional window as the positions, and the value holds from pen-up to the end. The path itself
+is unchanged (uniform window, so the lift point and the pressure drain still match). The fit
+rests on one stroke that separates the filters (slow → fast); the others agree with all of them.
+
+In the app, mean size difference from CLIP STUDIO over the five strokes:
+
+| Brush | Before | After |
+| --- | ---: | ---: |
+| velocity only | 0.154 | 0.089 |
+| pressure only | 0.094 | 0.092 |
+| 밀리펜 (both) | 0.178 | 0.124 |
+
+The slow → fast stroke goes from 0.39 / 0.44 px (ramp / end) to 0.14 / 0.05 with velocity only.
+Still open: with 밀리펜 the 4 px/ms end reads 0.34 → 0.40 (CLIP STUDIO drains pressure about
+one sample sooner after pen-up, and its 4 px/ms speed reads 0.48 stabilized against 0.42
+unstabilized). Unstabilized strokes are unchanged.
+
 ## Effector tilt response (2026-10-16)
 
 Same executable. Existing direct Ghidra outputs (`evidence/ghidra-effector.txt`,

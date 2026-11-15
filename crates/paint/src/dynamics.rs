@@ -285,6 +285,12 @@ impl PathWalker {
 
     /// Feed one point. `out` builds a step's dabs and returns the distance to the next step.
     pub fn push(&mut self, p: StrokePoint, out: &mut impl FnMut(StepInput) -> f64) {
+        self.push_with_speed(p, None, out);
+    }
+
+    /// [`Self::push`] with the velocity input at `p` given (document pixels per ms, as a CSP
+    /// stabilizer reports it) instead of measured from the path.
+    pub fn push_with_speed(&mut self, p: StrokePoint, speed: Option<f64>, out: &mut impl FnMut(StepInput) -> f64) {
         let Some(a) = self.last else {
             self.last = Some(p);
             self.pending_first = Some(p);
@@ -306,7 +312,11 @@ impl PathWalker {
             (0.0, self.seg_prev.1)
         };
         let (dist, dt) = (seg.0 + self.seg_prev.0, seg.1 + self.seg_prev.1);
-        let v = if dt > 0.0 { dist / dt } else { 0.0 };
+        let v = match speed.filter(|v| v.is_finite()) {
+            Some(v) => v.max(0.0) * self.zoom,
+            None if dt > 0.0 => dist / dt,
+            None => 0.0,
+        };
         self.seg_from = self.speed_at_last;
         self.seg_to = if v.is_finite() { v.min(1e6) as f32 } else { 0.0 };
         self.speed_at_last = self.seg_to;
@@ -933,13 +943,17 @@ impl DabGenerator {
         }
     }
 
-    fn walk(&mut self, pts: &[StrokePoint], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
-        for p in pts {
+    /// Walk the points; `speeds`, when it lines up with them, gives each point's velocity input
+    /// (a CSP stabilizer's, see [`crate::csp_stabilizer::Stabilizer::speed`]).
+    fn walk(&mut self, pts: &[StrokePoint], speeds: &[Option<f64>], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
+        let aligned = speeds.len() == pts.len();
+        for (i, p) in pts.iter().enumerate() {
             let p = apply_pose(&self.builder.brush, *p);
+            let speed = if aligned { speeds.get(i).copied().flatten() } else { None };
             let builder = &mut self.builder;
-            self.walker.push(p, &mut |s| builder.build(&s, dabs));
+            self.walker.push_with_speed(p, speed, &mut |s| builder.build(&s, dabs));
             if let (Some(w), Some(db)) = (self.dual_walker.as_mut(), self.dual.as_mut()) {
-                w.push(p, &mut |s| db.build(&s, dual));
+                w.push_with_speed(p, speed, &mut |s| db.build(&s, dual));
             }
         }
     }
@@ -968,11 +982,15 @@ impl DabGenerator {
     pub fn push(&mut self, pts: &[StrokePoint], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
         let mut sm = std::mem::take(&mut self.scratch);
         sm.clear();
+        let mut speeds = Vec::new();
         for p in pts {
             let p = self.stabilizer.push(*p);
+            let before = sm.len();
             self.smoother.push(p, &mut sm);
+            // The smoother may add or hold points; the velocity input follows one point each.
+            speeds.extend(std::iter::repeat_n(self.stabilizer.speed(), sm.len() - before));
         }
-        self.walk(&sm, dabs, dual);
+        self.walk(&sm, &speeds, dabs, dual);
         self.scratch = sm;
     }
 
@@ -991,11 +1009,15 @@ impl DabGenerator {
                 w.stop_in_place_steps();
             }
         }
+        let mut speeds = Vec::new();
         for p in caught_up {
+            let before = sm.len();
             self.smoother.push(p, &mut sm);
+            speeds.extend(std::iter::repeat_n(self.stabilizer.speed(), sm.len() - before));
         }
         self.smoother.finish(&mut sm);
-        self.walk(&sm, dabs, dual);
+        speeds.resize(sm.len(), self.stabilizer.speed());
+        self.walk(&sm, &speeds, dabs, dual);
         let builder = &mut self.builder;
         self.walker.finish(&mut |s| builder.build(&s, dabs));
         if let (Some(w), Some(db)) = (self.dual_walker.as_mut(), self.dual.as_mut()) {

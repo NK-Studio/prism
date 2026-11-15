@@ -75,17 +75,51 @@ pub struct Stabilizer {
     rate_scale: f64,
     /// Pen-up repeats are not input: they keep the scale measured while drawing.
     releasing: bool,
+    /// Per history sample: the raw input's speed over its two latest segments (document pixels
+    /// per ms), for CLIP STUDIO's velocity input.
+    raw_speed: VecDeque<f64>,
+    /// The raw segment before the newest sample: length (document pixels) and duration (ms).
+    raw_seg: (f64, f64),
+    /// The velocity input of the newest stabilized sample; held at pen-up.
+    speed: Option<f64>,
 }
+
+/// The rest CLIP STUDIO counts before a stroke's first segment (ms); see
+/// [`crate::dynamics::CSP_REST_MS`].
+const REST_MS: f64 = crate::dynamics::CSP_REST_MS;
 
 impl Stabilizer {
     pub fn new(cfg: &CspStabilizer, zoom: f32) -> Self {
         let cfg = cfg.bounded();
         let zoom = if zoom.is_finite() && zoom > 0.0 { f64::from(zoom) } else { 1.0 };
-        Self { window: cfg.start_window(), cfg, zoom, history: VecDeque::new(), drawing: false, rate_scale: 1.0, releasing: false }
+        Self {
+            window: cfg.start_window(),
+            cfg,
+            zoom,
+            history: VecDeque::new(),
+            drawing: false,
+            rate_scale: 1.0,
+            releasing: false,
+            raw_speed: VecDeque::new(),
+            raw_seg: (0.0, REST_MS),
+            speed: None,
+        }
     }
 
     pub fn active(&self) -> bool {
         self.cfg.level >= 1
+    }
+
+    /// CLIP STUDIO's velocity input at the newest stabilized sample, in document pixels per ms
+    /// (`None` without stabilization). It is not the speed of the stabilized path: the raw
+    /// input's two-segment speeds are averaged over the window with weights falling linearly
+    /// with age, `(level − k) / level` for the k-th newest sample, so the input rises sooner
+    /// than the path when the pen speeds up and falls with it when the pen slows down. From
+    /// pen-up it holds its value: the catch-up adds no speed. Fitted to CLIP STUDIO strokes with
+    /// velocity alone on the size (docs/sut-analysis.md › Effector velocity input ›
+    /// Stabilized velocity).
+    pub fn speed(&self) -> Option<f64> {
+        self.speed.filter(|_| self.active())
     }
 
     /// Feed one raw input sample; returns the stabilized brush position.
@@ -95,8 +129,58 @@ impl Stabilizer {
         }
         if self.history.len() >= MAX_HISTORY {
             self.history.pop_front();
+            self.raw_speed.pop_front();
         }
+        let speed = if self.releasing { self.raw_speed.back().copied().unwrap_or(0.0) } else { self.raw_input_speed(p) };
+        self.raw_speed.push_back(speed);
         self.history.push_back(p);
+        let out = self.filter(p);
+        if !self.releasing {
+            self.speed = Some(self.weighted_speed());
+        }
+        out
+    }
+
+    /// The raw input's speed over its two latest segments (see [`crate::dynamics::PathWalker`]).
+    fn raw_input_speed(&mut self, p: StrokePoint) -> f64 {
+        let Some(a) = self.history.back().copied() else { return 0.0 };
+        let len = (p.x - a.x).hypot(p.y - a.y);
+        let dt = p.time - a.time;
+        let seg = if dt > 0.0 && dt.is_finite() && len.is_finite() {
+            (len.min(1e9), dt.min(1e9))
+        } else if len > 1e-9 {
+            self.raw_seg
+        } else {
+            (0.0, self.raw_seg.1)
+        };
+        let (d, t) = (seg.0 + self.raw_seg.0, seg.1 + self.raw_seg.1);
+        self.raw_seg = seg;
+        let v = if t > 0.0 { d / t } else { 0.0 };
+        if v.is_finite() { v.min(1e6) } else { 0.0 }
+    }
+
+    /// The raw speeds over the current window, weighted `(level − k) / level` by age.
+    fn weighted_speed(&self) -> f64 {
+        let w = (self.window * self.rate_scale).max(1.0);
+        let reach = (f64::from(self.cfg.level) * self.rate_scale).max(w);
+        let n = self.raw_speed.len();
+        let (mut sum, mut weights) = (0.0, 0.0);
+        let mut used = 0.0;
+        let mut k = 0usize;
+        while (k as f64) < w {
+            if let Some(v) = n.checked_sub(1 + k).and_then(|i| self.raw_speed.get(i)) {
+                used = *v;
+            }
+            let part = (w - k as f64).min(1.0);
+            let weight = part * (reach - k as f64) / reach;
+            sum += used * weight;
+            weights += weight;
+            k += 1;
+        }
+        if weights > 0.0 && sum.is_finite() { sum / weights } else { 0.0 }
+    }
+
+    fn filter(&mut self, p: StrokePoint) -> StrokePoint {
         if !self.releasing {
             self.rate_scale = self.measure_rate_scale();
         }

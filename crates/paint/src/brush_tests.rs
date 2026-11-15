@@ -144,6 +144,35 @@ fn csp_speed_scales_by_on_screen_speed() {
 /// it, and steps between points interpolate it (measured with 밀리펜, docs/sut-analysis.md ›
 /// Effector velocity input).
 #[test]
+fn stabilized_velocity_holds_its_width_through_the_pen_up_catch_up() {
+    // Velocity alone on the size, stabilization 15: CLIP STUDIO keeps one width from the lift
+    // to the end of the line (docs/sut-analysis.md › Effector velocity input › Stabilized
+    // velocity).
+    let mut b = BrushSettings { size: 10.0, spacing: 0.1, csp_correction: true, ..brush() };
+    b.csp_stabilizer = Some(crate::CspStabilizer { level: 15, ..Default::default() });
+    b.shape_dynamics.enabled = true;
+    b.shape_dynamics.size.csp_speed = Some(CspSpeed { minimum: 0.6, curve: Some(PressureCurve::new(vec![[0.0, 1.0], [1.0, 0.0]]).unwrap()) });
+    let mut x = 0.0;
+    let pts: Vec<_> = (0..70)
+        .map(|i| {
+            if i > 0 {
+                x += if i <= 60 { 4.0 } else { 64.0 };
+            }
+            StrokePoint { time: f64::from(i) * 8.0, ..StrokePoint::new(x, 50.0, 1.0) }
+        })
+        .collect();
+    let mut g = crate::dynamics::DabGenerator::new(&b, 1.0);
+    let (mut live, mut dual) = (Vec::new(), Vec::new());
+    g.push(&pts, &mut live, &mut dual);
+    let lifted = live.last().unwrap().radius;
+    let mut tail = Vec::new();
+    g.finish(&mut tail, &mut dual);
+    assert!(tail.len() > 10, "the catch-up lays dabs: {}", tail.len());
+    assert!(tail.iter().all(|d| (d.radius - lifted).abs() < 0.05), "{lifted} then {:?}", tail.iter().map(|d| d.radius).collect::<Vec<_>>());
+    assert!(lifted < 4.6, "thinned by the input before the lift: {lifted}");
+}
+
+#[test]
 fn reads_speed_finds_a_velocity_input_on_any_dynamic() {
     let speed = Some(CspSpeed { minimum: 0.5, curve: None });
     let mut b = BrushSettings::default();
