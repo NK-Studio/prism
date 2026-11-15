@@ -1236,6 +1236,33 @@ fn colour_tips_paint_their_shape_in_their_own_colours() {
 }
 
 #[test]
+fn gray_tips_keep_their_alpha_and_their_gray_for_the_sub_colour() {
+    use super::material::tests::{c2f, database_sized, tar, tile_fixture_planes};
+    let package = |gray: [u8; 4]| tar(&c2f(&database_sized(1, 1024, tile_fixture_planes(2, 2, &[255, 255, 255, 0], Some(&gray)))));
+    let import = |gray: [u8; 4]| {
+        let mut bytes = fixture();
+        let rows: Vec<_> = ["first.layer", "second.layer"].iter().map(|p| vec![text(p), Value::Blob(package(gray))]).collect();
+        leaf(&mut bytes, 4, &rows);
+        read_sut(&bytes, "SUT", &prism_raster::Interrupt::NONE).unwrap()
+    };
+    // Opaque gray (Chainmail's arc ends): coverage is the alpha, the gray rides in the colours.
+    let imported = import([0, 128, 255, 0]);
+    let b = &imported.presets[0].brush;
+    let TipShape::Sequence(tips) = &b.tip else { panic!("sequence expected") };
+    assert_eq!(tips[0].data, [65535, 65535, 65535, 0]);
+    let gray = b.csp_tip_colors.first().cloned().flatten().map(|c| c.rgb.into_vec());
+    assert_eq!(gray, Some(vec![0, 0, 0, 128, 128, 128, 255, 255, 255, 0, 0, 0]));
+    assert_eq!(b.csp_tip_grays, [true, true]);
+    assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+    // A gray material without visible gray stays a plain density tip.
+    let black = import([0, 0, 0, 0]);
+    let b = &black.presets[0].brush;
+    assert!(b.csp_tip_colors.is_empty() && b.csp_tip_grays.is_empty());
+    let TipShape::Sequence(tips) = &b.tip else { panic!("sequence expected") };
+    assert_eq!(tips[0].data, [65535, 65535, 65535, 0]);
+}
+
+#[test]
 fn spray_size_synchronized_with_the_brush_keeps_its_ratio() {
     let fields = [
         ("BrushUseSpray", Value::Integer(1)),

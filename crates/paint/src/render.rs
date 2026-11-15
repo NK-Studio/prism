@@ -135,6 +135,12 @@ pub struct BrushContext {
     tip_means: Vec<Option<[f32; 3]>>,
     /// `tip_colors` trimmed like `ribbon_tips`, for ribbon slices.
     ribbon_colors: Vec<Option<Arc<[Mips; 3]>>>,
+    /// Which prepared colour tips are CSP gray tips (their planes hold the gray): see
+    /// [`BrushSettings::csp_tip_grays`]. Empty when none is.
+    tip_grays: Vec<bool>,
+    /// A gray tip's density `alpha × (1 − gray)`, laid instead of its alpha where it paints no
+    /// colours of its own (erasing, colour mixing, masks). Per prepared slot.
+    gray_density: Vec<Option<Arc<Mips>>>,
     /// CSP Ribbon: each tip without the transparent padding line at its end along the ribbon,
     /// and the factors from the full tip's normalised coordinates to the trimmed one's.
     ribbon_tips: Vec<(Arc<Mips>, [f32; 2])>,
@@ -263,13 +269,28 @@ impl BrushContext {
         let (texture, texture_scale) = prepare_pattern(&brush);
         // Colour tips paint their own colours (except when erasing): per pixel, or their mean
         // colour when the brush mixes colours (the mixing reservoir holds one colour).
-        let prepared: Vec<(usize, &GrayTile)> = match &brush.tip {
-            _ if brush.erase || brush.csp_tip_colors.is_empty() => Vec::new(),
+        let all_tips: Vec<(usize, &GrayTile)> = match &brush.tip {
+            _ if brush.csp_tip_colors.is_empty() => Vec::new(),
             TipShape::Sampled(g) if g.is_valid() => vec![(0, g)],
             TipShape::Sequence(tips) => tips.iter().enumerate().take(64).filter(|(_, g)| g.is_valid()).collect(),
             _ => Vec::new(),
         };
+        let prepared: &[(usize, &GrayTile)] = if brush.erase { &[] } else { &all_tips };
         let colors = |i: usize| brush.csp_tip_colors.get(i).and_then(Option::as_ref);
+        let gray = |i: usize| colors(i).is_some() && brush.csp_tip_grays.get(i).copied().unwrap_or(false);
+        let tip_grays: Vec<bool> = prepared.iter().map(|(i, _)| gray(*i)).collect();
+        // Built for erasing too, which lays no colours.
+        let gray_density: Vec<Option<Arc<Mips>>> = all_tips
+            .iter()
+            .map(|(i, g)| {
+                let c = colors(*i).filter(|c| gray(*i) && c.fits(g))?;
+                let data = g.data.iter().zip(c.rgb.chunks_exact(3)).map(|(a, px)| {
+                    let v = px.first().copied().unwrap_or(0);
+                    ((u32::from(*a) * u32::from(255 - v) + 127) / 255) as u16
+                });
+                Some(Arc::new(Mips::new(&GrayTile { width: g.width, height: g.height, data: data.collect() })))
+            })
+            .collect();
         let tip_means: Vec<_> = prepared.iter().map(|(i, g)| colors(*i)?.mean(g)).collect();
         let planes: Vec<_> = if brush.csp_mixing.is_some() { Vec::new() } else { prepared.iter().map(|(i, g)| colors(*i)?.premultiplied(g)).collect() };
         let tip_colors: Vec<_> = planes.iter().map(|p| p.as_ref().map(|p| Arc::new(p.each_ref().map(Mips::new)))).collect();
@@ -291,6 +312,8 @@ impl BrushContext {
             dual_sequence: if brush.dual_brush.enabled { sequence(&brush.dual_brush.tip) } else { Vec::new() },
             tip_colors: if tip_colors.iter().any(Option::is_some) { tip_colors } else { Vec::new() },
             tip_means: if tip_means.iter().any(Option::is_some) { tip_means } else { Vec::new() },
+            tip_grays: if tip_grays.iter().any(|g| *g) { tip_grays } else { Vec::new() },
+            gray_density: if gray_density.iter().any(Option::is_some) { gray_density } else { Vec::new() },
             ribbon_colors: if ribbon_colors.iter().any(Option::is_some) { ribbon_colors } else { Vec::new() },
             ribbon_tips,
             texture,
@@ -402,14 +425,37 @@ impl BrushContext {
         !self.tip_means.is_empty()
     }
 
-    /// The mean colour of dab `d`'s colour tip (`None`: it paints in the brush colour).
-    pub fn tip_mean_color(&self, d: &Dab) -> Option<[f32; 3]> {
-        let slot = match (d.ribbon, self.sequence.len()) {
+    /// The prepared tip slot dab `d` draws (a ribbon slice's tip, or the sequence's).
+    fn color_slot(&self, d: &Dab) -> usize {
+        match (d.ribbon, self.sequence.len()) {
             (_, 0) => 0,
             (Some(slice), n) => slice.tip as usize % n,
             (None, _) => self.tip_slot(d),
-        };
+        }
+    }
+
+    /// The mean colour of dab `d`'s colour tip (`None`: it paints in the brush colour, also for a
+    /// gray tip, whose colours follow the dab's).
+    pub fn tip_mean_color(&self, d: &Dab) -> Option<[f32; 3]> {
+        let slot = self.color_slot(d);
+        if self.tip_grays.get(slot).copied().unwrap_or(false) {
+            return None;
+        }
         self.tip_means.get(slot).copied().flatten()
+    }
+
+    /// Whether dab `d` draws a CSP gray tip: [`Self::rasterize_tip_color`] then gives its gray.
+    pub fn tip_is_gray(&self, d: &Dab) -> bool {
+        self.tip_grays.get(self.color_slot(d)).copied().unwrap_or(false)
+    }
+
+    /// Dab `d`'s gray-tip density (`alpha × (1 − gray)`), when it draws a gray tip outside a ribbon.
+    fn gray_density_for(&self, d: &Dab) -> Option<&Mips> {
+        if d.ribbon.is_some() || self.gray_density.is_empty() {
+            return None;
+        }
+        let slot = if self.sequence.is_empty() { 0 } else { self.tip_slot(d) };
+        self.gray_density.get(slot).and_then(Option::as_deref)
     }
 
     /// The straight RGB of dab `d`'s colour tip at each pixel of `rect` (row-major), sampled exactly
@@ -1049,6 +1095,13 @@ fn raster_dab(ctx: &BrushContext, d: &Dab, rect: Rect, want_color: bool, mut cov
     if want_color && ctx.rasterize_colored(d, rect, &mut cov, &mut rgb) {
         return (cov, Some(rgb));
     }
+    // A gray tip that lays no colours of its own keeps its gray as transparency.
+    if (!want_color || ctx.brush.csp_mixing.is_some())
+        && let Some(density) = ctx.gray_density_for(d)
+    {
+        ctx.rasterize_with(d, false, rect, &mut cov, Some(density));
+        return (cov, None);
+    }
     ctx.rasterize(d, false, rect, &mut cov);
     let colored = want_color && ctx.rasterize_tip_color(d, rect, &mut rgb);
     (cov, colored.then_some(rgb))
@@ -1414,7 +1467,7 @@ impl StrokeRenderer {
             };
             self.scratch = cov;
             let colored = tip_rgb.is_some();
-            let tip_rgb = tip_rgb.unwrap_or_default();
+            let mut tip_rgb = tip_rgb.unwrap_or_default();
             // A colour tip's dab colour: its mean (mixing and ribbons lay one colour a dab).
             if let Some([r, g, b]) = self.ctx.tip_mean_color(d).filter(|_| self.per_dab_color) {
                 d.color = [r, g, b, d.color[3]];
@@ -1451,6 +1504,14 @@ impl StrokeRenderer {
             };
             // Mixing dabs blend towards their own colour and alpha: they build up to full weight.
             let ceiling = if target_alpha.is_some() { 1.0 } else { d.opacity };
+            // A gray tip: its gray blends the dab colour towards the sub colour, pixel by pixel.
+            if colored && self.ctx.tip_is_gray(d) {
+                let (c, sub) = (d.color, self.ctx.brush.background);
+                for px in tip_rgb.iter_mut() {
+                    let g = px[0].clamp(0.0, 1.0);
+                    *px = std::array::from_fn(|k| c[k] + (sub[k] - c[k]) * g);
+                }
+            }
             match self.fmt.filter(|_| colored) {
                 Some(f) => {
                     let nc = f.mode.color_channels().min(native.len());

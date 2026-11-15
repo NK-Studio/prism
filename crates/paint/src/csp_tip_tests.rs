@@ -138,6 +138,67 @@ fn a_sequence_mixes_colour_and_brush_colour_tips_in_tip_order() {
     }
 }
 
+/// A 16×16 opaque tip, gray 0 on the left half and `right` on the right.
+fn gray_brush(right: u8) -> BrushSettings {
+    let gray: Vec<u8> = (0..16 * 16).flat_map(|i| [if i % 16 < 8 { 0 } else { right }; 3]).collect();
+    BrushSettings {
+        size: 16.0,
+        pressure_size: false,
+        color: [1.0, 0.0, 0.0, 1.0],
+        background: [0.0, 0.0, 1.0, 1.0],
+        tip: TipShape::Sampled(solid(16, 16)),
+        csp_tip_colors: vec![Some(CspTipColor { width: 16, height: 16, rgb: gray.into() })],
+        csp_tip_grays: vec![true],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn gray_tips_blend_the_dab_colour_towards_the_sub_colour_at_every_depth() {
+    use prism_color::{ColorMode, SampleType};
+    let b = gray_brush(128);
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+        render_stroke(&mut s, &b, &[StrokePoint::new(20.0, 20.0, 1.0)], None, false, 1.0);
+        let (left, right) = (s.rgba(16, 20), s.rgba(24, 20));
+        for (actual, expected) in left.iter().zip([1.0, 0.0, 0.0, 1.0]) {
+            assert!((actual - expected).abs() < 0.01, "{sample:?} left {left:?}");
+        }
+        // Gray 128/255: about half way to the sub colour, and fully opaque.
+        for (actual, expected) in right.iter().zip([0.498, 0.0, 0.502, 1.0]) {
+            assert!((actual - expected).abs() < 0.01, "{sample:?} right {right:?}");
+        }
+    }
+    // The dab's own colour (here a fixed sub-colour blend) is what the gray starts from.
+    let tinted = BrushSettings { csp_sub_color: Some(0.5), ..gray_brush(255) };
+    let mut s = Surface::new(PixelFormat::RGBA32F);
+    render_stroke(&mut s, &tinted, &[StrokePoint::new(20.0, 20.0, 1.0)], None, false, 1.0);
+    let (left, right) = (s.rgba(16, 20), s.rgba(24, 20));
+    assert!((left[0] - 0.5).abs() < 0.01 && (left[2] - 0.5).abs() < 0.01, "{left:?}");
+    assert!(right[0] < 0.01 && right[2] > 0.99, "{right:?}");
+}
+
+#[test]
+fn gray_tips_erase_and_mix_with_their_gray_as_transparency() {
+    // Erasing an opaque layer: the gray half erases only by its darkness (1 − gray).
+    let erase = BrushSettings { erase: true, ..gray_brush(255) };
+    let mut s = Surface::new(PixelFormat::RGBA32F);
+    s.fill_rect(prism_geom::Rect::new(0, 0, 64, 64), &[1.0, 1.0, 1.0, 1.0]);
+    render_stroke(&mut s, &erase, &[StrokePoint::new(20.0, 20.0, 1.0)], None, false, 1.0);
+    assert!(s.rgba(16, 20)[3] < 0.01, "black half erases");
+    assert!(s.rgba(24, 20)[3] > 0.99, "white half keeps the layer");
+    // Colour mixing lays one colour a dab: the white half stays transparent.
+    let mixing = BrushSettings { csp_mixing: Some(crate::csp_mixing::CspColorMixing::default()), ..gray_brush(255) };
+    let mut s = Surface::new(PixelFormat::RGBA32F);
+    render_stroke(&mut s, &mixing, &[StrokePoint::new(20.0, 20.0, 1.0)], None, false, 1.0);
+    assert!(s.rgba(16, 20)[3] > 0.99 && s.rgba(24, 20)[3] < 0.01, "{:?} {:?}", s.rgba(16, 20), s.rgba(24, 20));
+    // Hostile flags (longer than the colours, on a tip without colours) change nothing and never panic.
+    let hostile = BrushSettings { csp_tip_colors: vec![None], csp_tip_grays: vec![true, true, true], ..gray_brush(255) };
+    let mut s = Surface::new(PixelFormat::RGBA32F);
+    render_stroke(&mut s, &hostile, &[StrokePoint::new(20.0, 20.0, 1.0)], None, false, 1.0);
+    assert!(s.rgba(24, 20)[0] > 0.99, "{:?}", s.rgba(24, 20));
+}
+
 #[test]
 fn ribbons_lay_colour_tips_pixel_by_pixel() {
     // Left half red, right half blue; at no turn the tip's column 0 runs on the right of travel.

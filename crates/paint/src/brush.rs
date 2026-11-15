@@ -626,6 +626,13 @@ pub struct BrushSettings {
     /// colour (`None`: that tip paints in the brush colour). Ignored with colour mixing or erasing.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub csp_tip_colors: Vec<Option<crate::csp_tip::CspTipColor>>,
+    /// Imported CSP gray tips: `true` where `csp_tip_colors[i]` holds tip `i`'s gray (the same
+    /// value in every channel) instead of its colours. CLIP STUDIO draws a gray tip's coverage from
+    /// its alpha and its gray as a blend from the dab colour (black) to the sub colour (white,
+    /// `background`); erasing and colour mixing keep the density `alpha × (1 − gray)`
+    /// (measured, docs/sut-analysis.md › Gray brush tips).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub csp_tip_grays: Vec<bool>,
     /// Imported CSP Erase blending mode: the brush erases with whichever tool runs it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub csp_erase: bool,
@@ -720,6 +727,7 @@ impl Default for BrushSettings {
             csp_ribbon: None,
             csp_tip_order: None,
             csp_tip_colors: Vec::new(),
+            csp_tip_grays: Vec::new(),
             csp_erase: false,
             csp_stroke: None,
             csp_size_by_view: false,

@@ -511,7 +511,9 @@ fn control(ui: &mut egui::Ui, id: u32, label: &str, key: &str, m: &SutBrushMetad
                     b.csp_sub_color_dynamic = None;
                 }
             }
-            if !b.csp_tip_colors.is_empty() {
+            // Gray tips follow the dab colour; only colour tips keep their own colours.
+            let gray = |i: usize| b.csp_tip_grays.get(i).copied().unwrap_or(false);
+            if b.csp_tip_colors.iter().enumerate().any(|(i, c)| c.is_some() && !gray(i)) {
                 ui.small(tl!("Colour tips keep their own colours"));
             }
         }

@@ -1713,8 +1713,8 @@ The 15 CHERU hair-highlight tips are colour layers drawn in pure white with
 paint highlights, so CLIP STUDIO must draw colour tips in their own colours unless *Change brush
 tip colour* is on (inference, not traced). Prism's tips are density masks painted in the brush
 colour, so a colour tip now uses its alpha as the shape, and the import warns
-(`COLOUR_TIP`) when CLIP STUDIO would keep the tip's colours. Gray tips keep
-`alpha × (1 − gray)`. With *Change brush tip colour* on, Prism already does what CLIP STUDIO does,
+(`COLOUR_TIP`) when CLIP STUDIO would keep the tip's colours. Gray tips kept
+`alpha × (1 − gray)` until 2026-11-15; see Gray brush tips. With *Change brush tip colour* on, Prism already does what CLIP STUDIO does,
 so that setting no longer warns.
 
 ### Still open (measured on the local library)
@@ -1996,8 +1996,51 @@ PC for the run. Sub-colour share per pixel (median, solved against white for cov
 Direction and scale match: the sub colour at a light touch, the main colour as pressure rises.
 Both trail the curve (stabilization 7 and overlapping tips 170 px wide). CLIP STUDIO trails a
 little further and keeps sub-coloured parts where tips overlap (upper quartile 0.19 at pressure
-0.95, Prism 0.00); with "Blend brush tips with Darken" a darker earlier tip survives. Why its
-earlier tips persist longer (pressure smoothing, tip spacing at the start) is not measured.
+0.95, Prism 0.00). The cause is the next section, not pressure lag.
+
+### Gray brush tips draw their gray in the sub colour (measured 2026-11-15)
+
+Same setup, with strokes at **constant** pressure (doc x 150→1450 at 1.0 and at 0.3) and single
+taps, on a transparent layer (Chainmail paints Compare density, which leaves an opaque layer
+alone). Sub-colour share per pixel, solved against the white paper:
+
+| Constant pressure | CLIP STUDIO p10 / median / p90 | Prism |
+| --- | --- | --- |
+| 1.0 | −0.01 / 0.08 / 0.29 | 0.00 / 0.00 / 0.00 |
+| 0.3 | 0.26 / 0.32 / 0.49 | 0.26 / 0.26 / 0.27 |
+| 1.0 and 0.3, *Change brush tip color* off | −0.01 / 0.08 / 0.29 (both) | — |
+
+- The lower bound equals Prism's amount × curve exactly, and start, middle and end of each stroke
+  read the same, so the pressure response itself matches and nothing lags.
+- The extra sub colour sits at the ends of every arc, the same place in every dab. The tip images
+  are gray materials (pixel kind 17): opaque (alpha > 200) with gray 0 in the middle rising to
+  about 0.5 at the arc ends. With *Change brush tip color* off the arc ends stay sub-coloured and
+  both pressures look the same, so this is not part of colour jitter.
+- **Inference (measured, not traced):** CLIP STUDIO draws a gray tip's coverage from its alpha and
+  its gray as a blend from the drawing colour (black) towards the sub colour (white). With the
+  sub-colour blend `t` on, the pixel's sub share fits `t + (1 − t)·g` (0.26 + 0.74 × 0.3 ≈ 0.48
+  against the measured 0.49). Prism reads a gray tip as density `alpha × (1 − gray)` (Colour brush
+  tips, above), which is indistinguishable while the sub colour is white over white paper, and
+  wrong as soon as either is not.
+- **Prism (2026-11-15).** A primary tip from a gray material with visible gray (at least 1 % of its
+  pixels with alpha ≥ ½ at gray ≥ 8/255) imports as its alpha, with its gray in every channel of
+  `cspTipColors` and `cspTipGrays` set for it; this holds whether or not *Change brush tip color* is
+  on. The renderer lays it through the colour-tip path and blends each pixel from the dab colour to
+  `background` (the sub colour) by the gray. Erasing and colour mixing lay one colour, so they keep
+  the old density `alpha × (1 − gray)`; so do alpha-only and thumbnail materials, and dual brush tips
+  (not measured). Same strokes rendered again in Prism: 0.00 / 0.08 / 0.28 at pressure 1.0 and
+  0.26 / 0.32 / 0.48 at 0.3, against CLIP STUDIO's −0.01 / 0.08 / 0.29 and 0.26 / 0.32 / 0.49.
+- 29 of the 159 local sub tools have gray tips with at least 5 % of their opaque pixels at gray
+  ≥ 32: the lace, scallop and ribbon brushes, both lightning brushes and Ikazuchi ×2 (all-gray
+  tips), 茂み下白黒, SMOKE 1, 爆発, Sparkle-Lei D - sub glow and the Chainmail 2-colour brushes.
+- **Two more gaps on the same brush, silently dropped by the import:** `BrushIntervalEffector`
+  (spacing by pressure, minimum 40 %: CLIP STUDIO spaces the 0.3 row about twice as densely) and
+  `BrushThicknessEffector` (thickness by pressure, minimum 75 %). Locally 15 sub tools use an
+  active spacing effector and 22 a thickness effector; neither is imported or warned about.
+- **Taps.** A single-sample pen tap paints a dab in CLIP STUDIO, at a lower effective pressure
+  (sub share 0.21 for a tap at 1.0, 0.46 at 0.3). In the live Prism app the same tap leaves a
+  history step but no pixels; `paint.stroke` with one point does paint (`local_csp_render_one`).
+  Cause not found yet.
 
 ### Smaller brush options
 

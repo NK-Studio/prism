@@ -108,6 +108,8 @@ implementation does not establish exact Photoshop fidelity for ABR brushes.
 | Watercolor-edge units | 1 | Value used in pixels; 2026-11-15: unit 2 is pixels (measured), no longer warns; `mod.rs` |
 | Emphasize texture density | 1 | Approximated by contrast; `mod.rs` |
 | Start/end fade type 2 | 1 | Unsupported; `mod.rs` |
+| Gray tip drawn in the sub colour (2026-11-15) | 0 (no warning) | 29 sub tools; fixed the same day: gray blends the dab colour towards the sub colour (`cspTipGrays`), matched against CLIP STUDIO; `sut-analysis.md` › Gray brush tips |
+| Spacing / thickness by pressure (2026-11-15) | 0 (no warning) | 15 / 22 sub tools; `BrushIntervalEffector`, `BrushThicknessEffector` not imported |
 
 The screenshot's **葉っぱブラシ3** was reproduced in this run: imported, produced a
 stroke and emitted the same constant sub-color warning. It also has eight
