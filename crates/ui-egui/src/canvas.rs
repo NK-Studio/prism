@@ -3447,8 +3447,11 @@ fn tool_move(app: &mut PrismApp, x: f64, y: f64, pressure: f32, mods: egui::Modi
         let [x, y] = crate::special_ruler_ui::snap(d, [x, y], mods.shift);
         let sample = app.stylus.sample().unwrap_or_default();
         let pose_changed = app.stylus.stroke.last().is_some_and(|p| *p != [sample.tilt_x, sample.tilt_y, sample.rotation]);
-        let timed_build_up = app.session.tools.brush.build_up && app.stylus.times.last().is_some_and(|t| app.stylus.time > *t);
-        if d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25 || p[2] != f64::from(pressure)) || pose_changed || timed_build_up {
+        // A pen at rest still counts for the airbrush and for CSP's velocity input (the rest is a
+        // segment at speed 0, not part of the next move's duration).
+        let brush = &app.session.tools.brush;
+        let timed = (brush.build_up || brush.reads_speed()) && app.stylus.times.last().is_some_and(|t| app.stylus.time > *t);
+        if d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25 || p[2] != f64::from(pressure)) || pose_changed || timed {
             d.points.push([x, y, pressure as f64]);
             app.stylus.record_point();
         }
@@ -4571,6 +4574,28 @@ mod tests {
         // Transparency and points outside the canvas have nothing to compare.
         assert!(super::eyedropper_ring_colors(&mut app, 30.0, 10.0).is_none());
         assert!(super::eyedropper_ring_colors(&mut app, -1.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn a_resting_pen_keeps_its_samples_for_csp_velocity_input() {
+        // CLIP STUDIO counts a pen held still as segments at speed 0: the first move after a rest
+        // reads half its speed, not the move spread over the whole rest.
+        let points = |speed: bool| {
+            let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
+            app.ui.tool = Tool::Brush;
+            if speed {
+                app.session.tools.brush.shape_dynamics.size.csp_speed = Some(prism_paint::CspSpeed { minimum: 0.6, curve: None });
+            }
+            app.stylus.time = 0.0;
+            tool_event(&mut app, ToolEvent::Down { x: 5.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            for (i, x) in [5.0, 5.0, 5.0, 30.0].into_iter().enumerate() {
+                app.stylus.time = 8.0 * (i + 1) as f64;
+                tool_event(&mut app, ToolEvent::Move { x, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            }
+            app.drag.as_ref().map_or(0, |d| d.points.len())
+        };
+        assert_eq!(points(true), points(false) + 3, "three resting samples kept");
     }
 
     #[test]

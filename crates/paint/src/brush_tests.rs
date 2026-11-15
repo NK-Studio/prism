@@ -142,6 +142,20 @@ fn csp_speed_scales_by_on_screen_speed() {
 /// it, and steps between points interpolate it (measured with 밀리펜, docs/sut-analysis.md ›
 /// Effector velocity input).
 #[test]
+fn reads_speed_finds_a_velocity_input_on_any_dynamic() {
+    let speed = Some(CspSpeed { minimum: 0.5, curve: None });
+    let mut b = BrushSettings::default();
+    assert!(!b.reads_speed());
+    b.transfer.flow.csp_speed = speed.clone();
+    assert!(b.reads_speed());
+    let b = BrushSettings {
+        csp_thickness_dynamic: Some(crate::CspThickness { dynamic: Dynamic { csp_speed: speed, ..Dynamic::default() }, vertical: false }),
+        ..Default::default()
+    };
+    assert!(b.reads_speed());
+}
+
+#[test]
 fn csp_speed_is_averaged_over_two_segments_and_interpolated() {
     use crate::dynamics::{PathWalker, StepInput};
     let mut walker = PathWalker::new(None).with_zoom(1.0);
@@ -170,6 +184,34 @@ fn csp_speed_is_averaged_over_two_segments_and_interpolated() {
     assert!((at(144.0) - 8.0).abs() < 1e-6, "{seen:?}");
     // Halfway along the first fast segment: halfway between the two ends.
     assert!((at(48.0) - (0.5 + 4.25) / 2.0).abs() < 1e-6, "{seen:?}");
+}
+
+#[test]
+fn csp_speed_is_distance_over_time_with_an_8_ms_rest_before_the_stroke() {
+    use crate::dynamics::{PathWalker, StepInput};
+    // The velocity input of the step laid at `x` (steps every 4 px).
+    let speed_at = |pts: &[(f64, f64)], x: f64| {
+        let mut walker = PathWalker::new(None).with_zoom(1.0);
+        let mut seen: Vec<(f64, f32)> = Vec::new();
+        for &(px, time) in pts {
+            walker.push(StrokePoint { time, ..StrokePoint::new(px, 0.0, 1.0) }, &mut |s: StepInput| {
+                seen.push((s.point.x, s.speed));
+                4.0
+            });
+        }
+        seen.iter().find(|(px, _)| (*px - x).abs() < 1e-6).map(|(_, s)| *s).unwrap()
+    };
+    // 128 px in 16 ms from rest: 128 / (16 + 8) at the first point, then 8 px/ms.
+    let fast = [(0.0, 0.0), (128.0, 16.0), (256.0, 32.0)];
+    assert!((speed_at(&fast, 128.0) - 128.0 / 24.0).abs() < 1e-4);
+    assert!((speed_at(&fast, 256.0) - 8.0).abs() < 1e-4);
+    // A pen resting 16 ms first: its samples are segments at speed 0.
+    let rested = [(0.0, 0.0), (0.0, 8.0), (0.0, 16.0), (64.0, 24.0), (128.0, 32.0)];
+    assert!((speed_at(&rested, 64.0) - 4.0).abs() < 1e-4);
+    assert!((speed_at(&rested, 128.0) - 8.0).abs() < 1e-4);
+    // Unequal intervals: distance over time, not the mean of the two speeds (0.5 and 8 px/ms).
+    let uneven = [(0.0, 0.0), (4.0, 8.0), (8.0, 16.0), (136.0, 32.0)];
+    assert!((speed_at(&uneven, 136.0) - 132.0 / 24.0).abs() < 1e-4);
 }
 
 #[test]

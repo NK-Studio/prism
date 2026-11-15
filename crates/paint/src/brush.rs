@@ -801,6 +801,19 @@ impl BrushSettings {
         self.csp_correction && self.csp_post_correction.is_none() && (tip || particle)
     }
 
+    /// Any dynamic reads CLIP STUDIO's velocity input, so a stroke needs the times of samples
+    /// where the pen rests: they are segments at speed 0 (measured, docs/sut-analysis.md ›
+    /// Effector velocity input › Stroke start).
+    pub fn reads_speed(&self) -> bool {
+        let (s, c, t, k) = (&self.shape_dynamics, &self.color_dynamics, &self.transfer, &self.scattering);
+        [&s.size, &s.angle, &s.roundness, &k.scatter, &k.count_jitter, &self.texture.depth_jitter, &c.fg_bg, &t.opacity, &t.flow, &t.wetness, &t.mix]
+            .into_iter()
+            .chain(self.csp_sub_color_dynamic.as_ref())
+            .chain(self.csp_spacing_dynamic.as_ref())
+            .chain(self.csp_thickness_dynamic.as_ref().map(|t| &t.dynamic))
+            .any(|d| d.csp_speed.is_some())
+    }
+
     /// Keep Photoshop's tool setting available for switching back without filtering CSP input.
     pub fn effective_smoothing(&self) -> Smoothing {
         if self.csp_correction { Smoothing::default() } else { self.smoothing.clone() }

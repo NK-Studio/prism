@@ -830,12 +830,12 @@ case again with 16 ms samples. Velocity input along the path (`v` from the width
 - At the stroke's start the first point reads 0 and the second 0.61–0.67 for a fast start; counting
   the missing earlier segment as rest gives 0.5, not counting it 1. Prism counts it as rest.
 
-Prism's `PathWalker` keeps the last segment speed and the input at the last point: each new point
-gets the mean of its segment's speed and the previous one, and a step at fraction `f` of a segment
-gets `from + (to − from)·f`. A move without timestamps reuses the previous segment's speed. Prism's
-values above 1 at full speed are the width difference already seen at constant speed (Prism's lines
-end slightly thinner at small sizes), not the speed. Not measured: whether the mean is of speeds or
-of distance over time when the sample intervals differ.
+Prism's `PathWalker` keeps the last segment (on-screen length and duration) and the input at the
+last point: each new point gets the distance over the time of its segment and the previous one
+(the mean of the two speeds when the intervals are equal; see Stroke start for unequal ones), and
+a step at fraction `f` of a segment gets `from + (to − from)·f`. A move without timestamps repeats
+the previous segment. Prism's values above 1 at full speed are the width difference already seen
+at constant speed (Prism's lines end slightly thinner at small sizes), not the speed.
 
 **With stabilization (measured the same day).** 밀리펜 with Stabilization 15 (no Adjust by speed,
 stickiness 0), 100 % view, five strokes from x 360: 4 px/ms and 8 px/ms throughout, 0.5 then
@@ -871,9 +871,45 @@ Mean difference from CLIP STUDIO over all 42 points (`v` capped at 1): 0.159 bef
 
 Prism: `Stabilizer::average` averages `time` like `x`, `y` and pressure, and after a moving stroke
 `finish` feeds `{ pressure: 0, ..last }` (a stationary click keeps its pressure). Remaining
-differences: the first 40–100 px of a stroke (CLIP STUDIO is slower there) and Prism's line
-already being slightly thinner at full speed. Not measured: Adjust by speed, stickiness above 0,
-and whether a mouse's release sample also has pressure 0 (Prism applies it to every pointer).
+differences: the first 40–100 px of a stroke (see Stroke start) and Prism's line already being
+slightly thinner at full speed. Not measured: Adjust by speed, stickiness above 0, and whether a
+mouse's release sample also has pressure 0 (Prism applies it to every pointer).
+
+**Stroke start (measured the same day).** 밀리펜 without stabilization, 100 % view, strokes from
+x 360 that start moving at once (2, 4, 8 and 16 px/ms with 8 ms samples, 8 px/ms with 16 ms
+samples, one 4 px slow sample then 8 px/ms) and the same after the pen rests 40 or 80 ms (samples
+at the down position). `v` from the width against a 0.5 px/ms stroke, at the first input points:
+
+| Stroke | First point | CLIP STUDIO | Two-segment mean | Distance over time, 8 ms rest |
+| --- | --- | ---: | ---: | ---: |
+| rest 80 ms, then 8 px/ms (8 ms samples) | x 424 | 0.51 | 0.50 | 0.50 |
+| 8 px/ms with 16 ms samples, at once or after 40 ms rest | x 488 | 0.70–0.73 | 0.50 | 0.67 |
+| 8 px/ms (8 ms samples) at once | x 424 | 0.67 | 0.50 | 0.50 |
+| 4 px/ms at once: points 2–4 (peak), then steady | x 424–488 | 0.51–0.59 (0.63), 0.51 | 0.50 | 0.50 |
+| 4 px/ms after 40 ms rest: points 2–4, then steady | x 424–488 | 0.44–0.49, 0.50 | 0.50 | 0.50 |
+
+- A pen resting before it moves is a run of segments at speed 0: after 80 ms of rest the first
+  fast point reads half its speed and the next the full speed. Prism's canvas dropped samples that
+  did not move, so the first move's duration spanned the whole rest and its speed came out near 0
+  (0.03 at x 424 after 40 ms). It now keeps them when a dynamic reads the velocity input
+  (`BrushSettings::reads_speed`), as it already did for the airbrush.
+- With unequal intervals the input is the distance over the time of the two segments, not the mean
+  of their speeds: a 16 ms fast segment after an 8 ms rest reads 0.73 (two thirds: 0.67; the mean:
+  0.5). The same holds at the stroke's start without a rest, so the missing segment counts as an
+  8 ms rest (`CSP_REST_MS`): a 16 ms rest would read 0.5.
+- Strokes that move at once read 10–25 % faster than their speed for about the first 30 ms (8 px/ms
+  0.67 at the first point; 4 and 2 px/ms overshoot their steady value and settle by about the fifth
+  sample), and not at all after a rest. This reads like CLIP STUDIO timing the first samples late
+  (a stall when the stroke starts, then a burst), not a rule of the effector; Prism does not
+  reproduce it. Inference, not traced.
+- Within a segment CLIP STUDIO's value rises a little faster just after a point than a straight
+  line (about +0.1 in the first 8–16 px of a stroke); not modelled.
+
+Mean difference from CLIP STUDIO over 34 points of each stroke (`v` capped at 1): the first seven
+strokes 0.076 before, 0.048 after (resting 40 ms then 8 px/ms 0.184 → 0.031, 16 ms samples
+0.088 → 0.047); the seven confirming strokes 0.066 with the resting samples kept but speeds
+averaged, 0.043 with distance over time (16 ms samples 0.119 → 0.042–0.044). The stabilized
+strokes above are unchanged.
 
 ## Effector tilt response (2026-10-16)
 

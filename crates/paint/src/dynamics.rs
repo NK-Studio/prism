@@ -176,6 +176,11 @@ pub struct StepInput {
     pub speed: f32,
 }
 
+/// The rest CLIP STUDIO counts before a stroke's first segment for its velocity input (ms): a
+/// fast first segment of 16 ms reads two thirds of its speed, one of 8 ms half (measured,
+/// docs/sut-analysis.md › Effector velocity input › Stroke start).
+pub const CSP_REST_MS: f64 = 8.0;
+
 /// Walks a polyline and emits steps, each as far from the last as the step's own callback says (the
 /// spacing of the dab it laid), plus airbrush steps in time.
 #[derive(Clone, Debug)]
@@ -204,9 +209,10 @@ pub struct PathWalker {
     wait_for_direction: bool,
     /// Screen pixels per document pixel, for the on-screen speed.
     zoom: f64,
-    /// On-screen speed (screen pixels per ms) of the previous segment.
-    seg_speed_prev: f32,
-    /// CSP's velocity input at the last input point: the mean speed of the two segments before it.
+    /// The previous segment's on-screen length (screen pixels) and duration (ms); before the
+    /// first segment, a rest of [`CSP_REST_MS`].
+    seg_prev: (f64, f64),
+    /// CSP's velocity input at the last input point: the speed over the two segments before it.
     speed_at_last: f32,
     /// The velocity input at the current segment's two ends; steps between them interpolate.
     seg_from: f32,
@@ -230,7 +236,7 @@ impl PathWalker {
             in_place: true,
             wait_for_direction: false,
             zoom: 1.0,
-            seg_speed_prev: 0.0,
+            seg_prev: (0.0, CSP_REST_MS),
             speed_at_last: 0.0,
             seg_from: 0.0,
             seg_to: 0.0,
@@ -286,23 +292,25 @@ impl PathWalker {
         };
         let (dx, dy) = (p.x - a.x, p.y - a.y);
         let len = (dx * dx + dy * dy).sqrt();
-        // The segment's on-screen speed (the previous one's for a move without a duration). CSP's
-        // velocity input at an input point is the mean of the two segments before it (one at the
-        // stroke's start, with nothing before it counted as rest), and steps between two points
-        // interpolate it (measured, docs/sut-analysis.md › Effector velocity input).
+        // CSP's velocity input at an input point is the on-screen distance over the time of the two
+        // segments before it (at the stroke's start the segment before counts as a rest of
+        // `CSP_REST_MS`), and steps between two points interpolate it (measured,
+        // docs/sut-analysis.md › Effector velocity input). A move without a duration repeats the
+        // previous segment; an untimed stop is a rest as long as the previous segment.
         let seg_dt = p.time - a.time;
-        let seg_speed = if seg_dt > 0.0 && seg_dt.is_finite() && len.is_finite() {
-            let v = len * self.zoom / seg_dt;
-            if v.is_finite() { v.min(1e6) as f32 } else { 0.0 }
+        let seg = if seg_dt > 0.0 && seg_dt.is_finite() && len.is_finite() {
+            ((len * self.zoom).min(1e9), seg_dt.min(1e9))
         } else if len > 1e-9 {
-            self.seg_speed_prev
+            self.seg_prev
         } else {
-            0.0
+            (0.0, self.seg_prev.1)
         };
+        let (dist, dt) = (seg.0 + self.seg_prev.0, seg.1 + self.seg_prev.1);
+        let v = if dt > 0.0 { dist / dt } else { 0.0 };
         self.seg_from = self.speed_at_last;
-        self.seg_to = 0.5 * (seg_speed + self.seg_speed_prev);
+        self.seg_to = if v.is_finite() { v.min(1e6) as f32 } else { 0.0 };
         self.speed_at_last = self.seg_to;
-        self.seg_speed_prev = seg_speed;
+        self.seg_prev = seg;
         if len > 1e-9 {
             self.dir = (-dy).atan2(dx) as f32;
             if self.initial_dir.is_none() {
