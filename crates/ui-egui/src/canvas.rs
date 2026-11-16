@@ -4761,13 +4761,13 @@ mod tests {
 
     #[test]
     fn live_stroke_uses_pen_tilt_and_updates_a_reduced_texture_partially() {
-        // Pen tilt drives the size; the preview must use the tilt the commit gets. The document
+        // Pen tilt drives the tip's shape; the preview must use the tilt the commit gets. The document
         // is wider than MAX_TEXTURE, so the CPU texture is reduced (factor 2) and each step
         // must update only the reduced pixels it touched.
         let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
         let ctx = egui::Context::default();
         app.run("file.new", json!({"width": 4097, "height": 90, "background": "transparent"})).unwrap();
-        let tilt = json!({"size": 30, "hardness": 1.0, "spacing": 0.05, "shapeDynamics": {"enabled": true, "size": {"control": "penTilt"}}});
+        let tilt = json!({"size": 30, "hardness": 1.0, "spacing": 0.05, "shapeDynamics": {"enabled": true, "size": {"control": "penTilt"}, "tiltScale": 1.0}});
         app.run("tools.setBrush", json!({ "brush": tilt })).unwrap();
         app.ui.tool = Tool::Brush;
         assert_eq!(ensure_texture(&mut app, &ctx, 0, None).map(|t| t.1), Some(0.5));
@@ -4786,8 +4786,10 @@ mod tests {
         assert_eq!(app.perf.last_refresh, "rect", "the commit refreshes only the stroke");
         let doc = app.session.documents()[0].doc.clone();
         let (a, b) = (doc.layers[0].surface().unwrap(), shown.layers[0].surface().unwrap());
-        // 60° tilt shrinks the dab well below 30 px: the preview shows that size, as committed.
-        assert!(a.rgba(500, 45)[3] > 0.5 && a.rgba(500, 45 + 12)[3] == 0.0);
+        // Full tilt (60°) at Tilt Scale 100 % doubles the 30 px tip's height, as Photoshop does:
+        // paint reaches past the 15 px an upright pen covers, and stops at 30. The preview shows
+        // that shape, as committed.
+        assert!(a.rgba(500, 45 + 22)[3] > 0.5 && a.rgba(500, 45 + 36)[3] == 0.0);
         // (The smoothed tail catches up to the end point only when the stroke finishes.)
         assert!((0..90).all(|y| (0..700).all(|x| a.rgba(x, y) == b.rgba(x, y))), "commit matches the preview");
     }
