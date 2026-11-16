@@ -163,16 +163,20 @@ fn parse_any(key: &[u8; 4], data: &[u8], cged: Option<&[u8]>) -> Adjustment {
         b"thrs" => be16(data, 0).map(|v| Adjustment::Threshold { level: f32::from(v) / 255.0 }),
         b"post" => be16(data, 0).map(|v| Adjustment::Posterize { levels: u32::from(v) }),
         b"brit" => {
+            // The legacy contrast pivot (mean level) follows brightness and contrast.
+            let mean = be16(data, 4).map_or(127, |m| m.min(255) as u8);
             let modern = cged.and_then(|c| VersionedDescriptor::parse_prefix(c).ok()).and_then(|(v, _)| {
                 let d = v.descriptor;
                 Some(Adjustment::BrightnessContrast {
                     brightness: desc_num(&d, "Brgh")?,
                     contrast: desc_num(&d, "Cntr")?,
                     legacy: desc_bool(&d, "useLegacy").unwrap_or(false),
+                    mean: desc_num(&d, "means").map_or(mean, |m| m.clamp(0.0, 255.0).round() as u8),
                 })
             });
-            modern
-                .or_else(|| Some(Adjustment::BrightnessContrast { brightness: f32::from(bei16(data, 0)?), contrast: f32::from(bei16(data, 2)?), legacy: true }))
+            modern.or_else(|| {
+                Some(Adjustment::BrightnessContrast { brightness: f32::from(bei16(data, 0)?), contrast: f32::from(bei16(data, 2)?), legacy: true, mean })
+            })
         }
         b"hue2" => (|| {
             let colorize = *data.get(2)? != 0;
@@ -519,16 +523,16 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             put16(&mut v, 0);
             return vec![(*b"post", v)];
         }
-        Adjustment::BrightnessContrast { brightness, contrast, legacy } => {
+        Adjustment::BrightnessContrast { brightness, contrast, legacy, mean } => {
             v.extend_from_slice(&clamp_i16(*brightness).to_be_bytes());
             v.extend_from_slice(&clamp_i16(*contrast).to_be_bytes());
-            put16(&mut v, 127);
+            put16(&mut v, u16::from(*mean));
             v.push(0);
             let d = Descriptor::new("null")
                 .with("Vrsn", Value::Integer(1))
                 .with("Brgh", Value::Integer(brightness.round() as i32))
                 .with("Cntr", Value::Integer(contrast.round() as i32))
-                .with("means", Value::Integer(127))
+                .with("means", Value::Integer(i32::from(*mean)))
                 .with("Lab ", Value::Boolean(false))
                 .with("useLegacy", Value::Boolean(*legacy))
                 .with("Auto", Value::Boolean(false));
@@ -759,8 +763,8 @@ mod tests {
         rt(Adjustment::Invert);
         rt(Adjustment::Threshold { level: 128.0 / 255.0 });
         rt(Adjustment::Posterize { levels: 4 });
-        rt(Adjustment::BrightnessContrast { brightness: 20.0, contrast: -10.0, legacy: false });
-        rt(Adjustment::BrightnessContrast { brightness: -150.0, contrast: 100.0, legacy: true });
+        rt(Adjustment::BrightnessContrast { brightness: 20.0, contrast: -10.0, legacy: false, mean: 127 });
+        rt(Adjustment::BrightnessContrast { brightness: -150.0, contrast: 100.0, legacy: true, mean: 127 });
         rt(Adjustment::HueSaturation { hue: 30.0, saturation: -20.0, lightness: 5.0, colorize: false, ranges: HueRange::defaults() });
         rt(Adjustment::HueSaturation { hue: 200.0, saturation: 50.0, lightness: 0.0, colorize: true, ranges: HueRange::defaults() });
         let mut ranges = HueRange::defaults();
@@ -1101,6 +1105,6 @@ mod tests {
     #[test]
     fn legacy_brit_without_cged() {
         let a = parse(b"brit", &[0, 10, 0xff, 0xf6, 0, 127, 0], None, Channels::Rgb);
-        assert_eq!(a, Adjustment::BrightnessContrast { brightness: 10.0, contrast: -10.0, legacy: true });
+        assert_eq!(a, Adjustment::BrightnessContrast { brightness: 10.0, contrast: -10.0, legacy: true, mean: 127 });
     }
 }

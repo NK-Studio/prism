@@ -183,6 +183,59 @@ pub fn update_adjustment(existing: &Adjustment, p: &Value) -> Option<Result<Adju
     }
 }
 
+// ---------- Brightness/Contrast: legacy pivot and Auto ----------
+
+/// Long side of the sample [`active_sample`] reads (Auto halves it again to 500, as Photoshop).
+const SAMPLE_SIDE: usize = 1000;
+
+/// The active pixel layer's content as straight RGBA, every `step`th pixel of every `step`th row so
+/// the long side is at most [`SAMPLE_SIDE`] (whole for smaller layers), with its width and height.
+fn active_sample(s: &Session) -> Option<(Vec<[f32; 4]>, usize, usize)> {
+    let d = s.active()?;
+    let LayerContent::Raster(surf) = &d.doc.layer(d.active_layer?)?.content else { return None };
+    let r = surf.content_bounds();
+    if r.is_empty() {
+        return None;
+    }
+    let (w, h) = (r.width() as usize, r.height() as usize);
+    let step = w.max(h).div_ceil(SAMPLE_SIDE).max(1);
+    let fmt = surf.format();
+    let n = fmt.channels().max(1);
+    let (sw, sh) = (w.div_ceil(step), h.div_ceil(step));
+    let mut px = Vec::with_capacity(sw.saturating_mul(sh));
+    let mut row = Vec::new();
+    for y in (0..h).step_by(step) {
+        let y = r.y0 + y as i32;
+        surf.read_region_into(Rect { x0: r.x0, y0: y, x1: r.x1, y1: y + 1 }, &mut row);
+        px.extend(row.chunks_exact(n).step_by(step).map(|q| to_rgba(&fmt, q)));
+    }
+    Some((px, sw, sh))
+}
+
+/// The active pixel layer's mean level (Photoshop's legacy contrast pivot); 127 without one.
+pub fn brightness_contrast_mean(s: &Session) -> u8 {
+    active_sample(s).map_or(127, |(px, _, _)| prism_compose::bright_contrast::mean_level(&px))
+}
+
+/// Photoshop's Auto for Brightness/Contrast on the active pixel layer (None without one).
+pub fn brightness_contrast_auto(s: &Session, legacy: bool) -> Option<prism_compose::bright_contrast::Auto> {
+    active_sample(s).map(|(px, w, h)| prism_compose::bright_contrast::auto(&px, w, h, legacy))
+}
+
+/// Fills in what a Brightness/Contrast command leaves to the image: with `"auto": true` the
+/// brightness and contrast Auto chooses, and without `"mean"` the layer's mean level (the legacy
+/// pivot). Other adjustments pass through.
+pub fn resolve_brightness_contrast(s: &Session, adj: Adjustment, p: &Value) -> Result<Adjustment> {
+    let Adjustment::BrightnessContrast { brightness, contrast, legacy, mean } = adj else { return Ok(adj) };
+    let auto = opt_bool("brightnessContrast", p, "auto")?.unwrap_or(false);
+    let given_mean = given(p, "mean").is_some();
+    if auto && let Some(a) = brightness_contrast_auto(s, legacy) {
+        return Ok(Adjustment::BrightnessContrast { brightness: a.brightness as f32, contrast: a.contrast as f32, legacy, mean: if given_mean { mean } else { a.mean } });
+    }
+    let mean = if given_mean { mean } else { brightness_contrast_mean(s) };
+    Ok(Adjustment::BrightnessContrast { brightness, contrast, legacy, mean })
+}
+
 // ---------- destructive helpers ----------
 
 /// Runs `f` on the target surface's content as straight RGBA (`w × h` = content bounds), blending

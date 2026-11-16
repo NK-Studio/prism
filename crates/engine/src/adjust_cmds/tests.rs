@@ -389,3 +389,88 @@ fn a_targeted_mask_enables_editing_it_on_any_layer() {
     assert!(s.execute("image.adjustments.invert", mask).is_err());
     assert_eq!(rgba(&s, 23, 3), pixels);
 }
+
+/// Legacy Brightness/Contrast pivots about the layer's mean level, as Photoshop's does, unless
+/// `mean` is given; `auto` chooses the values from the layer.
+#[test]
+fn brightness_contrast_legacy_pivot_and_auto() {
+    let px = |s: &Session, x: i32| {
+        let d = s.active().unwrap();
+        let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
+        let LayerContent::Raster(surf) = &l.content else { panic!() };
+        (surf.sample_channel(x, 0, 0) * 255.0).round() as i32
+    };
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"color": "#3c3c3c"})).unwrap(); // 60
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"color": "#282828"})).unwrap(); // 40, mean 50
+    s.execute("select.deselect", json!({})).unwrap();
+    assert_eq!(crate::adjust_cmds::brightness_contrast_mean(&s), 50);
+    s.execute("image.adjustments.brightnessContrast", json!({"contrast": 50, "legacy": true})).unwrap();
+    assert_eq!((px(&s, 0), px(&s, 40)), (30, 70), "doubled about 50");
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("image.adjustments.brightnessContrast", json!({"contrast": 50, "legacy": true, "mean": 128})).unwrap();
+    assert_eq!(px(&s, 0), 0, "about the given pivot");
+    s.execute("edit.undo", json!({})).unwrap();
+    let a = crate::adjust_cmds::brightness_contrast_auto(&s, false).unwrap();
+    assert!(a.contrast > 0, "{a:?}");
+    s.execute("image.adjustments.brightnessContrast", json!({"auto": true})).unwrap();
+    assert!(px(&s, 40) > 60, "auto stretched the greys apart");
+    assert!(s.execute("image.adjustments.brightnessContrast", json!({"auto": "yes"})).is_err());
+    assert!(s.execute("image.adjustments.brightnessContrast", json!({"mean": "middle"})).is_err());
+}
+
+/// Levels' Set Black / Gray / White Point pickers: black and white move each channel's input end
+/// to the sample, gray sets the channel gammas so the sample comes out neutral.
+#[test]
+fn levels_eyedroppers_set_the_points() {
+    use crate::adjust_params::{CurvesEyedropper, levels_eyedropper, to_params};
+    use prism_doc::ColorMode;
+    let base = json!({});
+    let lv = |a: &Adjustment| match a {
+        Adjustment::Levels { per_channel, master, .. } => (per_channel.clone(), master.clone()),
+        _ => panic!("levels"),
+    };
+    let sample = [40.0 / 255.0, 60.0 / 255.0, 80.0 / 255.0];
+    let a = levels_eyedropper(&base, CurvesEyedropper::Black, sample, ColorMode::Rgb).unwrap();
+    let (ch, _) = lv(&a);
+    assert_eq!(ch.map(|c| (c.in_black * 255.0).round()), [40.0, 60.0, 80.0]);
+    let a = levels_eyedropper(&base, CurvesEyedropper::White, [204.0 / 255.0, 230.0 / 255.0, 1.0], ColorMode::Rgb).unwrap();
+    assert_eq!(lv(&a).0.map(|c| (c.in_white * 255.0).round()), [204.0, 230.0, 255.0]);
+    // Gray: every channel of the sample maps to (about) the same value.
+    let cast = [0.6, 0.45, 0.3];
+    let a = levels_eyedropper(&base, CurvesEyedropper::NeutralGray, cast, ColorMode::Rgb).unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+    s.execute("edit.fill", json!({"color": "#99734d"})).unwrap();
+    s.execute("image.adjustments.levels", to_params(&a)).unwrap();
+    let d = s.active().unwrap();
+    let LayerContent::Raster(surf) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!() };
+    let px: Vec<f32> = (0..3).map(|c| surf.sample_channel(0, 0, c) * 255.0).collect();
+    assert!(px.iter().all(|v| (v - px[0]).abs() <= 2.0), "neutral: {px:?}");
+    // The research's own example: (200, 128, 100) → gammas 0.45 / 1.28 / 1.74, a neutral 149.
+    let a = levels_eyedropper(&base, CurvesEyedropper::NeutralGray, [200.0 / 255.0, 128.0 / 255.0, 100.0 / 255.0], ColorMode::Rgb).unwrap();
+    assert_eq!(lv(&a).0.map(|c| (c.gamma * 100.0).round() / 100.0), [0.45, 1.28, 1.74]);
+    let mut t = Session::new();
+    t.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+    t.execute("edit.fill", json!({"color": "#c88064"})).unwrap();
+    t.execute("image.adjustments.levels", to_params(&a)).unwrap();
+    let d = t.active().unwrap();
+    let LayerContent::Raster(surf) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!() };
+    let got: Vec<f32> = (0..3).map(|c| (surf.sample_channel(0, 0, c) * 255.0).round()).collect();
+    assert!(got.iter().all(|v| (v - 149.0).abs() <= 1.0), "{got:?}");
+    // Black sets the output black to the shadow target (0) too, and keeps the input ends 2 apart
+    // by moving both: white 50, black sampled at 60 → 54 / 56.
+    let set = json!({"red": {"inWhite": 50, "outBlack": 20}});
+    let a = levels_eyedropper(&set, CurvesEyedropper::Black, [60.0 / 255.0, 0.0, 0.0], ColorMode::Rgb).unwrap();
+    let r = lv(&a).0[0].clone();
+    assert_eq!(((r.in_black * 255.0).round(), (r.in_white * 255.0).round(), r.out_black), (54.0, 56.0, 0.0));
+    // The command's `eyedropper` param, and errors.
+    s.execute("image.adjustments.levels", json!({"eyedropper": {"point": "black", "color": [0.1, 0.2, 0.3]}})).unwrap();
+    assert!(s.execute("image.adjustments.levels", json!({"eyedropper": {"point": "grey"}})).is_err());
+    assert!(s.execute("image.adjustments.levels", json!({"eyedropper": {"point": "white", "at": [-1, 0]}})).is_err());
+    assert!(levels_eyedropper(&base, CurvesEyedropper::NeutralGray, cast, ColorMode::Grayscale).is_err());
+    assert!(levels_eyedropper(&base, CurvesEyedropper::Black, [f32::NAN, 0.0, 0.0], ColorMode::Rgb).is_err());
+    assert!(levels_eyedropper(&base, CurvesEyedropper::Black, cast, ColorMode::Cmyk).is_err());
+}

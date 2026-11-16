@@ -124,6 +124,10 @@ impl HueRange {
     }
 }
 
+fn default_bc_mean() -> u8 {
+    127
+}
+
 fn default_hue_ranges() -> [HueRange; 6] {
     HueRange::defaults()
 }
@@ -135,6 +139,10 @@ pub enum Adjustment {
         brightness: f32,
         contrast: f32,
         legacy: bool,
+        /// The legacy contrast pivot: the target's mean level (0..=255) when the adjustment was
+        /// made, as Photoshop stores it in the PSD `brit` block.
+        #[serde(default = "default_bc_mean")]
+        mean: u8,
     },
     /// Composite channel first, then R, G, B (or the channels `space` names).
     Levels {

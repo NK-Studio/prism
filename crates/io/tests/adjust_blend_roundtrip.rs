@@ -44,8 +44,8 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
     let lc = |a: u8, b: u8, gamma: f32| LevelsChannel { in_black: g(a), in_white: g(b), gamma, out_black: g(5), out_white: g(250) };
     let lut = prism_cms::lutfile::LutFile::from_fn("t", 5, |c| [c[1], c[2] * 0.5, 1.0 - c[0]]);
     let all = vec![
-        (Adjustment::BrightnessContrast { brightness: 30.0, contrast: -20.0, legacy: false }, true),
-        (Adjustment::BrightnessContrast { brightness: -40.0, contrast: 50.0, legacy: true }, true),
+        (Adjustment::BrightnessContrast { brightness: 30.0, contrast: -20.0, legacy: false, mean: 127 }, true),
+        (Adjustment::BrightnessContrast { brightness: -40.0, contrast: 50.0, legacy: true, mean: 127 }, true),
         (
             Adjustment::Levels {
                 master: lc(10, 240, 1.2),
