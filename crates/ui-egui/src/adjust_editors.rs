@@ -458,9 +458,303 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Curves in Photoshop's dialog (Image › Adjustments › Curves)
+
+/// Photoshop's Curve Display Options: view state of the Curves dialog, never a parameter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CurvesView {
+    /// Show Amount of: Pigment/Ink % (both axes run from 0 % ink, white, to 100 %) instead of
+    /// Light (0-255).
+    pub pigment: bool,
+    /// Grid size: 10 × 10 instead of 4 × 4.
+    pub fine_grid: bool,
+    /// Show: Channel Overlays, Histogram, Baseline, Intersection Line.
+    pub overlays: bool,
+    pub histogram: bool,
+    pub baseline: bool,
+    pub intersection: bool,
+}
+
+impl CurvesView {
+    /// Photoshop's defaults: CMYK documents show ink, everything else light; all shown, 4 × 4.
+    pub fn default_for(space: ToneSpace) -> Self {
+        Self { pigment: space == ToneSpace::Cmyk, fine_grid: false, overlays: true, histogram: true, baseline: true, intersection: true }
+    }
+}
+
+/// Side of Photoshop's Curves graph (one point per level).
+pub const CURVES_GRAPH_SIDE: f32 = 256.0;
+/// Left of the graph: Output's label and field.
+const CURVES_GUTTER: f32 = 46.0;
+const CURVES_BAR: f32 = 3.0;
+/// Photoshop 27.4's Curves graph, measured on its dialog (dark theme, 2× screenshot): point
+/// squares 9 px, the curve 2 px, grid and baseline lines 1 px.
+const PS_HANDLE: f32 = 9.0;
+const PS_CURVE_WIDTH: f32 = 2.0;
+/// Grid lines: grey 53 at 46 % (79 → 67 on the graph, 146 → 103 over the histogram).
+const PS_GRID: Color32 = Color32::from_rgba_unmultiplied_const(53, 53, 53, 118);
+/// Baseline: darker than the grid (79 → about 56).
+const PS_BASELINE: Color32 = Color32::from_black_alpha(74);
+/// Intersection Line: grey 118 at 50 % (79 → 99, 146 → 132).
+const PS_INTERSECTION: Color32 = Color32::from_rgba_unmultiplied_const(118, 118, 118, 128);
+
+/// The channel dropdown of the Curves dialog (the key the Properties editor uses too).
+pub fn curves_channel(ui: &mut egui::Ui, v: &Value, cx: &EditorCx) -> usize {
+    channel_picker(ui, cx.mem.with("curves-ch"), tone_channels(space_of(v), cx.gray), tl!("Channel:"))
+}
+
+/// Shows channel `ch` next (Photoshop: Option/Alt+2 composite, +3 red, +4 green, +5 blue).
+pub fn set_curves_channel(ctx: &egui::Context, cx: &EditorCx, ch: usize) {
+    ctx.data_mut(|d| d.insert_temp(cx.mem.with("curves-ch"), ch));
+}
+
+/// Auto on channel `ch`: the curve's ends at the levels clipping 0.1 % of the channel's
+/// histogram (as Levels' Auto). Whether anything was set (no histogram: nothing).
+pub fn curves_auto(v: &mut Value, cx: &EditorCx, ch: usize) -> bool {
+    let chans = tone_channels(space_of(v), cx.gray);
+    let (Some(chan), Some(h)) = (chans.get(ch), cx.hist.as_ref().and_then(|h| h.ch.get(ch))) else { return false };
+    let (lo, hi) = auto_levels(h);
+    v[curve_key(chan)] = json!([[lo, 0.0], [hi, 255.0]]);
+    true
+}
+
+/// Display order of a curve: in Pigment/Ink % both axes are reversed (an involution).
+fn curves_display(pts: &[[f32; 2]], pigment: bool) -> Vec<[f32; 2]> {
+    if pigment { pts.iter().rev().map(|q| [255.0 - q[0], 255.0 - q[1]]).collect() } else { pts.to_vec() }
+}
+
+/// A value shown in a field: levels, or ink % (of the display coordinate) in Pigment/Ink %.
+pub fn curves_field_value(display: f32, pigment: bool) -> f32 {
+    if pigment { (display / 2.55).round() } else { display.round() }
+}
+
+fn curves_from_field(value: f32, pigment: bool) -> f32 {
+    if pigment { value * 2.55 } else { value }
+}
+
+/// The graph of Photoshop's Curves dialog for channel `ch`: Output's label and field at the left,
+/// the vertical and horizontal gradient bars, the black / white input sliders under the bar, then
+/// Input's label and field. Points are added, dragged and removed as in the Properties editor.
+pub fn curves_graph(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx, ch: usize, view: &CurvesView) -> Edit {
+    let t = Tokens::get(ui.ctx());
+    let space = space_of(v);
+    let chans = tone_channels(space, cx.gray);
+    let state_id = cx.mem.with("curves");
+    let mut st: CurveUi = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
+    let view_tag = cx.mem.with("curves-pigment");
+    let shown_pigment: Option<bool> = ui.data(|d| d.get_temp(view_tag));
+    if ch != st.channel || shown_pigment.is_some_and(|p| p != view.pigment) {
+        st = CurveUi { channel: ch, ..Default::default() };
+    }
+    ui.data_mut(|d| d.insert_temp(view_tag, view.pigment));
+    let chan = chans.get(ch).copied().unwrap_or(ToneChannel { key: "", label: "" });
+    let key = curve_key(&chan);
+    let pigment = view.pigment;
+    let mut dp = curves_display(&read_curve(v, key), pigment);
+    let mut e = Edit::default();
+    let mut changed = false;
+    let side = CURVES_GRAPH_SIDE;
+    let pad = CURVE_GRAPH_PADDING;
+
+    // Row: gutter (Output) | vertical bar | graph.
+    // The horizontal bar sits under the graph, inside the row.
+    let (row, _) = ui.allocate_exact_size(vec2(CURVES_GUTTER + CURVES_BAR + 2.0 + side + 2.0 * pad, side + 2.0 * pad + CURVES_BAR), Sense::hover());
+    let outer = Rect::from_min_size(pos2(row.left() + CURVES_GUTTER + CURVES_BAR + 2.0 - pad, row.top()), vec2(side + 2.0 * pad, side + 2.0 * pad));
+    let graph = outer.shrink(pad);
+    let resp = ui.interact(outer, cx.mem.with("curves-graph-area"), Sense::click_and_drag());
+    ui.data_mut(|d| d.insert_temp(cx.mem.with("curves-graph"), graph));
+    let to_scr = |q: [f32; 2]| pos2(graph.left() + q[0] / 255.0 * graph.width(), graph.bottom() - q[1] / 255.0 * graph.height());
+    let interaction = crate::point_curve::interact(ui, &resp, graph, &mut dp, &mut st.gesture);
+    changed |= interaction.changed;
+    e.commit |= interaction.commit;
+
+    let p = ui.painter_at(row.expand(4.0));
+    // Photoshop's graph is barely darker than its dialog (79 on 83).
+    let w = ui.visuals().window_fill;
+    p.rect_filled(graph, 0.0, Color32::from_rgb(w.r().saturating_sub(4), w.g().saturating_sub(4), w.b().saturating_sub(4)));
+    if view.histogram
+        && let Some(h) = cx.hist.as_ref().and_then(|h| h.ch.get(ch))
+    {
+        let mut h = *h;
+        if pigment {
+            h.reverse();
+        }
+        tone::draw_histogram(&p, graph, &h, Color32::from_gray(if t.pro { 146 } else { 175 }));
+    }
+    let n = if view.fine_grid { 10 } else { 4 };
+    let grid = Stroke::new(1.0, PS_GRID);
+    for i in 1..n {
+        let f = i as f32 / n as f32;
+        p.line_segment([pos2(graph.left() + f * graph.width(), graph.top()), pos2(graph.left() + f * graph.width(), graph.bottom())], grid);
+        p.line_segment([pos2(graph.left(), graph.top() + f * graph.height()), pos2(graph.right(), graph.top() + f * graph.height())], grid);
+    }
+    // Photoshop draws the baseline like a grid line, and no focus ring round the graph.
+    if view.baseline {
+        p.line_segment([graph.left_bottom(), graph.right_top()], Stroke::new(1.0, PS_BASELINE));
+    }
+    p.rect_stroke(graph, 0.0, Stroke::new(1.5, if t.pro { Color32::from_gray(48) } else { t.field_border }), StrokeKind::Outside);
+    // Gradient bars: the channel's tone from none to full, reversed in Pigment/Ink %.
+    let (dark, light) = if pigment { (bar_color(&chan, &t), Color32::BLACK) } else { (Color32::BLACK, bar_color(&chan, &t)) };
+    // Photoshop: the vertical bar 2 px left of the frame, the horizontal one right under it.
+    let vbar = Rect::from_min_max(pos2(graph.left() - 1.5 - 2.0 - CURVES_BAR, graph.top()), pos2(graph.left() - 1.5 - 2.0, graph.bottom()));
+    let hbar = Rect::from_min_max(pos2(graph.left() - 1.5, graph.bottom() + 1.5), pos2(graph.right() + 1.5, graph.bottom() + 1.5 + CURVES_BAR));
+    gradient_bar(&p, vbar, dark, light, true);
+    gradient_bar(&p, hbar, dark, light, false);
+    let draw_curve = |pts: &[[f32; 2]], color: Color32, width: f32| {
+        let cp: Vec<prism_doc::adjust::CurvePoint> = pts.iter().map(|q| prism_doc::adjust::CurvePoint { input: q[0] / 255.0, output: q[1] / 255.0 }).collect();
+        let lut = prism_compose::adjust::curve_lut(&cp);
+        let last = lut.len().saturating_sub(1).max(1);
+        let line: Vec<Pos2> = (0..=255)
+            .map(|x| {
+                let input = if pigment { 255 - x } else { x } as f32 / 255.0;
+                let out = lut.get((input * last as f32).round() as usize).copied().unwrap_or(input) * 255.0;
+                to_scr([x as f32, if pigment { 255.0 - out } else { out }])
+            })
+            .collect();
+        p.add(egui::Shape::line(line, Stroke::new(width, color)));
+    };
+    if ch == 0 && view.overlays {
+        for c in chans.iter().skip(1) {
+            let cp = read_curve(v, c.key);
+            if cp.len() > 2 || cp.first().is_some_and(|q| q != &[0.0, 0.0]) || cp.last().is_some_and(|q| q != &[255.0, 255.0]) {
+                draw_curve(&cp, bar_color(c, &t).gamma_multiply(0.85), 1.0);
+            }
+        }
+    }
+    let real = curves_display(&dp, pigment);
+    let selected = st.gesture.selected.filter(|i| *i < dp.len());
+    // Intersection Line: through the selected point, edge to edge, for as long as a point is
+    // selected (Photoshop 27.4 keeps it after the drag, wherever the pointer is).
+    if view.intersection
+        && let Some(q) = selected.and_then(|i| dp.get(i))
+    {
+        let s = to_scr(*q);
+        let line = Stroke::new(1.0, PS_INTERSECTION);
+        p.line_segment([pos2(graph.left(), s.y), pos2(graph.right(), s.y)], line);
+        p.line_segment([pos2(s.x, graph.top()), pos2(s.x, graph.bottom())], line);
+    }
+    draw_curve(&real, if ch == 0 { t.text } else { bar_color(&chan, &t) }, PS_CURVE_WIDTH);
+    // Points: hollow squares, the selected one solid; cut off at the graph's edge.
+    let pp = ui.painter_at(graph.expand(1.0));
+    for (i, q) in dp.iter().enumerate() {
+        let r = Rect::from_center_size(to_scr(*q), vec2(PS_HANDLE, PS_HANDLE));
+        if Some(i) == selected {
+            pp.rect_filled(r, 0.0, t.text);
+        } else {
+            pp.rect_filled(r.shrink(1.0), 0.0, t.field);
+            pp.rect_stroke(r, 0.0, Stroke::new(1.5, t.text), StrokeKind::Inside);
+        }
+    }
+
+    // The black and white input sliders: the curve's first and last points, moved sideways.
+    ui.add_space(-ui.spacing().item_spacing.y);
+    let (strip, _) = ui.allocate_exact_size(vec2(row.width(), 14.0), Sense::hover());
+    let track = Rect::from_min_max(pos2(graph.left() - 6.0, strip.top()), pos2(graph.right() + 6.0, strip.bottom()));
+    let sresp = ui.interact(track, cx.mem.with("curves-input-sliders"), Sense::drag());
+    let ends = [0, dp.len().saturating_sub(1)];
+    let drag_id = cx.mem.with("curves-input-slider");
+    if sresp.drag_started()
+        && let Some(pos) = sresp.interact_pointer_pos()
+    {
+        let xs: Vec<f32> = ends.iter().filter_map(|&i| dp.get(i)).map(|q| to_scr(*q).x).collect();
+        let pick = nearest(&xs, pos.x);
+        ui.data_mut(|d| d.insert_temp(drag_id, pick));
+    }
+    if sresp.dragged()
+        && let (Some(Some(k)), Some(pos)) = (ui.data(|d| d.get_temp::<Option<u8>>(drag_id)), sresp.interact_pointer_pos())
+        && let Some(&i) = ends.get(usize::from(k))
+        && let Some(y) = dp.get(i).map(|q| q[1])
+    {
+        let x = ((pos.x - graph.left()) / graph.width() * 255.0).clamp(0.0, 255.0).round();
+        changed |= curve_edit::move_to(&mut dp, i, [x, y]);
+        st.gesture.selected = Some(i);
+    }
+    if sresp.drag_stopped() {
+        e.commit = true;
+    }
+    let p = ui.painter_at(track.expand(2.0));
+    for (k, &i) in ends.iter().enumerate() {
+        let Some(q) = dp.get(i) else { continue };
+        let x = to_scr(*q).x;
+        // Photoshop's slider: a little house, its peak on the level.
+        let (y0, w) = (strip.top() + 1.0, 6.0);
+        let house = vec![pos2(x, y0), pos2(x + w, y0 + 6.0), pos2(x + w, y0 + 11.0), pos2(x - w, y0 + 11.0), pos2(x - w, y0 + 6.0)];
+        // Light: the left slider sets black, the right one white; Pigment/Ink % swaps them.
+        let white = (k == 1) != pigment;
+        let (fill, edge) = if white { (Color32::from_gray(225), Color32::from_gray(90)) } else { (t.field, t.text) };
+        p.add(egui::Shape::convex_polygon(house, fill, Stroke::new(1.0, edge)));
+    }
+
+    // Output (left of the graph) and Input (under it) of the selected point.
+    let unit = if pigment { "%" } else { "" };
+    let top = if pigment { 100.0 } else { 255.0 };
+    let field_w = 42.0;
+    let out_at = Rect::from_min_size(pos2(row.left(), graph.bottom() - 46.0), vec2(CURVES_GUTTER - 4.0, 46.0));
+    let mut out_val = selected.and_then(|i| dp.get(i)).map_or(0.0, |q| curves_field_value(q[1], pigment));
+    let mut in_val = selected.and_then(|i| dp.get(i)).map_or(0.0, |q| curves_field_value(q[0], pigment));
+    let mut fields_changed = false;
+    let mut fields_dragging = false;
+    // With no point selected Photoshop shows the level under the pointer, as plain text.
+    let hover = if selected.is_none() {
+        resp.hover_pos().filter(|q| graph.contains(*q)).map(|q| {
+            let v = [((q.x - graph.left()) / graph.width() * 255.0).clamp(0.0, 255.0), ((graph.bottom() - q.y) / graph.height() * 255.0).clamp(0.0, 255.0)];
+            v.map(|x| format!("{}{unit}", curves_field_value(x, pigment)))
+        })
+    } else {
+        None
+    };
+    {
+        // A child that leaves the parent's cursor under the slider strip.
+        let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(out_at).layout(egui::Layout::top_down(egui::Align::Min)));
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.add(egui::Label::new(tl!("Output:")).wrap_mode(egui::TextWrapMode::Extend));
+        if selected.is_some() {
+            let r = widgets::value_field(ui, &mut out_val, 0.0..=top, unit, field_w);
+            fields_changed |= r.changed();
+            fields_dragging |= r.dragged();
+            e.commit |= r.drag_stopped();
+        } else if let Some(h) = &hover {
+            ui.label(&h[1]);
+        }
+    }
+    ui.horizontal(|ui| {
+        ui.add_space(CURVES_GUTTER + CURVES_BAR + 2.0);
+        ui.label(tl!("Input:"));
+        if selected.is_some() {
+            let r = widgets::value_field(ui, &mut in_val, 0.0..=top, unit, field_w);
+            fields_changed |= r.changed();
+            fields_dragging |= r.dragged();
+            e.commit |= r.drag_stopped();
+        } else if let Some(h) = &hover {
+            ui.label(&h[0]);
+        }
+    });
+    if fields_changed
+        && let Some(i) = selected
+        && curve_edit::move_to(&mut dp, i, [curves_from_field(in_val, pigment), curves_from_field(out_val, pigment)])
+    {
+        changed = true;
+        e.commit |= !fields_dragging;
+    }
+
+    ui.data_mut(|d| d.insert_temp(state_id, st));
+    if changed {
+        let pts = curves_display(&dp, pigment);
+        v[key] = json!(pts.iter().map(|q| [q[0].round(), q[1].round()]).collect::<Vec<_>>());
+        if space == ToneSpace::Lab
+            && let Some(o) = v.as_object_mut()
+        {
+            o.remove("points");
+        }
+        e.changed = true;
+    }
+    e
+}
+
+// ---------------------------------------------------------------------------------------------
 // Levels
 
-type Lv = [f32; 5]; // in_black, gamma, in_white, out_black, out_white (0–255, gamma as is)
+type Lv =[f32; 5]; // in_black, gamma, in_white, out_black, out_white (0–255, gamma as is)
 
 fn read_levels(v: &Value, key: &str) -> Lv {
     let o = if key.is_empty() { Some(v) } else { v.get(key) };

@@ -3817,6 +3817,13 @@ filter	Cell Size	셀 크기
 	(Pixels)	(픽셀)
 adjust	Brightness	명도
 adjust	Use Legacy	레거시 사용
+adjust	Show Amount of:	양 표시:
+adjust	Light (0-255)	빛(0-255)
+adjust	Pigment/Ink %	안료/잉크 %
+adjust	Grid size:	격자 크기:
+adjust	Channel Overlays	채널 오버레이
+adjust	Histogram	막대 그래프
+adjust	Intersection Line	교차 선
 filter	Blur Method	흐림 효과 방법
 filter	Spin	회전
 filter	Zoom	돋보기
@@ -3861,3 +3868,5 @@ submenu	Other…	기타
 	Super Zoom: enlarged to {size} (Undo to go back)	슈퍼 줌: {size}로 확대 (실행 취소로 되돌리기)
 	Output	출력
 	Fast (Real-ESRGAN animevideov3)	빠름 (Real-ESRGAN animevideov3)
+	Show Grid in 25% increments	25% 단위로 격자 표시
+	Show Grid in 10% increments	10% 단위로 격자 표시

@@ -132,6 +132,46 @@ Photoshop's whole-level rounding (fitted on the PSD corpus), so it is kept.
   gives 0.45 / 1.28 / 1.74 and a neutral 149.
 - RGB edits the red, green and blue records; Grayscale the composite record (black and white only).
 
+## Curves
+
+### Dialog (Photoshop 27.4)
+
+Title centred over a hairline. "Preset:" with a dropdown (Default) and a gear menu. A frame headed
+by "Channel: RGB" holding, at the left, the point / pencil mode buttons, "Output:" and the
+On-image Adjustment tool; the graph (4 × 4 grid, histogram behind it, a vertical gradient bar at
+its left and a horizontal one under it, with a black and a white input slider triangle under that);
+"Input:" under the bar; the Set Black / Gray / White Point eyedroppers and "Show Clipping" in the
+last row. A middle column of the Curve Display Options: "Show Amount of:" (Light (0-255) /
+Pigment/Ink %), "Grid size:" (4 × 4 / 10 × 10 buttons), "Show:" (Channel Overlays, Histogram,
+Baseline, Intersection Line). Right column: OK, Cancel, Smooth (only for the pencil), Auto,
+Options…, Preview. The fields beside Output and Input show while a point is selected. Korean:
+양 표시 / 빛(0-255) / 안료/잉크 % / 격자 크기 / 표시 / 채널 오버레이 / 막대 그래프 / 기준선 /
+교차 선 / 매끄럽게 / 클리핑 표시.
+
+Prism (`ui-egui/src/adjust_ps_ui.rs` `curves`, graph `adjust_editors::curves_graph`): the same
+structure. Pigment/Ink % reverses both axes and the bars and shows ink % in the fields (CMYK
+documents start in it); the input sliders move the curve's first and last points sideways; the graph
+is drawn as measured on Photoshop's (2× screenshots driven with `cua-driver`, dark theme): graph 79
+on a dialog of 83, grid grey 53 at 46 %, baseline darker (about 56), frame 1.5 px grey 48, gradient
+bars 3 px (the vertical one 2 px left of the frame, the horizontal one right under it), curve 2 px,
+point squares 9 px cut off at the graph's edge (the selected one solid), house-shaped input sliders.
+The Intersection Line (grey 118 at 50 %) crosses the graph through the selected point for as long as
+it is selected, during the drag and after it wherever the pointer is. With no point selected, Output
+and Input show the level under the pointer as plain text. Option/Alt+2…5 pick the channels; Alt
+turns Cancel into Reset. Cmd+Z steps back through the dialog's own edits and Shift+Cmd+Z forward (a
+whole drag is one step; up to 100), in Brightness/Contrast and Levels too; not checked in Photoshop
+yet (it had quit when this was written). Auto sets the channel's ends at its 0.1 % clip levels (as
+Levels' Auto; Photoshop's own default algorithm wasn't checked). The view options are view state,
+not parameters. Not there yet: the pencil mode and Smooth, the On-image Adjustment tool, Show
+Clipping, Options…, the gear menu and Photoshop's built-in presets.
+
+### Maths
+
+The research notes give Curves only as their own approximation (a Fritsch–Carlson monotone curve
+through three fixed points), not read from the binary. Prism keeps its natural cubic spline through
+the points (overshoot allowed, clamped, constant outside the end points; fitted on the PSD corpus).
+The eyedroppers keep Prism's per-channel point placement.
+
 ## Still open
 
 - Auto's target curve (Photoshop's trained model) is a stand-in.
