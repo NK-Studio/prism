@@ -50,6 +50,7 @@ fn offer(update: &Update, target: &InstallTarget) -> Offer {
         version: update.version.clone(),
         current: update.current.clone(),
         notes_url: update.notes_url.clone(),
+        notes: update.notes.clone(),
         download_url: update.download_url.clone(),
         can_install: update.asset.is_some() && target.can_install(),
         note,

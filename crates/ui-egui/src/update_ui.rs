@@ -34,6 +34,10 @@ pub struct Offer {
     pub can_install: bool,
     /// Why it can't (portable copy, read-only location, too old a version…).
     pub note: Option<String>,
+    /// What changed, one line per change, by language code (`en`, `ko`); empty when the feed
+    /// lists none.
+    #[serde(default)]
+    pub notes: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// What the desktop updater reports back.
@@ -291,6 +295,11 @@ fn state_name(s: &Status) -> &'static str {
 
 /// Content width of the update window.
 pub const WIDTH: f32 = 404.0;
+/// The space around the contents.
+pub const MARGIN: egui::Margin = egui::Margin { left: 24, right: 24, top: 22, bottom: 18 };
+/// The title bar ([`title_bar`]): as tall as macOS's, so the system's window buttons sit centred
+/// on it.
+pub const TITLE_H: f32 = crate::floating_window::BUTTONS_BAR_H;
 /// The app icon beside the headline (points).
 const ICON: f32 = 56.0;
 /// The icon file keeps the macOS template's clear margin (100 of 1024 px a side); it is cropped
@@ -364,6 +373,65 @@ fn headline(status: &Status) -> (String, String) {
     }
 }
 
+/// Whether the title bar is laid out as Windows does: the icon and the title at the left, Close
+/// at the right. macOS centres the title and has its own buttons.
+fn windows_title(app: &PrismApp) -> bool {
+    !cfg!(target_os = "macos") || app.custom_titlebar
+}
+
+/// Where the title starts in `band`: at the left as Windows has it, or centred as macOS has it.
+fn title_left(band: egui::Rect, title_width: f32, windows: bool) -> f32 {
+    if windows { band.left() + TITLE_INSET } else { band.center().x - title_width / 2.0 }
+}
+
+/// The title's inset from the window's left edge (Windows layout). No icon beside it: the app
+/// icon is already in the window, by the headline.
+const TITLE_INSET: f32 = 14.0;
+
+/// The window's title bar: a band across the top edge that moves the window. On Windows and
+/// FreeBSD (whose floating windows have no decorations) the title sits at the top left and Close
+/// at the right. On macOS the title is centred and the system's own window buttons
+/// sit over the band's left end ([`crate::floating_window::show_with_buttons`]), so it draws no
+/// button. `corner` rounds the band's top corners to the frame's. Returns the drag handle and
+/// whether Close was clicked.
+pub fn title_bar(app: &PrismApp, ui: &mut egui::Ui, title: &str, id: egui::Id, corner: egui::CornerRadius) -> (egui::Response, bool) {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(WIDTH);
+    let (left, top) = (f32::from(MARGIN.left), f32::from(MARGIN.top));
+    // The band covers the frame's margin: from its inner edge to edge, and up to its top.
+    let origin = ui.cursor().min - egui::vec2(left, top);
+    let band = egui::Rect::from_min_size(origin, egui::vec2(left + WIDTH + f32::from(MARGIN.right), TITLE_H));
+    ui.allocate_space(egui::vec2(WIDTH, TITLE_H - top + 12.0));
+    let painter = ui.painter().clone();
+    painter.rect_filled(band, egui::CornerRadius { nw: corner.nw, ne: corner.ne, sw: 0, se: 0 }, t.chrome);
+    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(band.left(), band.bottom() - 1.0), band.max), 0.0, t.separator);
+    let windows = windows_title(app);
+    let close_rect = egui::Rect::from_min_max(egui::pos2(band.right() - crate::titlebar::BUTTON_WIDTH, band.top()), egui::pos2(band.right(), band.bottom() - 1.0));
+    let handle = if windows { band.with_max_x(close_rect.left()) } else { band };
+    let drag = ui.interact(handle, id.with("title"), egui::Sense::drag());
+    let galley = painter.layout_no_wrap(title.to_owned(), egui::FontId::proportional(12.5), t.text);
+    let x = title_left(band, galley.size().x, windows);
+    painter.galley(egui::pos2(x, band.center().y - galley.size().y / 2.0), galley, t.text);
+    if !windows {
+        return (drag, false);
+    }
+    // Close, as the caption button of Prism's own title bar: full height, red under the pointer.
+    let close = ui.interact(close_rect, id.with("close"), egui::Sense::click());
+    let fill = match (close.is_pointer_button_down_on(), close.hovered()) {
+        (true, _) => t.caption_close.gamma_multiply(0.8),
+        (_, true) => t.caption_close,
+        _ => egui::Color32::TRANSPARENT,
+    };
+    painter.rect_filled(close_rect, egui::CornerRadius { ne: corner.ne, ..Default::default() }, fill);
+    let stroke = egui::Stroke::new(1.0, if close.hovered() { t.caption_close_text } else { t.icon });
+    let (c, h) = (close_rect.center(), 5.0);
+    painter.line_segment([c + egui::vec2(-h, -h), c + egui::vec2(h, h)], stroke);
+    painter.line_segment([c + egui::vec2(-h, h), c + egui::vec2(h, -h)], stroke);
+    close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Close")));
+    let clicked = close.on_hover_text(tl!("Close")).clicked();
+    (drag, clicked)
+}
+
 /// The top of the window: the app icon beside the headline. Returns its rectangle (the window's
 /// drag handle).
 pub fn header(app: &PrismApp, ui: &mut egui::Ui) -> egui::Rect {
@@ -403,30 +471,39 @@ pub fn header(app: &PrismApp, ui: &mut egui::Ui) -> egui::Rect {
     .rect
 }
 
-/// "1.4.2 → 1.4.3": what is installed and what the update brings.
-fn versions(ui: &mut egui::Ui, t: &Tokens, offer: &Offer) {
-    let half = (WIDTH - 36.0 - 28.0) / 2.0;
-    let cell = |ui: &mut egui::Ui, caption: &str, version: &str, new: bool| {
-        ui.vertical(|ui| {
-            ui.set_width(half);
-            ui.spacing_mut().item_spacing.y = 3.0;
-            ui.add(egui::Label::new(egui::RichText::new(caption).size(11.0).color(if new { t.accent } else { t.text_faint })).selectable(false));
-            ui.add(egui::Label::new(egui::RichText::new(version).font(crate::theme::semibold(16.0)).color(if new { t.text } else { t.text_dim })).truncate());
-        });
-    };
-    egui::Frame::new().fill(t.field).stroke(egui::Stroke::new(1.0, t.field_border)).corner_radius(t.radius).inner_margin(egui::Margin::symmetric(18, 11)).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            cell(ui, tl!("Current version"), &offer.current, false);
-            let (arrow, _) = ui.allocate_exact_size(egui::vec2(28.0, 34.0), egui::Sense::hover());
-            let (tip, stroke) = (arrow.center() + egui::vec2(-4.0, 0.0), egui::Stroke::new(1.5, t.text_faint));
-            ui.painter().line_segment([tip - egui::vec2(14.0, 0.0), tip], stroke);
-            ui.painter().line_segment([tip - egui::vec2(5.0, 4.5), tip], stroke);
-            ui.painter().line_segment([tip - egui::vec2(5.0, -4.5), tip], stroke);
-            cell(ui, tl!("New version"), &offer.version, true);
+/// The lines of `notes` for the language the window is drawn in, else English, else whichever
+/// language the feed has.
+fn notes_for<'a>(notes: &'a std::collections::BTreeMap<String, Vec<String>>, lang: &str) -> &'a [String] {
+    notes.get(&lang.to_ascii_lowercase()).or_else(|| notes.get("en")).or_else(|| notes.values().next()).map(Vec::as_slice).unwrap_or(&[])
+}
+
+/// What the update changes: the feed's notes as a bulleted list in a box, scrolling when long.
+/// Nothing is drawn when the feed has none.
+fn changes(ui: &mut egui::Ui, t: &Tokens, offer: &Offer) {
+    let lines = notes_for(&offer.notes, crate::i18n::current().code());
+    if lines.is_empty() {
+        return;
+    }
+    let inner = WIDTH - 2.0 * 18.0;
+    egui::Frame::new().fill(t.field).stroke(egui::Stroke::new(1.0, t.field_border)).corner_radius(t.radius).inner_margin(egui::Margin::symmetric(18, 12)).show(ui, |ui| {
+        ui.set_width(inner);
+        ui.spacing_mut().item_spacing.y = 6.0;
+        ui.add(egui::Label::new(egui::RichText::new(tl!("What's new in this version")).size(11.0).color(t.accent)).selectable(false));
+        egui::ScrollArea::vertical().max_height(CHANGES_MAX_H).auto_shrink([false, true]).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 5.0;
+            for line in lines {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = 7.0;
+                    ui.add(egui::Label::new(egui::RichText::new("•").color(t.text_faint)).selectable(false));
+                    ui.add(egui::Label::new(egui::RichText::new(line).color(t.text)).wrap());
+                });
+            }
         });
     });
 }
+
+/// The tallest the list of changes gets before it scrolls.
+const CHANGES_MAX_H: f32 = 132.0;
 
 /// A slim download bar with the amounts under it.
 fn progress(ui: &mut egui::Ui, t: &Tokens, received: u64, total: u64) {
@@ -456,9 +533,11 @@ pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.set_width(WIDTH);
     match &status {
         Status::Available { offer } => {
-            versions(ui, &t, offer);
+            changes(ui, &t, offer);
             if let Some(url) = offer.notes_url.clone() {
-                ui.add_space(6.0);
+                if !offer.notes.is_empty() {
+                    ui.add_space(6.0);
+                }
                 if ui.link(tl!("Release Notes")).clicked() {
                     crate::links::open(app, ui.ctx(), &url);
                 }

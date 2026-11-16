@@ -7,10 +7,12 @@
 //!     PRISM_UPDATE_SECRET_KEY CI secret).
 //! cargo xtask update publish --site <update site checkout>
 //!     [--packages-url URL] [--dist dist/release] [--version X.Y.Z] [--min-supported X.Y.Z]
-//!     [--notes-url URL] [--download-url URL] [--secret PATH]
+//!     [--notes-url URL] [--download-url URL] [--changes PATH] [--secret PATH]
 //!     writes and signs <site>/stable/latest.json for this version's update packages, which are
 //!     served from --packages-url (default: this version's GitHub Release), and writes the site's
-//!     Cloudflare config if missing.
+//!     Cloudflare config if missing. The version's table in --changes (default:
+//!     packaging/release/changes.toml) becomes the feed's `notes`, which the Software Update
+//!     window lists.
 //! ```
 //!
 //! The site serves only the feed: Cloudflare's static assets stop at 25 MiB per file, and the
@@ -141,7 +143,24 @@ fn publish(root: &Path, args: &[&str]) -> Result<(), String> {
             manifest[field] = json!(v);
         }
     }
+    let changes_path = match flag(args, "--changes") {
+        Some(p) => absolute(Path::new(p))?,
+        None => root.join(CHANGES),
+    };
+    let changes = std::fs::read_to_string(&changes_path).map_err(|e| format!("{}: {e}", changes_path.display()))?;
+    match release_notes(&changes, &version).map_err(|e| format!("{}: {e}", changes_path.display()))? {
+        Some(notes) => {
+            for (lang, lines) in &notes {
+                eprintln!("  notes {lang}: {} line(s)", lines.len());
+            }
+            manifest["notes"] = json!(notes);
+        }
+        None => eprintln!("warning: no [\"{version}\"] table in {}: the update window will list no changes", changes_path.display()),
+    }
     let text = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())? + "\n";
+    if text.len() > MAX_FEED_BYTES {
+        return Err(format!("the feed is {} bytes; Prism reads at most {MAX_FEED_BYTES}", text.len()));
+    }
     let sig = minisign::sign(None, &sk, std::io::Cursor::new(text.as_bytes()), Some(&format!("prism {version}")), Some("Prism update feed"))
         .map_err(|e| e.to_string())?
         .into_string();
@@ -158,6 +177,45 @@ fn publish(root: &Path, args: &[&str]) -> Result<(), String> {
     }
     eprintln!("wrote {} (signed); upload the packages to {packages_url}, then deploy the site", stable.join("latest.json").display());
     Ok(())
+}
+
+/// What changed in each version, by language (see the file's header).
+const CHANGES: &str = "packaging/release/changes.toml";
+/// Mirror `prism_updater::manifest`: the largest feed Prism reads, and what it shows of `notes`
+/// (it drops the rest silently, so publishing more is a mistake to fix here).
+const MAX_FEED_BYTES: usize = 64 * 1024;
+const MAX_NOTE_LINES: usize = 24;
+const MAX_NOTE_CHARS: usize = 300;
+
+type Notes = std::collections::BTreeMap<String, Vec<String>>;
+
+/// The `["<version>"]` table of `changes.toml`: its lines by language, or `None` when the version
+/// has no table (or an empty one).
+fn release_notes(changes: &str, version: &str) -> Result<Option<Notes>, String> {
+    let all: std::collections::BTreeMap<String, Notes> = toml::from_str(changes).map_err(|e| e.to_string())?;
+    let Some(notes) = all.get(version) else { return Ok(None) };
+    let mut out = Notes::new();
+    for (lang, lines) in notes {
+        if lang.is_empty() || !lang.bytes().all(|b| b.is_ascii_lowercase() || b == b'-') {
+            return Err(format!("[\"{version}\"]: `{lang}` is not a language code (ko, en, pt-br)"));
+        }
+        if lines.len() > MAX_NOTE_LINES {
+            return Err(format!("[\"{version}\"] {lang}: {} lines; the update window shows at most {MAX_NOTE_LINES}", lines.len()));
+        }
+        for line in lines {
+            let chars = line.chars().count();
+            if line.trim().is_empty() || line.trim() != line || line.chars().any(char::is_control) {
+                return Err(format!("[\"{version}\"] {lang}: {line:?} must be one non-empty line without surrounding spaces"));
+            }
+            if chars > MAX_NOTE_CHARS {
+                return Err(format!("[\"{version}\"] {lang}: a line of {chars} characters; the update window shows at most {MAX_NOTE_CHARS}"));
+            }
+        }
+        if !lines.is_empty() {
+            out.insert(lang.clone(), lines.clone());
+        }
+    }
+    Ok((!out.is_empty()).then_some(out))
 }
 
 /// Where the update packages are downloaded from: this version's GitHub Release.
@@ -229,6 +287,54 @@ mod tests {
         assert_eq!(packages_url(DEFAULT_PACKAGES_URL, "1.3.0").unwrap(), "https://github.com/NK-Studio/prism/releases/download/v1.3.0");
         assert_eq!(packages_url("https://example.com/p/{version}/", "2.0.0").unwrap(), "https://example.com/p/2.0.0");
         assert!(packages_url("http://example.com/{version}", "1.0.0").is_err());
+    }
+
+    #[test]
+    fn the_feed_notes_are_the_versions_table() {
+        let changes = r#"
+            ["1.4.3"]
+            ko = ["빨라졌어요", "새 창"]
+            en = ["Faster", "A new window"]
+            ["1.4.2"]
+            en = ["Older"]
+            ["1.4.1"]
+            en = []
+        "#;
+        let notes = release_notes(changes, "1.4.3").unwrap().unwrap();
+        assert_eq!(notes["ko"], ["빨라졌어요", "새 창"]);
+        assert_eq!(notes["en"], ["Faster", "A new window"]);
+        assert_eq!(release_notes(changes, "1.4.2").unwrap().unwrap().len(), 1);
+        assert_eq!(release_notes(changes, "1.4.1").unwrap(), None, "an empty table lists nothing");
+        assert_eq!(release_notes(changes, "9.0.0").unwrap(), None, "no table for the version");
+
+        // Mistakes are errors here: Prism would cut or drop them silently.
+        for bad in [
+            r#"["1.0.0"]
+               en = [" padded "]"#.to_owned(),
+            r#"["1.0.0"]
+               en = [""]"#.to_owned(),
+            r#"["1.0.0"]
+               EN = ["x"]"#.to_owned(),
+            format!("[\"1.0.0\"]\nen = [\"{}\"]", "x".repeat(MAX_NOTE_CHARS + 1)),
+            format!("[\"1.0.0\"]\nen = [{}]", vec!["\"x\""; MAX_NOTE_LINES + 1].join(",")),
+            "not toml [".to_owned(),
+        ] {
+            assert!(release_notes(&bad, "1.0.0").is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_repositorys_changes_file_is_valid() {
+        let text = std::fs::read_to_string(crate::root().join(CHANGES)).unwrap();
+        let all: std::collections::BTreeMap<String, Notes> = toml::from_str(&text).unwrap();
+        assert!(!all.is_empty());
+        for version in all.keys() {
+            crate::version::validate(version).unwrap();
+            let notes = release_notes(&text, version).unwrap().unwrap_or_default();
+            // Every language Prism ships says the same number of things.
+            let counts: Vec<usize> = ["ko", "en"].iter().map(|l| notes.get(*l).map_or(0, Vec::len)).collect();
+            assert!(counts[0] > 0 && counts[0] == counts[1], "{version}: ko and en must both list the changes: {counts:?}");
+        }
     }
 
     #[test]

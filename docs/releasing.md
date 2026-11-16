@@ -195,6 +195,14 @@ Installed copies find new versions through a signed feed on a Cloudflare Workers
 launch and every four hours while it stays open. It pops up "Do you want to update now?" for a new
 version unless the user chose *Skip This Version*; after *Later* it asks again at the next launch.
 
+**What the window says.** Software Update is a small window of its own (title centred on macOS,
+at the top left with a Close button on Windows) that lists what changed. The list comes from
+[`packaging/release/changes.toml`](../packaging/release/changes.toml): one table per version with
+a few short lines in Korean and English. `cargo xtask update publish` copies the table of the
+version it publishes into the signed feed (`notes` in `latest.json`), so **write the version's
+table before publishing**; without one it warns and the window shows only the Release Notes link.
+Builds before 1.4.3 ignore the field.
+
 **How it stays safe.** `stable/latest.json` lists each platform's package with its URL, size and
 SHA-256. It is signed with a minisign (Ed25519) key whose public half is compiled into Prism, so a
 compromised site can't make Prism install anything else. Downloads are checked against the signed

@@ -89,7 +89,8 @@ pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
 /// Style from any window: Photoshop's are windows of their own, moved anywhere on screen by their
 /// title bars.
 pub fn floats(d: &Dialog) -> bool {
-    d.presentation == crate::state::DialogPresentation::Embedded && (d.window.is_some() || system_window(d.kind) || crate::color_picker_ui::floats(&d.fields))
+    d.presentation == crate::state::DialogPresentation::Embedded
+        && (d.window.is_some() || system_window(d.kind) || crate::color_picker_ui::floats(&d.fields) || crate::update_ui::owns(&d.fields))
 }
 
 /// Dialogs that are one of the system's own windows, as in Photoshop: the system's window buttons
@@ -105,7 +106,11 @@ fn floating(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog) {
     let key = egui::Id::new(("floating-dialog", d.id));
     let viewport = crate::native_dialogs::viewport(d.id);
     let add = |app: &mut PrismApp, child: &egui::Context| show_one(app, child, d, !child.embed_viewports());
-    if d.kind == DialogKind::LayerStyle {
+    if d.kind == DialogKind::LayerStyle || crate::update_ui::owns(&d.fields) {
+        // Software Update too: a small window of its own that can sit anywhere on screen while the
+        // work goes on behind it (it is not app-modal: see `blocks_host`). Its title is drawn by
+        // the contents, so it is centred on macOS whatever the system does with window titles
+        // (recent versions put them beside the buttons).
         crate::floating_window::show_with_buttons(app, ctx, key, viewport, display_title(d), add);
     } else if system_window(d.kind) {
         crate::floating_window::show_titled(app, ctx, key, viewport, display_title(d), add);
@@ -173,7 +178,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
         let update_card = crate::update_ui::owns(&fields);
         if update_card {
             let frame = if own_window { crate::floating_window::frame(ctx) } else { egui::Frame::popup(&ctx.global_style()) };
-            modal = modal.frame(frame.inner_margin(egui::Margin { left: 24, right: 24, top: 22, bottom: 18 }));
+            modal = modal.frame(frame.inner_margin(crate::update_ui::MARGIN));
         }
         // File › New draws its own title row and panes edge to edge, as Photoshop's window does.
         let new_doc = d.kind == DialogKind::NewDocument;
@@ -251,9 +256,19 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 drag_started |= r.drag_started_by(egui::PointerButton::Primary);
                 ui.add_space(if crate::about_ui::compact(ctx) { 16.0 } else { 42.0 });
             } else if update_card {
+                // Prism draws the title bar: the title at the top left with Close at the right
+                // on Windows, centred under the system's window buttons on macOS.
+                let corner = if own_window { egui::CornerRadius::ZERO } else { ctx.global_style().visuals.menu_corner_radius };
+                let (r, close) = crate::update_ui::title_bar(app, ui, &title, id, corner);
+                drag += r.drag_delta();
+                drag_started |= r.drag_started_by(egui::PointerButton::Primary);
+                if close {
+                    outcome = Some(false);
+                }
+                // The headline moves the window too.
                 let header = crate::update_ui::header(app, ui);
-                let r = ui.interact(header.with_max_x(ui.max_rect().right()), id.with("title"), egui::Sense::drag());
-                drag = r.drag_delta();
+                let r = ui.interact(header.with_max_x(ui.max_rect().right()), id.with("header"), egui::Sense::drag());
+                drag += r.drag_delta();
                 drag_started |= r.drag_started_by(egui::PointerButton::Primary);
                 ui.add_space(8.0);
             } else if new_doc {
@@ -657,6 +672,43 @@ pub fn open_command_dialog(app: &mut PrismApp, command: &str, label: &str) -> u6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Software Update in its own OS window: pressing on its title bar and moving hands the
+    /// window to the OS to drag, and so does the headline under it.
+    #[test]
+    fn the_update_window_is_dragged_by_its_title_bar_and_headline() {
+        for start in [egui::pos2(200.0, 16.0), egui::pos2(220.0, 70.0)] {
+            let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+            let ctx = egui::Context::default();
+            PrismApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+            app.ui.update.status = crate::update_ui::Status::UpToDate;
+            let mut fields = serde_json::Map::new();
+            fields.insert("__update".into(), serde_json::json!(true));
+            fields.insert("__label".into(), serde_json::json!("Software Update"));
+            let id = app.ui.open_dialog(DialogKind::Command, fields);
+            let mut frame = |app: &mut PrismApp, events: Vec<egui::Event>| {
+                let d = app.ui.dialogs.iter().find(|d| d.id == id).cloned().expect("the dialog stays open");
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(452.0, 200.0))),
+                    events,
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| {
+                    show_one(app, ui.ctx(), &d, true);
+                });
+                out.textures_delta.clear();
+                out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default()
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            let press = egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() };
+            let mut cmds = frame(&mut app, vec![egui::Event::PointerMoved(start), press]);
+            cmds.extend(frame(&mut app, vec![egui::Event::PointerMoved(start + egui::vec2(12.0, 5.0))]));
+            cmds.extend(frame(&mut app, vec![egui::Event::PointerMoved(start + egui::vec2(30.0, 9.0))]));
+            assert_eq!(cmds.iter().filter(|c| matches!(c, egui::ViewportCommand::StartDrag)).count(), 1, "from {start:?}: {cmds:?}");
+        }
+    }
 
     #[test]
     fn about_overview_uses_the_prism_product_name() {

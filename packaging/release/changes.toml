@@ -1,0 +1,22 @@
+# What changed in each version, as the Software Update window lists it ("What's new in this
+# version"). `cargo xtask update publish` copies the table of the version it publishes into the
+# signed feed (`notes` in latest.json); a version without a table publishes without a list and
+# the window then shows only the Release Notes link.
+#
+# One table per version, newest first. One short line per change a user would notice, in each
+# language Prism ships (`ko`, `en`): plain text, no Markdown, at most 24 lines of 300 characters.
+# Write the table in the same change as the feature, or at the latest before publishing.
+
+["1.4.3"]
+ko = [
+  "펜 기울기와 필압으로 그은 선이 Photoshop과 같아졌어요(기울기 조절, 기울기 비율, 브러시 투영, 가늘어지는 선 끝).",
+  "새 버전이 나오면 프리즘을 켤 때마다, 그리고 켜 둔 동안에도 알려 줘요.",
+  "소프트웨어 업데이트 창이 새로워졌어요. 별도 창으로 떠서 어디로든 옮길 수 있고, 달라진 점을 바로 보여 줘요.",
+  "macOS 설치 디스크(DMG) 창을 새로 꾸몄어요.",
+]
+en = [
+  "Pen tilt and pressure lines match Photoshop (tilt controls, Tilt Scale, Brush Projection, the thin end of a line).",
+  "Prism tells you about a new version at every launch, and while it stays open.",
+  "A new Software Update window: it floats on its own, moves anywhere, and lists what changed.",
+  "A new look for the macOS install disk (DMG) window.",
+]

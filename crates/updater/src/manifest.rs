@@ -3,6 +3,7 @@
 //! ```json
 //! { "schema": 1, "version": "1.2.0", "pub_date": "2026-10-20", "min_supported": "1.0.0",
 //!   "notes_url": "https://…/releases/1.2.0/notes.html", "download_url": "https://…",
+//!   "notes": { "en": ["Faster brush strokes", "…"], "ko": ["브러시가 빨라졌어요", "…"] },
 //!   "platforms": {
 //!     "macos-universal": { "url": "https://…/prism-1.2.0-macos-universal.app.zip",
 //!                          "sha256": "…64 hex…", "size": 61234567 },
@@ -25,6 +26,11 @@ pub const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 pub const MAX_PACKAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Feed schema versions this build understands.
 pub const SCHEMA: u32 = 1;
+/// What an update shows of the feed's `notes`: this many languages, lines per language and
+/// characters per line. The rest is dropped, not an error: the notes are only read.
+pub const MAX_NOTE_LANGUAGES: usize = 8;
+pub const MAX_NOTE_LINES: usize = 24;
+pub const MAX_NOTE_CHARS: usize = 300;
 
 /// The parsed feed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +46,10 @@ pub struct Manifest {
     pub min_supported: Option<String>,
     #[serde(default)]
     pub notes_url: Option<String>,
+    /// What changed in this version, one line per change, by language code (`en`, `ko`). Plain
+    /// text. Optional: feeds written before 1.4.3 have none.
+    #[serde(default)]
+    pub notes: BTreeMap<String, Vec<String>>,
     /// Page for a manual download (portable builds, unsupported platforms, too-old builds).
     #[serde(default)]
     pub download_url: Option<String>,
@@ -63,6 +73,9 @@ pub struct Update {
     pub version: String,
     pub pub_date: Option<String>,
     pub notes_url: Option<String>,
+    /// The feed's `notes`, cleaned for display ([`clean_notes`]); empty when it has none.
+    #[serde(default)]
+    pub notes: BTreeMap<String, Vec<String>>,
     pub download_url: Option<String>,
     /// The feed key that matched (`macos-universal`, `windows-x64`, …).
     pub platform: String,
@@ -148,11 +161,38 @@ pub fn evaluate(manifest: &Manifest, current: &str, platform_keys: &[&str]) -> R
         version: manifest.version.clone(),
         pub_date: manifest.pub_date.clone(),
         notes_url: manifest.notes_url.clone(),
+        notes: clean_notes(&manifest.notes),
         download_url: manifest.download_url.clone(),
         platform,
         asset: if manual_only { None } else { asset },
         manual_only,
     }))
+}
+
+/// The feed's change notes as an update shows them: language codes lower-cased, lines trimmed and
+/// kept on one line (control characters become spaces), empty ones dropped, and everything capped
+/// ([`MAX_NOTE_LANGUAGES`], [`MAX_NOTE_LINES`], [`MAX_NOTE_CHARS`]) so a feed can't flood the window.
+pub fn clean_notes(notes: &BTreeMap<String, Vec<String>>) -> BTreeMap<String, Vec<String>> {
+    let mut out = BTreeMap::new();
+    for (lang, lines) in notes {
+        if out.len() >= MAX_NOTE_LANGUAGES {
+            break;
+        }
+        let lang = lang.trim().to_ascii_lowercase();
+        let cleaned: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                let flat: String = line.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+                flat.trim().chars().take(MAX_NOTE_CHARS).collect::<String>()
+            })
+            .filter(|line| !line.is_empty())
+            .take(MAX_NOTE_LINES)
+            .collect();
+        if !lang.is_empty() && !cleaned.is_empty() {
+            out.entry(lang).or_insert(cleaned);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -197,6 +237,27 @@ mod tests {
         assert!(matches!(verify_manifest(bytes.as_bytes(), &sig, &other_pk), Err(Error::BadSignature(_))));
         assert!(verify_manifest(bytes.as_bytes(), "garbage", &pk).is_err());
         assert!(verify_manifest(bytes.as_bytes(), &sig, "not a key").is_err());
+    }
+
+    #[test]
+    fn notes_reach_the_update_cleaned_and_capped() {
+        let with_notes = feed("9.9.9").replacen(r#""schema":1,"#, r#""schema":1,"notes":{"KO":["  빨라졌어요  ","","줄\n바꿈"],"en":["Faster"],"":["x"],"de":[]},"#, 1);
+        let m: Manifest = serde_json::from_str(&with_notes).unwrap();
+        let u = evaluate(&m, "1.0.0", &["macos-universal"]).unwrap().unwrap();
+        assert_eq!(u.notes.get("ko").map(Vec::as_slice), Some(&["빨라졌어요".to_string(), "줄 바꿈".to_string()][..]), "trimmed, one line each, blanks dropped");
+        assert_eq!(u.notes.get("en").map(Vec::as_slice), Some(&["Faster".to_string()][..]));
+        assert_eq!(u.notes.len(), 2, "no unnamed or empty languages: {:?}", u.notes);
+
+        // A feed without the field (every feed before 1.4.3) still parses.
+        let plain: Manifest = serde_json::from_str(&feed("9.9.9")).unwrap();
+        assert!(plain.notes.is_empty());
+        assert!(evaluate(&plain, "1.0.0", &["macos-universal"]).unwrap().unwrap().notes.is_empty());
+
+        // A flood is cut down, never an error or a huge window.
+        let flood: BTreeMap<String, Vec<String>> = (0..50).map(|l| (format!("l{l:02}"), (0..500).map(|_| "가".repeat(5000)).collect())).collect();
+        let cleaned = clean_notes(&flood);
+        assert_eq!(cleaned.len(), MAX_NOTE_LANGUAGES);
+        assert!(cleaned.values().all(|lines| lines.len() == MAX_NOTE_LINES && lines.iter().all(|l| l.chars().count() == MAX_NOTE_CHARS)));
     }
 
     #[test]

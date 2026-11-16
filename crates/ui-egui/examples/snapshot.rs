@@ -20,7 +20,8 @@
 //! `--cursor-pack DIR --hover-at X,Y` paints optional cursor artwork for offscreen review.
 //! `--click-at X,Y` opens a screen-space menu (for example the top Select menu) after the script.
 //! `--update-offer VERSION` fakes an update server offering VERSION, so the launch check pops up
-//! the "Do you want to update now?" dialog. `--update-offer none` reports no update,
+//! the "Do you want to update now?" dialog with three sample changes (`--update-no-notes`: a feed
+//! that lists none). `--update-offer none` reports no update,
 //! `--update-offer offline` a failed check. Confirming the dialog (`ui.dialog.confirm`) shows a
 //! download stopped at 43%; `--update-ready` finishes it at once.
 
@@ -34,18 +35,30 @@ struct FakeUpdater {
     version: String,
     /// The download completes instead of stopping part-way.
     ready: bool,
+    /// The feed lists what changed.
+    notes: bool,
     events: Vec<UpdateEvent>,
 }
 
 impl Updater for FakeUpdater {
     fn check(&mut self) {
-        let offer = Offer {
+        let mut offer = Offer {
             version: self.version.clone(),
             current: prism_engine::build_info::VERSION.into(),
             notes_url: Some("https://example.com/notes".into()),
+            notes: [
+                ("ko", ["업데이트가 올라오면 실행할 때마다 알려 줘요.", "소프트웨어 업데이트 창이 별도 창으로 떠서 어디로든 옮길 수 있어요.", "회전 보기 커서와 나침반이 Photoshop과 같아졌어요."]),
+                ("en", ["Prism tells you about an update at every launch.", "Software Update is a window of its own that you can move anywhere.", "Rotate View has Photoshop's cursor and compass."]),
+            ]
+            .into_iter()
+            .map(|(lang, lines)| (lang.to_string(), lines.iter().map(|l| l.to_string()).collect()))
+            .collect(),
             can_install: true,
             ..Default::default()
         };
+        if !self.notes {
+            offer.notes.clear();
+        }
         self.events.push(UpdateEvent::Checked(match self.version.as_str() {
             "none" => Ok(None),
             "offline" => Err("couldn't reach the update server: no connection".into()),
@@ -96,7 +109,8 @@ fn main() {
     };
     if let Some(version) = arg(&args, "--update-offer") {
         let ready = args.iter().any(|a| a == "--update-ready");
-        services.updater = Some(Box::new(FakeUpdater { version, ready, events: Vec::new() }));
+        let notes = !args.iter().any(|a| a == "--update-no-notes");
+        services.updater = Some(Box::new(FakeUpdater { version, ready, notes, events: Vec::new() }));
     }
     let open = arg(&args, "--open");
     let cursor_pack = arg(&args, "--cursor-pack");

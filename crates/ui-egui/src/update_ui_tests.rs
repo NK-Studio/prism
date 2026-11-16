@@ -303,6 +303,8 @@ fn the_window_draws_in_every_state() {
         Status::UpToDate,
         Status::Available { offer: offer(true) },
         Status::Available { offer: Offer { note: Some("Portable copy.".into()), ..offer(false) } },
+        // More changes than fit (the list scrolls), one very long.
+        Status::Available { offer: Offer { notes: [("en".to_string(), (0..60).map(|i| format!("Change {i} {}", "x".repeat(i * 20))).collect())].into_iter().collect(), ..offer(true) } },
         Status::Downloading { offer: offer(true), received: 0, total: 0 },
         Status::Downloading { offer: offer(true), received: u64::MAX, total: 1 },
         Status::Ready { offer: offer(true) },
@@ -318,4 +320,87 @@ fn the_window_draws_in_every_state() {
         }
         assert!(update_dialog(&a).is_some());
     }
+}
+
+#[test]
+fn floats_in_a_window_of_its_own_without_blocking_the_work() {
+    let (mut a, _log, ctx) = app(false);
+    a.ui.update.status = Status::Available { offer: offer(true) };
+    let id = open_dialog(&mut a);
+    let d = a.ui.dialogs.iter().find(|d| d.id == id).cloned().unwrap();
+    assert!(crate::dialogs::floats(&d) && crate::native_dialogs::own_window(&d));
+    assert!(!crate::dialogs::blocks_host(&a, &ctx), "Prism stays usable behind it");
+}
+
+#[test]
+fn the_title_is_at_the_top_left_on_windows_and_centred_on_macos() {
+    let band = egui::Rect::from_min_size(egui::pos2(100.0, 0.0), egui::vec2(452.0, TITLE_H));
+    // Windows: at the left edge, with no icon before it.
+    assert_eq!(title_left(band, 120.0, true), 100.0 + TITLE_INSET);
+    assert!(TITLE_INSET < 20.0, "nothing but the inset before the title");
+    // macOS: centred.
+    assert_eq!(title_left(band, 120.0, false) + 60.0, band.center().x);
+}
+
+fn notes(pairs: &[(&str, &[&str])]) -> std::collections::BTreeMap<String, Vec<String>> {
+    pairs.iter().map(|(lang, lines)| (lang.to_string(), lines.iter().map(|l| l.to_string()).collect())).collect()
+}
+
+#[test]
+fn changes_come_in_the_window_language_then_english_then_any() {
+    let both = notes(&[("en", &["Faster"]), ("ko", &["빨라졌어요"])]);
+    assert_eq!(notes_for(&both, "ko"), ["빨라졌어요"]);
+    assert_eq!(notes_for(&both, "KO"), ["빨라졌어요"]);
+    assert_eq!(notes_for(&both, "ja"), ["Faster"], "English when the language isn't there");
+    assert_eq!(notes_for(&notes(&[("de", &["Schneller"])]), "ko"), ["Schneller"], "whatever there is");
+    assert!(notes_for(&notes(&[]), "ko").is_empty());
+}
+
+#[test]
+fn the_box_lists_the_changes_not_the_versions() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let (mut a, _log, _ctx) = app(false);
+    let listed = Offer { notes: notes(&[("en", &["Faster brush strokes", "A window of its own"])]), ..offer(true) };
+    a.ui.update.status = Status::Available { offer: listed };
+    let mut h = Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), a);
+    PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    open_dialog(h.state_mut());
+    h.run_steps(4);
+    assert!(h.query_by_label("Faster brush strokes").is_some());
+    assert!(h.query_by_label("A window of its own").is_some());
+    assert!(h.query_by_label("What's new in this version").is_some());
+    // The old "1.0.0 → 9.0.0" strip is gone: the installed version isn't shown on its own.
+    assert!(h.query_by_label("1.0.0").is_none());
+    assert!(h.query_by_label("Current version").is_none());
+
+    // A feed without notes: no empty box.
+    h.state_mut().ui.update.status = Status::Available { offer: offer(true) };
+    h.run_steps(3);
+    assert!(h.query_by_label("What's new in this version").is_none());
+    assert!(h.query_by_label("Update").is_some());
+}
+
+#[test]
+fn the_windows_title_bar_closes_the_window() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let (mut a, _log, _ctx) = app(false);
+    // Windows and FreeBSD draw their own title bars (as the snapshot's `--custom-titlebar`).
+    a.custom_titlebar = true;
+    a.ui.update.status = Status::Available { offer: offer(true) };
+    let mut h = Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), a);
+    // The fonts first: the window's headline needs them from its first frame.
+    PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    open_dialog(h.state_mut());
+    h.run_steps(4);
+    let close = h.get_by_label("Close").rect();
+    let later = h.get_by_label("Later").rect();
+    assert!(close.center().y < later.top() - 100.0, "Close is in the title bar, at the top: {close:?}");
+    assert!(close.right() >= later.right(), "at the right end: {close:?} {later:?}");
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    assert!(update_dialog(h.state()).is_none(), "closed");
+    assert!(matches!(h.state().ui.update.status, Status::Available { .. }), "like Later: nothing skipped");
+    assert!(h.state().session.prefs().updates.skipped_version.is_empty());
 }
