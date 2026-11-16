@@ -21,7 +21,7 @@ fn white_icons() -> &'static HashMap<&'static str, Arc<[u8]>> {
             .map(|(name, bytes)| {
                 let svg = String::from_utf8_lossy(bytes).replace("currentColor", "#ffffff");
                 // Lucide's 2 px stroke is heavy at toolbar sizes; the tool glyphs carry their own weights.
-                let svg = if name.starts_with("tool-") || name.starts_with("opt-") { svg } else { svg.replace("stroke-width=\"2\"", "stroke-width=\"1.75\"") };
+                let svg = if name.starts_with("tool-") || name.starts_with("opt-") || name.starts_with("layers-") { svg } else { svg.replace("stroke-width=\"2\"", "stroke-width=\"1.75\"") };
                 (*name, Arc::from(svg.into_bytes().into_boxed_slice()))
             })
             .collect()
@@ -145,6 +145,9 @@ pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tool
     // The options-bar glyphs (`opt-*`) are detailed drawings and need the most room.
     let fraction = if name.starts_with("opt-") {
         0.75
+    } else if name.starts_with("layers-") {
+        // The Layers panel footer glyphs are drawn edge to edge, as large as Photoshop's.
+        0.66
     } else if name.starts_with("tool-") {
         0.6
     } else {

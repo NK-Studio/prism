@@ -1,6 +1,7 @@
 //! Lucide icons (ISC licence), embedded and tinted at runtime.
 //! The `tool-*` glyphs (`assets/icons/tools/`) are Prism's own artwork: solid toolbar glyphs.
 //! The `opt-*` glyphs (`assets/icons/options/`) are Prism's own artwork for the options bar.
+//! The `layers-*` glyphs (`assets/icons/layers/`) are Prism's own artwork for the Layers panel footer.
 
 pub static ICONS: &[(&str, &[u8])] = &[
     ("align-center", include_bytes!("../../../assets/icons/align-center.svg")),
@@ -141,6 +142,14 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("opt-pressure-size", include_bytes!("../../../assets/icons/options/pressure-size.svg")),
     ("opt-smoothing-options", include_bytes!("../../../assets/icons/options/smoothing-options.svg")),
     ("opt-symmetry", include_bytes!("../../../assets/icons/options/symmetry.svg")),
+    // Layers panel footer glyphs: original artwork, see assets/icons/layers/LICENSE.txt.
+    ("layers-adjust", include_bytes!("../../../assets/icons/layers/adjust.svg")),
+    ("layers-folder", include_bytes!("../../../assets/icons/layers/folder.svg")),
+    ("layers-fx", include_bytes!("../../../assets/icons/layers/fx.svg")),
+    ("layers-link", include_bytes!("../../../assets/icons/layers/link.svg")),
+    ("layers-mask", include_bytes!("../../../assets/icons/layers/mask.svg")),
+    ("layers-new", include_bytes!("../../../assets/icons/layers/new.svg")),
+    ("layers-trash", include_bytes!("../../../assets/icons/layers/trash.svg")),
     // Toolbar glyphs: original artwork, see assets/icons/tools/LICENSE.txt.
     ("tool-airbrush", include_bytes!("../../../assets/icons/tools/airbrush.svg")),
     ("tool-arrow", include_bytes!("../../../assets/icons/tools/arrow.svg")),

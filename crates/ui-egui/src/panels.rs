@@ -1816,25 +1816,25 @@ fn layers(app: &mut PrismApp, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let delete_params = footer_drag.filter(|(_, in_selection)| !in_selection).map_or(json!({}), |(layer, _)| json!({"layer": layer}));
             let can_delete = app.session.is_enabled_with("layer.delete", &delete_params);
-            let trash = ui.add_enabled_ui(can_delete, |ui| icons::button(ui, "trash", 26.0, false, tl!("Delete layer"))).inner;
+            let trash = ui.add_enabled_ui(can_delete, |ui| icons::button(ui, "layers-trash", 26.0, false, tl!("Delete layer"))).inner;
             if trash.clicked() {
                 actions.push(("layer.delete".into(), json!({})));
             }
             actions.extend(footer_drop(ui, &trash, footer_drag, "layer.delete"));
             // The button makes the layer straight away (the ⌥⇧⌘N command); ⌥-click asks in the
             // New Layer dialog first, as in Photoshop (a null param runs it like its menu item).
-            let new_layer = icons::button(ui, "square-plus", 26.0, false, &crate::shortcuts::tip_label(app, "Create a new layer", crate::new_layer_ui::NO_DIALOG));
+            let new_layer = icons::button(ui, "layers-new", 26.0, false, &crate::shortcuts::tip_label(app, "Create a new layer", crate::new_layer_ui::NO_DIALOG));
             if new_layer.clicked() {
                 let ask = ui.input(|i| i.modifiers.alt);
                 actions.push(("layer.new.layer".into(), if ask { Value::Null } else { json!({}) }));
             }
             actions.extend(footer_drop(ui, &new_layer, footer_drag, "layer.duplicate"));
-            let group = icons::button(ui, "folder", 26.0, false, tl!("Create a new group"));
+            let group = icons::button(ui, "layers-folder", 26.0, false, tl!("Create a new group"));
             if group.clicked() {
                 actions.push(("layer.new.group".into(), json!({})));
             }
             actions.extend(footer_drop(ui, &group, footer_drag, "layer.groupLayers"));
-            let adj = footer_menu_button(ui, "contrast", 26.0, tl!("Create new fill or adjustment layer"));
+            let adj = footer_menu_button(ui, "layers-adjust", 26.0, tl!("Create new fill or adjustment layer"));
             egui::Popup::menu(&adj).open_memory(footer_menu_right_click(&adj)).show(|ui| {
                 ui.set_min_width(190.0);
                 for c in prism_engine::command_specs().iter().filter(|c| c.id.starts_with("layer.newAdjustmentLayer.")) {
@@ -1855,7 +1855,7 @@ fn layers(app: &mut PrismApp, ui: &mut egui::Ui) {
             });
             if icons::button(
                 ui,
-                "square-dot",
+                "layers-mask",
                 26.0,
                 false,
                 &crate::i18n::fmt(tl!("Add a mask  (from the selection; {key} inverts)"), &[("key", &crate::shortcuts::pretty("Alt"))]),
@@ -1865,7 +1865,7 @@ fn layers(app: &mut PrismApp, ui: &mut egui::Ui) {
                 let alt = ui.input(|i| i.modifiers.alt);
                 actions.push((crate::layer_menu_ui::add_mask_command(doc.selection.is_some(), alt).into(), json!({})));
             }
-            let fx = fx_button(ui, 26.0, tl!("Add a layer style"));
+            let fx = footer_menu_button(ui, "layers-fx", 26.0, tl!("Add a layer style"));
             egui::Popup::menu(&fx).open_memory(footer_menu_right_click(&fx)).show(|ui| {
                 ui.set_min_width(180.0);
                 if ui.button(tl!("Blending Options…")).clicked() {
@@ -1882,7 +1882,7 @@ fn layers(app: &mut PrismApp, ui: &mut egui::Ui) {
             });
             // Photoshop's footer starts with Link Layers (enabled with two or more layers selected).
             let can_link = app.session.is_enabled("layer.linkLayers");
-            if ui.add_enabled_ui(can_link, |ui| icons::button(ui, "link", 26.0, false, tl!("Link layers"))).inner.clicked() {
+            if ui.add_enabled_ui(can_link, |ui| icons::button(ui, "layers-link", 26.0, false, tl!("Link layers"))).inner.clicked() {
                 actions.push(("layer.linkLayers".into(), json!({})));
             }
         });
@@ -1954,33 +1954,18 @@ fn footer_menu_right_click(response: &egui::Response) -> Option<egui::SetOpenCom
     }
 }
 
-/// The small down-arrow makes it clear that the footer icon expands into a menu.
-fn footer_menu_arrow(ui: &egui::Ui, rect: Rect) {
-    let t = Tokens::get(ui.ctx());
-    let arrow = Rect::from_min_size(rect.right_bottom() - vec2(11.0, 10.0), vec2(9.0, 9.0));
-    icons::paint(ui, arrow, "chevron-down", 8.0, t.text_dim);
-}
-
+/// A footer icon that opens a menu: the glyph, with Photoshop's small solid triangle at its
+/// lower right to say so.
 fn footer_menu_button(ui: &mut egui::Ui, icon: &str, size: f32, tip: &str) -> egui::Response {
-    let response = icons::button(ui, icon, size, false, tip);
-    footer_menu_arrow(ui, response.rect);
-    response
-}
-
-/// Photoshop's italic "fx" footer button (no icon-font equivalent).
-fn fx_button(ui: &mut egui::Ui, size: f32, tip: &str) -> egui::Response {
-    let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(size + 5.0, size), Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    if resp.hovered() {
-        ui.painter().rect_filled(r, t.radius_sm, t.hover);
-    }
-    let mut job = egui::text::LayoutJob::default();
-    job.append("fx", 0.0, egui::TextFormat { font_id: egui::FontId::proportional(15.0), color: t.icon, italics: true, ..Default::default() });
-    let g = ui.painter().layout_job(job);
-    ui.painter().galley(r.center() - g.size() / 2.0, g, t.icon);
-    footer_menu_arrow(ui, r);
-    resp.on_hover_text(tip)
+    let tint = if ui.is_enabled() { icons::button_chrome(ui, rect, false, resp.hovered()) } else { Tokens::get(ui.ctx()).text_faint };
+    let glyph = Rect::from_min_size(rect.min, vec2(size, size));
+    icons::paint(ui, glyph, icon, (size * 0.66).round(), tint);
+    let tip_pos = pos2(rect.right() - 5.0, rect.bottom() - 4.0);
+    let triangle = vec![tip_pos - vec2(2.5, 3.0), tip_pos + vec2(2.5, -3.0), tip_pos];
+    ui.painter().add(egui::Shape::convex_polygon(triangle, tint, egui::Stroke::NONE));
+    if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
 }
 
 /// How a Layers panel row is selected: in the (multi-)selection, the primary/active layer, and
