@@ -752,22 +752,53 @@ fn save_new_style(app: &mut PrismApp, f: &Map<String, Value>) {
     }
 }
 
-/// The dialog's layout in points, in Photoshop's proportions: the effect list, the selected
-/// page, and the column of OK / Cancel / New Style… / Preview with the style swatch.
-const LIST_W: f32 = 210.0;
-/// The page column's fixed height. Photoshop's dialog keeps one size whichever page is shown:
-/// this fits the tallest page (Blending Options with Blend If) and shorter pages leave the rest
-/// blank, so picking another effect never resizes the window. A page that would still not fit
-/// (a larger UI font) scrolls instead of growing the dialog.
-pub(crate) const PAGE_H: f32 = 620.0;
-/// The effect list's frame, gap and toolbar under its rows: the list's rows fill the rest of
-/// the page height, so the list and the page end on one line.
-const LIST_CHROME: f32 = 30.0;
-const PAGE_W: f32 = 404.0;
-const SIDE_W: f32 = 118.0;
+/// The dialog's layout in points, measured on Photoshop 2026's dialog (macOS, at 2×): a title
+/// band, then the Name row over the effect list and the selected page, and the column of OK /
+/// Cancel / New Style… / Preview with the style swatch; 770 × 531 pt in all.
+pub(crate) const TITLE_H: f32 = 27.0;
+/// The body's margins under the title band (left, right, top, bottom).
+const PAD: (f32, f32, f32, f32) = (12.0, 10.0, 10.0, 11.0);
+/// The effect list's width, its scroll gutter included.
+const LIST_W: f32 = 227.0;
+/// The scroll gutter down the list's right side, shown whether or not the list scrolls.
+const GUTTER_W: f32 = 16.0;
+/// The toolbar under the list's rows (fx, the arrows, the trash), inside the list's frame.
+const TOOLBAR_H: f32 = 25.0;
+const LIST_GAP: f32 = 10.0;
+const PAGE_W: f32 = 366.0;
+const SIDE_GAP: f32 = 17.0;
+const SIDE_W: f32 = 128.0;
+/// The Name row and the space under it, above the list and the page.
+const NAME_H: f32 = 19.0;
+const NAME_GAP: f32 = 11.0;
+/// The list's and the page's fixed height. Photoshop's dialog keeps one size whichever page is
+/// shown: this fits the tallest page (Blending Options with Blend If) and shorter pages leave the
+/// rest blank, so picking another effect never resizes the window. A page that would still not
+/// fit (a larger UI font) scrolls instead of growing the dialog.
+pub(crate) const PAGE_H: f32 = 454.0;
 const ROW_H: f32 = 26.0;
-/// The right-aligned label column of a page row ("Blend Mode:").
-const LABEL_W: f32 = 100.0;
+/// The right-aligned label column of a page row ("Blend Mode:"), then the gap before its controls.
+const LABEL_W: f32 = 74.0;
+/// A page row's height and the space between rows.
+const FIELD_H: f32 = 18.0;
+const ROW_GAP: f32 = 3.0;
+/// A titled box's inner padding at the sides, where its title starts, and the space between
+/// two boxes stacked on a page.
+const BOX_PAD: f32 = 10.0;
+const TITLE_INSET: f32 = 19.0;
+const BOX_GAP: f32 = 11.0;
+/// Check boxes, in the list and on the pages.
+const CHECK: f32 = 11.0;
+/// Photoshop's dialog buttons: OK, Cancel, New Style…, Make Default, Reset to Default.
+const BUTTON_H: f32 = 25.0;
+/// Label text on the pages and in the list.
+fn label_font() -> egui::FontId {
+    egui::FontId::proportional(12.5)
+}
+/// Number fields on the pages: Photoshop's short box with proportional digits.
+fn field_look() -> widgets::FieldLook {
+    widgets::FieldLook { height: 18.0, font: egui::FontId::proportional(12.5), lift: 0.5 }
+}
 /// Where the dialog keeps how tall the selected page's content is (view state, egui memory).
 fn page_content_id() -> egui::Id {
     egui::Id::new("layer-style-page-content-h")
@@ -797,23 +828,113 @@ pub(crate) fn add_every_page(f: &mut Map<String, Value>) -> Vec<String> {
     pages
 }
 
-/// The dialog's content width: the three columns and the gaps between them.
-pub const WIDTH: f32 = LIST_W + PAGE_W + SIDE_W + 40.0;
+/// The dialog's width, edge to edge: the margins, the three columns and the gaps between them.
+pub const WIDTH: f32 = PAD.0 + LIST_W + LIST_GAP + PAGE_W + SIDE_GAP + SIDE_W + PAD.1;
+
+/// Photoshop's title band across the dialog's top, `height` tall: its name centred on a darker
+/// band with a dark line under it, and a close button at its right end off macOS (on macOS the
+/// system's window buttons sit over the band's left end in a window of its own). `corner` is the
+/// dialog frame's rounding, kept on the band's top corners. Returns the band, which drags the
+/// dialog, and whether the close button was clicked.
+pub fn title_bar(ui: &mut egui::Ui, title: &str, id: egui::Id, corner: egui::CornerRadius, height: f32) -> (egui::Response, bool) {
+    let t = Tokens::get(ui.ctx());
+    let spacing = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let (bar, _) = ui.allocate_exact_size(vec2(WIDTH, height), Sense::hover());
+    ui.spacing_mut().item_spacing.y = spacing;
+    let p = ui.painter();
+    p.rect_filled(bar, egui::CornerRadius { sw: 0, se: 0, ..corner }, t.dock);
+    p.hline(bar.x_range(), bar.bottom() - 0.5, Stroke::new(1.0, Color32::from_black_alpha(170)));
+    let galley = p.layout_no_wrap(title.to_owned(), crate::theme::semibold(13.0), t.text_dim);
+    p.galley(bar.center() - galley.size() / 2.0, galley, t.text_dim);
+    // Painted text: name the band, so tests and agents find the dialog by its title.
+    let resp = ui.interact(bar, id.with("title"), Sense::drag());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, title));
+    let mut close = false;
+    if !cfg!(target_os = "macos") {
+        // The same answer as Cancel (no accessibility name of its own, so it never doubles it).
+        let r = egui::Rect::from_center_size(egui::pos2(bar.right() - 20.0, bar.center().y), vec2(30.0, height - 6.0));
+        let hit = ui.interact(r, id.with("close"), Sense::click());
+        if hit.hovered() {
+            ui.painter().rect_filled(r, t.radius_sm, t.hover);
+        }
+        let (c, s) = (r.center(), 4.5);
+        let ink = Stroke::new(1.3, if hit.hovered() { t.text } else { t.text_dim });
+        ui.painter().line_segment([c + vec2(-s, -s), c + vec2(s, s)], ink);
+        ui.painter().line_segment([c + vec2(-s, s), c + vec2(s, -s)], ink);
+        close = hit.clicked();
+    }
+    (resp, close)
+}
 
 /// The enable checkbox of an effect row.
 fn fx_checkbox_rect(row: egui::Rect) -> egui::Rect {
-    egui::Rect::from_min_size(row.min + vec2(6.0, 6.0), vec2(14.0, 14.0))
+    egui::Rect::from_min_size(egui::pos2(row.left() + 5.0, row.center().y - CHECK / 2.0), vec2(CHECK, CHECK))
 }
 
-/// An effect row's checkbox: an accent box with a tick when on, an outline when off.
-fn fx_checkbox(p: &egui::Painter, cb: egui::Rect, on: bool, t: &Tokens) {
+/// Photoshop's check box: a light box with a dark tick when on, a dark box with a light edge when
+/// off (brighter while the pointer is over it).
+fn paint_check(p: &egui::Painter, cb: egui::Rect, on: bool, hovered: bool, t: &Tokens) {
     if on {
-        p.rect_filled(cb, 2.0, t.accent);
-        p.line_segment([cb.left_center() + vec2(3.0, 0.5), cb.center_bottom() + vec2(-1.0, -3.5)], Stroke::new(1.8, Color32::WHITE));
-        p.line_segment([cb.center_bottom() + vec2(-1.0, -3.5), cb.right_top() + vec2(-3.0, 3.5)], Stroke::new(1.8, Color32::WHITE));
+        p.rect_filled(cb, 2.0, if hovered { t.text } else { t.text_dim });
+        let at = |x: f32, y: f32| cb.min + vec2(cb.width() * x, cb.height() * y);
+        let tick = Stroke::new(1.6, t.canvas);
+        p.line_segment([at(0.22, 0.52), at(0.43, 0.73)], tick);
+        p.line_segment([at(0.43, 0.73), at(0.79, 0.29)], tick);
     } else {
-        p.rect_stroke(cb, 2.0, Stroke::new(1.5, t.text_faint), StrokeKind::Inside);
+        p.rect_filled(cb, 2.0, t.field);
+        p.rect_stroke(cb, 2.0, Stroke::new(1.0, if hovered { t.text_dim } else { t.text_faint }), StrokeKind::Inside);
     }
+}
+
+/// A page's check box and its label; a click on either toggles it.
+fn check_box(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
+    check_box_sized(ui, on, label, CHECK, label_font())
+}
+
+fn check_box_sized(ui: &mut egui::Ui, on: &mut bool, label: &str, size: f32, font: egui::FontId) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let text = tl!(label);
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, t.text_dim);
+    let gap = 8.0;
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(size + gap + galley.size().x, size + 3.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, text));
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    let cb = egui::Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - size / 2.0), vec2(size, size));
+    paint_check(ui.painter(), cb, *on, resp.hovered(), &t);
+    if resp.has_focus() {
+        ui.painter().rect_stroke(cb.expand(2.0), 3.0, Stroke::new(1.5, t.accent), StrokeKind::Outside);
+    }
+    ui.painter().galley(egui::pos2(cb.right() + gap, rect.center().y - galley.size().y / 2.0), galley, t.text_dim);
+    resp
+}
+
+/// Photoshop's dialog button: a pill with a thin edge, brighter on the default button (OK).
+fn pill_button(ui: &mut egui::Ui, label: &str, width: f32, default: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), egui::FontId::proportional(13.0), t.text);
+    let size = vec2(width.max(galley.size().x + 28.0), BUTTON_H);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    // Painted text: name the button for accessibility (and so tests and agents can find it).
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    let r = rect.height() / 2.0;
+    let p = ui.painter();
+    if resp.is_pointer_button_down_on() {
+        p.rect_filled(rect, r, t.pressed);
+    } else if resp.hovered() {
+        p.rect_filled(rect, r, t.hover);
+    }
+    let edge = if default { t.text } else { t.card.lerp_to_gamma(t.text, 0.3) };
+    p.rect_stroke(rect, r, Stroke::new(1.0, edge), StrokeKind::Inside);
+    if resp.has_focus() {
+        p.rect_stroke(rect.expand(2.0), r + 2.0, Stroke::new(2.0, t.accent), StrokeKind::Outside);
+    }
+    p.galley(rect.center() - galley.size() / 2.0, galley, t.text);
+    resp
 }
 
 fn selected_fill(t: &Tokens) -> Color32 {
@@ -840,30 +961,28 @@ fn list_row(ui: &mut egui::Ui, id: egui::Id, label: &str, indent: f32, check: Op
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
     }
-    ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, t.separator));
+    ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, t.separator));
     let mut out = RowClicks::default();
     let text_x = match check {
         Some(on) => {
             let cb = fx_checkbox_rect(rect).translate(vec2(indent, 0.0));
-            let cresp = ui.interact(cb.expand(3.0), id.with("check"), Sense::click());
-            fx_checkbox(ui.painter(), cb, on, &t);
+            let cresp = ui.interact(cb.expand(4.0), id.with("check"), Sense::click());
+            paint_check(ui.painter(), cb, on, cresp.hovered(), &t);
             out.check = cresp.clicked();
-            28.0
+            25.0
         }
-        None => 10.0,
+        None => 5.0,
     };
-    let lit = selected || check != Some(false);
-    ui.painter().text(
-        rect.left_center() + vec2(text_x + indent, 0.0),
-        egui::Align2::LEFT_CENTER,
-        tl!(label),
-        egui::FontId::proportional(12.5),
-        if lit { t.text } else { t.text_dim },
-    );
+    // Photoshop draws every name alike, on or off; the box says which.
+    ui.painter().text(rect.left_center() + vec2(text_x + indent, 0.0), egui::Align2::LEFT_CENTER, tl!(label), egui::FontId::proportional(13.0), t.text_dim);
     if plus {
-        let r = egui::Rect::from_center_size(rect.right_center() - vec2(15.0, 0.0), vec2(20.0, 20.0));
-        let presp = ui.interact(r, id.with("plus"), Sense::click()).on_hover_text(tl!("Add a new instance of this effect"));
-        crate::icons::paint(ui, r, "square-plus", 15.0, if presp.hovered() { t.accent } else { t.text_dim });
+        // A boxed plus at the row's right end, as in Photoshop.
+        let r = egui::Rect::from_center_size(rect.right_center() - vec2(11.0, 0.0), vec2(13.0, 13.0));
+        let presp = ui.interact(r.expand(3.0), id.with("plus"), Sense::click()).on_hover_text(tl!("Add a new instance of this effect"));
+        let ink = Stroke::new(1.0, if presp.hovered() { t.accent } else { t.text });
+        ui.painter().rect_stroke(r, 1.0, ink, StrokeKind::Inside);
+        ui.painter().hline((r.left() + 3.0)..=(r.right() - 3.0), r.center().y, ink);
+        ui.painter().vline(r.center().x, (r.top() + 3.0)..=(r.bottom() - 3.0), ink);
         out.plus = presp.clicked();
     }
     out.row = resp.clicked() && !out.check && !out.plus;
@@ -950,22 +1069,28 @@ fn move_instance(f: &mut Map<String, Value>, id: &str, up: bool) {
     }
 }
 
-/// The effect list (Styles, Blending Options, then every kind and its instances) with its
-/// toolbar: the fx menu, move up / down and delete.
-fn effect_list(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str, height: f32) {
+/// The effect list (Styles, Blending Options, then every kind and its instances) in Photoshop's
+/// frame: the rows beside a scroll gutter, then the toolbar (the fx menu, move up / down, delete)
+/// along the frame's bottom. As tall as the page beside it.
+fn effect_list(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
     let t = Tokens::get(ui.ctx());
-    ui.vertical(|ui| {
-        ui.set_width(LIST_W);
-        egui::Frame::NONE.stroke(Stroke::new(1.0, t.field_border)).inner_margin(1).show(ui, |ui| {
-            ui.set_width(LIST_W - 2.0);
-            egui::ScrollArea::vertical().id_salt("layer-style-list").max_height(height).auto_shrink([false, false]).show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                effect_rows(ui, f, selected);
-            });
-        });
-        ui.add_space(4.0);
-        list_toolbar(ui, f, selected);
+    let (rect, _) = ui.allocate_exact_size(vec2(LIST_W, PAGE_H), Sense::hover());
+    let rows = egui::Rect::from_min_max(rect.min + vec2(1.0, 1.0), egui::pos2(rect.right() - 1.0, rect.bottom() - 2.0 - TOOLBAR_H));
+    let gutter = egui::Rect::from_min_max(egui::pos2(rows.right() - GUTTER_W, rows.top()), rows.max);
+    let p = ui.painter();
+    p.rect_filled(gutter, 0.0, t.field.lerp_to_gamma(t.card, 0.5));
+    p.rect_stroke(rect, 0.0, Stroke::new(1.0, t.card_border), StrokeKind::Inside);
+    p.hline(rect.x_range(), rows.bottom() + 0.5, Stroke::new(1.0, t.separator));
+    let mut list = ui.new_child(egui::UiBuilder::new().id_salt("layer-style-list").max_rect(rows).layout(egui::Layout::top_down(egui::Align::Min)));
+    // The scroll bar, when the rows overflow, runs in the gutter.
+    egui::ScrollArea::vertical().id_salt("layer-style-list").max_height(rows.height()).auto_shrink([false, false]).show(&mut list, |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.set_width(rows.width() - GUTTER_W);
+        effect_rows(ui, f, selected);
     });
+    let bar = egui::Rect::from_min_max(egui::pos2(rect.left() + 6.0, rows.bottom() + 1.0), rect.max - vec2(6.0, 1.0));
+    let mut tools = ui.new_child(egui::UiBuilder::new().id_salt("layer-style-tools").max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    list_toolbar(&mut tools, f, selected);
 }
 
 fn effect_rows(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
@@ -991,7 +1116,7 @@ fn effect_rows(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
                 // Photoshop lists Contour and Texture even before there is a bevel: a click adds
                 // the bevel with that element on.
                 for &(part, part_label, _) in BEVEL_PARTS {
-                    let c = list_row(ui, ui.id().with(("fxrow", kind, part)), part_label, 18.0, Some(false), false, false);
+                    let c = list_row(ui, ui.id().with(("fxrow", kind, part)), part_label, 10.0, Some(false), false, false);
                     if c.row || c.check {
                         add_instance(f, kind);
                         let id = f.get("selected").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -1023,7 +1148,7 @@ fn effect_rows(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
                 for &(part, part_label, _) in BEVEL_PARTS {
                     let page = format!("{id}#{part}");
                     let on = part_on(f, id, part);
-                    let c = list_row(ui, ui.id().with(("fxrow", kind, id.as_str(), part)), part_label, 18.0, Some(on), page == selected, false);
+                    let c = list_row(ui, ui.id().with(("fxrow", kind, id.as_str(), part)), part_label, 10.0, Some(on), page == selected, false);
                     if c.check {
                         set_part(f, id, part, !on);
                         f.insert("selected".into(), json!(page));
@@ -1068,12 +1193,13 @@ fn list_toolbar(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
                 }
             }
         });
+        ui.add_space(6.0);
         let up = sibling(f, selected, true).is_some();
-        if ui.add_enabled_ui(up, |ui| crate::icons::button(ui, "chevron-up", 24.0, false, tl!("Move Effect Up"))).inner.clicked() {
+        if ui.add_enabled_ui(up, |ui| arrow_button(ui, true, "Move Effect Up")).inner.clicked() {
             move_instance(f, selected, true);
         }
         let down = sibling(f, selected, false).is_some();
-        if ui.add_enabled_ui(down, |ui| crate::icons::button(ui, "chevron-down", 24.0, false, tl!("Move Effect Down"))).inner.clicked() {
+        if ui.add_enabled_ui(down, |ui| arrow_button(ui, false, "Move Effect Down")).inner.clicked() {
             move_instance(f, selected, false);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1084,51 +1210,122 @@ fn list_toolbar(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
     });
 }
 
-/// Photoshop's titled group box: an etched frame whose title sits in a gap of its top edge.
-/// An empty title draws no frame. `min_h` is the least height the box takes in all, its title
-/// and the gap under it included (0 = as tall as its rows).
-fn group_box<R>(ui: &mut egui::Ui, title: &str, min_h: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+/// Photoshop's move up / down buttons under the list: a solid block arrow, dimmed while there is
+/// nothing to move past.
+fn arrow_button(ui: &mut egui::Ui, up: bool, tooltip: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!(tooltip)));
+    let resp = resp.on_hover_text(tl!(tooltip));
+    let ink = if !ui.is_enabled() {
+        t.text_faint.gamma_multiply(0.7)
+    } else if resp.hovered() {
+        t.text
+    } else {
+        t.text_dim
+    };
+    // The head (a triangle) and the stem (a bar), pointing up or down from the centre.
+    let c = rect.center();
+    let s = if up { 1.0 } else { -1.0 };
+    let head = vec![c + vec2(0.0, -5.5 * s), c + vec2(5.5, 0.0), c + vec2(-5.5, 0.0)];
+    ui.painter().add(egui::Shape::convex_polygon(head, ink, Stroke::NONE));
+    let stem = egui::Rect::from_two_pos(c + vec2(-2.25, -0.5 * s), c + vec2(2.25, 5.5 * s));
+    ui.painter().rect_filled(stem, 0.0, ink);
+    resp
+}
+
+/// Photoshop's titled group box: a dark etched frame whose title sits in a gap of its top edge.
+/// An empty title draws no frame, only the box's side padding. `min_h` is the least height the
+/// box takes in all, its title included (0 = as tall as its rows).
+fn group_box<R>(ui: &mut egui::Ui, title: &str, min_h: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     if title.is_empty() {
-        return ui.vertical(add).inner;
+        return ui
+            .horizontal_top(|ui| {
+                ui.add_space(BOX_PAD);
+                ui.vertical(add).inner
+            })
+            .inner;
     }
-    let galley = ui.painter().layout_no_wrap(tl!(title).to_string(), egui::FontId::proportional(12.5), t.text);
-    let half = (galley.size().y / 2.0).round();
-    // Title half, the frame's top and bottom margins, the item gap after the frame and the
-    // gap added under it.
-    let chrome = half + 14.0 + 8.0 + ui.spacing().item_spacing.y + 6.0;
-    let content_min = (min_h - chrome).max(0.0);
-    ui.add_space(half);
-    let width = ui.available_width();
-    let inner = egui::Frame::NONE.inner_margin(egui::Margin { left: 10, right: 10, top: 14, bottom: 8 }).show(ui, |ui| {
-        ui.set_width((width - 20.0).max(40.0));
-        ui.set_min_height(content_min);
-        add(ui)
-    });
-    let r = inner.response.rect;
-    let stroke = Stroke::new(1.0, t.field_border);
+    titled_box(
+        ui,
+        min_h,
+        |ui| {
+            let t = Tokens::get(ui.ctx());
+            ui.add(egui::Label::new(RichText::new(tl!(title)).font(label_font()).color(t.text)).selectable(false));
+        },
+        add,
+    )
+}
+
+/// A [`group_box`] whose title is `header`'s widgets (Blend If's channel dropdown sits in the
+/// title, as in Photoshop), set into a gap of the frame's top edge.
+fn titled_box<R>(ui: &mut egui::Ui, min_h: f32, header: impl FnOnce(&mut egui::Ui), add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let t = Tokens::get(ui.ctx());
+    let avail = ui.available_rect_before_wrap();
+    let top = avail.top();
+    let head = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(TITLE_INSET);
+            ui.scope(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                header(ui);
+            })
+            .response
+            .rect
+        })
+        .inner;
+    let (pad_top, pad_bottom) = (5.0, 10.0);
+    let content_min = (min_h - (ui.cursor().top() - top) - pad_top - pad_bottom).max(0.0);
+    let inner = egui::Frame::NONE
+        .inner_margin(egui::Margin { left: BOX_PAD as i8, right: BOX_PAD as i8, top: pad_top as i8, bottom: pad_bottom as i8 })
+        .show(ui, |ui| {
+            ui.set_width((avail.width() - 2.0 * BOX_PAD).max(40.0));
+            ui.set_min_height(content_min);
+            add(ui)
+        });
+    // Half a pixel in, so the 1 pt lines land on whole pixels at 1× and 2×.
+    let r = egui::Rect::from_min_max(egui::pos2(avail.left(), head.center().y.round()), egui::pos2(avail.right(), inner.response.rect.bottom())).shrink(0.5);
+    let stroke = Stroke::new(1.0, t.card_border);
     let p = ui.painter();
-    let tx = r.left() + 10.0;
-    p.line_segment([r.left_top(), egui::pos2(tx, r.top())], stroke);
-    p.line_segment([egui::pos2(tx + galley.size().x + 8.0, r.top()), r.right_top()], stroke);
-    p.line_segment([r.right_top(), r.right_bottom()], stroke);
-    p.line_segment([r.right_bottom(), r.left_bottom()], stroke);
-    p.line_segment([r.left_bottom(), r.left_top()], stroke);
-    p.galley(egui::pos2(tx + 4.0, r.top() - half), galley, t.text);
-    ui.add_space(6.0);
+    p.hline(r.left()..=(head.left() - 5.0), r.top(), stroke);
+    p.hline((head.right() + 5.0)..=r.right(), r.top(), stroke);
+    p.vline(r.right(), r.y_range(), stroke);
+    p.hline(r.x_range(), r.bottom(), stroke);
+    p.vline(r.left(), r.y_range(), stroke);
     inner.inner
+}
+
+/// The space between two boxes stacked on a page.
+fn box_gap(ui: &mut egui::Ui) {
+    ui.add_space((BOX_GAP - ui.spacing().item_spacing.y).max(0.0));
 }
 
 /// A page row: the label right-aligned in a fixed column ("Blend Mode:"), then its controls.
 fn field_row<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    field_row_h(ui, label, FIELD_H, add)
+}
+
+/// A [`field_row`] `height` tall, its label centred on it (the Angle dial's row).
+fn field_row_h<R>(ui: &mut egui::Ui, label: &str, height: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
-        let (r, _) = ui.allocate_exact_size(vec2(LABEL_W, 22.0), Sense::hover());
+        let (r, _) = ui.allocate_exact_size(vec2(LABEL_W, height), Sense::hover());
         if !label.is_empty() {
-            ui.painter().text(r.right_center(), egui::Align2::RIGHT_CENTER, format!("{}:", tl!(label)), egui::FontId::proportional(12.5), t.text_dim);
+            ui.painter().text(r.right_center(), egui::Align2::RIGHT_CENTER, format!("{}:", tl!(label)), label_font(), t.text_dim);
         }
-        ui.add_space(4.0);
         add(ui)
+    })
+    .inner
+}
+
+/// A check box in the controls' column (no label of its own), Photoshop's tighter row.
+fn check_row(ui: &mut egui::Ui, on: &mut bool, label: &str) -> bool {
+    // As tall as the box (not a full control row): Photoshop stacks these 17 pt apart.
+    let layout = egui::Layout::left_to_right(egui::Align::Center);
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), CHECK), layout, |ui| {
+        ui.add_space(LABEL_W);
+        check_box(ui, on, label).changed()
     })
     .inner
 }
@@ -1137,17 +1334,54 @@ fn field_row<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) 
 fn slider_field(ui: &mut egui::Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     field_row(ui, label, |ui| {
-        let s = ui.allocate_ui(vec2(132.0, 22.0), |ui| widgets::slider(ui, v, range.clone(), None)).inner;
-        let n = widgets::value_field(ui, v, range, "", 56.0);
-        ui.label(RichText::new(unit).color(t.text_dim));
+        let s = page_slider(ui, v, range.clone());
+        let n = widgets::value_field_look(ui, v, range, "", 42.0, &field_look());
+        ui.add_space(-4.0);
+        ui.label(RichText::new(unit).font(label_font()).color(t.text_dim));
         s.changed() || n.changed()
     })
+}
+
+/// Photoshop's dialog slider: a thin track with a light pointer under it, its tip on the value.
+fn page_slider(ui: &mut egui::Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(108.0, FIELD_H), Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(*value), ""));
+    let (lo, hi) = (*range.start(), *range.end());
+    let c = rect.center().y;
+    let track = egui::Rect::from_min_max(egui::pos2(rect.left() + 7.0, c - 6.0), egui::pos2(rect.right() - 7.0, c - 3.25));
+    if let Some(p) = resp.interact_pointer_pos()
+        && (resp.dragged() || resp.clicked())
+        && hi > lo
+    {
+        let v = lo + ((p.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * (hi - lo);
+        if (v - *value).abs() > f32::EPSILON {
+            *value = v;
+            resp.mark_changed();
+        }
+    }
+    let f = if hi > lo { ((*value - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 };
+    let x = track.left() + f * track.width();
+    let p = ui.painter();
+    p.rect_filled(track, 1.0, t.field_border);
+    // The pointer: a house shape whose tip touches the track.
+    let tip = c - 5.0;
+    let pts = vec![
+        egui::pos2(x, tip),
+        egui::pos2(x + 5.0, tip + 5.5),
+        egui::pos2(x + 5.0, c + 6.5),
+        egui::pos2(x - 5.0, c + 6.5),
+        egui::pos2(x - 5.0, tip + 5.5),
+    ];
+    let edge = if resp.hovered() || resp.dragged() { t.accent } else { t.canvas };
+    p.add(egui::Shape::convex_polygon(pts, t.text, Stroke::new(1.0, edge)));
+    resp
 }
 
 /// A blend mode dropdown.
 fn blend_dropdown(ui: &mut egui::Ui, id: &str, cur: &mut String) -> bool {
     let opts: Vec<(String, &str)> = prism_color::BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
-    widgets::dropdown(ui, id, cur, &opts, 150.0)
+    widgets::dropdown(ui, id, cur, &opts, 104.0)
 }
 
 /// A colour swatch editing `#rrggbb` text; returns the new value when it changed.
@@ -1165,29 +1399,39 @@ pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -
     let mut new_style = false;
     let mut outcome = None;
     let invalid = validate_params(f).err();
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
-            name_row(ui, f);
-            ui.add_space(8.0);
-            // Both columns have fixed sizes: the list and the page end on one line and the
-            // dialog keeps its size whichever page is selected.
-            ui.horizontal_top(|ui| {
-                effect_list(ui, f, &selected, PAGE_H - LIST_CHROME);
-                ui.add_space(12.0);
-                ui.vertical(|ui| {
-                    ui.set_width(PAGE_W);
-                    ui.set_height(PAGE_H);
-                    let out = egui::ScrollArea::vertical().id_salt("layer-style-page").max_height(PAGE_H).auto_shrink([false, false]).show(ui, |ui| {
-                        page(app, ui, f, &selected, invalid.as_deref(), &mut style_click);
+    let margin = egui::Margin { left: PAD.0 as i8, right: PAD.1 as i8, top: PAD.2 as i8, bottom: PAD.3 as i8 };
+    egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+        // Every gap below is spelled out, as measured on Photoshop's dialog.
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                name_row(ui, f);
+                ui.add_space(NAME_GAP);
+                // Both columns have fixed sizes: the list and the page end on one line and the
+                // dialog keeps its size whichever page is selected.
+                ui.horizontal_top(|ui| {
+                    effect_list(ui, f, &selected);
+                    ui.add_space(LIST_GAP);
+                    ui.vertical(|ui| {
+                        ui.set_width(PAGE_W);
+                        ui.set_height(PAGE_H);
+                        // Photoshop's compact page rows: 20 pt controls, 3 pt apart.
+                        let s = ui.spacing_mut();
+                        s.item_spacing = vec2(8.0, ROW_GAP);
+                        s.interact_size.y = FIELD_H;
+                        s.button_padding.y = 2.0;
+                        let out = egui::ScrollArea::vertical().id_salt("layer-style-page").max_height(PAGE_H).auto_shrink([false, false]).show(ui, |ui| {
+                            page(app, ui, f, &selected, invalid.as_deref(), &mut style_click);
+                        });
+                        ui.data_mut(|d| d.insert_temp(page_content_id(), out.content_size.y));
                     });
-                    ui.data_mut(|d| d.insert_temp(page_content_id(), out.content_size.y));
                 });
             });
-        });
-        ui.add_space(14.0);
-        ui.vertical(|ui| {
-            ui.set_width(SIDE_W);
-            side_column(app, ui, f, &mut outcome, &mut new_style);
+            ui.add_space(SIDE_GAP);
+            ui.vertical(|ui| {
+                ui.set_width(SIDE_W);
+                side_column(app, ui, f, &mut outcome, &mut new_style);
+            });
         });
     });
     // Style swatch clicks load the style into the dialog (OK applies it, Cancel drops it);
@@ -1202,33 +1446,47 @@ pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -
 }
 
 /// The layer's name, renamed on OK as in Photoshop's dialog.
+/// The row keeps its height without a name, so the list and the page never move.
 fn name_row(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    let Some(mut name) = f.get("name").and_then(Value::as_str).map(str::to_string) else { return };
     let t = Tokens::get(ui.ctx());
+    let name = f.get("name").and_then(Value::as_str).map(str::to_string);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(format!("{}:", tl!("Name"))).color(t.text_dim));
-        if ui.add_sized(vec2(320.0, 22.0), egui::TextEdit::singleline(&mut name)).changed() {
-            f.insert("name".into(), json!(name));
+        ui.set_height(NAME_H);
+        // The label right-aligned before the field, which lines up over the list's checkboxes.
+        let (r, _) = ui.allocate_exact_size(vec2(45.0, NAME_H), Sense::hover());
+        ui.painter().text(r.right_center(), egui::Align2::RIGHT_CENTER, format!("{}:", tl!("Name")), label_font(), t.text_dim);
+        ui.add_space(5.0);
+        if let Some(mut name) = name {
+            let edit = egui::TextEdit::singleline(&mut name).font(label_font()).margin(vec2(4.0, 1.0)).vertical_align(egui::Align::Center);
+            if ui.add_sized(vec2(LIST_W, NAME_H), edit).changed() {
+                f.insert("name".into(), json!(name));
+            }
         }
     });
 }
 
-/// OK, Cancel, New Style…, Preview and the swatch of the pending style.
+/// OK, Cancel, New Style…, Preview and the swatch of the pending style, spaced as in Photoshop.
 fn side_column(app: &PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, outcome: &mut Option<bool>, new_style: &mut bool) {
-    ui.spacing_mut().item_spacing.y = 8.0;
-    if widgets::primary_button(ui, tl!("OK"), SIDE_W).clicked() {
+    if pill_button(ui, tl!("OK"), SIDE_W, true).clicked() {
         *outcome = Some(true);
     }
-    if widgets::secondary_button(ui, tl!("Cancel"), SIDE_W).clicked() {
+    ui.add_space(10.0);
+    if pill_button(ui, tl!("Cancel"), SIDE_W, false).clicked() {
         *outcome = Some(false);
     }
-    if widgets::secondary_button(ui, tl!("New Style…"), SIDE_W).clicked() {
+    ui.add_space(10.0);
+    if pill_button(ui, tl!("New Style…"), SIDE_W, false).clicked() {
         *new_style = true;
     }
+    ui.add_space(11.0);
     let mut preview = f.get("preview").and_then(Value::as_bool).unwrap_or(true);
-    if widgets::checkbox(ui, &mut preview, tl!("Preview")).changed() {
-        f.insert("preview".into(), json!(preview));
-    }
+    ui.horizontal(|ui| {
+        ui.add_space(14.0);
+        if check_box_sized(ui, &mut preview, "Preview", 12.5, egui::FontId::proportional(13.5)).changed() {
+            f.insert("preview".into(), json!(preview));
+        }
+    });
+    ui.add_space(11.5);
     preview_swatch(app, ui, f);
 }
 
@@ -1266,13 +1524,14 @@ fn pending_style(f: &Map<String, Value>) -> prism_engine::presets::styles::Style
     prism_engine::presets::styles::StylePreset { name: String::new(), effects, blend: None, fill_opacity: fill.map(|v| (v / 100.0).clamp(0.0, 1.0) as f32) }
 }
 
-/// Photoshop's preview swatch: the pending style on a grey square, redrawn when it changes.
+/// Photoshop's preview swatch: the pending style on a grey square in a dark well, redrawn when
+/// it changes.
 fn preview_swatch(app: &PrismApp, ui: &mut egui::Ui, f: &Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(SIDE_W, SIDE_W), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(SIDE_W, SIDE_W + 1.0), Sense::hover());
     ui.painter().rect_filled(rect, 0.0, t.canvas);
-    ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
-    let inner = rect.shrink(4.0);
+    ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    let inner = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.width().min(rect.height()) - 2.0));
     let px = (inner.width() * ui.ctx().pixels_per_point()).round().clamp(32.0, 256.0) as u32;
     let key = egui::Id::new("layer-style-swatch");
     let hash = preview_hash(f) ^ u64::from(px).rotate_left(32);
@@ -1280,7 +1539,7 @@ fn preview_swatch(app: &PrismApp, ui: &mut egui::Ui, f: &Map<String, Value>) {
     let tex = match cached {
         Some((h, tex)) if h == hash => Some(tex),
         _ => {
-            let rgba = prism_engine::presets::styles::thumbnail(&app.session, &pending_style(f), px);
+            let rgba = prism_engine::presets::styles::dialog_preview(&app.session, &pending_style(f), px);
             let side = px as usize;
             (rgba.len() == side * side * 4).then(|| {
                 let img = egui::ColorImage::from_rgba_unmultiplied([side, side], &rgba);
@@ -1344,15 +1603,16 @@ fn page(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, selec
         effect_page(ui, f, selected, &sel_kind, spec(&sel_kind));
         // Make Default stores this page as the user default; Reset to Default restores it (or
         // the factory defaults before the first Make). Centred under the page, as in Photoshop.
-        ui.add_space(4.0);
+        box_gap(ui);
         ui.horizontal(|ui| {
-            let w = 110.0 + 130.0 + ui.spacing().item_spacing.x;
+            ui.spacing_mut().item_spacing.x = 10.0;
+            let w = 112.0 + 132.0 + ui.spacing().item_spacing.x;
             ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
-            if widgets::secondary_button(ui, tl!("Make Default"), 110.0).clicked() {
+            if pill_button(ui, tl!("Make Default"), 112.0, false).clicked() {
                 let disp = page_values(f, selected, &sel_kind);
                 let _ = app.run("layer.layerStyle.makeDefault", json!({"kind": sel_kind, "params": disp}));
             }
-            if widgets::secondary_button(ui, tl!("Reset to Default"), 130.0).clicked()
+            if pill_button(ui, tl!("Reset to Default"), 132.0, false).clicked()
                 && let Ok(v) = app.run("layer.layerStyle.defaultFor", json!({"kind": sel_kind}))
                 && let Some(e) = entry_mut(f, selected)
             {
@@ -1413,10 +1673,12 @@ fn effect_page(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str, se
             _ => ("", start),
         };
         let end = rows.iter().skip(from).position(|r| matches!(r.2, P::Group)).map_or(rows.len(), |n| from + n);
+        if start > 0 {
+            box_gap(ui);
+        }
         group_box(ui, title, 0.0, |ui| {
             for &(key, label, kind_p) in rows.get(from..end).unwrap_or(&[]) {
                 effect_row(ui, f, selected, sel_kind, key, label, kind_p);
-                ui.add_space(2.0);
             }
         });
         start = end.max(start + 1);
@@ -1470,7 +1732,7 @@ fn effect_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str, sel
             let first = options.first().map_or("", |o| o.0);
             let mut cur = disp.get(key).and_then(Value::as_str).unwrap_or(first).to_string();
             let opts: Vec<(String, &str)> = options.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-            if field_row(ui, label, |ui| widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), &mut cur, &opts, 150.0)) {
+            if field_row(ui, label, |ui| widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), &mut cur, &opts, 132.0)) {
                 edits.push((key, json!(cur)));
             }
         }
@@ -1501,7 +1763,7 @@ fn effect_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str, sel
             let off = disp.get(key) == Some(&Value::Bool(false));
             let mut cur = stored.clone().or_else(|| list.first().map(|l| l.0.clone())).unwrap_or_default();
             let opts: Vec<(String, &str)> = list.iter().map(|(id, n)| (id.clone(), n.as_str())).collect();
-            if field_row(ui, label, |ui| widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), &mut cur, &opts, 180.0)) || (stored.is_none() && !off) {
+            if field_row(ui, label, |ui| widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), &mut cur, &opts, 160.0)) || (stored.is_none() && !off) {
                 edits.push((key, json!(cur)));
             }
         }
@@ -1530,7 +1792,7 @@ fn effect_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str, sel
         }
         P::Check => {
             let mut b = disp.get(key).and_then(Value::as_bool).unwrap_or(false);
-            if field_row(ui, "", |ui| widgets::checkbox(ui, &mut b, label).changed()) {
+            if check_row(ui, &mut b, label) {
                 edits.push((key, json!(b)));
             }
         }
@@ -1620,20 +1882,26 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
             p["opacity"] = json!(v.round());
         }
     });
+    box_gap(ui);
     group_box(ui, "Advanced Blending", 0.0, |ui| {
         let mut v = num(p, "fillOpacity", 100.0);
         if slider_field(ui, "Fill Opacity", &mut v, 0.0..=100.0, "%") {
             p["fillOpacity"] = json!(v.round());
         }
-        // Channels: one check box per colour channel (checked = blends).
+        // Channels: one check box per colour channel (checked = blends), spread across the row
+        // as Photoshop spaces them.
         let mut ch: Vec<bool> =
             p.get("channels").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_bool().unwrap_or(true)).collect()).unwrap_or_default();
         ch.resize(names.len(), true);
         let changed = field_row(ui, "Channels", |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let pitch = (ui.available_width() / names.len().max(1) as f32).min(63.0);
             let mut changed = false;
             for (i, name) in names.iter().enumerate() {
                 if let Some(c) = ch.get_mut(i) {
-                    changed |= widgets::checkbox(ui, c, name).changed();
+                    let r = check_box(ui, c, name);
+                    changed |= r.changed();
+                    ui.add_space((pitch - r.rect.width()).max(6.0));
                 }
             }
             changed
@@ -1643,57 +1911,71 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
         }
         let mut cur = p.get("knockout").and_then(Value::as_str).unwrap_or("none").to_string();
         let opts: Vec<(String, &str)> = KNOCKOUT.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-        if field_row(ui, "Knockout", |ui| widgets::dropdown(ui, "fx-blendingOptions-knockout", &mut cur, &opts, 110.0)) {
+        if field_row(ui, "Knockout", |ui| widgets::dropdown(ui, "fx-blendingOptions-knockout", &mut cur, &opts, 72.0)) {
             p["knockout"] = json!(cur);
         }
         for &(key, label) in ADVANCED_CHECKS {
             let default = matches!(key, "blendClippedLayersAsGroup" | "transparencyShapesLayer");
             let mut b = p.get(key).and_then(Value::as_bool).unwrap_or(default);
-            if field_row(ui, "", |ui| widgets::checkbox(ui, &mut b, label).changed()) {
+            if check_row(ui, &mut b, label) {
                 p[key] = json!(b);
             }
         }
     });
-    // Blend If: the channel, then This Layer / Underlying Layer split sliders (Alt-drag splits).
+    // Blend If: its channel in the box's title, then This Layer / Underlying Layer split sliders
+    // (Alt-drag splits).
     let entries = p.get("blendIf").and_then(Value::as_array).map_or(0, Vec::len);
     if entries == 0 {
         return;
     }
     let sel = p.get("blendIfChannel").and_then(Value::as_u64).map_or(0, |v| v as usize).min(entries - 1);
-    group_box(ui, "Blend If", 0.0, |ui| {
-        // A colour document lists Gray first; a one-channel document only its channel (Gray).
-        let label = |i: usize| -> String {
-            if entries == names.len() {
-                names.get(i).cloned().unwrap_or_default()
-            } else if i == 0 {
-                "Gray".to_string()
-            } else {
-                names.get(i - 1).cloned().unwrap_or_default()
-            }
-        };
-        let labels: Vec<String> = (0..entries).map(label).collect();
-        let opts: Vec<(usize, &str)> = labels.iter().enumerate().map(|(i, l)| (i, l.as_str())).collect();
-        let mut cur = sel;
-        if field_row(ui, "Channel", |ui| widgets::dropdown(ui, "fx-blendingOptions-blendIf", &mut cur, &opts, 110.0)) {
-            p["blendIfChannel"] = json!(cur);
+    // A colour document lists Gray first; a one-channel document only its channel (Gray).
+    let label = |i: usize| -> String {
+        if entries == names.len() {
+            names.get(i).cloned().unwrap_or_default()
+        } else if i == 0 {
+            "Gray".to_string()
+        } else {
+            names.get(i - 1).cloned().unwrap_or_default()
         }
-        for (key, label) in [("thisLayer", "This Layer:"), ("underlying", "Underlying Layer:")] {
-            let mut q = blend_quad(p.get("blendIf").and_then(|a| a.get(sel)).and_then(|e| e.get(key)));
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(tl!(label)).color(t.text_dim));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let side = |lo: u8, hi: u8| if lo == hi { lo.to_string() } else { format!("{lo} / {hi}") };
-                    ui.label(RichText::new(format!("{}    {}", side(q[0], q[1]), side(q[2], q[3]))).color(t.text));
-                });
-            });
-            if blend_if_bar(ui, ui.id().with(("blendIf", key)), &mut q)
-                && let Some(e) = p.get_mut("blendIf").and_then(|a| a.get_mut(sel))
-            {
-                e[key] = json!(q);
+    };
+    let labels: Vec<String> = (0..entries).map(label).collect();
+    let opts: Vec<(usize, &str)> = labels.iter().enumerate().map(|(i, l)| (i, l.as_str())).collect();
+    let mut cur = sel;
+    let mut picked = false;
+    box_gap(ui);
+    titled_box(
+        ui,
+        0.0,
+        |ui| {
+            ui.add(egui::Label::new(RichText::new(format!("{}:", tl!("Blend If"))).font(label_font()).color(t.text)).selectable(false));
+            picked = widgets::dropdown(ui, "fx-blendingOptions-blendIf", &mut cur, &opts, 64.0);
+        },
+        |ui| {
+            for (i, (key, label)) in [("thisLayer", "This Layer:"), ("underlying", "Underlying Layer:")].into_iter().enumerate() {
+                if i > 0 {
+                    ui.add_space(4.0);
+                }
+                let mut q = blend_quad(p.get("blendIf").and_then(|a| a.get(sel)).and_then(|e| e.get(key)));
+                // The label in the label column, then the black and the white point at fixed
+                // places, as Photoshop prints them ("0", or "0 / 20" once split).
+                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), FIELD_H), Sense::hover());
+                let side = |lo: u8, hi: u8| if lo == hi { lo.to_string() } else { format!("{lo} / {hi}") };
+                let painter = ui.painter();
+                painter.text(egui::pos2(row.left() + LABEL_W, row.center().y), egui::Align2::RIGHT_CENTER, tl!(label), label_font(), t.text_dim);
+                painter.text(egui::pos2(row.left() + LABEL_W + 27.0, row.center().y), egui::Align2::LEFT_CENTER, side(q[0], q[1]), label_font(), t.text);
+                painter.text(egui::pos2(row.left() + LABEL_W + 92.0, row.center().y), egui::Align2::LEFT_CENTER, side(q[2], q[3]), label_font(), t.text);
+                if blend_if_bar(ui, ui.id().with(("blendIf", key)), &mut q)
+                    && let Some(e) = p.get_mut("blendIf").and_then(|a| a.get_mut(sel))
+                {
+                    e[key] = json!(q);
+                }
             }
-            ui.add_space(4.0);
-        }
-    });
+        },
+    );
+    if picked {
+        p["blendIfChannel"] = json!(cur);
+    }
 }
 
 /// A Blend If range from the dialog's JSON (`[blackLo, blackHi, whiteLo, whiteHi]`), full when absent.
@@ -1711,25 +1993,32 @@ fn blend_quad(v: Option<&Value>) -> [u8; 4] {
     q
 }
 
-/// A Blend If slider: a black-to-white ramp with a black and a white handle, each split in two
-/// halves by Alt-dragging (the layer fades between them). Returns whether `q` changed.
+/// A Blend If slider: Photoshop's black-to-white ramp with a dark and a light pointer under it,
+/// each split in two halves by Alt-dragging (the layer fades between them). Returns whether `q`
+/// changed.
 fn blend_if_bar(ui: &mut egui::Ui, id: egui::Id, q: &mut [u8; 4]) -> bool {
     let t = Tokens::get(ui.ctx());
-    let w = ui.available_width().clamp(120.0, 320.0);
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, 26.0), Sense::click_and_drag());
+    let w = ui.available_width().clamp(120.0, 264.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click_and_drag());
     let ramp = egui::Rect::from_min_size(rect.min + vec2(6.0, 0.0), vec2(w - 12.0, 12.0));
     let x_of = |v: u8| ramp.left() + ramp.width() * f32::from(v) / 255.0;
     let v_of = |x: f32| (((x - ramp.left()) / ramp.width().max(1.0)) * 255.0).round().clamp(0.0, 255.0) as u8;
-    // The ramp, drawn as vertical strips.
-    let strips = 32;
-    for s in 0..strips {
-        let x0 = ramp.left() + ramp.width() * s as f32 / strips as f32;
-        let x1 = ramp.left() + ramp.width() * (s + 1) as f32 / strips as f32;
-        let g = (255.0 * (s as f32 + 0.5) / strips as f32) as u8;
-        ui.painter().rect_filled(egui::Rect::from_x_y_ranges(x0..=x1, ramp.y_range()), 0.0, Color32::from_gray(g));
+    // The ramp: one smooth mesh, grey levels set every 1/16 so it reads evenly.
+    let steps = 16u32;
+    let mut mesh = egui::Mesh::default();
+    for s in 0..=steps {
+        let f = s as f32 / steps as f32;
+        let x = ramp.left() + ramp.width() * f;
+        let g = Color32::from_gray((f * 255.0).round() as u8);
+        mesh.colored_vertex(egui::pos2(x, ramp.top()), g);
+        mesh.colored_vertex(egui::pos2(x, ramp.bottom()), g);
     }
-    ui.painter().rect_stroke(ramp, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-    // Handles: triangles under the ramp; a split handle shows two half triangles.
+    for s in 0..steps {
+        let i = s * 2;
+        mesh.add_triangle(i, i + 1, i + 2);
+        mesh.add_triangle(i + 1, i + 3, i + 2);
+    }
+    ui.painter().add(mesh);
     let mut changed = false;
     let drag_key = id.with("handle");
     if resp.drag_started()
@@ -1777,25 +2066,28 @@ fn blend_if_bar(ui: &mut egui::Ui, id: egui::Id, q: &mut [u8; 4]) -> bool {
             changed = true;
         }
     }
-    let base = ramp.bottom() + 1.0;
-    let tri = |x: f32, half: i8, fill: Color32| {
-        let (l, r) = match half {
-            -1 => (x - 5.0, x),
-            1 => (x, x + 5.0),
-            _ => (x - 5.0, x + 5.0),
+    // Pointers: Photoshop's house shapes under the ramp, the tip on the value, with a groove down
+    // the middle; a split pointer shows its two halves apart.
+    let (top, shoulder, bottom) = (ramp.bottom(), ramp.bottom() + 6.0, ramp.bottom() + 11.5);
+    let edge = Stroke::new(1.0, t.canvas);
+    let house = |x: f32, half: i8, fill: Color32| {
+        let pts = match half {
+            -1 => vec![egui::pos2(x, top), egui::pos2(x, bottom), egui::pos2(x - 6.0, bottom), egui::pos2(x - 6.0, shoulder)],
+            1 => vec![egui::pos2(x, top), egui::pos2(x + 6.0, shoulder), egui::pos2(x + 6.0, bottom), egui::pos2(x, bottom)],
+            _ => vec![egui::pos2(x, top), egui::pos2(x + 6.0, shoulder), egui::pos2(x + 6.0, bottom), egui::pos2(x - 6.0, bottom), egui::pos2(x - 6.0, shoulder)],
         };
-        let pts = vec![egui::pos2(x, base), egui::pos2(r, base + 10.0), egui::pos2(l, base + 10.0)];
-        ui.painter().add(egui::Shape::convex_polygon(pts, fill, Stroke::new(1.0, t.text_dim)));
+        ui.painter().add(egui::Shape::convex_polygon(pts, fill, edge));
+        if half == 0 {
+            ui.painter().vline(x, (shoulder - 1.0)..=(bottom - 2.5), Stroke::new(1.0, t.text_faint));
+        }
     };
-    let dark = Color32::from_gray(20);
-    let light = Color32::from_gray(240);
-    for (pair, fill) in [(0usize, dark), (2, light)] {
+    for (pair, fill) in [(0usize, t.card), (2, t.text_dim)] {
         let (a, b) = (q[pair], q[pair + 1]);
         if a == b {
-            tri(x_of(a), 0, fill);
+            house(x_of(a), 0, fill);
         } else {
-            tri(x_of(a), -1, fill);
-            tri(x_of(b), 1, fill);
+            house(x_of(a), -1, fill);
+            house(x_of(b), 1, fill);
         }
     }
     changed
@@ -1806,8 +2098,8 @@ fn blend_if_bar(ui: &mut egui::Ui, id: egui::Id, q: &mut [u8; 4]) -> bool {
 /// Returns the angle's response and whether the check box toggled.
 fn angle_row(ui: &mut egui::Ui, label: &str, angle: &mut f32, check: Option<(&str, &mut bool)>) -> (egui::Response, bool) {
     let t = Tokens::get(ui.ctx());
-    field_row(ui, label, |ui| {
-        let (rect, mut dial) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::click_and_drag());
+    field_row_h(ui, label, 30.0, |ui| {
+        let (rect, mut dial) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click_and_drag());
         dial.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, ui.is_enabled(), tl!(label)));
         if (dial.clicked() || dial.dragged())
             && let Some(pos) = dial.interact_pointer_pos()
@@ -1819,12 +2111,13 @@ fn angle_row(ui: &mut egui::Ui, label: &str, angle: &mut f32, check: Option<(&st
             }
         }
         let painter = ui.painter();
-        let radius = rect.width() / 2.0 - 2.0;
-        painter.circle(rect.center(), radius, t.field, Stroke::new(1.0, t.field_border));
+        let radius = rect.width() / 2.0 - 1.0;
+        // Photoshop's dial: a dark disc with a light rim and a needle from the centre to the rim.
+        painter.circle(rect.center(), radius, t.field, Stroke::new(1.0, t.text_faint));
         let radians = angle.to_radians();
-        let tip = rect.center() + vec2(radians.cos(), -radians.sin()) * (radius - 4.0);
-        painter.line_segment([rect.center(), tip], Stroke::new(2.0, t.accent));
-        painter.circle_filled(rect.center(), 2.0, t.text_dim);
+        let tip = rect.center() + vec2(radians.cos(), -radians.sin()) * (radius - 1.0);
+        painter.line_segment([rect.center(), tip], Stroke::new(1.5, t.text));
+        painter.circle_filled(rect.center(), 1.5, t.text);
         if dial.has_focus() {
             painter.circle_stroke(rect.center(), radius + 2.0, Stroke::new(1.0, t.accent));
             let step = ui.input(|i| {
@@ -1837,14 +2130,15 @@ fn angle_row(ui: &mut egui::Ui, label: &str, angle: &mut f32, check: Option<(&st
                 dial.mark_changed();
             }
         }
-        let field = widgets::value_field(ui, angle, -180.0..=180.0, "", 52.0);
-        ui.label(RichText::new("°").color(t.text_dim));
+        let field = widgets::value_field_look(ui, angle, -180.0..=180.0, "", 42.0, &field_look());
+        ui.add_space(-4.0);
+        ui.label(RichText::new("°").font(label_font()).color(t.text_dim));
         if field.changed() {
             dial.mark_changed();
         }
         let toggled = check.is_some_and(|(label, on)| {
-            ui.add_space(8.0);
-            widgets::checkbox(ui, on, label).changed()
+            ui.add_space(4.0);
+            check_box(ui, on, label).changed()
         });
         (dial | field, toggled)
     })
@@ -1920,7 +2214,7 @@ mod tests {
             .shapes
             .iter()
             .filter_map(|c| match &c.shape {
-                egui::Shape::Rect(r) if r.rect.size() == vec2(14.0, 14.0) && r.stroke.width > 0.0 => Some(r.rect),
+                egui::Shape::Rect(r) if r.rect.size() == vec2(CHECK, CHECK) && r.stroke.width > 0.0 => Some(r.rect),
                 _ => None,
             })
             .collect();

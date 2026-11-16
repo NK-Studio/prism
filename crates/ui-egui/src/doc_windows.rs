@@ -523,7 +523,10 @@ pub(crate) fn queue_drag_input(app: &mut PrismApp, ctx: &Context) {
 }
 
 pub(crate) fn automated(ctx: &Context) -> bool {
-    let id = ctx.viewport_id();
+    automated_in(ctx, ctx.viewport_id())
+}
+/// Whether viewport `id` took scripted input in its latest pass.
+pub(crate) fn automated_in(ctx: &Context, id: ViewportId) -> bool {
     ctx.data(|d| d.get_temp::<bool>(automated_key(id))).unwrap_or(false)
 }
 pub(crate) fn input_pending(app: &PrismApp, ctx: &Context) -> bool {

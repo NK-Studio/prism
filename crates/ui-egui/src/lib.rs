@@ -57,6 +57,7 @@ pub mod discard_ui;
 pub mod distort_ui;
 pub mod doc_props_ui;
 pub mod doc_windows;
+pub mod hover_follow;
 pub mod dock;
 pub mod dock_drag;
 pub mod dock_float;
@@ -1287,6 +1288,12 @@ impl eframe::App for PrismApp {
         let t0 = gpu_canvas::now_ms();
         if (!self.ui.dialogs.is_empty() && !doc_windows::dialogs_here(self, &ctx)) || !discard_ui::here(self, &ctx) {
             ui.disable();
+            // Photoshop doesn't dim the window behind a dialog in a window of its own (Layer
+            // Style's preview must be judged at true contrast): inert, not faded. The save
+            // prompt keeps its dimming.
+            if discard_ui::here(self, &ctx) {
+                ui.set_opacity(1.0);
+            }
         }
         // Each painting tool keeps its own brush (#218), so switch the active tool's brush in
         // before anything this frame reads it (the cursor, the options bar, a stroke).
@@ -1405,7 +1412,8 @@ impl eframe::App for PrismApp {
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);
         discard_ui::block(self, &ctx);
-        // File › New in its own window: this window behind it takes no pointer or keys.
+        // File › New or Layer Style in its own window: this window behind it takes no pointer or
+        // keys (the canvas still pans and zooms under Layer Style, see `dialogs::free_pointer_over`).
         if self.discard.is_none() && dialogs::blocks_host(self, &ctx) {
             floating_window::block(&ctx, false);
         }
@@ -1634,6 +1642,8 @@ impl PrismApp {
     pub fn setup_context(ctx: &egui::Context, kind: theme::ThemeKind) {
         ctx.add_plugin(tool_cursor::CursorLifecycle);
         ctx.add_plugin(doc_windows::NativeInput);
+        // After `NativeInput`: it says which viewports are taking scripted input.
+        ctx.add_plugin(hover_follow::HoverFollow);
         theme::install_fonts(ctx);
         egui_extras::install_image_loaders(ctx);
         theme::apply(ctx, kind);

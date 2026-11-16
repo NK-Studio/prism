@@ -444,6 +444,13 @@ fn main() -> eframe::Result {
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
             app.services.screen_cursor = cursor::screen_service();
+            // Hover in a window that isn't the key window (macOS).
+            if let Some(probe) = cursor::hover_probe() {
+                prism_ui_egui::hover_follow::install(&cc.egui_ctx, probe);
+            }
+            if let Some(set) = cursor::hover_cursor() {
+                prism_ui_egui::hover_follow::install_cursor(&cc.egui_ctx, set);
+            }
             #[cfg(target_os = "windows")]
             {
                 app.services.window_opacity = Some(window_opacity::service());

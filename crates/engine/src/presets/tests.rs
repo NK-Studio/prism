@@ -283,6 +283,14 @@ fn styles_apply_to_selected_layers_and_new_from_layer() {
     assert_eq!(px.len(), 48 * 48 * 4);
     assert!(px[(4 * 48 + 24) * 4 + 3] == 0 || px[(7 * 48 + 24) * 4 + 3] > 0, "glow reaches outside the square");
     assert!(px[(24 * 48 + 24) * 4 + 3] == 255);
+    // The Layer Style dialog's preview: a plain mid-grey square half the swatch wide, its corners
+    // square (Photoshop's), transparent outside.
+    let px = super::styles::dialog_preview(&s, &super::styles::StylePreset { name: String::new(), effects: vec![], blend: None, fill_opacity: None }, 48);
+    assert_eq!(px.len(), 48 * 48 * 4);
+    let at = |x: usize, y: usize| &px[(y * 48 + x) * 4..(y * 48 + x) * 4 + 4];
+    assert_eq!(at(12, 12)[3], 255, "the corner is square");
+    assert_eq!(at(11, 24)[3], 0, "transparent outside the square");
+    assert!((80..=100).contains(&at(24, 24)[0]), "mid grey: {:?}", at(24, 24));
 }
 
 #[test]

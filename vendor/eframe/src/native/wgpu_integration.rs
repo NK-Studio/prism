@@ -520,6 +520,20 @@ impl WinitApp for WgpuWinitApp<'_> {
                     return Ok(EventResult::RepaintNext(window.id()));
                 }
             }
+
+            // Prism: macOS sends mouse motion to the key window only, and winit drops it once
+            // the pointer is outside that window. Run a pass anyway while another of our
+            // windows may be under the pointer, so the app can keep its hover state current.
+            if cfg!(target_os = "macos")
+                && shared.focused_viewport.is_some()
+                && shared.viewports.len() > 1
+                && let Some(root) = shared
+                    .viewports
+                    .get(&ViewportId::ROOT)
+                    .and_then(|viewport| viewport.window.as_ref())
+            {
+                return Ok(EventResult::RepaintNext(root.id()));
+            }
         }
 
         Ok(EventResult::Wait)

@@ -71,7 +71,9 @@ pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
         if d.presentation == crate::state::DialogPresentation::Native || crate::doc_windows::viewport(d.window) != ctx.viewport_id() {
             continue;
         }
-        if floats(&d) {
+        // Embedded viewports (headless) have no OS windows: a floating dialog is drawn here like
+        // any other, and its area is the window's, so the canvas under it knows where it is.
+        if floats(&d) && !ctx.embed_viewports() {
             floating(app, ctx, &d);
         } else if let Some(rect) = show_one(app, ctx, &d, false) {
             shown.push(rect);
@@ -82,30 +84,41 @@ pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
 
 /// A dialog opened from a detached document window gets an OS window of its own, above the
 /// document windows, like Photoshop's floating dialogs: drawn inside the document window it would
-/// be clipped to that window and could not be dragged past its edges. So does File › New from any
-/// window: Photoshop's is a window of its own, moved anywhere on screen by its title bar.
+/// be clipped to that window and could not be dragged past its edges. So do File › New and Layer
+/// Style from any window: Photoshop's are windows of their own, moved anywhere on screen by their
+/// title bars.
 pub fn floats(d: &Dialog) -> bool {
-    d.presentation == crate::state::DialogPresentation::Embedded && (d.window.is_some() || d.kind == DialogKind::NewDocument)
+    d.presentation == crate::state::DialogPresentation::Embedded && (d.window.is_some() || system_window(d.kind))
 }
 
-/// [`floats`]: the dialog in its own borderless window, dragged by the title row (File › New with
-/// the system's window buttons on macOS).
+/// Dialogs that are one of the system's own windows, as in Photoshop: the system's window buttons
+/// on macOS ([`crate::floating_window::show_titled`], Layer Style with its title centred:
+/// [`crate::floating_window::show_with_buttons`]), app-modal ([`blocks_host`]).
+fn system_window(kind: DialogKind) -> bool {
+    matches!(kind, DialogKind::NewDocument | DialogKind::LayerStyle)
+}
+
+/// [`floats`]: the dialog in its own borderless window, dragged by the title row (File › New and
+/// Layer Style with the system's window buttons on macOS).
 fn floating(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog) {
     let key = egui::Id::new(("floating-dialog", d.id));
     let viewport = crate::native_dialogs::viewport(d.id);
     let add = |app: &mut PrismApp, child: &egui::Context| show_one(app, child, d, !child.embed_viewports());
-    if d.kind == DialogKind::NewDocument {
+    if d.kind == DialogKind::LayerStyle {
+        crate::floating_window::show_with_buttons(app, ctx, key, viewport, display_title(d), add);
+    } else if system_window(d.kind) {
         crate::floating_window::show_titled(app, ctx, key, viewport, display_title(d), add);
     } else {
         crate::floating_window::show(app, ctx, key, viewport, display_title(d), add);
     }
 }
 
-/// File › New is app-modal, as in Photoshop: while it floats in a window of its own, the window it
-/// came from takes no input. (Drawn inside that window, egui's modal layer blocks it instead.)
+/// File › New and Layer Style are app-modal, as in Photoshop: while one floats in a window of its
+/// own, the window it came from takes no input. (Drawn inside that window, egui's modal layer
+/// blocks it instead.)
 pub fn blocks_host(app: &PrismApp, ctx: &egui::Context) -> bool {
     !ctx.embed_viewports()
-        && app.ui.dialogs.iter().any(|d| d.kind == DialogKind::NewDocument && floats(d) && crate::doc_windows::viewport(d.window) == ctx.viewport_id())
+        && app.ui.dialogs.iter().any(|d| system_window(d.kind) && floats(d) && crate::doc_windows::viewport(d.window) == ctx.viewport_id())
 }
 
 /// Draws one dialog in `ctx`'s window. `own_window`: `ctx` is the dialog's own viewport
@@ -158,6 +171,13 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
         // File › New draws its own title row and panes edge to edge, as Photoshop's window does.
         let new_doc = d.kind == DialogKind::NewDocument;
         if new_doc {
+            let frame = if own_window { crate::floating_window::frame(ctx) } else { egui::Frame::popup(&ctx.global_style()) };
+            modal = modal.frame(frame.inner_margin(0));
+        }
+        // Layer Style draws Photoshop's title band edge to edge (or sits under the system's title
+        // bar) and lays out its own margins.
+        let layer_style = d.kind == DialogKind::LayerStyle;
+        if layer_style {
             let frame = if own_window { crate::floating_window::frame(ctx) } else { egui::Frame::popup(&ctx.global_style()) };
             modal = modal.frame(frame.inner_margin(0));
         }
@@ -232,6 +252,17 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                     if close {
                         outcome = Some(false);
                     }
+                }
+            } else if layer_style {
+                // Its title centred on its own band, as in Photoshop; in its own window on macOS
+                // the band is the system's title bar height, under the system's window buttons.
+                let corner = if own_window { egui::CornerRadius::ZERO } else { ctx.global_style().visuals.menu_corner_radius };
+                let height = if crate::floating_window::system_buttons(own_window) { crate::floating_window::BUTTONS_BAR_H } else { crate::layer_style::TITLE_H };
+                let (r, close) = crate::layer_style::title_bar(ui, &title, id, corner, height);
+                drag = r.drag_delta();
+                drag_started |= r.drag_started_by(egui::PointerButton::Primary);
+                if close {
+                    outcome = Some(false);
                 }
             } else {
                 let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
@@ -392,8 +423,9 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
             ui.min_rect().expand(ui.spacing().menu_margin.sum().max_elem() + 2.0)
         });
         // The picker has a larger frame margin; include that whole frame in the canvas hit guard.
-        let covered = if color_picker || about_card || own_window || padded || new_doc { modal.response.rect } else { modal.inner };
-        // The system's close button of the dialog's own window (File › New on macOS) cancels it.
+        let covered = if color_picker || about_card || own_window || padded || new_doc || layer_style { modal.response.rect } else { modal.inner };
+        // The system's close button of the dialog's own window (File › New, Layer Style on macOS)
+        // cancels it.
         if outcome.is_none() && own_window && ctx.input(|i| i.viewport().close_requested()) {
             outcome = Some(false);
         }
@@ -648,6 +680,25 @@ mod tests {
             h.run_steps(1);
             assert!(free_pointer_over(&h.ctx, egui::Rect::from_min_size(egui::Pos2::ZERO, size)).is_none());
         }
+    }
+
+    /// Layer Style is a window of its own, as in Photoshop, also opened from the main window: the
+    /// system's title bar on macOS, app-modal. Headless (embedded viewports) it stays in the
+    /// window as an egui modal.
+    #[test]
+    fn layer_style_gets_a_window_of_its_own() {
+        let mut session = prism_engine::Session::new();
+        session.execute("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
+        session.execute("layer.new.layer", serde_json::json!({})).unwrap();
+        let mut app = PrismApp::new(session, crate::Services::default());
+        let id = crate::layer_style::open(&mut app, None).unwrap();
+        let d = app.ui.dialogs.iter().find(|d| d.id == id).cloned().expect("the dialog");
+        assert!(d.window.is_none(), "opened from the main window");
+        assert!(floats(&d) && crate::native_dialogs::own_window(&d));
+        assert!(system_window(d.kind));
+        assert!(!blocks_host(&app, &egui::Context::default()));
+        // The others stay in their window.
+        assert!(!system_window(DialogKind::About));
     }
 
     /// Photoshop's Layer Style dialog keeps one size whichever page is shown: picking another

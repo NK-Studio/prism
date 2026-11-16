@@ -53,12 +53,13 @@ core-graphics2 = { version = "=0.6.1", default-features = false, features = ["di
 # registers the handler (Objective-C interop needs unsafe, which our workspace forbids) behind a
 # safe API. Pinned exactly: review the diff before bumping.
 fmv-macos-events = "=0.1.0"
-# Safe AppKit calls only: turn off AppKit's title bar dragging (mac_window.rs) and find where the
-# pointer is when files are dropped (cursor.rs; winit 0.30 drops carry no position). Already in
+# Safe AppKit calls only: turn off AppKit's title bar dragging (mac_window.rs), find where the
+# pointer is when files are dropped and show the cursor of a window that isn't key (cursor.rs;
+# winit 0.30 drops carry no position, and its cursors count in the key window only). Already in
 # Cargo.lock (winit, prism-tablet); pinned exactly to the same versions.
 objc2 = "=0.6.4"
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSGeometry", "NSProcessInfo", "NSString", "NSURL"] }
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSApplicationScripting", "NSEvent", "NSOpenPanel", "NSPanel", "NSResponder", "NSSavePanel", "NSScreen", "NSView", "NSWindow"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSEnumerator", "NSGeometry", "NSProcessInfo", "NSString", "NSURL"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSApplicationScripting", "NSCursor", "NSEvent", "NSImage", "NSOpenPanel", "NSPanel", "NSResponder", "NSSavePanel", "NSScreen", "NSView", "NSWindow"] }
 # The Save window's Other Location… panel (location_panel.rs) takes a completion block. Already in
 # Cargo.lock (objc2-app-kit); pinned exactly to the same version.
 block2 = { version = "=0.6.2", default-features = false, features = ["std"] }

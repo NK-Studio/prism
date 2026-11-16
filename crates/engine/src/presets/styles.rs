@@ -289,13 +289,31 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
 /// Swatch for the Styles panel: the style on a rounded square, `size`² RGBA8 (straight alpha,
 /// transparent around the square).
 pub fn thumbnail(s: &Session, style: &StylePreset, size: u32) -> Vec<u8> {
+    swatch(s, style, size, Swatch { margin: 0.2, radius: 0.12, grey: 0.86 })
+}
+
+/// The Layer Style dialog's preview, as Photoshop draws it: the style on a plain mid-grey square
+/// half the swatch wide, `size`² RGBA8 (straight alpha, transparent around the square).
+pub fn dialog_preview(s: &Session, style: &StylePreset, size: u32) -> Vec<u8> {
+    swatch(s, style, size, Swatch { margin: 0.25, radius: 0.0, grey: 0.345 })
+}
+
+/// The square a [`swatch`] draws the style on, in fractions of the swatch's side.
+struct Swatch {
+    margin: f32,
+    radius: f32,
+    grey: f32,
+}
+
+fn swatch(s: &Session, style: &StylePreset, size: u32, shape: Swatch) -> Vec<u8> {
     let size = size.clamp(8, 256);
     let mut doc = Document::new("style", Size::new(size, size), ColorMode::Rgb, SampleType::U8);
     let fmt = doc.pixel_format();
     let mut l = Layer::raster("swatch", fmt);
-    let m = (size as f32 * 0.2).round();
+    let m = (size as f32 * shape.margin).round();
     let (x0, x1) = (m, size as f32 - m);
-    let r = size as f32 * 0.12;
+    let r = size as f32 * shape.radius;
+    let grey = shape.grey;
     if let Some(surf) = l.surface_mut() {
         let mut px = Vec::with_capacity((size * size * 4) as usize);
         for y in 0..size {
@@ -306,7 +324,7 @@ pub fn thumbnail(s: &Session, style: &StylePreset, size: u32) -> Vec<u8> {
                 let qy = (cy - (x0 + x1) / 2.0).abs() - ((x1 - x0) / 2.0 - r);
                 let d = (qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0)) - r;
                 let a = (0.5 - d).clamp(0.0, 1.0);
-                px.extend_from_slice(&[0.86, 0.86, 0.86, a]);
+                px.extend_from_slice(&[grey, grey, grey, a]);
             }
         }
         surf.write_region(Rect::new(0, 0, size as i32, size as i32), &px);

@@ -15,7 +15,7 @@ pub fn show(
     title: String,
     add: impl FnMut(&mut PrismApp, &egui::Context) -> Option<egui::Rect>,
 ) {
-    show_impl(app, ctx, key, viewport, title, false, add);
+    show_impl(app, ctx, key, viewport, title, Chrome::Borderless, add);
 }
 
 /// [`show`] for a window that is one of the system's own (File › New, as in Photoshop): on macOS
@@ -32,13 +32,49 @@ pub fn show_titled(
     title: String,
     add: impl FnMut(&mut PrismApp, &egui::Context) -> Option<egui::Rect>,
 ) {
-    show_impl(app, ctx, key, viewport, title, true, add);
+    show_impl(app, ctx, key, viewport, title, Chrome::SystemTitle, add);
 }
+
+/// [`show_titled`] with the title drawn by the contents, centred as Photoshop's dialogs have it
+/// (Layer Style): on macOS the system's window buttons stay (close live, minimise and zoom off)
+/// over a transparent title bar, and the contents draw their own title band under them,
+/// [`BUTTONS_BAR_H`] tall so the buttons sit centred on it. Elsewhere the same borderless window
+/// as [`show`].
+pub fn show_with_buttons(
+    app: &mut PrismApp,
+    ctx: &egui::Context,
+    key: egui::Id,
+    viewport: egui::ViewportId,
+    title: String,
+    add: impl FnMut(&mut PrismApp, &egui::Context) -> Option<egui::Rect>,
+) {
+    show_impl(app, ctx, key, viewport, title, Chrome::Buttons, add);
+}
+
+/// The height of macOS's title bar, where a [`show_with_buttons`] window's buttons sit.
+pub const BUTTONS_BAR_H: f32 = 32.0;
 
 /// Whether a [`show_titled`] window's contents sit under the system's title bar (macOS, in a
 /// window of its own: `own_window`), so they draw none themselves.
 pub fn system_title_bar(own_window: bool) -> bool {
     own_window && cfg!(target_os = "macos")
+}
+
+/// Whether a [`show_with_buttons`] window's contents have the system's window buttons over their
+/// title band (macOS, in a window of its own), so they leave those to the system.
+pub fn system_buttons(own_window: bool) -> bool {
+    own_window && cfg!(target_os = "macos")
+}
+
+/// How much of the system's window a floating modal shows on macOS.
+#[derive(Clone, Copy, PartialEq)]
+enum Chrome {
+    /// None: the contents are the whole window.
+    Borderless,
+    /// The system's title bar with its title and buttons.
+    SystemTitle,
+    /// The system's buttons over the contents' own title band.
+    Buttons,
 }
 
 fn show_impl(
@@ -47,7 +83,7 @@ fn show_impl(
     key: egui::Id,
     viewport: egui::ViewportId,
     title: String,
-    titled: bool,
+    chrome: Chrome,
     mut add: impl FnMut(&mut PrismApp, &egui::Context) -> Option<egui::Rect>,
 ) {
     if ctx.embed_viewports() {
@@ -74,17 +110,18 @@ fn show_impl(
         }
     };
     // macOS: a titled window with its title bar and buttons hidden and the content under it, for
-    // the system's rounded corners and shadow (or, `titled`, with them shown). Elsewhere a plain
-    // borderless window.
+    // the system's rounded corners and shadow (or with them shown, or only the buttons shown over
+    // the content). Elsewhere a plain borderless window.
     let mac = cfg!(target_os = "macos");
-    let system_bar = mac && titled;
+    let system_bar = mac && chrome == Chrome::SystemTitle;
+    let buttons = mac && chrome != Chrome::Borderless;
     let builder = egui::ViewportBuilder::default()
         .with_title(title)
         .with_decorations(mac)
         .with_fullsize_content_view(mac && !system_bar)
         .with_titlebar_shown(system_bar)
         .with_title_shown(system_bar)
-        .with_titlebar_buttons_shown(system_bar)
+        .with_titlebar_buttons_shown(buttons)
         .with_resizable(false)
         .with_taskbar(false)
         .with_minimize_button(false)
@@ -100,9 +137,9 @@ fn show_impl(
         if child.input(|i| i.viewport().close_requested()) {
             child.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
-        if system_bar {
-            // The system's title bar in the theme's appearance (a dark bar over Prism's dark
-            // themes even when macOS is light), sent when it changes.
+        if buttons {
+            // The system's title bar and buttons in the theme's appearance (a dark bar over
+            // Prism's dark themes even when macOS is light), sent when it changes.
             let theme = if crate::theme::Tokens::get(&child).dark() { egui::SystemTheme::Dark } else { egui::SystemTheme::Light };
             let sent = key.with("theme");
             if child.data(|m| m.get_temp::<egui::SystemTheme>(sent)) != Some(theme) {

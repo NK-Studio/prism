@@ -1922,6 +1922,176 @@ fn hdr_preview(app: &PrismApp, doc: &prism_doc::Document) -> Option<[f32; 2]> {
     app.session.color.hdr_preview(doc).map(|h| [h.exposure, h.gamma])
 }
 
+/// The active tool's cursor at `p` over a canvas view: the brush tip, the tool's artwork or a
+/// stock cursor, with what the tool previews around it. `idle` is a view the tools aren't working
+/// in (another window's, or another tile's): the same cursor, since a press there makes it the
+/// active view, without the previews that belong to the active document (clone source, selection
+/// mode badge, the ⇧ line from the last stroke).
+#[allow(clippy::too_many_arguments)]
+fn tool_hover_cursor(
+    app: &mut PrismApp,
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    xf: &ViewXform,
+    view: &View,
+    response: &egui::Response,
+    tool: Tool,
+    p: Pos2,
+    resizing: bool,
+    output: Option<u32>,
+    zoom_out: impl Fn(bool) -> bool,
+    idle: bool,
+) {
+    let ctx = ui.ctx().clone();
+    let alt = ui.input(|i| i.modifiers.alt);
+    if !idle && !resizing && !alt && !app.ui.shell.sticky_alt {
+        draw_clone_preview(app, painter, xf, xf.to_doc(p), output);
+    }
+    let held = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
+    let cursor_mods = app.drag.as_ref().map_or(held, |d| d.modifiers);
+    let badge = if idle { None } else { crate::tool_feedback::badge(app, tool, cursor_mods) };
+    let icon = match tool {
+        // Resizing the brush: the circle stays where the drag began (`brush_resize`).
+        t if resizing && crate::brush_resize::applies(t) => egui::CursorIcon::None,
+        // ⌥ turns a painting tool into the Eyedropper (`alt_eyedropper`): its cursor too,
+        // unless Preferences › Cursors › Other Cursors asks for the precise crosshair.
+        t if app.alt_sampling || (app.drag.is_none() && alt_samples(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) => {
+            // While it samples (button held), the comparison ring replaces the cursor (#213).
+            if let Some(icon) = eyedropper_ring(app, painter, xf, p, response.is_pointer_button_down_on()) {
+                icon
+            } else if app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise {
+                egui::CursorIcon::Crosshair
+            } else {
+                pipette_cursor(ui.ctx(), p)
+            }
+        }
+        t if t.is_brushlike() || t == Tool::QuickSelection => {
+            // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
+            // full size), precise crosshair, or the standard pointer.
+            use prism_engine::prefs::PaintingCursor;
+            let cur = app.session.prefs().cursors.clone();
+            let painting = app.drag.is_some();
+            let brush = &app.session.tools.brush;
+            let full = (brush.size / 2.0 * view.zoom).max(1.0);
+            let r = if cur.painting == PaintingCursor::NormalTip { (full * (0.5 + 0.5 * brush.hardness.clamp(0.0, 1.0))).max(1.0) } else { full };
+            match cur.painting {
+                PaintingCursor::Standard => egui::CursorIcon::Default,
+                PaintingCursor::Precise => crate::tool_cursor::crosshair(painter, p, 6.0, 0.0),
+                _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(painter, p, 5.0, 0.0),
+                // The Pencil: the square of whole pixels its dab fills, on the pixel grid.
+                _ if tool == Tool::Pencil => {
+                    let ppp = painter.ctx().pixels_per_point();
+                    let sq = pencil_cursor_rect(xf, xf.to_doc(p), brush.size, ppp);
+                    let px = 1.0 / ppp;
+                    painter.rect_stroke(sq, 0.0, Stroke::new(px, Color32::from_black_alpha(160)), egui::StrokeKind::Outside);
+                    painter.rect_stroke(sq, 0.0, Stroke::new(px, Color32::from_white_alpha(230)), egui::StrokeKind::Inside);
+                    // Too small to see where it is: the hotspot as well.
+                    if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
+                        crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
+                    }
+                    egui::CursorIcon::None
+                }
+                _ => {
+                    let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip, r);
+                    crate::tool_cursor::circle(painter, p, r, centre)
+                }
+            }
+        }
+        // The Eyedropper: the comparison ring follows the pointer while it samples (#213);
+        // otherwise its pipette, or the crosshair for Precise Other Cursors.
+        Tool::Eyedropper => {
+            if let Some(icon) = eyedropper_ring(app, painter, xf, p, response.is_pointer_button_down_on()) {
+                icon
+            } else if app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise {
+                egui::CursorIcon::Crosshair
+            } else {
+                pipette_cursor(ui.ctx(), p)
+            }
+        }
+        // Preferences › Cursors › Other Cursors: Precise shows a crosshair for every tool.
+        Tool::Move | Tool::Type | Tool::VerticalType if app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise => {
+            egui::CursorIcon::Crosshair
+        }
+        Tool::Move => crate::tool_cursor::move_tool(painter, p, app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move) && response.dragged()),
+        Tool::Hand => crate::tool_cursor::hand(painter, p, response.dragged()),
+        Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
+        // The magnifying glass, for the Zoom tool and the temporary zoom keys alike.
+        Tool::Zoom => crate::tool_cursor::zoom(painter, p, zoom_out(alt)),
+        Tool::Type | Tool::VerticalType => egui::CursorIcon::Text,
+        // Path Selection's black arrow, Direct Selection's white one; ⌘ swaps them while
+        // held, with what a press does (direct_select.rs).
+        Tool::PathSelection | Tool::DirectSelection => crate::tool_cursor::path_tool(painter, p, crate::direct_select::direct_cursor(app, held)),
+        // ⌘ makes the Pen Direct Selection: its white arrow.
+        Tool::Pen if crate::direct_select::direct_cursor(app, held) => crate::tool_cursor::path_tool(painter, p, true),
+        Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, painter, p, view.zoom),
+        Tool::RedEye => {
+            let pupil = app.ui.tool_options.red_eye_pupil_size.clamp(1.0, 100.0);
+            let r_doc = prism_algo::redeye::search_radius(pupil);
+            let r = (r_doc * view.zoom).max(2.0);
+            painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
+            painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
+            for (w, c) in [(2.5, Color32::from_black_alpha(140)), (1.0, Color32::from_white_alpha(220))] {
+                painter.line_segment([p - vec2(3.0, 0.0), p + vec2(3.0, 0.0)], Stroke::new(w, c));
+                painter.line_segment([p - vec2(0.0, 3.0), p + vec2(0.0, 3.0)], Stroke::new(w, c));
+            }
+            if app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise {
+                egui::CursorIcon::None
+            } else {
+                crate::cursor_pack::show(&ctx, p, 1562, egui::CursorIcon::Crosshair).unwrap_or(egui::CursorIcon::None)
+            }
+        }
+        _ => egui::CursorIcon::Crosshair,
+    };
+    // Dynamic brush tips, comparison rings and temporary samplers already own their
+    // cursor. Only standard tool artwork is replaced; precise settings stay precise.
+    let precise = app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise;
+    let brush = tool.is_brushlike() || tool == Tool::QuickSelection;
+    let asset = if brush && app.session.prefs().cursors.painting != prism_engine::prefs::PaintingCursor::Standard {
+        None
+    } else if precise && !brush && !matches!(tool, Tool::Hand | Tool::RotateView | Tool::Zoom) {
+        Some(1025)
+    } else if tool == Tool::Pen && crate::direct_select::direct_cursor(app, held) {
+        // ⌘: the Pen is Direct Selection (`tool_cursor::path_tool` drew its arrow).
+        None
+    } else if tool == Tool::Pen {
+        Some(crate::vector_ui::pen_cursor_asset(app, xf.to_doc(p), held))
+    } else if matches!(tool, Tool::PathSelection | Tool::DirectSelection) {
+        // `tool_cursor::path_tool` already took the cursor pack's arrow for the mode.
+        None
+    } else if matches!(tool, Tool::Ruler | Tool::Count) {
+        Some(crate::analysis_ui::cursor_asset(app, tool, xf.to_doc(p), held))
+    } else if tool == Tool::Patch {
+        let mode = crate::tool_feedback::Badge::from_mode(selection_mode(app, held));
+        Some(if crate::retouch_ui::patch_drags_selection(app, xf.to_doc(p), held) {
+            if app.ui.tool_options.patch_mode == "destination" { 1577 } else { 1576 }
+        } else {
+            1572 + match mode {
+                None => 0,
+                Some(crate::tool_feedback::Badge::Add) => 1,
+                Some(crate::tool_feedback::Badge::Subtract) => 2,
+                Some(crate::tool_feedback::Badge::Intersect) => 3,
+            }
+        })
+    } else {
+        Some(crate::cursor_pack::tool_asset(tool, badge, zoom_out(held.alt), response.dragged()))
+    };
+    let icon = if icon != egui::CursorIcon::None { asset.and_then(|a| crate::tool_cursor::standard(painter, p, a, icon)).unwrap_or(icon) } else { icon };
+    let icon = visible_crosshair(icon, painter, p, cfg!(target_os = "windows"));
+    ui.ctx().set_cursor_icon(icon);
+    // Selection tools: + / − / × badge for the effective mode (#170). A gesture keeps the
+    // mode it started with (⇧ then constrains the marquee instead of adding).
+    if let Some(b) = badge {
+        let combined = crate::cursor_pack::active(&ctx) == Some(crate::cursor_pack::tool_asset(tool, badge, false, false));
+        if !combined {
+            crate::tool_feedback::draw_badge(painter, p, b, tool == Tool::QuickSelection);
+        }
+    }
+    // ⇧ after a stroke: the straight line a click would paint (#257).
+    if !idle {
+        crate::stroke_constraint::draw_line_preview(app, painter, xf, p, tool, held.shift);
+    }
+}
+
 /// Draw one canvas view and handle its input. `primary` = main window (tools active).
 pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
@@ -2720,152 +2890,16 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
             });
             ui.ctx().set_cursor_icon(c);
         } else if let Some(p) = response.hover_pos() {
-            let alt = ui.input(|i| i.modifiers.alt);
-            if !resizing && !alt && !app.ui.shell.sticky_alt {
-                draw_clone_preview(app, &painter, &xf, xf.to_doc(p), output);
-            }
-            let held = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
-            let cursor_mods = app.drag.as_ref().map_or(held, |d| d.modifiers);
-            let badge = crate::tool_feedback::badge(app, tool, cursor_mods);
-            let icon = match tool {
-                // Resizing the brush: the circle stays where the drag began (`brush_resize`).
-                t if resizing && crate::brush_resize::applies(t) => egui::CursorIcon::None,
-                // ⌥ turns a painting tool into the Eyedropper (`alt_eyedropper`): its cursor too,
-                // unless Preferences › Cursors › Other Cursors asks for the precise crosshair.
-                t if app.alt_sampling || (app.drag.is_none() && alt_samples(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) => {
-                    // While it samples (button held), the comparison ring replaces the cursor (#213).
-                    if let Some(icon) = eyedropper_ring(app, &painter, &xf, p, response.is_pointer_button_down_on()) {
-                        icon
-                    } else if app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise {
-                        egui::CursorIcon::Crosshair
-                    } else {
-                        pipette_cursor(ui.ctx(), p)
-                    }
-                }
-                t if t.is_brushlike() || t == Tool::QuickSelection => {
-                    // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
-                    // full size), precise crosshair, or the standard pointer.
-                    use prism_engine::prefs::PaintingCursor;
-                    let cur = app.session.prefs().cursors.clone();
-                    let painting = app.drag.is_some();
-                    let brush = &app.session.tools.brush;
-                    let full = (brush.size / 2.0 * view.zoom).max(1.0);
-                    let r = if cur.painting == PaintingCursor::NormalTip { (full * (0.5 + 0.5 * brush.hardness.clamp(0.0, 1.0))).max(1.0) } else { full };
-                    match cur.painting {
-                        PaintingCursor::Standard => egui::CursorIcon::Default,
-                        PaintingCursor::Precise => crate::tool_cursor::crosshair(&painter, p, 6.0, 0.0),
-                        _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(&painter, p, 5.0, 0.0),
-                        // The Pencil: the square of whole pixels its dab fills, on the pixel grid.
-                        _ if tool == Tool::Pencil => {
-                            let ppp = painter.ctx().pixels_per_point();
-                            let sq = pencil_cursor_rect(&xf, xf.to_doc(p), brush.size, ppp);
-                            let px = 1.0 / ppp;
-                            painter.rect_stroke(sq, 0.0, Stroke::new(px, Color32::from_black_alpha(160)), egui::StrokeKind::Outside);
-                            painter.rect_stroke(sq, 0.0, Stroke::new(px, Color32::from_white_alpha(230)), egui::StrokeKind::Inside);
-                            // Too small to see where it is: the hotspot as well.
-                            if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
-                                crate::tool_cursor::crosshair(&painter, p, 4.0, 0.0);
-                            }
-                            egui::CursorIcon::None
-                        }
-                        _ => {
-                            let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip, r);
-                            crate::tool_cursor::circle(&painter, p, r, centre)
-                        }
-                    }
-                }
-                // The Eyedropper: the comparison ring follows the pointer while it samples (#213);
-                // otherwise its pipette, or the crosshair for Precise Other Cursors.
-                Tool::Eyedropper => {
-                    if let Some(icon) = eyedropper_ring(app, &painter, &xf, p, response.is_pointer_button_down_on()) {
-                        icon
-                    } else if app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise {
-                        egui::CursorIcon::Crosshair
-                    } else {
-                        pipette_cursor(ui.ctx(), p)
-                    }
-                }
-                // Preferences › Cursors › Other Cursors: Precise shows a crosshair for every tool.
-                Tool::Move | Tool::Type | Tool::VerticalType if app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise => {
-                    egui::CursorIcon::Crosshair
-                }
-                Tool::Move => crate::tool_cursor::move_tool(&painter, p, app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move) && response.dragged()),
-                Tool::Hand => crate::tool_cursor::hand(&painter, p, response.dragged()),
-                Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
-                // The magnifying glass, for the Zoom tool and the temporary zoom keys alike.
-                Tool::Zoom => crate::tool_cursor::zoom(&painter, p, zoom_out(alt)),
-                Tool::Type | Tool::VerticalType => egui::CursorIcon::Text,
-                // Path Selection's black arrow, Direct Selection's white one; ⌘ swaps them while
-                // held, with what a press does (direct_select.rs).
-                Tool::PathSelection | Tool::DirectSelection => crate::tool_cursor::path_tool(&painter, p, crate::direct_select::direct_cursor(app, held)),
-                // ⌘ makes the Pen Direct Selection: its white arrow.
-                Tool::Pen if crate::direct_select::direct_cursor(app, held) => crate::tool_cursor::path_tool(&painter, p, true),
-                Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, view.zoom),
-                Tool::RedEye => {
-                    let pupil = app.ui.tool_options.red_eye_pupil_size.clamp(1.0, 100.0);
-                    let r_doc = prism_algo::redeye::search_radius(pupil);
-                    let r = (r_doc * view.zoom).max(2.0);
-                    painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
-                    painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
-                    for (w, c) in [(2.5, Color32::from_black_alpha(140)), (1.0, Color32::from_white_alpha(220))] {
-                        painter.line_segment([p - vec2(3.0, 0.0), p + vec2(3.0, 0.0)], Stroke::new(w, c));
-                        painter.line_segment([p - vec2(0.0, 3.0), p + vec2(0.0, 3.0)], Stroke::new(w, c));
-                    }
-                    if app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise {
-                        egui::CursorIcon::None
-                    } else {
-                        crate::cursor_pack::show(&ctx, p, 1562, egui::CursorIcon::Crosshair).unwrap_or(egui::CursorIcon::None)
-                    }
-                }
-                _ => egui::CursorIcon::Crosshair,
-            };
-            // Dynamic brush tips, comparison rings and temporary samplers already own their
-            // cursor. Only standard tool artwork is replaced; precise settings stay precise.
-            let precise = app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise;
-            let brush = tool.is_brushlike() || tool == Tool::QuickSelection;
-            let asset = if brush && app.session.prefs().cursors.painting != prism_engine::prefs::PaintingCursor::Standard {
-                None
-            } else if precise && !brush && !matches!(tool, Tool::Hand | Tool::RotateView | Tool::Zoom) {
-                Some(1025)
-            } else if tool == Tool::Pen && crate::direct_select::direct_cursor(app, held) {
-                // ⌘: the Pen is Direct Selection (`tool_cursor::path_tool` drew its arrow).
-                None
-            } else if tool == Tool::Pen {
-                Some(crate::vector_ui::pen_cursor_asset(app, xf.to_doc(p), held))
-            } else if matches!(tool, Tool::PathSelection | Tool::DirectSelection) {
-                // `tool_cursor::path_tool` already took the cursor pack's arrow for the mode.
-                None
-            } else if matches!(tool, Tool::Ruler | Tool::Count) {
-                Some(crate::analysis_ui::cursor_asset(app, tool, xf.to_doc(p), held))
-            } else if tool == Tool::Patch {
-                let mode = crate::tool_feedback::Badge::from_mode(selection_mode(app, held));
-                Some(if crate::retouch_ui::patch_drags_selection(app, xf.to_doc(p), held) {
-                    if app.ui.tool_options.patch_mode == "destination" { 1577 } else { 1576 }
-                } else {
-                    1572 + match mode {
-                        None => 0,
-                        Some(crate::tool_feedback::Badge::Add) => 1,
-                        Some(crate::tool_feedback::Badge::Subtract) => 2,
-                        Some(crate::tool_feedback::Badge::Intersect) => 3,
-                    }
-                })
-            } else {
-                Some(crate::cursor_pack::tool_asset(tool, badge, zoom_out(held.alt), response.dragged()))
-            };
-            let icon = if icon != egui::CursorIcon::None { asset.and_then(|a| crate::tool_cursor::standard(&painter, p, a, icon)).unwrap_or(icon) } else { icon };
-            let icon = visible_crosshair(icon, &painter, p, cfg!(target_os = "windows"));
-            ui.ctx().set_cursor_icon(icon);
-            // Selection tools: + / − / × badge for the effective mode (#170). A gesture keeps the
-            // mode it started with (⇧ then constrains the marquee instead of adding).
-            if let Some(b) = badge {
-                let combined = crate::cursor_pack::active(&ctx) == Some(crate::cursor_pack::tool_asset(tool, badge, false, false));
-                if !combined {
-                    crate::tool_feedback::draw_badge(&painter, p, b, tool == Tool::QuickSelection);
-                }
-            }
-            // ⇧ after a stroke: the straight line a click would paint (#257).
-            crate::stroke_constraint::draw_line_preview(app, &painter, &xf, p, tool, held.shift);
+            tool_hover_cursor(app, ui, &painter, &xf, &view, &response, tool, p, resizing, output, zoom_out, false);
         }
+    } else if !under_dialog
+        && !crate::doc_windows::dragging(&ctx)
+        && ui.is_enabled()
+        && ui.input(|i| !i.pointer.any_down())
+        && let Some(p) = response.hover_pos()
+    {
+        // Not the active view: its tool cursor all the same, as a press here makes it active.
+        tool_hover_cursor(app, ui, &painter, &xf, &view, &response, tool, p, false, output, zoom_out, true);
     }
     // Scrollbars (scrollbars.rs): drawn over the canvas edges, they take the pointer there.
     let t0 = crate::gpu_canvas::now_ms();
@@ -3967,6 +4001,11 @@ pub fn extra_windows(app: &mut PrismApp, ctx: &egui::Context) {
             let blocked = (!app.ui.dialogs.is_empty() && !crate::doc_windows::dialogs_here(app, &child)) || !crate::discard_ui::here(app, &child);
             if blocked {
                 ui.disable();
+                // Inert but not faded behind another window's dialog, as in Photoshop (the save
+                // prompt keeps its dimming).
+                if crate::discard_ui::here(app, &child) {
+                    ui.set_opacity(1.0);
+                }
             }
             egui::Panel::top(egui::Id::new(("document-window-title", w.id))).exact_size(32.0).show(ui, |ui| {
                 let t = crate::theme::Tokens::get(&child);
@@ -4929,6 +4968,38 @@ mod tests {
             let segs = app.outline_cache.as_ref().map_or(0, |(_, _, s)| s.len());
             assert_eq!(segs > 0, traced, "{centre:?} at zoom {zoom}");
         }
+    }
+
+    #[test]
+    fn a_view_that_is_not_the_active_one_shows_the_tool_cursor_too() {
+        // With a document floated into its own window, the canvas of whichever window wasn't the
+        // active one kept the arrow under a brush: the tool cursors were drawn in the active
+        // view only, though a press there paints with that tool.
+        let ctx = egui::Context::default();
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        app.sync_views();
+        app.ui.tool = Tool::Brush;
+        let view = app.ui.views[0].clone();
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0));
+        let icon = |app: &mut PrismApp, primary: bool, events: Vec<egui::Event>| {
+            let raw = egui::RawInput { screen_rect: Some(rect), events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                canvas_view(app, ui, 0, rect, view.clone(), primary);
+            });
+            out.textures_delta.clear();
+            out.platform_output.cursor_icon
+        };
+        let at = egui::Event::PointerMoved(egui::pos2(100.0, 100.0));
+        icon(&mut app, false, vec![at.clone()]);
+        let idle = icon(&mut app, false, vec![at.clone()]);
+        let active = icon(&mut app, true, vec![at]);
+        assert_eq!(idle, egui::CursorIcon::None, "the brush tip replaces the pointer");
+        assert_eq!(idle, active);
+        // A drag that began elsewhere (a stroke leaving its own window) changes nothing here.
+        let press =
+            egui::Event::PointerButton { pos: egui::pos2(100.0, 100.0), button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() };
+        assert_eq!(icon(&mut app, false, vec![press]), egui::CursorIcon::Default);
     }
 
     #[test]
