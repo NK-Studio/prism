@@ -92,4 +92,5 @@ next to the files:
 Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 
 | `assets/icons/annotation-arrow.svg` | Annotation arrow tool icon | NK Studio | Original geometric artwork | MIT OR Apache-2.0 (see `assets/icons/LICENSE-annotation-arrow.txt`) |
+| `assets/icons/options/*.svg` (7 files) | Options-bar glyphs for the brush tools (Brush Settings toggle, pressure for opacity and size, airbrush, smoothing options, brush angle, symmetry), drawn on a 24 px grid | NK Studio | Original artwork | MIT OR Apache-2.0, [`assets/icons/options/LICENSE.txt`](assets/icons/options/LICENSE.txt) |
 | `assets/icons/tools/*.svg` (55 files) | Toolbar tool glyphs: one solid glyph per tool (and the Clip Studio workspace's Airbrush and Decoration), drawn on a 24 px grid | NK Studio | Original artwork | MIT OR Apache-2.0, [`assets/icons/tools/LICENSE.txt`](assets/icons/tools/LICENSE.txt) |

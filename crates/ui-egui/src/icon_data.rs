@@ -1,5 +1,6 @@
 //! Lucide icons (ISC licence), embedded and tinted at runtime.
 //! The `tool-*` glyphs (`assets/icons/tools/`) are Prism's own artwork: solid toolbar glyphs.
+//! The `opt-*` glyphs (`assets/icons/options/`) are Prism's own artwork for the options bar.
 
 pub static ICONS: &[(&str, &[u8])] = &[
     ("align-center", include_bytes!("../../../assets/icons/align-center.svg")),
@@ -132,6 +133,14 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("wand-sparkles", include_bytes!("../../../assets/icons/wand-sparkles.svg")),
     ("x", include_bytes!("../../../assets/icons/x.svg")),
     ("zoom-in", include_bytes!("../../../assets/icons/zoom-in.svg")),
+    // Options-bar glyphs: original artwork, see assets/icons/options/LICENSE.txt.
+    ("opt-airbrush", include_bytes!("../../../assets/icons/options/airbrush.svg")),
+    ("opt-angle", include_bytes!("../../../assets/icons/options/angle.svg")),
+    ("opt-brush-settings", include_bytes!("../../../assets/icons/options/brush-settings.svg")),
+    ("opt-pressure-opacity", include_bytes!("../../../assets/icons/options/pressure-opacity.svg")),
+    ("opt-pressure-size", include_bytes!("../../../assets/icons/options/pressure-size.svg")),
+    ("opt-smoothing-options", include_bytes!("../../../assets/icons/options/smoothing-options.svg")),
+    ("opt-symmetry", include_bytes!("../../../assets/icons/options/symmetry.svg")),
     // Toolbar glyphs: original artwork, see assets/icons/tools/LICENSE.txt.
     ("tool-airbrush", include_bytes!("../../../assets/icons/tools/airbrush.svg")),
     ("tool-arrow", include_bytes!("../../../assets/icons/tools/arrow.svg")),

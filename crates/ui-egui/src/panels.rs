@@ -725,18 +725,20 @@ pub fn options_bar(app: &mut PrismApp, ui: &mut egui::Ui) {
                             b.mode = mode;
                         }
                         percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 62.0);
-                        if icons::button(ui, "circle-dot", 24.0, b.pressure_opacity, tl!("Always use pressure for opacity")).clicked() {
+                        if icons::button(ui, "opt-pressure-opacity", 24.0, b.pressure_opacity, tl!("Always use pressure for opacity")).clicked() {
                             b.pressure_opacity = !b.pressure_opacity;
                         }
                         percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 62.0);
-                        let airbrush = icons::button(ui, "sparkles", 24.0, b.build_up, tl!("Enable airbrush-style build-up effects"));
+                        let airbrush = icons::button(ui, "opt-airbrush", 24.0, b.build_up, tl!("Enable airbrush-style build-up effects"));
                         if crate::brush_picker::named(airbrush, tl!("Enable airbrush-style build-up effects")).clicked() {
                             b.build_up = !b.build_up;
                         }
                         smoothing_field(ui, b, 58.0);
                         smoothing_options(ui, b);
                         widgets::vline(ui, 22.0);
-                        if icons::button(ui, "circle-dot", 24.0, b.pressure_size, tl!("Always use pressure for size")).clicked() {
+                        brush_angle_field(ui, b);
+                        widgets::vline(ui, 22.0);
+                        if icons::button(ui, "opt-pressure-size", 24.0, b.pressure_size, tl!("Always use pressure for size")).clicked() {
                             b.pressure_size = !b.pressure_size;
                         }
                         symmetry_menu(app, ui);
@@ -2781,10 +2783,24 @@ fn smoothing_field(ui: &mut egui::Ui, b: &mut prism_engine::BrushSettings, width
     }
 }
 
+/// Options-bar brush angle (Photoshop's "Set the brush angle"): the angle glyph and a degrees
+/// field on the brush's tip angle, the same value as Brush Settings › Brush Tip Shape › Angle.
+fn brush_angle_field(ui: &mut egui::Ui, b: &mut prism_engine::BrushSettings) {
+    let t = Tokens::get(ui.ctx());
+    let (r, icon) = ui.allocate_exact_size(vec2(18.0, 24.0), Sense::hover());
+    icons::paint(ui, r, "opt-angle", 16.0, t.icon);
+    icon.on_hover_text(tl!("Set the brush angle"));
+    let mut angle = if b.angle.is_finite() { b.angle } else { 0.0 };
+    let field = widgets::value_field(ui, &mut angle, -180.0..=180.0, "°", 52.0);
+    if crate::brush_picker::named(field, tl!("Set the brush angle")).changed() {
+        b.angle = angle.round().clamp(-180.0, 180.0);
+    }
+}
+
 /// Options-bar gear beside Smoothing: Photoshop's smoothing options popup, edited on the brush
 /// like the Smoothing % (so they stay per tool and reach the live stroke and the commit).
 fn smoothing_options(ui: &mut egui::Ui, b: &mut prism_engine::BrushSettings) {
-    let resp = icons::button(ui, "settings", 24.0, false, tl!("Set additional smoothing options"));
+    let resp = icons::button(ui, "opt-smoothing-options", 24.0, false, tl!("Set additional smoothing options"));
     let resp = crate::brush_picker::named(resp, tl!("Set additional smoothing options"));
     egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let s = &mut b.smoothing;
@@ -2816,7 +2832,7 @@ fn symmetry_menu(app: &mut PrismApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let current = app.session.active().and_then(|st| st.symmetry_path.as_ref()).map(|axis| axis.source.clone());
     let choices = symmetry_choices(app);
-    let resp = icons::button(ui, "arrow-left-right", 24.0, current.is_some(), tl!("Set painting symmetry options"));
+    let resp = icons::button(ui, "opt-symmetry", 24.0, current.is_some(), tl!("Set painting symmetry options"));
     let resp = crate::brush_picker::named(resp, tl!("Set painting symmetry options"));
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(200.0);

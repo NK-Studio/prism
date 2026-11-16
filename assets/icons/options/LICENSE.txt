@@ -1,0 +1,5 @@
+Prism options-bar glyphs (assets/icons/options/*.svg)
+Copyright 2026 NK Studio
+Original artwork drawn for Prism on a 24 px grid.
+Licensed under either the MIT license or Apache License 2.0, at your option.
+See ../../../LICENSE-MIT and ../../../LICENSE-APACHE for full license texts.

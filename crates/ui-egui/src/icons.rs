@@ -21,7 +21,7 @@ fn white_icons() -> &'static HashMap<&'static str, Arc<[u8]>> {
             .map(|(name, bytes)| {
                 let svg = String::from_utf8_lossy(bytes).replace("currentColor", "#ffffff");
                 // Lucide's 2 px stroke is heavy at toolbar sizes; the tool glyphs carry their own weights.
-                let svg = if name.starts_with("tool-") { svg } else { svg.replace("stroke-width=\"2\"", "stroke-width=\"1.75\"") };
+                let svg = if name.starts_with("tool-") || name.starts_with("opt-") { svg } else { svg.replace("stroke-width=\"2\"", "stroke-width=\"1.75\"") };
                 (*name, Arc::from(svg.into_bytes().into_boxed_slice()))
             })
             .collect()
@@ -142,7 +142,14 @@ pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tool
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let tint = if ui.is_enabled() { button_chrome(ui, rect, selected, resp.hovered()) } else { Tokens::get(ui.ctx()).text_faint };
     // The solid tool glyphs fill more of their button than the line icons, as in Photoshop's toolbar.
-    let fraction = if name.starts_with("tool-") { 0.6 } else { 0.52 };
+    // The options-bar glyphs (`opt-*`) are detailed drawings and need the most room.
+    let fraction = if name.starts_with("opt-") {
+        0.75
+    } else if name.starts_with("tool-") {
+        0.6
+    } else {
+        0.52
+    };
     paint(ui, rect, name, (box_size * fraction).round(), tint);
     if tooltip.is_empty() { resp } else { resp.on_hover_text(tl!(tooltip)) }
 }
@@ -171,6 +178,13 @@ mod tests {
     fn every_tool_has_an_icon() {
         for t in Tool::ALL {
             assert!(exists(tool_icon(t)), "{t:?}");
+        }
+    }
+
+    #[test]
+    fn options_bar_glyphs_exist() {
+        for name in ["airbrush", "angle", "brush-settings", "pressure-opacity", "pressure-size", "smoothing-options", "symmetry"] {
+            assert!(exists(&format!("opt-{name}")), "{name}");
         }
     }
 

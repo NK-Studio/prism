@@ -107,7 +107,7 @@ pub fn open_settings(app: &mut PrismApp, ctx: &egui::Context) {
 /// (Photoshop's "Toggle the Brush Settings panel"). It runs Window › Brush Settings (F5).
 pub fn settings_toggle(app: &mut PrismApp, ui: &mut egui::Ui) {
     let on = app.ui.panels.brush_settings;
-    if named(icons::button(ui, "sliders-horizontal", 24.0, on, "Toggle the Brush Settings panel  (F5)"), "Toggle the Brush Settings panel").clicked()
+    if named(icons::button(ui, "opt-brush-settings", 24.0, on, "Toggle the Brush Settings panel  (F5)"), "Toggle the Brush Settings panel").clicked()
         && let Err(e) = crate::menus::invoke(app, ui.ctx(), "window.panel.brushSettings", json!({}))
     {
         app.ui.status = e;

@@ -1326,6 +1326,7 @@
 	Set foreground color	전경색 설정
 	Set painting symmetry options	페인팅 대칭 옵션 설정
 	Symmetry Off	대칭 끔
+	Set the brush angle	브러시 각도 설정
 	Set shape fill type	모양 채우기 유형 설정
 	Set shape stroke type	모양 획 유형 설정
 	Set the text color	텍스트 색상 설정
@@ -3699,3 +3700,12 @@ hand	Grip	꽉 쥐기
 	white	흰색
 	Drag and drop file	파일 드래그 앤 드롭
 	Or [select] from your computer to get started.	또는 내 컴퓨터에서 [선택]해 시작하세요.
+	Blend Interior Effects as Group	내부 효과를 그룹으로 혼합
+	Blend Clipped Layers as Group	클리핑된 레이어를 그룹으로 혼합
+	Transparency Shapes Layer	투명도로 레이어 모양 결정
+	Layer Mask Hides Effects	레이어 마스크가 효과 숨김
+	Vector Mask Hides Effects	벡터 마스크가 효과 숨김
+	This Layer:	이 레이어:
+	Underlying Layer:	아래 레이어:
+	Shallow	얕게
+	Deep	깊게
