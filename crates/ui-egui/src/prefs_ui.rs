@@ -778,14 +778,16 @@ pub fn open_shortcuts(app: &mut PrismApp, tab: u64) -> u64 {
 
 /// Open the Embedded Profile Mismatch prompt for the active document.
 pub fn open_mismatch(app: &mut PrismApp, report: &Value) -> u64 {
+    let working = report["working"].as_str().unwrap_or("?");
     let msg = if report.get("missing").and_then(Value::as_bool) == Some(true) {
-        format!("The document does not have an embedded colour profile. Working space: {}.", report["working"].as_str().unwrap_or("?"))
+        crate::i18n::fmt(tl!("The document does not have an embedded colour profile. Working space: {name}."), &[("name", working)])
     } else {
-        format!(
-            "The document has an embedded colour profile that does not match the working space.\nEmbedded: {}\nWorking: {}",
-            report["embedded"].as_str().unwrap_or("?"),
-            report["working"].as_str().unwrap_or("?")
-        )
+        [
+            tl!("The document has an embedded colour profile that does not match the working space.").to_string(),
+            crate::i18n::fmt(tl!("Embedded: {name}"), &[("name", report["embedded"].as_str().unwrap_or("?"))]),
+            crate::i18n::fmt(tl!("Working: {name}"), &[("name", working)]),
+        ]
+        .join("\n")
     };
     let action = match report["action"].as_str() {
         Some("converted") => "convert",
@@ -1543,6 +1545,28 @@ mod tests {
             h.run_steps(1);
         }
         assert_eq!(*h.state(), [0x80, 0x80, 0x80]);
+    }
+
+    #[test]
+    fn profile_mismatch_message_follows_the_interface_language() {
+        let mut app = crate::PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+        let message = |app: &mut crate::PrismApp, report: Value| {
+            let id = super::open_mismatch(app, &report);
+            let d = app.ui.dialogs.iter().find(|d| d.id == id).unwrap();
+            d.fields["message"].as_str().unwrap().to_string()
+        };
+        let mismatch = json!({"embedded": "Display", "working": "sRGB IEC61966-2.1", "mismatch": true});
+        let missing = json!({"working": "sRGB IEC61966-2.1", "missing": true});
+        let previous = crate::i18n::current();
+        crate::i18n::set_current(crate::i18n::Lang::from_code("ko").unwrap());
+        let ko = message(&mut app, mismatch.clone());
+        let ko_missing = message(&mut app, missing);
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let en = message(&mut app, mismatch);
+        crate::i18n::set_current(previous);
+        assert_eq!(ko, "문서에 포함된 색상 프로파일이 작업 색상 공간과 일치하지 않습니다.\n포함된 프로파일: Display\n작업 색상 공간: sRGB IEC61966-2.1");
+        assert_eq!(ko_missing, "문서에 포함된 색상 프로파일이 없습니다. 작업 색상 공간: sRGB IEC61966-2.1.");
+        assert_eq!(en, "The document has an embedded colour profile that does not match the working space.\nEmbedded: Display\nWorking: sRGB IEC61966-2.1");
     }
 
     #[test]

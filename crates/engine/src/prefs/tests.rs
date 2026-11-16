@@ -388,3 +388,32 @@ fn removed_linux_preference_does_not_break_saved_preferences() {
     let saved = serde_json::to_value(session.prefs()).unwrap();
     assert!(saved["performance"].get("linuxDisplayServer").is_none());
 }
+
+#[test]
+fn profile_ask_defaults_follow_photoshop_and_migrate_untouched_files() {
+    let ask = |s: &Session| (s.color.settings.ask_on_mismatch, s.color.settings.ask_on_paste, s.color.settings.ask_on_missing);
+    // Photoshop's General Purpose settings ask about none of them.
+    assert_eq!(ask(&Session::new()), (false, false, false));
+    // A version 1 file still holding the former defaults moves to the new ones…
+    let old = r#"{"version":1,"colorSettings":{"askOnMismatch":true,"askOnPaste":true,"askOnMissing":false,"workingRgb":"display-p3"}}"#;
+    let mut s = Session::new();
+    s.load_prefs_json(old).unwrap();
+    assert_eq!(ask(&s), (false, false, false));
+    assert_eq!(s.color.settings.working_rgb, "display-p3", "other colour settings are kept");
+    // …and saves as version 2, so a later choice to ask again survives the next launch.
+    s.execute("edit.colorSettings", json!({"askOnMismatch": true, "askOnPaste": true})).unwrap();
+    let saved = s.prefs_to_json();
+    assert_eq!(serde_json::from_str::<Value>(&saved).unwrap()["version"], 2);
+    let mut t = Session::new();
+    t.load_prefs_json(&saved).unwrap();
+    assert_eq!(ask(&t), (true, true, false));
+    // A version 1 file whose user changed these settings keeps their choice.
+    for chosen in [
+        r#"{"version":1,"colorSettings":{"askOnMismatch":true,"askOnPaste":false}}"#,
+        r#"{"version":1,"colorSettings":{"askOnMismatch":true,"askOnPaste":true,"askOnMissing":true}}"#,
+    ] {
+        let mut u = Session::new();
+        u.load_prefs_json(chosen).unwrap();
+        assert!(u.color.settings.ask_on_mismatch, "{chosen}");
+    }
+}

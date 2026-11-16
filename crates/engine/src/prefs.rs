@@ -1343,7 +1343,7 @@ impl Session {
         let mut v = self.prefs().to_json();
         if let Value::Object(m) = &mut v {
             m.insert("colorSettings".into(), serde_json::to_value(&self.color.settings).unwrap_or(Value::Null));
-            m.insert("version".into(), json!(1));
+            m.insert("version".into(), json!(PREFS_VERSION));
             m.insert("presets".into(), self.presets.to_json(self));
         }
         v
@@ -1353,7 +1353,13 @@ impl Session {
     /// defaults and unknown keys are ignored, so files from older and newer versions load.
     pub fn load_prefs_json(&mut self, s: &str) -> std::result::Result<(), String> {
         let mut v: Value = serde_json::from_str(s).map_err(|e| format!("preferences: {e}"))?;
-        let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
+        let version = v.get("version").and_then(Value::as_u64).unwrap_or(0);
+        let mut color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
+        if version < 2
+            && let Some(Value::Object(c)) = color.as_mut()
+        {
+            migrate_ask_defaults(c);
+        }
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));
         let prefs: Preferences = serde_json::from_value(v).map_err(|e| format!("preferences: {e}"))?;
         if let Some(c) = color {
@@ -1701,6 +1707,23 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("edit.toolbar", "Toolbar…", ["Edit"], None, r##"{"hidden":["<tool>",…]?,"order":["<tool>",…]?,"reset":bool=false}"##, toolbar, true),
     ]
+}
+
+/// Version written into the preferences file. 2: the colour-management "ask" defaults follow
+/// Photoshop's General Purpose settings (all off).
+const PREFS_VERSION: u64 = 2;
+
+/// Files older than version 2 stored Prism's former defaults (Ask When Opening and Ask When
+/// Pasting on for profile mismatches). Files still holding exactly those values were never
+/// changed by the user, so they move to the new defaults; any other combination is a choice
+/// and stays.
+fn migrate_ask_defaults(c: &mut Map<String, Value>) {
+    let on = |k: &str| c.get(k).and_then(Value::as_bool) == Some(true);
+    let missing_off = c.get("askOnMissing").and_then(Value::as_bool) != Some(true);
+    if on("askOnMismatch") && on("askOnPaste") && missing_off {
+        c.insert("askOnMismatch".into(), Value::Bool(false));
+        c.insert("askOnPaste".into(), Value::Bool(false));
+    }
 }
 
 #[cfg(test)]

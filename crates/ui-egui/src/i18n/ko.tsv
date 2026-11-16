@@ -968,6 +968,10 @@
 	Effects	효과
 	Embed Color Profile	색상 프로파일 포함
 	Embedded Profile Mismatch	포함된 프로파일 불일치
+	The document has an embedded colour profile that does not match the working space.	문서에 포함된 색상 프로파일이 작업 색상 공간과 일치하지 않습니다.
+	The document does not have an embedded colour profile. Working space: {name}.	문서에 포함된 색상 프로파일이 없습니다. 작업 색상 공간: {name}.
+	Embedded: {name}	포함된 프로파일: {name}
+	Working: {name}	작업 색상 공간: {name}
 	Enable airbrush-style build-up effects	에어브러시처럼 색이 쌓이는 효과 활성화
 	Enhance Edge	가장자리 향상
 	Entire Font	전체 글꼴

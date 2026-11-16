@@ -137,8 +137,10 @@ impl Default for ColorSettings {
             policy_rgb: Policy::Preserve,
             policy_cmyk: Policy::Preserve,
             policy_gray: Policy::Preserve,
-            ask_on_mismatch: true,
-            ask_on_paste: true,
+            // Photoshop's General Purpose presets (its defaults) ask about none of these; only
+            // the Prepress presets turn them on.
+            ask_on_mismatch: false,
+            ask_on_paste: false,
             ask_on_missing: false,
             intent: Intent::RelativeColorimetric.id().into(),
             bpc: true,
@@ -974,7 +976,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.colorSettings",
             "Color Settings…",
             ["Edit"],
-            r##"{"workingRgb":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020","workingCmyk":"coated-cmyk","workingGray":"sgray|gray-gamma-2.2","policyRgb":"preserve|convert|off","policyCmyk":"preserve|convert|off","policyGray":"preserve|convert|off","askOnMismatch":bool=true,"askOnPaste":bool=true,"askOnMissing":bool=false,"intent":"relative|perceptual|saturation|absolute","blendTextGamma":1.0..2.2|bool=1.45,"bpc":bool=true,"dither":bool=true,"monitorProfile":"auto|srgb|display-p3|adobe-rgb-compat|prophoto-compat|rec2020","reset":bool=false} (working spaces and the monitor profile also accept .icc paths; monitor `auto` = the main display's profile when the platform provides it, else sRGB; the reply's `monitorStatus` says which profile is in use and why: source auto|manual|fallback, reason)"##,
+            r##"{"workingRgb":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020","workingCmyk":"coated-cmyk","workingGray":"sgray|gray-gamma-2.2","policyRgb":"preserve|convert|off","policyCmyk":"preserve|convert|off","policyGray":"preserve|convert|off","askOnMismatch":bool=false,"askOnPaste":bool=false,"askOnMissing":bool=false,"intent":"relative|perceptual|saturation|absolute","blendTextGamma":1.0..2.2|bool=1.45,"bpc":bool=true,"dither":bool=true,"monitorProfile":"auto|srgb|display-p3|adobe-rgb-compat|prophoto-compat|rec2020","reset":bool=false} (working spaces and the monitor profile also accept .icc paths; monitor `auto` = the main display's profile when the platform provides it, else sRGB; the reply's `monitorStatus` says which profile is in use and why: source auto|manual|fallback, reason)"##,
             always,
             color_settings,
             true,
@@ -1247,10 +1249,16 @@ mod settings_tests {
     #[test]
     fn open_policies() {
         let mut s = Session::new();
-        // Preserve (default): an Adobe RGB file keeps its profile and asks.
+        // Preserve (default): an Adobe RGB file keeps its profile without asking, as Photoshop's
+        // default General Purpose settings do.
         let (_, r) = s.open_document(tagged("adobe-rgb-compat"), None);
-        assert_eq!((r["action"].as_str(), r["mismatch"].as_bool(), r["ask"].as_bool()), (Some("kept"), Some(true), Some(true)));
+        assert_eq!((r["action"].as_str(), r["mismatch"].as_bool(), r["ask"].as_bool()), (Some("kept"), Some(true), Some(false)));
         assert!(desc(&s.active().unwrap().doc).unwrap().starts_with("Adobe RGB"));
+        // With Ask When Opening on (Photoshop's Prepress presets) the same file asks.
+        s.execute("edit.colorSettings", json!({"askOnMismatch": true})).unwrap();
+        let (_, r) = s.open_document(tagged("adobe-rgb-compat"), None);
+        assert_eq!((r["action"].as_str(), r["ask"].as_bool()), (Some("kept"), Some(true)));
+        s.execute("edit.colorSettings", json!({"askOnMismatch": false})).unwrap();
         // Matching profiles never ask.
         let (_, r) = s.open_document(tagged("srgb"), None);
         assert_eq!(r["mismatch"], false);
