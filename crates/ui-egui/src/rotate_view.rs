@@ -1,11 +1,13 @@
 //! Rotate View tool: turn the canvas camera around its centre without rewriting pixels.
 //!
-//! Drag around the view centre (clockwise increases the angle). Shift snaps to 15°. Reset View,
-//! Escape, a double-click, or the on-canvas compass put the angle back to 0. History is not
-//! recorded. Trackpad rotate is gated by Preferences › Enhanced Controls › Rotate View with
-//! Trackpad.
+//! Drag around the view centre (clockwise increases the angle). Shift snaps to 15°. While the
+//! drag lasts a compass stands at the view centre, as in Photoshop: its rose is fixed to the
+//! screen and its needle turns with the image, the red half pointing at the document's top.
+//! Reset View, Escape, a double-click, or the small corner compass put the angle back to 0.
+//! History is not recorded. Trackpad rotate is gated by Preferences › Enhanced Controls ›
+//! Rotate View with Trackpad.
 
-use egui::{Align2, Pos2, Rect, Stroke, pos2, vec2};
+use egui::{Align2, Pos2, Rect, Shape, Stroke, Vec2, pos2, vec2};
 use serde_json::{Value, json};
 
 use crate::PrismApp;
@@ -192,7 +194,104 @@ pub fn drag(ctx: &egui::Context, view: &mut View, xf: &ViewXform, b: &Buttons, p
     true
 }
 
-/// Compass in the top-right of the canvas (north = document up). Hidden at 0°.
+/// Screen direction of the document's top (a unit vector, Y-down) in a view turned `rotation`
+/// degrees and optionally flipped, as [`ViewXform::to_screen`] maps it. A hostile angle is 0.
+pub fn north(rotation: f32, flip: bool) -> Vec2 {
+    let rad = wrap_deg(rotation).to_radians();
+    let (s, c) = if rad.abs() < 1e-6 { (0.0, 1.0) } else { (rad.sin(), rad.cos()) };
+    vec2(if flip { -s } else { s }, -c)
+}
+
+/// The drag compass, in points: the rose's long and short points and the ring they stand on,
+/// the needle's reach and half-width, and the pivot.
+const ROSE_LONG: f32 = 68.0;
+const ROSE_SHORT: f32 = 46.0;
+const ROSE_RING: f32 = 17.0;
+const NEEDLE: f32 = 88.0;
+const NEEDLE_HALF: f32 = 11.0;
+const HUB: f32 = 5.0;
+
+/// The drag compass's size in a canvas: full size where it fits, smaller in a small view, and
+/// nothing in one too small to read it (or with a hostile rect).
+pub fn compass_scale(canvas: Rect) -> Option<f32> {
+    let (w, h) = (canvas.width(), canvas.height());
+    if !(w.is_finite() && h.is_finite() && canvas.center().x.is_finite() && canvas.center().y.is_finite()) {
+        return None;
+    }
+    let k = w.min(h) / (2.0 * NEEDLE + 24.0);
+    (k >= 0.2).then_some(k.min(1.0))
+}
+
+/// The needle's outline around `centre`: the red tip (the document's top), the right corner,
+/// the white tip and the left corner.
+pub fn needle(centre: Pos2, rotation: f32, flip: bool, scale: f32) -> [Pos2; 4] {
+    let n = north(rotation, flip);
+    let left = vec2(n.y, -n.x);
+    [centre + n * (NEEDLE * scale), centre - left * (NEEDLE_HALF * scale), centre - n * (NEEDLE * scale), centre + left * (NEEDLE_HALF * scale)]
+}
+
+/// A filled triangle or quad, wound the way the tessellator's feathering expects.
+fn facet(painter: &egui::Painter, mut points: Vec<Pos2>, fill: egui::Color32) {
+    let area: f32 = points.iter().zip(points.iter().cycle().skip(1)).map(|(a, b)| a.x * b.y - b.x * a.y).sum();
+    if area < 0.0 {
+        points.reverse();
+    }
+    painter.add(Shape::convex_polygon(points, fill, Stroke::NONE));
+}
+
+/// Draw the drag compass at the centre of `canvas`: the eight-point rose stays put, the needle
+/// follows the image (red = the document's top), lit on the needle's left.
+fn paint_compass(painter: &egui::Painter, canvas: Rect, rotation: f32, flip: bool) {
+    let Some(k) = compass_scale(canvas) else { return };
+    let c = canvas.center();
+    let col = Tokens::rotate_compass();
+    let at = |deg: f32, r: f32| c + vec2(deg.to_radians().sin(), -deg.to_radians().cos()) * (r * k);
+    let mut star = Vec::with_capacity(16);
+    let mut ring = Vec::with_capacity(8);
+    for i in 0..8u8 {
+        let a = f32::from(i) * 45.0;
+        let tip = at(a, if i % 2 == 0 { ROSE_LONG } else { ROSE_SHORT });
+        let (l, r) = (at(a - 22.5, ROSE_RING), at(a + 22.5, ROSE_RING));
+        let mid = l + (r - l) * 0.5;
+        facet(painter, vec![tip, l, mid], col.rose[0]);
+        facet(painter, vec![tip, mid, r], col.rose[1]);
+        star.extend([l, tip]);
+        ring.push(l);
+    }
+    facet(painter, ring, col.rose[0]);
+    painter.add(Shape::closed_line(star, Stroke::new(1.0, col.outline)));
+    painter.circle_stroke(c, (ROSE_RING - 4.5) * k, Stroke::new(2.0 * k, col.rose[1]));
+
+    let [tip_n, right, tip_s, left] = needle(c, rotation, flip, k);
+    let drop = vec2(0.0, 1.5 * k);
+    facet(painter, vec![tip_n + drop, right + drop, tip_s + drop, left + drop], col.shadow);
+    facet(painter, vec![tip_n, left, right], col.north[1]);
+    facet(painter, vec![tip_n, left, c], col.north[0]);
+    facet(painter, vec![tip_s, right, left], col.south[1]);
+    facet(painter, vec![tip_s, c, left], col.south[0]);
+    painter.add(Shape::closed_line(vec![tip_n, right, tip_s, left], Stroke::new(1.0, col.outline)));
+    painter.circle_filled(c, HUB * k, col.hub[0]);
+    painter.circle_stroke(c, HUB * k, Stroke::new(1.0, col.hub[1]));
+}
+
+/// The Rotate View drag that turns the view in `canvas`, if one is in progress there. A drag
+/// whose release never arrived (the tool changed under it, the window lost the pointer) is
+/// dropped here, so its compass cannot outlive the gesture.
+fn active_drag(ctx: &egui::Context, canvas: Rect) -> Option<RotateDrag> {
+    let z = ctx.data(|d| d.get_temp::<RotateDrag>(id()))?;
+    if !ctx.input(|i| i.pointer.any_down()) {
+        ctx.data_mut(|d| d.remove::<RotateDrag>(id()));
+        return None;
+    }
+    (z.pivot.distance(canvas.center()) < 0.5).then_some(z)
+}
+
+/// True while a Rotate View drag turns the view in `canvas` (its compass is showing).
+pub fn dragging(ctx: &egui::Context, canvas: Rect) -> bool {
+    active_drag(ctx, canvas).is_some()
+}
+
+/// Small compass in the top-right of the canvas (north = document up). Hidden at 0°.
 pub fn compass_rect(canvas: Rect) -> Rect {
     const S: f32 = 36.0;
     const M: f32 = 10.0;
@@ -215,6 +314,10 @@ pub fn overlay(app: &PrismApp, ctx: &egui::Context, painter: &egui::Painter, xf:
         view.rotation = 0.0;
         ctx.data_mut(|d| d.remove::<RotateDrag>(id()));
     }
+    // The drag compass shows at every angle, 0° included, for as long as the button is down.
+    if active_drag(ctx, xf.rect).is_some() {
+        paint_compass(painter, xf.rect, view.rotation, xf.flip);
+    }
     if !compass_visible(view.rotation) {
         ctx.data_mut(|d| d.remove::<Rect>(compass_id()));
         return false;
@@ -226,12 +329,7 @@ pub fn overlay(app: &PrismApp, ctx: &egui::Context, painter: &egui::Painter, xf:
     painter.circle_filled(r.center(), r.width() * 0.5, if hover { t.hover } else { t.chrome });
     painter.circle_stroke(r.center(), r.width() * 0.5 - 0.5, Stroke::new(1.0, t.separator));
     // Document up: (0, −1) in document space, rotated then flipped like [`ViewXform::to_screen`].
-    let rad = view.rotation.to_radians();
-    let (c, s) = if view.rotation.abs() < 1e-6 { (1.0, 0.0) } else { (rad.cos(), rad.sin()) };
-    let (rx, ry) = (s, -c);
-    let sx = if xf.flip { -1.0 } else { 1.0 };
-    let needle = vec2(rx * sx, ry) * (r.width() * 0.32);
-    let tip = r.center() + needle;
+    let tip = r.center() + north(view.rotation, xf.flip) * (r.width() * 0.32);
     painter.line_segment([r.center(), tip], Stroke::new(2.0, t.accent));
     painter.circle_filled(tip, 2.5, t.accent);
     painter.text(r.center() + vec2(0.0, r.width() * 0.18), Align2::CENTER_CENTER, "N", egui::FontId::proportional(9.0), t.text_faint);
@@ -243,7 +341,8 @@ pub fn overlay(app: &PrismApp, ctx: &egui::Context, painter: &egui::Painter, xf:
     hover
 }
 
-/// Cursor for the Rotate View tool.
+/// The stock cursor behind the Rotate View drawing (`tool_cursor::Art::RotateView`), for a
+/// backend that cannot upload the bitmap.
 pub fn cursor(dragged: bool) -> egui::CursorIcon {
     if dragged { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab }
 }
@@ -479,6 +578,129 @@ mod tests {
         assert_eq!(h.state().session.documents()[0].history.past_len(), 0);
         assert_eq!(crate::state::Tool::from_name("RotateView"), Some(crate::state::Tool::RotateView));
         assert_eq!(crate::state::Tool::RotateView.key(), 'R');
+    }
+
+    /// As measured in Photoshop 2026 (2026-11-16): Shift is read while the drag moves, not at
+    /// the press. From −40°, a 20° sweep with Shift gave −15° (absolute multiples of 15°, not
+    /// steps from the start); a raw +10° gave 15° (nearest, not floor); Shift pressed mid-drag
+    /// snapped (raw 55° → 60°) and Shift released mid-drag freed the angle (raw 80° → 79°).
+    #[test]
+    fn shift_snaps_while_it_is_down_and_frees_the_angle_when_it_comes_up() {
+        let mut h = harness();
+        let c = h.state().last_canvas_rect.center();
+        let at = |deg: f32| c + vec2(120.0 * deg.to_radians().cos(), 120.0 * deg.to_radians().sin());
+        let rot = |h: &Harness<'static, PrismApp>| h.state().ui.views[0].rotation;
+        h.state_mut().ui.views[0].rotation = -40.0;
+        h.event(Event::PointerMoved(at(0.0)));
+        h.step();
+        press(&mut h, at(0.0), true, false);
+        h.event(Event::PointerMoved(at(20.0)));
+        h.step();
+        assert!((rot(&h) + 20.0).abs() < 0.75, "free: {}", rot(&h));
+        // Shift goes down mid-drag: the nearest absolute multiple of 15°, not −40° + 15°.
+        h.event(Event::ModifiersChanged(egui::Modifiers::SHIFT));
+        h.event(Event::PointerMoved(at(20.5)));
+        h.step();
+        assert_eq!(rot(&h), -15.0);
+        // Raw +10°: the nearest multiple is 15°, not 0°.
+        h.event(Event::PointerMoved(at(50.0)));
+        h.step();
+        assert_eq!(rot(&h), 15.0);
+        // Shift comes up mid-drag: the angle follows the pointer again.
+        h.event(Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.event(Event::PointerMoved(at(119.0)));
+        h.step();
+        assert!((rot(&h) - 79.0).abs() < 0.75, "freed: {}", rot(&h));
+        press(&mut h, at(119.0), false, false);
+        h.run_steps(2);
+        assert!((rot(&h) - 79.0).abs() < 0.75, "released: {}", rot(&h));
+        assert_eq!(h.state().session.documents()[0].history.past_len(), 0);
+    }
+
+    #[test]
+    fn north_follows_the_document_top_and_survives_hostile_angles() {
+        let close = |a: Vec2, b: Vec2| (a - b).length() < 1e-4;
+        assert!(close(north(0.0, false), vec2(0.0, -1.0)));
+        // 90° clockwise: the document's top is at the right of the screen; a flip mirrors it.
+        assert!(close(north(90.0, false), vec2(1.0, 0.0)));
+        assert!(close(north(90.0, true), vec2(-1.0, 0.0)));
+        assert!(close(north(180.0, false), vec2(0.0, 1.0)));
+        assert!(close(north(-90.0, false), vec2(-1.0, 0.0)));
+        // The same direction `ViewXform` gives the document's up vector.
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
+        for rot in [0.0, 15.0, 33.0, 168.0, -47.0] {
+            for flip in [false, true] {
+                let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip, rotation: rot };
+                let up = xf.to_screen(0.0, -1.0) - xf.to_screen(0.0, 0.0);
+                assert!(close(north(rot, flip), up), "rot={rot} flip={flip}: {:?} vs {up:?}", north(rot, flip));
+            }
+        }
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(close(north(bad, false), vec2(0.0, -1.0)), "{bad}");
+        }
+        assert!(north(1.0e30, true).length().is_finite());
+    }
+
+    #[test]
+    fn needle_points_red_at_the_document_top_and_fits_small_views() {
+        let c = pos2(200.0, 150.0);
+        let [red, right, white, left] = needle(c, 0.0, false, 1.0);
+        assert_eq!(red, c + vec2(0.0, -NEEDLE));
+        assert_eq!(white, c + vec2(0.0, NEEDLE));
+        assert!(left.x < c.x && right.x > c.x, "lit side on the left at 0°");
+        let [red, ..] = needle(c, 90.0, false, 0.5);
+        assert!((red - (c + vec2(NEEDLE * 0.5, 0.0))).length() < 1e-3, "{red:?}");
+        // Full size where it fits, scaled down in a small view, absent in a tiny or hostile one.
+        assert_eq!(compass_scale(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0))), Some(1.0));
+        let k = compass_scale(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 100.0))).expect("small view");
+        assert!(k < 1.0 && 2.0 * NEEDLE * k < 100.0, "{k}");
+        assert_eq!(compass_scale(Rect::from_min_size(Pos2::ZERO, vec2(20.0, 20.0))), None);
+        assert_eq!(compass_scale(Rect::from_min_size(Pos2::ZERO, vec2(f32::NAN, 500.0))), None);
+        assert_eq!(compass_scale(Rect::NOTHING), None);
+    }
+
+    /// Shapes the canvas painted this frame that are the drag compass's red needle facets.
+    fn red_facets(h: &Harness<'static, PrismApp>) -> usize {
+        let red = Tokens::rotate_compass().north;
+        h.output().shapes.iter().filter(|s| matches!(&s.shape, Shape::Path(p) if red.contains(&p.fill))).count()
+    }
+
+    #[test]
+    fn compass_shows_only_while_the_view_is_dragged() {
+        let mut h = harness();
+        let r = h.state().last_canvas_rect;
+        let c = r.center();
+        let p0 = c + vec2(120.0, 0.0);
+        h.event(Event::PointerMoved(p0));
+        h.step();
+        assert_eq!(red_facets(&h), 0, "idle: no compass");
+        assert!(!dragging(&h.ctx, r));
+        press(&mut h, p0, true, false);
+        let p1 = c + vec2(120.0 * 30f32.to_radians().cos(), 120.0 * 30f32.to_radians().sin());
+        h.event(Event::PointerMoved(p1));
+        h.step();
+        h.step();
+        assert!((h.state().ui.views[0].rotation - 30.0).abs() < 0.75, "{}", h.state().ui.views[0].rotation);
+        assert_eq!(red_facets(&h), 2, "dragging: the needle's two red facets");
+        assert!(dragging(&h.ctx, r));
+        // Another view's canvas does not show this drag's compass.
+        assert!(!dragging(&h.ctx, r.translate(vec2(300.0, 0.0))));
+        press(&mut h, p1, false, false);
+        h.run_steps(2);
+        assert_eq!(red_facets(&h), 0, "released: the compass is gone, the angle stays");
+        assert!(!dragging(&h.ctx, r));
+        assert!((h.state().ui.views[0].rotation - 30.0).abs() < 0.75);
+        assert_eq!(h.state().session.documents()[0].history.past_len(), 0);
+    }
+
+    #[test]
+    fn a_drag_without_its_release_does_not_leave_a_compass_behind() {
+        let mut h = harness();
+        let r = h.state().last_canvas_rect;
+        h.ctx.data_mut(|d| d.insert_temp(id(), RotateDrag { pivot: r.center(), start_pointer: 0.0, start_rotation: 0.0 }));
+        h.run_steps(2);
+        assert_eq!(red_facets(&h), 0);
+        assert!(h.ctx.data(|d| d.get_temp::<RotateDrag>(id())).is_none(), "the stale drag is dropped");
     }
 
     #[test]

@@ -475,13 +475,15 @@ fn roles_map_to_their_drawings_and_selection_modes_share_one() {
         (Tool::DirectSelection, Art::ArrowWhite),
         (Tool::Rectangle, Art::Cross),
         (Tool::Hand, Art::Hand),
-        (Tool::RotateView, Art::Hand),
+        (Tool::RotateView, Art::RotateView),
         (Tool::Zoom, Art::ZoomIn),
     ] {
         assert_eq!(role(tool, None), Some(art), "{tool:?}");
     }
     assert_eq!(Art::for_role(crate::cursor_pack::tool_asset(Tool::Zoom, None, true, false)), Some(Art::ZoomOut));
     assert_eq!(Art::for_role(crate::cursor_pack::tool_asset(Tool::Hand, None, false, true)), Some(Art::HandClosed));
+    // Rotate View keeps its own drawing while it drags, as in Photoshop.
+    assert_eq!(Art::for_role(crate::cursor_pack::tool_asset(Tool::RotateView, None, false, true)), Some(Art::RotateView));
     // Tools without a drawing keep the crosshair; hostile ids are nothing.
     for id in [crate::cursor_pack::tool_asset(Tool::Gradient, None, false, false), 0, 1, u32::MAX] {
         assert_eq!(Art::for_role(id), None, "{id}");

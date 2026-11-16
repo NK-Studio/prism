@@ -120,6 +120,19 @@ pub struct Tokens {
     pub scrim: Color32,
 }
 
+/// Colours of the Rotate View compass ([`Tokens::rotate_compass`]). Pairs are the lit facet,
+/// then the shaded one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CompassColors {
+    pub rose: [Color32; 2],
+    pub outline: Color32,
+    pub shadow: Color32,
+    pub north: [Color32; 2],
+    pub south: [Color32; 2],
+    /// The pivot's fill and its rim.
+    pub hub: [Color32; 2],
+}
+
 impl Tokens {
     /// Quiet, darker outline for the empty eye slot of hidden layers and effects.
     pub(crate) fn hidden_layer_outline(self) -> Color32 {
@@ -136,6 +149,19 @@ impl Tokens {
     /// Tool outlines need contrast on arbitrary document pixels, independently of UI theme.
     pub(crate) fn cursor_outline() -> [Color32; 2] {
         [Color32::from_black_alpha(160), Color32::from_white_alpha(235)]
+    }
+
+    /// The Rotate View compass sits on arbitrary document pixels too, so it is the same in every
+    /// theme: a pale rose, a red half that points at the document's top and a white half.
+    pub(crate) fn rotate_compass() -> CompassColors {
+        CompassColors {
+            rose: [Color32::from_rgba_unmultiplied(255, 255, 255, 185), Color32::from_rgba_unmultiplied(205, 205, 205, 170)],
+            outline: Color32::from_black_alpha(40),
+            shadow: Color32::from_black_alpha(45),
+            north: [Color32::from_rgb(228, 54, 64), Color32::from_rgb(176, 40, 52)],
+            south: [Color32::from_gray(248), Color32::from_gray(196)],
+            hub: [Color32::from_gray(250), Color32::from_gray(150)],
+        }
     }
 
     pub fn for_kind(kind: ThemeKind) -> Self {

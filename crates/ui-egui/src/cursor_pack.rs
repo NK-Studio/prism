@@ -311,13 +311,8 @@ pub(crate) fn tool_asset(tool: Tool, badge: Option<Badge>, alt: bool, dragging: 
                 1005
             }
         }
-        Tool::RotateView => {
-            if dragging {
-                25006
-            } else {
-                1630
-            }
-        }
+        // Photoshop keeps the Rotate View cursor while it turns the view; the hand never closes.
+        Tool::RotateView => 1630,
         Tool::Zoom => {
             if alt {
                 1007

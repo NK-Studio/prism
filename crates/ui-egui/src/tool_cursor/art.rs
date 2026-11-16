@@ -25,6 +25,8 @@ pub(crate) enum Art {
     Move,
     Hand,
     HandClosed,
+    /// The hand on a tilted sheet under a turning arrow (Rotate View), idle and dragging alike.
+    RotateView,
     ZoomIn,
     ZoomOut,
     /// The crosshair with a centre dot: the marquees, the shapes and every precise cursor.
@@ -52,12 +54,13 @@ pub(crate) enum Art {
 
 impl Art {
     #[cfg(test)]
-    pub(crate) const ALL: [Art; 22] = [
+    pub(crate) const ALL: [Art; 23] = [
         Art::Arrow,
         Art::ArrowWhite,
         Art::Move,
         Art::Hand,
         Art::HandClosed,
+        Art::RotateView,
         Art::ZoomIn,
         Art::ZoomOut,
         Art::Cross,
@@ -84,6 +87,7 @@ impl Art {
             Art::Move => include_bytes!("../../../../assets/cursors/move.svg"),
             Art::Hand => include_bytes!("../../../../assets/cursors/hand.svg"),
             Art::HandClosed => include_bytes!("../../../../assets/cursors/hand-closed.svg"),
+            Art::RotateView => include_bytes!("../../../../assets/cursors/rotate-view.svg"),
             Art::ZoomIn => include_bytes!("../../../../assets/cursors/zoom-in.svg"),
             Art::ZoomOut => include_bytes!("../../../../assets/cursors/zoom-out.svg"),
             Art::Cross => include_bytes!("../../../../assets/cursors/cross.svg"),
@@ -111,6 +115,8 @@ impl Art {
             Art::Arrow | Art::Move | Art::Lasso | Art::LassoPolygon => [3.2, 2.5],
             Art::ArrowWhite => [3.2, 2.7],
             Art::Hand | Art::HandClosed => [16.0, 17.0],
+            // The palm of the small hand.
+            Art::RotateView => [11.0, 19.8],
             Art::ZoomIn | Art::ZoomOut => [12.0, 12.0],
             Art::Cross => [16.5, 16.5],
             Art::CrossRect => [8.5, 8.5],
@@ -128,7 +134,7 @@ impl Art {
     pub(super) fn fallback(self) -> CursorIcon {
         match self {
             Art::Arrow | Art::ArrowWhite | Art::Move => CursorIcon::Default,
-            Art::Hand => CursorIcon::Grab,
+            Art::Hand | Art::RotateView => CursorIcon::Grab,
             Art::HandClosed => CursorIcon::Grabbing,
             Art::ZoomIn => CursorIcon::ZoomIn,
             Art::ZoomOut => CursorIcon::ZoomOut,
@@ -144,7 +150,8 @@ impl Art {
     /// is drawn beside it); roles without a drawing keep the crosshair or the stock cursor.
     pub(crate) fn for_role(id: u32) -> Option<Art> {
         Some(match id {
-            1005 | 1630 => Art::Hand,
+            1005 => Art::Hand,
+            1630 => Art::RotateView,
             25006 => Art::HandClosed,
             1006 => Art::ZoomIn,
             1007 => Art::ZoomOut,
