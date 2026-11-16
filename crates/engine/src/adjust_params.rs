@@ -865,6 +865,55 @@ pub fn curves_eyedropper_from_params(s: &crate::Session, p: &Value) -> Result<Op
     curves_eyedropper(&without_eyedropper(p), picker, sample, mode).map(Some)
 }
 
+/// Photoshop's Exposure eyedroppers (its help: Set Black Point sets the Offset so the sample goes
+/// to zero; Set White Point sets the Exposure so it goes to white; Set Gray Point sets the Exposure
+/// so it goes to middle grey). They work in the linear light Exposure works in (the document's
+/// exposure tone curve) on the sample's luminance (0.299 R + 0.587 G + 0.114 B: inferred, not
+/// measured); the other settings are kept. Middle grey is level 128.
+pub fn exposure_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], mode: ColorMode, depth: prism_color::SampleType) -> Result<Adjustment> {
+    const CMD: &str = "exposure eyedropper";
+    if sample.iter().any(|v| !v.is_finite()) {
+        return Err(bad(CMD, "sample components must be finite"));
+    }
+    if !matches!(mode, ColorMode::Rgb | ColorMode::Grayscale) {
+        return Err(bad(CMD, "only RGB and Grayscale documents are supported"));
+    }
+    let mut adjustment = from_params("exposure", base, None, mode)?;
+    let Adjustment::Exposure { exposure, offset, gamma } = &mut adjustment else {
+        return Err(bad(CMD, "expected an Exposure adjustment"));
+    };
+    let t = prism_compose::adjust::Transfer::for_document(mode, depth).for_exposure();
+    let [r, g, b] = sample.map(|v| t.decode(v.clamp(0.0, 1.0)));
+    let lin = 0.299 * r + 0.587 * g + 0.114 * b;
+    let exposure_for = |target: f32| -> Result<f32> {
+        let need = target - *offset;
+        if lin <= 1e-6 || need <= 1e-6 {
+            return Err(bad(CMD, "the sample is too dark to set the exposure from"));
+        }
+        let e = (need / lin).log2();
+        if e.is_finite() { Ok((e * 100.0).round() / 100.0) } else { Err(bad(CMD, "no exposure reaches that sample")) }
+    };
+    match picker {
+        CurvesEyedropper::Black => *offset = ((-lin * exposure.exp2()) * 10000.0).round() / 10000.0,
+        CurvesEyedropper::White => *exposure = exposure_for(1.0)?,
+        CurvesEyedropper::NeutralGray => {
+            let grey = t.decode(128.0 / 255.0).powf(gamma.max(0.01));
+            *exposure = exposure_for(grey)?;
+        }
+    }
+    *exposure = exposure.clamp(-20.0, 20.0);
+    *offset = offset.clamp(-0.5, 0.5);
+    Ok(adjustment)
+}
+
+/// The `eyedropper` param of the Exposure commands (as for Curves); the rest of `p` is the
+/// Exposure settings the picker edits. `None` without the key.
+pub fn exposure_eyedropper_from_params(s: &crate::Session, p: &Value) -> Result<Option<Adjustment>> {
+    let Some((picker, sample)) = eyedropper_sample(s, p, "exposure eyedropper")? else { return Ok(None) };
+    let d = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    exposure_eyedropper(&without_eyedropper(p), picker, sample, d.mode, d.depth).map(Some)
+}
+
 /// The `eyedropper` param of the Levels commands (as for Curves); the rest of `p` is the Levels
 /// settings the picker edits. `None` without the key.
 pub fn levels_eyedropper_from_params(s: &crate::Session, p: &Value) -> Result<Option<Adjustment>> {

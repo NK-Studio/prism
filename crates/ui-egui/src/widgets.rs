@@ -151,24 +151,26 @@ const FIELD_PAD: f32 = 3.0;
 
 /// How a [`value_field`] is drawn: its box height, the number's font, and how far that font's
 /// digits are raised to sit centred in the box.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct FieldLook {
     pub height: f32,
     pub font: egui::FontId,
     pub lift: f32,
     /// Always two decimals ("1.00"), as Photoshop shows a gamma; otherwise trailing zeros go.
     pub fixed2: bool,
+    /// How the number is written, when a dialog writes it its own way (Exposure's "+1.5").
+    pub format: Option<fn(f64) -> String>,
 }
 
 impl FieldLook {
     /// Panels and option bars: a 24 pt box with 12 pt monospace digits.
     pub fn compact() -> Self {
-        Self { height: 24.0, font: theme::mono(12.0), lift: FIELD_LIFT, fixed2: false }
+        Self { height: 24.0, font: theme::mono(12.0), lift: FIELD_LIFT, fixed2: false, format: None }
     }
 
     /// Photoshop's larger dialog fields (File › New): a 30 pt box with 14 pt proportional digits.
     pub fn large() -> Self {
-        Self { height: 30.0, font: egui::FontId::proportional(14.0), lift: 0.5, fixed2: false }
+        Self { height: 30.0, font: egui::FontId::proportional(14.0), lift: 0.5, fixed2: false, format: None }
     }
 }
 
@@ -231,7 +233,7 @@ fn value_field_in(
             // Left-aligned, as in Photoshop: a number that gains a digit grows to the right
             // instead of shifting sideways.
             let layout = egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Min).with_main_justify(true);
-            ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine, look.fixed2)).inner
+            ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine, look.fixed2, look.format)).inner
         }
     };
     ui.data_mut(|d| d.insert_temp(slot.id, resp.id));
@@ -252,7 +254,9 @@ fn value_field_in(
             let typed = ui.data(|d| d.get_temp::<String>(resp.id.with("typed")));
             let typed = typed.filter(|s| plain(s).is_some_and(|v| (v - f64::from(*value)).abs() < 1e-4));
             let shown = typed.unwrap_or_else(|| {
-                if look.fixed2 {
+                if let Some(format) = look.format {
+                    format(f64::from(*value))
+                } else if look.fixed2 {
                     format!("{:.2}", f64::from(*value))
                 } else if fine {
                     fmt_num2(f64::from(*value))
@@ -394,7 +398,7 @@ fn whole(v: f32, lo: f32, hi: f32) -> f32 {
 /// The number in a [`value_field`]. A typed number applies as it's typed; arithmetic waits for
 /// Enter, Tab or click-away, because per keystroke `5/2` would land first and a caller that
 /// rounds it would cut `5/2*2` short. `changed()` means a new value, not just a keystroke.
-fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, fine: bool, fixed2: bool) -> Response {
+fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, fine: bool, fixed2: bool, format: Option<fn(f64) -> String>) -> Response {
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     let held = id.with("arithmetic");
     let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
@@ -411,11 +415,15 @@ fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
             .speed(if fine { 0.01 } else { 0.5 })
             // A drag moves a whole-number field in whole units (typing can still give 12.5).
             .max_decimals_opt((!fine).then_some(0))
-            .custom_formatter(move |v, _| if fixed2 { format!("{:.2}", (v * 100.0).round() / 100.0) } else if fine { fmt_num2(v) } else { fmt_num(v) })
+            .custom_formatter(move |v, _| if let Some(format) = format {
+                format(v)
+            } else if fixed2 { format!("{:.2}", (v * 100.0).round() / 100.0) } else if fine { fmt_num2(v) } else { fmt_num(v) })
             .update_while_editing(!math)
             // Focus is read when parsing, not above: Tab hands it on inside `ui.add`.
             .custom_parser(move |s| {
                 ctx.data_mut(|d| d.insert_temp(typed, s.to_owned()));
+                // A leading "+" (as Exposure writes positive values) is just the number.
+                let s = s.trim_start().strip_prefix('+').unwrap_or(s);
                 let v = parse_num(s);
                 if ctx.memory(|m| m.has_focus(id)) && plain(s).is_none() {
                     // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.

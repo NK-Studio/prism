@@ -51,7 +51,7 @@ fn kind(f: &Map<String, Value>) -> &str {
 
 /// Is this dialog drawn in Photoshop's classic adjustment layout?
 pub fn owns(f: &Map<String, Value>) -> bool {
-    matches!(kind(f), "brightnessContrast" | "levels" | "curves")
+    matches!(kind(f), "brightnessContrast" | "levels" | "curves" | "exposure")
 }
 
 /// The dialog's content width.
@@ -119,6 +119,7 @@ pub fn body(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
     let outcome = match kind(f) {
         "levels" => levels(app, ui, f),
         "curves" => curves(app, ui, f),
+        "exposure" => exposure(app, ui, f),
         _ => brightness_contrast(app, ui, f),
     };
     settle(ui, f);
@@ -286,6 +287,141 @@ fn levels(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     if changed && let Value::Object(v) = values {
         f.retain(|k, _| k.starts_with("__"));
         f.extend(v);
+        crate::adjust_dialog::rebase_picker(f);
+    }
+    outcome
+}
+
+/// Photoshop 27.4's Exposure fields: up to `decimals` places, trailing zeros dropped, and a "+"
+/// before values of 1 and more ("+20", "+11.86", "+1", but "0.5", "0.42", "-0.5"; measured).
+fn signed(v: f64, decimals: i32) -> String {
+    let k = 10f64.powi(decimals);
+    let r = (v * k).round() / k;
+    let r = if r == 0.0 { 0.0 } else { r };
+    let text = format!("{r:.*}", decimals as usize);
+    let text = if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_string() } else { text };
+    if r >= 1.0 { format!("+{text}") } else { text }
+}
+
+fn exposure_text(v: f64) -> String {
+    signed(v, 2)
+}
+
+fn offset_text(v: f64) -> String {
+    signed(v, 4)
+}
+
+/// Exposure's gamma slider (measured): 9.99 at the left end, 1 in the middle, 0.01 at the right,
+/// each half linear.
+pub fn gamma_pos(g: f32) -> f32 {
+    if g >= 1.0 { -((g - 1.0) / 8.99).clamp(0.0, 1.0) } else { ((1.0 - g) / 0.99).clamp(0.0, 1.0) }
+}
+
+/// The gamma at slider position `p` in -1..=1 (see [`gamma_pos`]), to two decimals.
+pub fn gamma_at(p: f32) -> f32 {
+    let p = if p.is_finite() { p.clamp(-1.0, 1.0) } else { 0.0 };
+    let g = if p < 0.0 { 1.0 - p * 8.99 } else { 1.0 - p * 0.99 };
+    (g * 100.0).round() / 100.0
+}
+
+/// An Exposure option: the label with its field at the right (written by `format`), then the
+/// slider on its own scale `prange` (`to_pos` / `from_pos`), values kept to `step`.
+#[allow(clippy::too_many_arguments)]
+fn fine_row(
+    ui: &mut egui::Ui,
+    text: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    step: f32,
+    format: fn(f64) -> String,
+    to_pos: impl Fn(f32) -> f32,
+    from_pos: impl Fn(f32) -> f32,
+) -> bool {
+    let mut changed = false;
+    let snap = |v: f32| ((v / step).round() * step).clamp(*range.start(), *range.end());
+    ui.horizontal(|ui| {
+        ui.label(text);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let before = *value;
+            let look = widgets::FieldLook { format: Some(format), ..widgets::FieldLook::compact() };
+            widgets::value_field_look(ui, value, range.clone(), "", FIELD_W + 4.0, &look);
+            *value = snap(*value);
+            changed |= *value != before;
+        });
+    });
+    let mut p = to_pos(*value);
+    let (lo, hi) = (to_pos(*range.start()).min(to_pos(*range.end())), to_pos(*range.start()).max(to_pos(*range.end())));
+    if widgets::slider(ui, &mut p, lo..=hi, None).changed() {
+        let v = snap(from_pos(p));
+        changed |= v != *value;
+        *value = v;
+    }
+    changed
+}
+
+/// Image › Adjustments › Exposure in Photoshop 27.4's layout: "Preset", then Exposure, Offset and
+/// Gamma Correction (each a label with its field and a slider); OK, Cancel (Alt: Reset), the
+/// Set Black / Gray / White Point eyedroppers and Preview (Opt+P) at the right.
+fn exposure(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
+    let mut outcome = None;
+    let mode = app.session.active().map_or(prism_doc::ColorMode::Rgb, |s| s.doc.mode);
+    let mut e = num(f, "exposure").clamp(-20.0, 20.0);
+    let mut o = num(f, "offset").clamp(-0.5, 0.5);
+    let mut g = f.get("gamma").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(1.0).clamp(0.01, 9.99) as f32;
+    let alt = ui.input(|i| i.modifiers.alt);
+    let mut reset = false;
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(OPTIONS_W);
+            ui.horizontal(|ui| {
+                ui.label(label("Preset"));
+                let custom = (e, o, g) != (0.0, 0.0, 1.0);
+                let mut pick = if custom { "custom" } else { "default" }.to_string();
+                let options = [("default".to_string(), tl!("Default")), ("custom".to_string(), tl!("Custom"))];
+                let opts: Vec<(String, &str)> = options.iter().filter(|(k, _)| custom || k == "default").map(|(k, l)| (k.clone(), *l)).collect();
+                if widgets::dropdown(ui, "psex-preset", &mut pick, &opts, ui.available_width()) && pick == "default" && custom {
+                    reset = true;
+                }
+            });
+            ui.add_space(6.0);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            fine_row(ui, tl!("Exposure"), &mut e, -20.0..=20.0, 0.01, exposure_text, |v| v / 20.0, |p| p * 20.0);
+            ui.add_space(6.0);
+            fine_row(ui, tl!("Offset"), &mut o, -0.5..=0.5, 0.0001, offset_text, |v| v / 0.5, |p| p * 0.5);
+            ui.add_space(6.0);
+            fine_row(ui, label("Gamma Correction"), &mut g, 0.01..=9.99, 0.01, exposure_text, gamma_pos, gamma_at);
+        });
+        ui.add_space(GAP);
+        ui.vertical(|ui| {
+            ui.set_width(BUTTON_W);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            if widgets::primary_button(ui, tl!("OK"), BUTTON_W).clicked() {
+                outcome = Some(true);
+            }
+            if widgets::secondary_button(ui, if alt { tl!("Reset") } else { tl!("Cancel") }, BUTTON_W).clicked() {
+                if alt {
+                    reset = true;
+                } else {
+                    outcome = Some(false);
+                }
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                crate::adjust_dialog::picker_buttons(ui, f, mode);
+            });
+            ui.add_space(4.0);
+            preview_checkbox(ui, f, true);
+        });
+    });
+    if reset {
+        (e, o, g) = (0.0, 0.0, 1.0);
+    }
+    let changed = [("exposure", e), ("offset", o), ("gamma", g)].iter().any(|(k, v)| f.get(*k).and_then(Value::as_f64) != Some(f64::from(*v)));
+    f.insert("exposure".into(), json!(e));
+    f.insert("offset".into(), json!(o));
+    f.insert("gamma".into(), json!(g));
+    if changed {
         crate::adjust_dialog::rebase_picker(f);
     }
     outcome
@@ -799,6 +935,90 @@ mod tests {
         h.run_steps(3);
         key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
         assert_eq!(field(&h, id, "inWhite").as_f64(), Some(255.0));
+    }
+
+    /// Photoshop 27.4's Exposure (measured): fields written "+20", "+11.86", "+1", "0.5", "0.42",
+    /// "-0.5", "-20"; the gamma slider runs 9.99 (left), 1 (middle), 0.01 (right), each half
+    /// linear (0.42 three quarters of the way right).
+    #[test]
+    fn exposure_fields_and_gamma_slider_match_photoshop() {
+        assert_eq!([20.0, 11.86, 1.0, 0.5, 0.42, -0.5, -20.0, 0.0, 9.99].map(exposure_text), ["+20", "+11.86", "+1", "0.5", "0.42", "-0.5", "-20", "0", "+9.99"]);
+        assert_eq!(offset_text(0.1234), "0.1234");
+        assert_eq!(offset_text(-0.00001), "0");
+        assert_eq!((gamma_at(-1.0), gamma_at(0.0), gamma_at(1.0)), (9.99, 1.0, 0.01));
+        assert_eq!(gamma_at(0.596), 0.41);
+        for g in [0.01, 0.42, 1.0, 2.5, 9.99] {
+            assert!((gamma_at(gamma_pos(g)) - g).abs() < 0.006, "{g}");
+        }
+        assert_eq!(gamma_at(f32::NAN), 1.0);
+    }
+
+    /// The Exposure dialog: Preset, the three rows, OK / Cancel (Alt: Reset), the eyedroppers
+    /// (white sets the exposure from the canvas) and Preview (Opt+P); Cmd+Z steps back.
+    #[test]
+    fn exposure_dialog_has_photoshops_controls() {
+        let (mut h, id) = dialog_for("image.adjustments.exposure");
+        assert!(owns(&h.state().ui.dialogs[0].fields));
+        for label in ["Offset", "Gamma Correction", "OK", "Cancel", "Set Black Point", "Set Neutral Gray Point", "Set White Point"] {
+            assert!(h.query_by_label(label).is_some(), "{label}");
+        }
+        // The fill is #806040: White Point takes its luminance to white.
+        click(&mut h, "Set White Point", egui::Modifiers::NONE);
+        assert!(crate::adjust_dialog::picker_armed(h.state()));
+        assert!(crate::adjust_dialog::sample_at(h.state_mut(), 5.0, 5.0));
+        h.run_steps(3);
+        let e = field(&h, id, "exposure").as_f64().unwrap();
+        assert!(e > 1.0 && e < 3.0, "exposure {e}");
+        key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert_eq!(field(&h, id, "exposure").as_f64(), Some(0.0), "Cmd+Z undoes the eyedropper");
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("gamma".into(), json!(2.5));
+        h.run_steps(3);
+        click(&mut h, "Reset", egui::Modifiers::ALT);
+        assert_eq!(field(&h, id, "gamma").as_f64(), Some(1.0));
+        assert!(h.state().ui.dialogs.iter().any(|d| d.id == id));
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("offset".into(), json!(0.1));
+        h.run_steps(2);
+        let steps = h.state().session.active().unwrap().history.past_len();
+        click(&mut h, "OK", egui::Modifiers::NONE);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    }
+
+    #[test]
+    fn exposure_dialog_survives_odd_values() {
+        let (mut h, id) = dialog_for("image.adjustments.exposure");
+        let d = h.state_mut().ui.dialog_mut(id).unwrap();
+        d.fields.insert("exposure".into(), json!("lots"));
+        d.fields.insert("offset".into(), json!(1e9));
+        d.fields.insert("gamma".into(), json!(-3));
+        h.run_steps(3);
+        assert_eq!((field(&h, id, "exposure"), field(&h, id, "offset")), (json!(0.0), json!(0.5)));
+        assert!((field(&h, id, "gamma").as_f64().unwrap() - 0.01).abs() < 1e-6);
+    }
+
+    /// Run explicitly for visual QA: the Exposure dialog in two themes.
+    #[test]
+    #[ignore = "writes target/exposure-dialog/*.png for visual inspection"]
+    fn write_exposure_dialog_sheet() {
+        let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/exposure-dialog");
+        std::fs::create_dir_all(&out).unwrap();
+        for kind in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::StudioLight] {
+            let mut s = prism_engine::Session::new();
+            s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(560.0, 340.0))
+                .with_pixels_per_point(2.0)
+                .wgpu()
+                .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), PrismApp::new(s, crate::Services::default()));
+            PrismApp::setup_context(&h.ctx, kind);
+            let id = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.exposure").unwrap();
+            h.run_steps(3);
+            let d = h.state_mut().ui.dialog_mut(id).unwrap();
+            d.fields.insert("exposure".into(), json!(11.86));
+            d.fields.insert("gamma".into(), json!(0.42));
+            h.run_steps(5);
+            h.render().unwrap().save(out.join(format!("{kind:?}.png"))).unwrap();
+        }
     }
 
     #[test]

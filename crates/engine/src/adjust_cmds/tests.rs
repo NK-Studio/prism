@@ -474,3 +474,45 @@ fn levels_eyedroppers_set_the_points() {
     assert!(levels_eyedropper(&base, CurvesEyedropper::Black, [f32::NAN, 0.0, 0.0], ColorMode::Rgb).is_err());
     assert!(levels_eyedropper(&base, CurvesEyedropper::Black, cast, ColorMode::Cmyk).is_err());
 }
+
+/// Exposure's eyedroppers: black sets the offset that takes the sample to 0, white the exposure
+/// that takes it to white, gray the exposure that takes it to level 128 (an achromatic sample).
+#[test]
+fn exposure_eyedroppers_set_offset_and_exposure() {
+    use crate::adjust_params::{CurvesEyedropper, exposure_eyedropper, to_params};
+    use prism_color::SampleType;
+    use prism_doc::ColorMode;
+    let run = |a: &Adjustment, hex: &str| -> f32 {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+        s.execute("edit.fill", json!({"color": hex})).unwrap();
+        s.execute("image.adjustments.exposure", to_params(a)).unwrap();
+        let d = s.active().unwrap();
+        let LayerContent::Raster(surf) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!() };
+        surf.sample_channel(0, 0, 0) * 255.0
+    };
+    let grey = |v: f32| [v / 255.0; 3];
+    let base = json!({});
+    let a = exposure_eyedropper(&base, CurvesEyedropper::White, grey(100.0), ColorMode::Rgb, SampleType::U8).unwrap();
+    assert!(run(&a, "#646464") >= 254.0, "white: {a:?}");
+    let a = exposure_eyedropper(&base, CurvesEyedropper::NeutralGray, grey(60.0), ColorMode::Rgb, SampleType::U8).unwrap();
+    assert!((run(&a, "#3c3c3c") - 128.0).abs() <= 1.5, "gray: {a:?}");
+    let a = exposure_eyedropper(&base, CurvesEyedropper::Black, grey(70.0), ColorMode::Rgb, SampleType::U8).unwrap();
+    assert!(run(&a, "#464646") <= 1.0, "black: {a:?}");
+    assert!(matches!(a, Adjustment::Exposure { exposure, .. } if exposure == 0.0), "black keeps the exposure");
+    // Odd samples and modes fail cleanly.
+    assert!(exposure_eyedropper(&base, CurvesEyedropper::White, [0.0; 3], ColorMode::Rgb, SampleType::U8).is_err());
+    assert!(exposure_eyedropper(&base, CurvesEyedropper::White, [f32::NAN; 3], ColorMode::Rgb, SampleType::U8).is_err());
+    assert!(exposure_eyedropper(&base, CurvesEyedropper::White, grey(100.0), ColorMode::Lab, SampleType::U8).is_err());
+    // A very bright sample clamps instead of overflowing.
+    let a = exposure_eyedropper(&base, CurvesEyedropper::White, [1e-9, 0.0, 0.0], ColorMode::Rgb, SampleType::U8);
+    assert!(a.is_err() || matches!(a, Ok(Adjustment::Exposure { exposure, .. }) if exposure <= 20.0));
+    // Through the command's param, as agents drive it.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#646464"})).unwrap();
+    s.execute("image.adjustments.exposure", json!({"eyedropper": {"point": "white", "at": [1, 1]}})).unwrap();
+    let d = s.active().unwrap();
+    let LayerContent::Raster(surf) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!() };
+    assert!(surf.sample_channel(1, 1, 0) * 255.0 >= 254.0);
+}

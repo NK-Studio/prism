@@ -3828,6 +3828,7 @@ adjust	Grid size:	격자 크기:
 adjust	Channel Overlays	채널 오버레이
 adjust	Histogram	막대 그래프
 adjust	Intersection Line	교차 선
+adjust	Gamma Correction	감마 교정
 filter	Blur Method	흐림 효과 방법
 filter	Spin	회전
 filter	Zoom	돋보기

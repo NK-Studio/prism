@@ -45,13 +45,15 @@ impl Transfer {
             t => t,
         }
     }
-    fn decode(self, v: f32) -> f32 {
+    /// Display value → linear light.
+    pub fn decode(self, v: f32) -> f32 {
         match self {
             Transfer::Srgb => prism_color::convert::srgb_to_linear(v.max(0.0)),
             Transfer::Gamma(g) => v.max(0.0).powf(g),
         }
     }
-    fn encode(self, v: f32) -> f32 {
+    /// Linear light → display value.
+    pub fn encode(self, v: f32) -> f32 {
         match self {
             Transfer::Srgb => prism_color::convert::linear_to_srgb(v.max(0.0)),
             Transfer::Gamma(g) => v.max(0.0).powf(1.0 / g),

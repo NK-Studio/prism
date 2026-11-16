@@ -33,43 +33,49 @@ fn picker_supported(mode: prism_doc::ColorMode, eyedropper: prism_engine::adjust
     mode == prism_doc::ColorMode::Rgb || (mode == prism_doc::ColorMode::Grayscale && eyedropper != CurvesEyedropper::NeutralGray)
 }
 
-fn is_curves(fields: &Map<String, Value>) -> bool {
-    fields.get("__adjust").and_then(Value::as_str) == Some("curves")
+/// Exposure's grey point sets the exposure from the sample's luminance, so Grayscale has it too.
+fn picker_supported_for(kind: &str, mode: prism_doc::ColorMode, eyedropper: prism_engine::adjust_params::CurvesEyedropper) -> bool {
+    if kind == "exposure" { matches!(mode, prism_doc::ColorMode::Rgb | prism_doc::ColorMode::Grayscale) } else { picker_supported(mode, eyedropper) }
 }
+
+fn kind_of(fields: &Map<String, Value>) -> &str {
+    fields.get("__adjust").and_then(Value::as_str).unwrap_or_default()
+}
+
 
 /// Curves and Levels have the Set Black / Gray / White Point eyedroppers (the armed one in
 /// `__curvePicker`, the settings it edits in `__curvePickerBase`).
 fn has_pickers(fields: &Map<String, Value>) -> bool {
-    matches!(fields.get("__adjust").and_then(Value::as_str), Some("curves" | "levels"))
+    matches!(fields.get("__adjust").and_then(Value::as_str), Some("curves" | "levels" | "exposure"))
 }
 
 /// Whether the top modal has a supported Curves or Levels eyedropper armed.
 pub fn picker_armed(app: &PrismApp) -> bool {
     let Some(dialog) = app.ui.dialogs.last().filter(|d| has_pickers(&d.fields)) else { return false };
     let Some(eyedropper) = picker(dialog.fields.get(CURVE_PICKER)) else { return false };
-    app.session.active().is_some_and(|s| picker_supported(s.doc.mode, eyedropper))
+    app.session.active().is_some_and(|s| picker_supported_for(kind_of(&dialog.fields), s.doc.mode, eyedropper))
 }
 
 /// Sample the committed merged document through the regular canvas sampler and update only the
 /// open Curves dialog. Returns true when an armed Curves picker consumed the pointer event, even
 /// if the point was outside the image or transparent.
 pub fn sample_at(app: &mut PrismApp, x: f64, y: f64) -> bool {
-    let Some((id, eyedropper, base, levels)) = app.ui.dialogs.last().and_then(|dialog| {
+    let Some((id, eyedropper, base, kind)) = app.ui.dialogs.last().and_then(|dialog| {
         let eyedropper = has_pickers(&dialog.fields).then(|| picker(dialog.fields.get(CURVE_PICKER))).flatten()?;
         let base = dialog.fields.get(CURVE_PICKER_BASE).cloned().unwrap_or_else(|| crate::filter_dialog::params_of(&dialog.fields));
-        Some((dialog.id, eyedropper, base, !is_curves(&dialog.fields)))
+        Some((dialog.id, eyedropper, base, kind_of(&dialog.fields).to_string()))
     }) else {
         return false;
     };
-    let Some(mode) = app.session.active().map(|s| s.doc.mode) else { return true };
-    if !picker_supported(mode, eyedropper) {
+    let Some((mode, depth)) = app.session.active().map(|s| (s.doc.mode, s.doc.depth)) else { return true };
+    if !picker_supported_for(&kind, mode, eyedropper) {
         return true;
     }
     let Some(sample) = crate::canvas::composite_color(app, x, y) else { return true };
-    let resolved = if levels {
-        prism_engine::adjust_params::levels_eyedropper(&base, eyedropper, sample, mode)
-    } else {
-        prism_engine::adjust_params::curves_eyedropper(&base, eyedropper, sample, mode)
+    let resolved = match kind.as_str() {
+        "levels" => prism_engine::adjust_params::levels_eyedropper(&base, eyedropper, sample, mode),
+        "exposure" => prism_engine::adjust_params::exposure_eyedropper(&base, eyedropper, sample, mode, depth),
+        _ => prism_engine::adjust_params::curves_eyedropper(&base, eyedropper, sample, mode),
     };
     let params = match resolved {
         Ok(adjustment) => prism_engine::adjust_params::to_params(&adjustment),
@@ -121,13 +127,14 @@ fn curves_picker_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mo
 pub(crate) fn picker_buttons(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mode: prism_doc::ColorMode) {
     use prism_engine::adjust_params::CurvesEyedropper;
     let current = picker(fields.get(CURVE_PICKER));
+    let kind = kind_of(fields).to_string();
     let mut chosen = None;
     for (id, eyedropper, label, tone) in [
         ("black", CurvesEyedropper::Black, tl!("Set Black Point"), 0),
         ("gray", CurvesEyedropper::NeutralGray, tl!("Set Neutral Gray Point"), 128),
         ("white", CurvesEyedropper::White, tl!("Set White Point"), 255),
     ] {
-        let enabled = picker_supported(mode, eyedropper);
+        let enabled = picker_supported_for(&kind, mode, eyedropper);
         if picker_button(ui, current == Some(eyedropper), enabled, label, egui::Color32::from_gray(tone)).clicked() {
             chosen = Some((id, eyedropper));
         }
@@ -434,8 +441,9 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
         PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-        // (Levels and Brightness/Contrast reset: their Photoshop layout is `adjust_ps_ui`.)
-        open(h.state_mut(), "image.adjustments.exposure").unwrap();
+        // (Brightness/Contrast, Levels, Curves and Exposure reset: their Photoshop layout is
+        // `adjust_ps_ui`.)
+        open(h.state_mut(), "image.adjustments.vibrance").unwrap();
         h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
         h.run_steps(3);
         assert!(h.query_by_label("Cancel").is_some() && h.query_by_label("Reset").is_none());

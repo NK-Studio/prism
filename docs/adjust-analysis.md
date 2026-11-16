@@ -172,6 +172,42 @@ through three fixed points), not read from the binary. Prism keeps its natural c
 the points (overshoot allowed, clamped, constant outside the end points; fitted on the PSD corpus).
 The eyedroppers keep Prism's per-channel point placement.
 
+## Exposure
+
+### Dialog (Photoshop 27.4, measured by driving it)
+
+Title centred over a hairline. "Preset" (no colon) with a dropdown (Default) and a menu button;
+then Exposure, Offset and Gamma Correction (ko: 노출 / 오프셋 / 감마 교정), each a label with its
+field at the right and a slider with a round knob under it. Right column: OK, Cancel, the Set
+Black / Gray / White Point eyedroppers, "Preview(Opt+P)". Measured with real drags:
+
+- Exposure: −20..+20, linear (0 in the middle; three quarters right reads +11.86).
+- Offset: −0.5..+0.5, linear.
+- Gamma Correction: 9.99 at the left end, 1 in the middle, 0.01 at the right end, each half linear
+  (three quarters right reads 0.42).
+- Fields drop trailing zeros and write a "+" only before values of 1 and more: "+20", "+11.86",
+  "+1", "+9.99", but "0.5", "0.42", "0.01", "-0.5", "-20", "0". (Typing into the fields was not
+  captured.)
+
+Prism (`ui-egui/src/adjust_ps_ui.rs` `exposure`): the same layout, fields and sliders; Alt turns
+Cancel into Reset; Cmd+Z / Shift+Cmd+Z as in the other dialogs. Not there yet: Photoshop's
+built-in presets and the preset menu.
+
+### Maths
+
+The research notes give Exposure only as their own estimate (linear light × 2^exposure + offset,
+then 1/gamma), which is the formula Prism already uses through the document's exposure tone curve
+(a 2.2 power for RGB, fitted on the PSD corpus), so it is kept.
+
+### Eyedroppers
+
+From Adobe's description (not the research notes): Set Black Point sets the Offset so the sample
+goes to zero, Set White Point sets the Exposure so it goes to white, Set Gray Point sets the
+Exposure so it goes to middle grey (level 128). Prism (`adjust_params::exposure_eyedropper`, the
+`eyedropper` param of `image.adjustments.exposure`) works on the sample's luminance
+(0.299 R + 0.587 G + 0.114 B) in the same linear light; the luminance weighting is inferred, not
+measured.
+
 ## Still open
 
 - Auto's target curve (Photoshop's trained model) is a stand-in.

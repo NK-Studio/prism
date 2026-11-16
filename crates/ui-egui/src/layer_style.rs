@@ -797,7 +797,7 @@ fn label_font() -> egui::FontId {
 }
 /// Number fields on the pages: Photoshop's short box with proportional digits.
 fn field_look() -> widgets::FieldLook {
-    widgets::FieldLook { height: 18.0, font: egui::FontId::proportional(12.5), lift: 0.5, fixed2: false }
+    widgets::FieldLook { height: 18.0, font: egui::FontId::proportional(12.5), lift: 0.5, fixed2: false, format: None }
 }
 /// Where the dialog keeps how tall the selected page's content is (view state, egui memory).
 fn page_content_id() -> egui::Id {
