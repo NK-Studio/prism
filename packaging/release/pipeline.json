@@ -46,8 +46,9 @@
       "title": "Build the Windows installer",
       "optional": true,
       "do": [
-        "On a Windows PC with this commit: `pwsh packaging/windows/package.ps1 -Arch x64`.",
-        "Copy dist/release/prism-{version}-windows-x64.msi into this Mac's dist/release/.",
+        "The push of the version commit runs the GitHub Actions `Build` workflow (build.yml), which packages Windows x64 (unsigned). Wait for it: `gh run list --repo NK-Studio/prism --workflow build.yml --limit 3`.",
+        "Download its Windows artifact into this Mac's dist/release/: `gh run download <run id> --repo NK-Studio/prism --name prism-windows-x64 --dir dist/release` (or Actions › the run › Artifacts › prism-windows-x64, unzipped into dist/release/).",
+        "No Actions run: on a Windows PC with this commit, `pwsh packaging/windows/package.ps1 -Arch x64`, then copy dist/release/prism-{version}-windows-x64.msi here.",
         "Skip this step (`cargo xtask release skip`) to ship macOS only."
       ],
       "verify": [{ "kind": "files", "paths": ["dist/release/prism-{version}-windows-*.msi"] }]

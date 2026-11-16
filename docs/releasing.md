@@ -258,7 +258,9 @@ machine. It clones `../prism-updates`, signs the feed for `dist/release` with
 from the pushed tag) and checks they download, force-pushes a single commit (as the `NK-Studio`
 gh account) and waits for the live feed. Add `--dry-run` to only print the feed (nothing is
 uploaded or pushed). RustRover has *Prism Publish Update* and *Prism Publish Update (dry run)*
-for it.
+for it. The local release belt (`cargo xtask release`) builds macOS here and takes the Windows
+`.msi` from the `Build` workflow's `prism-windows-x64` artifact for the version commit
+(`gh run download <run id> --repo NK-Studio/prism --name prism-windows-x64 --dir dist/release`).
 
 **Release checklist:** `cargo xtask release start X.Y.Z` walks a release step by step: version,
 commit, macOS build, smoke test, Windows build, tag, installers, feed, update check. The steps

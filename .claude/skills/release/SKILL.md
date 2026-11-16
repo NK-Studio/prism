@@ -45,9 +45,12 @@ previous step (repeat to go further back).
 
 ## Background the steps rely on
 
-- Builds are local (GitHub Actions is off for billing reasons). macOS is Apple silicon only:
+- GitHub Actions: only the `Build` workflow (build.yml) is on. Every push to main packages macOS
+  aarch64 and Windows x64 as run artifacts; the belt takes the Windows `.msi` from there
+  (`gh run download <run id> --repo NK-Studio/prism --name prism-windows-x64 --dir dist/release`).
+  Release/Publish workflows are off, so publishing stays local. macOS is built locally, Apple silicon only:
   RustRover "Prism Package (macOS)" with ▶ (the hammer only builds the binary) or
-  `packaging/macos/package.sh --arch aarch64`. Windows needs a Windows PC (`packaging/windows/package.ps1`).
+  `packaging/macos/package.sh --arch aarch64`. Without an Actions run, Windows needs a Windows PC (`packaging/windows/package.ps1`).
 - First-time installs come from the public GitHub Release `v<version>` of NK-Studio/prism: the
   `.dmg` (open it, drag Prism onto Applications), like Ramus. `publish-feed` uploads it together
   with the update packages and checks it's on the release.
