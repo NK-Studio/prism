@@ -81,13 +81,18 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
     Ok(match kind {
         "invert" => Adjustment::Invert,
         "brightnessContrast" => {
-            let (b0, c0, l0) = match base {
-                Some(Adjustment::BrightnessContrast { brightness, contrast, legacy }) => (*brightness, *contrast, *legacy),
-                _ => (0.0, 0.0, false),
+            let (b0, c0, l0, m0) = match base {
+                Some(Adjustment::BrightnessContrast { brightness, contrast, legacy, mean }) => (*brightness, *contrast, *legacy, *mean),
+                _ => (0.0, 0.0, false, 127),
             };
             let legacy = r.boolean("legacy", l0)?;
             let (lo, hi) = if legacy { (-100.0, 100.0) } else { (-50.0, 100.0) };
-            Adjustment::BrightnessContrast { brightness: r.num("brightness", b0, -150.0, 150.0)?, contrast: r.num("contrast", c0, lo, hi)?, legacy }
+            Adjustment::BrightnessContrast {
+                brightness: r.num("brightness", b0, -150.0, 150.0)?,
+                contrast: r.num("contrast", c0, lo, hi)?,
+                legacy,
+                mean: r.num("mean", f32::from(m0), 0.0, 255.0)?.round() as u8,
+            }
         }
         "threshold" => {
             let l0 = match base {
@@ -213,7 +218,9 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
 pub fn to_params(adj: &Adjustment) -> Value {
     match adj {
         Adjustment::Invert | Adjustment::Unsupported { .. } => json!({}),
-        Adjustment::BrightnessContrast { brightness, contrast, legacy } => json!({"brightness": brightness, "contrast": contrast, "legacy": legacy}),
+        Adjustment::BrightnessContrast { brightness, contrast, legacy, mean } => {
+            json!({"brightness": brightness, "contrast": contrast, "legacy": legacy, "mean": mean})
+        }
         Adjustment::Threshold { level } => json!({"level": (level * 255.0).round()}),
         Adjustment::Posterize { levels } => json!({"levels": levels}),
         Adjustment::Exposure { exposure, offset, gamma } => json!({"exposure": exposure, "offset": offset, "gamma": gamma}),
@@ -669,18 +676,149 @@ pub fn curves_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3
     Ok(adjustment)
 }
 
-/// The `eyedropper` param of the Curves commands, so agents and the CLI can drive the dialog's
-/// Set Black/Neutral Gray/White Point pickers: `{"point":"black"|"gray"|"white","at":[x,y]}`
-/// samples the merged composite at document pixel (x, y), or `"color":[r,g,b]` (0–1) gives the
-/// sample directly. The rest of `p` is the curve the picker edits. `None` without the key.
-pub fn curves_eyedropper_from_params(s: &crate::Session, p: &Value) -> Result<Option<Adjustment>> {
-    const CMD: &str = "curves eyedropper";
+/// Photoshop's target colours for the Levels eyedroppers (its defaults: shadows 0, midtones 128,
+/// highlights 255, in levels).
+pub const LEVELS_TARGET_SHADOW: f64 = 0.0;
+pub const LEVELS_TARGET_MIDTONE: f64 = 128.0;
+pub const LEVELS_TARGET_HIGHLIGHT: f64 = 255.0;
+
+/// Input black and white at least `gap` levels apart: when they are closer, both move apart by
+/// half the shortfall each (white up by `n / 2`, black down by `(n + 1) / 2`), then both shift
+/// back inside 0..=255.
+fn keep_gap(lo: &mut f64, hi: &mut f64, gap: i64) {
+    let (mut l, mut h) = (lo.round() as i64, hi.round() as i64);
+    let n = l - h + gap;
+    if n >= 1 {
+        h += n / 2;
+        l -= (n + 1) / 2;
+        while h > 255 {
+            h -= 1;
+            l -= 1;
+        }
+        while l < 0 {
+            l += 1;
+            h += 1;
+        }
+    }
+    (*lo, *hi) = (l as f64, h as f64);
+}
+
+/// `log2(|hi − lo| / (x − min))` with `x` rounded and kept within `[min + 1, max − 1]`; a
+/// distance under one level counts as 0.001.
+fn log2_ratio(lo: f64, hi: f64, x: f64) -> f64 {
+    let (mn, mx) = (lo.min(hi), lo.max(hi));
+    let x = x.round();
+    let x = if x > mn { x.min(mx - 1.0) } else { mn + 1.0 };
+    let d = if x - mn < 1.0 { 0.001 } else { x - mn };
+    ((hi - lo).abs() / d).ln() / std::f64::consts::LN_2
+}
+
+/// One Levels record in levels (0..=255) as the eyedroppers work on it.
+#[derive(Clone, Copy)]
+struct Lv255 {
+    in_black: f64,
+    gamma: f64,
+    in_white: f64,
+    out_black: f64,
+    out_white: f64,
+}
+
+impl Lv255 {
+    fn of(c: &prism_doc::adjust::LevelsChannel) -> Self {
+        let l = |v: f32| f64::from(v) * 255.0;
+        Self { in_black: l(c.in_black), gamma: f64::from(c.gamma), in_white: l(c.in_white), out_black: l(c.out_black), out_white: l(c.out_white) }
+    }
+
+    fn store(self, c: &mut prism_doc::adjust::LevelsChannel) {
+        let l = |v: f64| (v.clamp(0.0, 255.0) / 255.0) as f32;
+        (c.in_black, c.in_white, c.out_black, c.out_white) = (l(self.in_black), l(self.in_white), l(self.out_black), l(self.out_white));
+        c.gamma = self.gamma.clamp(0.01, 9.99) as f32;
+    }
+
+    /// Set Black (`black`) or White Point: the input end takes the sample, the output end the
+    /// target colour, and the input ends stay two levels apart.
+    fn point(&mut self, sample: f64, target: f64, black: bool) {
+        if black {
+            self.in_black = sample.round();
+            self.out_black = target;
+        } else {
+            self.in_white = sample.round();
+            self.out_white = target;
+        }
+        keep_gap(&mut self.in_black, &mut self.in_white, 2);
+    }
+}
+
+/// Levels' Set Black / Gray / White Point eyedroppers (the maintainer's research notes on
+/// Photoshop 2026, `docs/adjust-analysis.md`), on a sample in 0..=1:
+/// * black / white: per channel, input black (white) = the sample's level, output black (white) =
+///   the target colour (0 / 255), the input ends kept two levels apart;
+/// * gray: per channel `γc = log2(input range / (sample − input black)) ÷ log2(output range /
+///   (128 − output black))`, then every gamma divided by the three gammas' geometric mean (the
+///   colour goes, the brightness stays), rounded to hundredths.
+///
+/// RGB edits the red, green and blue records; Grayscale the composite one (no gray point).
+pub fn levels_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
+    const CMD: &str = "levels eyedropper";
+    if sample.iter().any(|v| !v.is_finite()) {
+        return Err(bad(CMD, "sample components must be finite"));
+    }
+    if !matches!(mode, ColorMode::Rgb | ColorMode::Grayscale) {
+        return Err(bad(CMD, "only RGB and Grayscale documents are supported"));
+    }
+    if mode == ColorMode::Grayscale && picker == CurvesEyedropper::NeutralGray {
+        return Err(bad(CMD, "Neutral Gray is unavailable for Grayscale documents"));
+    }
+    let mut adjustment = from_params("levels", base, None, mode)?;
+    let Adjustment::Levels { master, per_channel, .. } = &mut adjustment else {
+        return Err(bad(CMD, "expected a Levels adjustment"));
+    };
+    let sample = sample.map(|v| f64::from(v.clamp(0.0, 1.0)) * 255.0);
+    let black = picker == CurvesEyedropper::Black;
+    let target = if black { LEVELS_TARGET_SHADOW } else { LEVELS_TARGET_HIGHLIGHT };
+    if mode == ColorMode::Grayscale {
+        let mut l = Lv255::of(master);
+        l.point((sample[0] + sample[1] + sample[2]) / 3.0, target, black);
+        l.store(master);
+        return Ok(adjustment);
+    }
+    match picker {
+        CurvesEyedropper::Black | CurvesEyedropper::White => {
+            for (ch, v) in per_channel.iter_mut().zip(sample) {
+                let mut l = Lv255::of(ch);
+                l.point(v, target, black);
+                l.store(ch);
+            }
+        }
+        CurvesEyedropper::NeutralGray => {
+            let mut ls = [Lv255::of(&per_channel[0]), Lv255::of(&per_channel[1]), Lv255::of(&per_channel[2])];
+            let g: [f64; 3] = std::array::from_fn(|c| {
+                let l = ls[c];
+                let a = log2_ratio(l.in_black, l.in_white, sample[c]);
+                let b = log2_ratio(l.out_black, l.out_white, LEVELS_TARGET_MIDTONE);
+                if b != 0.0 && a > 0.0 { a / b } else { 1.0 }
+            });
+            let gm = ((g[0] * g[1] * g[2]).ln() / 3.0).exp();
+            for (c, (l, ch)) in ls.iter_mut().zip(per_channel.iter_mut()).enumerate() {
+                let q = if gm.is_finite() && gm > 0.0 { g[c] / gm } else { 1.0 };
+                l.gamma = ((100.0 * q).round() / 100.0).clamp(0.01, 9.99);
+                l.store(ch);
+            }
+        }
+    }
+    Ok(adjustment)
+}
+
+/// The picker and the colour sample of an `eyedropper` param (`{"point":"black"|"gray"|"white",
+/// "at":[x,y]}` samples the merged composite at document pixel (x, y); `"color":[r,g,b]` (0–1) gives
+/// it directly). `None` without the key.
+fn eyedropper_sample(s: &crate::Session, p: &Value, cmd: &str) -> Result<Option<(CurvesEyedropper, [f32; 3])>> {
     let Some(e) = p.get("eyedropper") else { return Ok(None) };
     let picker = match e.get("point").and_then(Value::as_str) {
         Some("black") => CurvesEyedropper::Black,
         Some("gray") => CurvesEyedropper::NeutralGray,
         Some("white") => CurvesEyedropper::White,
-        _ => return Err(bad(CMD, "`eyedropper.point` must be \"black\", \"gray\" or \"white\"")),
+        _ => return Err(bad(cmd, "`eyedropper.point` must be \"black\", \"gray\" or \"white\"")),
     };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let triple = |v: &Value| -> Option<[f64; 3]> {
@@ -688,29 +826,51 @@ pub fn curves_eyedropper_from_params(s: &crate::Session, p: &Value) -> Result<Op
         Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?])
     };
     let sample = if let Some(c) = e.get("color") {
-        let c = triple(c).ok_or_else(|| bad(CMD, "`eyedropper.color` must be [r, g, b] in 0..1"))?;
+        let c = triple(c).ok_or_else(|| bad(cmd, "`eyedropper.color` must be [r, g, b] in 0..1"))?;
         c.map(|v| v as f32)
     } else if let Some(at) = e.get("at") {
         let xy = at.as_array().filter(|a| a.len() == 2).and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?]));
-        let [x, y] = xy.filter(|xy| xy.iter().all(|v| v.is_finite())).ok_or_else(|| bad(CMD, "`eyedropper.at` must be [x, y] in document pixels"))?;
+        let [x, y] = xy.filter(|xy| xy.iter().all(|v| v.is_finite())).ok_or_else(|| bad(cmd, "`eyedropper.at` must be [x, y] in document pixels"))?;
         let (w, h) = (f64::from(d.doc.size.width), f64::from(d.doc.size.height));
         if x < 0.0 || y < 0.0 || x >= w || y >= h {
-            return Err(bad(CMD, "`eyedropper.at` is outside the image"));
+            return Err(bad(cmd, "`eyedropper.at` is outside the image"));
         }
         let rect = prism_geom::Rect::from_xywh(x.floor() as i32, y.floor() as i32, 1, 1);
         let [r, g, b, a] = prism_compose::render(&d.doc, rect).px.first().copied().unwrap_or_default();
         if a <= 0.0 {
-            return Err(bad(CMD, "the sampled pixel is transparent"));
+            return Err(bad(cmd, "the sampled pixel is transparent"));
         }
         [r, g, b]
     } else {
-        return Err(bad(CMD, "`eyedropper` needs `at` [x, y] or `color` [r, g, b]"));
+        return Err(bad(cmd, "`eyedropper` needs `at` [x, y] or `color` [r, g, b]"));
     };
+    Ok(Some((picker, sample)))
+}
+
+/// `p` without its `eyedropper` key: the settings the picker edits.
+fn without_eyedropper(p: &Value) -> Value {
     let mut base = p.clone();
     if let Some(o) = base.as_object_mut() {
         o.remove("eyedropper");
     }
-    curves_eyedropper(&base, picker, sample, d.doc.mode).map(Some)
+    base
+}
+
+/// The `eyedropper` param of the Curves commands, so agents and the CLI can drive the dialog's
+/// Set Black/Neutral Gray/White Point pickers (see [`eyedropper_sample`]). The rest of `p` is the
+/// curve the picker edits. `None` without the key.
+pub fn curves_eyedropper_from_params(s: &crate::Session, p: &Value) -> Result<Option<Adjustment>> {
+    let Some((picker, sample)) = eyedropper_sample(s, p, "curves eyedropper")? else { return Ok(None) };
+    let mode = s.active().ok_or(EngineError::NoDocument)?.doc.mode;
+    curves_eyedropper(&without_eyedropper(p), picker, sample, mode).map(Some)
+}
+
+/// The `eyedropper` param of the Levels commands (as for Curves); the rest of `p` is the Levels
+/// settings the picker edits. `None` without the key.
+pub fn levels_eyedropper_from_params(s: &crate::Session, p: &Value) -> Result<Option<Adjustment>> {
+    let Some((picker, sample)) = eyedropper_sample(s, p, "levels eyedropper")? else { return Ok(None) };
+    let mode = s.active().ok_or(EngineError::NoDocument)?.doc.mode;
+    levels_eyedropper(&without_eyedropper(p), picker, sample, mode).map(Some)
 }
 
 /// `[[in, out], …]` in 0..255: sorted by input, duplicates collapsed, 2..=19 points.

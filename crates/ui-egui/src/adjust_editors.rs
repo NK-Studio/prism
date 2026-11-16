@@ -519,27 +519,51 @@ fn nearest(xs: &[f32], x: f32) -> Option<u8> {
 }
 
 fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
-    let t = Tokens::get(ui.ctx());
-    let chans = tone_channels(space_of(v), cx.gray);
     let mut ch = 0;
     let mut auto = false;
     ui.horizontal(|ui| {
-        ch = channel_picker(ui, cx.mem.with("levels-ch"), chans, tl!("Channel:"));
+        ch = levels_channel(ui, v, cx);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             auto = widgets::secondary_button(ui, tl!("Auto"), 0.0).clicked();
         });
     });
+    let mut e = Edit::default();
+    if auto && levels_auto(v, cx, ch) {
+        e.changed = true;
+        e.commit = true;
+    }
+    e.add(levels_ranges(ui, v, cx, ch, None));
+    e
+}
+
+/// The Levels channel picker ("Channel:"); the selected channel's index.
+pub fn levels_channel(ui: &mut egui::Ui, v: &Value, cx: &EditorCx) -> usize {
+    channel_picker(ui, cx.mem.with("levels-ch"), tone_channels(space_of(v), cx.gray), tl!("Channel:"))
+}
+
+/// Auto on channel `ch`: black and white input levels clipping 0.1 % of its histogram, gamma 1.
+/// Whether anything was set (no histogram: nothing).
+pub fn levels_auto(v: &mut Value, cx: &EditorCx, ch: usize) -> bool {
+    let chans = tone_channels(space_of(v), cx.gray);
+    let (Some(chan), Some(h)) = (chans.get(ch), cx.hist.as_ref().map(|h| &h[ch])) else { return false };
+    let mut l = read_levels(v, chan.key);
+    let (lo, hi) = auto_levels(h);
+    (l[0], l[1], l[2]) = (lo, 1.0, hi);
+    write_levels(v, chan.key, &l);
+    true
+}
+
+/// The histogram with the input black / gamma / white handles and fields, then Output Levels, for
+/// channel `ch`. `input_label`: a caption over the histogram (Photoshop's dialog has one).
+pub fn levels_ranges(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx, ch: usize, input_label: Option<&str>) -> Edit {
+    let t = Tokens::get(ui.ctx());
+    let chans = tone_channels(space_of(v), cx.gray);
     let chan = chans.get(ch).copied().unwrap_or(ToneChannel { key: "", label: "" });
     let mut l = read_levels(v, chan.key);
     let mut e = Edit::default();
     let mut changed = false;
-    if auto && let Some(h) = &cx.hist {
-        let (lo, hi) = auto_levels(&h[ch]);
-        l[0] = lo;
-        l[2] = hi;
-        l[1] = 1.0;
-        changed = true;
-        e.commit = true;
+    if let Some(text) = input_label {
+        label(ui, text);
     }
     let w = ui.available_width().min(300.0);
     // Histogram.
@@ -547,8 +571,8 @@ fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let hr = hr.shrink2(vec2(6.0, 0.0));
     let p = ui.painter_at(hr.expand(1.0));
     p.rect_filled(hr, 0.0, t.field);
-    if let Some(h) = &cx.hist {
-        tone::draw_histogram(&p, hr, &h[ch], hist_color(&chan, &t));
+    if let Some(h) = cx.hist.as_ref().map(|h| &h[ch]) {
+        tone::draw_histogram(&p, hr, h, hist_color(&chan, &t));
     }
     p.rect_stroke(hr, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     // Input sliders: black, gamma, white.
@@ -592,7 +616,8 @@ fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         let gap = ((w - 3.0 * fw) / 2.0 - 12.0).max(0.0);
         let r0 = widgets::value_field(ui, &mut nb, 0.0..=253.0, "", fw);
         ui.add_space(gap);
-        let r1 = widgets::value_field(ui, &mut ng, 0.01..=9.99, "", fw);
+        // Photoshop shows the gamma with two decimals (1.00).
+        let r1 = widgets::value_field_look(ui, &mut ng, 0.01..=9.99, "", fw, &widgets::FieldLook { fixed2: true, ..widgets::FieldLook::compact() });
         ui.add_space(gap);
         let r2 = widgets::value_field(ui, &mut nw, 2.0..=255.0, "", fw);
         if r0.changed() {

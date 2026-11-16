@@ -19,6 +19,7 @@ pub mod actions;
 pub mod adjust_dialog;
 pub mod adjust_editors;
 pub mod adjust_preview;
+pub mod adjust_ps_ui;
 pub mod adjust_ui;
 pub mod analysis_ui;
 pub mod arrow_handles_ui;

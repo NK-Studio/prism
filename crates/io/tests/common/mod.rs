@@ -152,7 +152,7 @@ pub fn gen_doc(mode: ColorMode, depth: SampleType, f: Features) -> Document {
             Adjustment::Invert,
             Adjustment::Threshold { level: g(100) },
             Adjustment::Posterize { levels: 5 },
-            Adjustment::BrightnessContrast { brightness: 20.0, contrast: -10.0, legacy: false },
+            Adjustment::BrightnessContrast { brightness: 20.0, contrast: -10.0, legacy: false, mean: 127 },
             Adjustment::HueSaturation { hue: 30.0, saturation: -20.0, lightness: 5.0, colorize: false, ranges: prism_doc::adjust::HueRange::defaults() },
             Adjustment::Exposure { exposure: 0.5, offset: 0.0, gamma: 1.0 },
             Adjustment::Levels {

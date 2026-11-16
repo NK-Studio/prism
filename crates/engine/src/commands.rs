@@ -1049,11 +1049,15 @@ fn build() -> Vec<CommandSpec> {
     // Levels/Curves channel keys follow the document: red/green/blue (RGB), gray (Grayscale),
     // cyan/magenta/yellow/black (CMYK), lightness/a/b (Lab); see `adjust_params`.
     const ADJ: &[(&str, &str, &str)] = &[
-        ("brightnessContrast", "Brightness/Contrast…", r##"{"brightness":-150..150=0,"contrast":-50..100=0,"legacy":bool=false}"##),
+        (
+            "brightnessContrast",
+            "Brightness/Contrast…",
+            r##"{"brightness":-150..150=0,"contrast":-50..100=0,"legacy":bool=false,"auto":bool=false} (auto: Photoshop's Auto chooses brightness and contrast from the layer; mean: the legacy contrast pivot 0..255, omitted = the layer's mean level)"##,
+        ),
         (
             "levels",
             "Levels…",
-            r##"{"inBlack":0..253=0,"gamma":0.01..9.99=1,"inWhite":2..255=255,"outBlack":0..255=0,"outWhite":0..255=255,"red":json,"green":json,"blue":json} (top level = composite; per channel {"inBlack","gamma","inWhite","outBlack","outWhite"} under red/green/blue, gray, cyan/magenta/yellow/black or lightness/a/b)"##,
+            r##"{"inBlack":0..253=0,"gamma":0.01..9.99=1,"inWhite":2..255=255,"outBlack":0..255=0,"outWhite":0..255=255,"red":json,"green":json,"blue":json,"eyedropper":json} (top level = composite; per channel {"inBlack","gamma","inWhite","outBlack","outWhite"} under red/green/blue, gray, cyan/magenta/yellow/black or lightness/a/b; eyedropper {"point":"black"|"gray"|"white","at":[x,y]|"color":[r,g,b]} sets that point from a sample, RGB and Grayscale)"##,
         ),
         (
             "curves",
@@ -1114,11 +1118,16 @@ fn build() -> Vec<CommandSpec> {
             enabled: has_doc,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
-                let eyedropped = if kind == "curves" { crate::adjust_params::curves_eyedropper_from_params(s, p)? } else { None };
+                let eyedropped = match kind.as_str() {
+                    "curves" => crate::adjust_params::curves_eyedropper_from_params(s, p)?,
+                    "levels" => crate::adjust_params::levels_eyedropper_from_params(s, p)?,
+                    _ => None,
+                };
                 let adj = match eyedropped {
                     Some(adj) => adj,
                     None => crate::adjust_params::from_params(&kind, p, None, doc_mode(s))?,
                 };
+                let adj = crate::adjust_cmds::resolve_brightness_contrast(s, adj, p)?;
                 new_adjustment(s, adj, p, &format!("layer.newAdjustmentLayer.{kind}"))
             },
             journal: true,
@@ -1140,11 +1149,16 @@ fn build() -> Vec<CommandSpec> {
             enabled: has_pixel_or_channel,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
-                let eyedropped = if kind == "curves" { crate::adjust_params::curves_eyedropper_from_params(s, p)? } else { None };
+                let eyedropped = match kind.as_str() {
+                    "curves" => crate::adjust_params::curves_eyedropper_from_params(s, p)?,
+                    "levels" => crate::adjust_params::levels_eyedropper_from_params(s, p)?,
+                    _ => None,
+                };
                 let adj = match eyedropped {
                     Some(adj) => adj,
                     None => crate::adjust_params::from_params(&kind, p, None, doc_mode(s))?,
                 };
+                let adj = crate::adjust_cmds::resolve_brightness_contrast(s, adj, p)?;
                 let label = adj.label().to_string();
                 destructive_adjust(s, &label, adj, p)
             },

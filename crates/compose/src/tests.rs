@@ -1149,45 +1149,67 @@ fn adjustment_results_are_rounded_to_the_document_depth() {
     }
 }
 
-// Ground truth captured from Adobe Photoshop 2026 (27.10.0): a 0..255 ramp pushed through modern
-// (non-legacy) Brightness/Contrast via `executeAction("BrgC", ... useLegacy=false)`. These pin our
-// reverse-engineered curves (see crates/compose/src/adjust.rs modern_* and log/devlog.md).
-#[test]
-fn modern_contrast_matches_photoshop() {
-    // (contrast, [out at x = 0,16,32,64,96,128,160,192,224,255])
-    let cases: [(f32, [u8; 10]); 4] = [
-        (50.0, [0, 11, 23, 52, 87, 128, 169, 204, 233, 255]),
-        (-50.0, [0, 21, 41, 76, 105, 128, 151, 180, 215, 255]),
-        (100.0, [0, 5, 14, 40, 78, 128, 178, 216, 242, 255]),
-        (-25.0, [0, 19, 37, 70, 101, 128, 155, 186, 220, 255]),
-    ];
-    let xs = [0usize, 16, 32, 64, 96, 128, 160, 192, 224, 255];
-    for (c, out) in cases {
-        for (i, &x) in xs.iter().enumerate() {
-            let got = adjust::modern_contrast(x as f32 / 255.0, c) * 255.0;
-            let err = (got - out[i] as f32).abs();
-            assert!(err <= 2.0, "contrast {c} x={x}: got {got:.1} want {} (err {err:.1})", out[i]);
-        }
+// Photoshop 27.4 output for a 0..255 ramp through Brightness/Contrast (`executeAction("BrgC")`),
+// at x = 0,16,32,64,96,128,160,192,224,255: the research formulas (compose::bright_contrast) give
+// the same 8-bit tables within a level.
+const BC_XS: [usize; 10] = [0, 16, 32, 64, 96, 128, 160, 192, 224, 255];
+
+fn assert_within_a_level(t: &[u8; 256], want: [u8; 10], what: &str) {
+    for (x, w) in BC_XS.iter().zip(want) {
+        assert!(t[*x].abs_diff(w) <= 1, "{what} x={x}: got {} want {w}", t[*x]);
     }
 }
 
 #[test]
-fn modern_brightness_matches_photoshop() {
-    let cases: [(f32, [u8; 10]); 2] = [(50.0, [0, 22, 44, 88, 132, 171, 203, 228, 246, 255]), (-50.0, [0, 12, 23, 47, 70, 93, 118, 148, 186, 255])];
-    let xs = [0usize, 16, 32, 64, 96, 128, 160, 192, 224, 255];
-    for (b, out) in cases {
-        for (i, &x) in xs.iter().enumerate() {
-            let got = adjust::modern_brightness(x as f32 / 255.0, b) * 255.0;
-            let err = (got - out[i] as f32).abs();
-            // The brightness roll-off is a spline; our fit is close but approximate at the top.
-            assert!(err <= 6.0, "brightness {b} x={x}: got {got:.1} want {} (err {err:.1})", out[i]);
+fn modern_brightness_contrast_matches_photoshop() {
+    let cases: [(i32, i32, [u8; 10]); 12] = [
+        (50, 0, [0, 22, 44, 88, 132, 171, 203, 228, 246, 255]),
+        (-50, 0, [0, 12, 23, 47, 70, 93, 118, 148, 186, 255]),
+        (30, 0, [0, 19, 39, 77, 116, 154, 189, 219, 241, 255]),
+        (100, 0, [0, 30, 60, 120, 173, 209, 232, 245, 252, 255]),
+        (-100, 0, [0, 9, 17, 34, 51, 68, 87, 111, 147, 255]),
+        (150, 0, [0, 41, 82, 162, 214, 239, 249, 253, 254, 255]),
+        (-150, 0, [0, 6, 12, 25, 37, 50, 63, 79, 106, 255]),
+        (0, 50, [0, 11, 23, 52, 87, 128, 169, 204, 233, 255]),
+        (0, -50, [0, 21, 41, 76, 105, 128, 151, 180, 215, 255]),
+        (0, 100, [0, 5, 14, 40, 78, 128, 178, 216, 242, 255]),
+        (30, 60, [0, 12, 26, 63, 111, 164, 203, 231, 247, 255]),
+        (-100, -40, [0, 11, 22, 42, 60, 78, 95, 115, 142, 255]),
+    ];
+    for (b, c, want) in cases {
+        assert_within_a_level(&crate::bright_contrast::table8(b, c, false, 127), want, &format!("modern b={b} c={c}"));
+    }
+}
+
+#[test]
+fn legacy_brightness_contrast_matches_photoshop() {
+    // Measured on a chart whose mean level is 129: the pivot.
+    let cases: [(i32, i32, [u8; 10]); 5] = [
+        (100, 0, [100, 116, 132, 164, 196, 228, 255, 255, 255, 255]),
+        (0, 50, [0, 0, 0, 0, 63, 127, 191, 255, 255, 255]),
+        (0, 100, [0, 0, 0, 0, 0, 0, 255, 255, 255, 255]),
+        (-60, 70, [0, 0, 0, 0, 0, 0, 33, 139, 245, 255]),
+        (40, -40, [92, 101, 111, 130, 149, 168, 188, 207, 226, 245]),
+    ];
+    for (b, c, want) in cases {
+        assert_within_a_level(&crate::bright_contrast::table8(b, c, true, 129), want, &format!("legacy b={b} c={c}"));
+    }
+}
+
+#[test]
+fn brightness_contrast_lut_survives_odd_values() {
+    for (b, c) in [(f32::NAN, 0.0), (0.0, f32::INFINITY), (1e9, -1e9), (-150.0, 100.0)] {
+        for legacy in [false, true] {
+            for depth in [Some(SampleType::U8), Some(SampleType::U16), None] {
+                let t = adjust::brightness_contrast_lut(b, c, legacy, 200, depth);
+                assert!(t.iter().all(|v| (0.0..=1.0).contains(v)), "{b} {c} {legacy}");
+            }
         }
     }
-    // Endpoints and the zero slider are exact.
-    assert_eq!(adjust::modern_brightness(0.0, 120.0), 0.0);
-    assert_eq!(adjust::modern_brightness(1.0, -120.0), 1.0);
-    assert_eq!(adjust::modern_brightness(0.37, 0.0), 0.37);
-    assert_eq!(adjust::modern_contrast(0.37, 0.0), 0.37);
+    // An 8-bit document gets Photoshop's 8-bit table exactly.
+    let t = adjust::brightness_contrast_lut(37.0, -12.0, false, 127, Some(SampleType::U8));
+    let t8 = crate::bright_contrast::table8(37, -12, false, 127);
+    assert!(t.iter().zip(t8).all(|(a, b)| (a * 255.0).round() as u8 == b));
 }
 
 // Levels ground truth from Adobe Photoshop 2026 (adjustLevels on a 0..255 ramp). Verifies our
@@ -1721,7 +1743,7 @@ fn clipped_brightness_and_desaturation_whiten_a_lighter_color_logo() {
     let mut logo = solid_layer("logo", Rect::new(0, 0, 1, 1), yellow);
     logo.blend = BlendMode::LighterColor;
     d.layers.push(logo);
-    for adj in [Adjustment::BrightnessContrast { brightness: 150.0, contrast: 0.0, legacy: false }, Adjustment::Vibrance { vibrance: 0.0, saturation: -100.0 }]
+    for adj in [Adjustment::BrightnessContrast { brightness: 150.0, contrast: 0.0, legacy: false, mean: 127 }, Adjustment::Vibrance { vibrance: 0.0, saturation: -100.0 }]
     {
         let mut l = Layer::new("adj", LayerContent::Adjustment(adj));
         l.clipped = true;

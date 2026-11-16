@@ -3815,6 +3815,8 @@ filter	Long Strokes	긴 획
 filter	Cell Size	셀 크기
 	square	정사각형
 	(Pixels)	(픽셀)
+adjust	Brightness	명도
+adjust	Use Legacy	레거시 사용
 filter	Blur Method	흐림 효과 방법
 filter	Spin	회전
 filter	Zoom	돋보기
@@ -3843,3 +3845,4 @@ filter	Threshold	한계값
 	pixels right	픽셀 오른쪽
 	pixels down	픽셀 아래
 submenu	Other…	기타
+	Input Levels:	입력 레벨:

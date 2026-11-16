@@ -181,8 +181,8 @@ fn adjustments() -> Vec<Adjustment> {
         Adjustment::Invert,
         Adjustment::Threshold { level: 0.5 },
         Adjustment::Posterize { levels: 5 },
-        Adjustment::BrightnessContrast { brightness: 30.0, contrast: 40.0, legacy: false },
-        Adjustment::BrightnessContrast { brightness: -20.0, contrast: -30.0, legacy: true },
+        Adjustment::BrightnessContrast { brightness: 30.0, contrast: 40.0, legacy: false, mean: 127 },
+        Adjustment::BrightnessContrast { brightness: -20.0, contrast: -30.0, legacy: true, mean: 127 },
         Adjustment::Exposure { exposure: 0.7, offset: 0.02, gamma: 1.2 },
         Adjustment::Levels {
             master: lc(0.1, 0.9, 1.3),
@@ -1421,7 +1421,7 @@ fn rgba16f_fallback_path_renders() {
     top.blend = BlendMode::Multiply;
     top.opacity = 0.8;
     d.layers.push(top);
-    d.layers.push(Layer::new("adj", LayerContent::Adjustment(Adjustment::BrightnessContrast { brightness: 30.0, contrast: 40.0, legacy: false })));
+    d.layers.push(Layer::new("adj", LayerContent::Adjustment(Adjustment::BrightnessContrast { brightness: 30.0, contrast: 40.0, legacy: false, mean: 127 })));
     let cpu = prism_compose::flatten(&d);
     let out = render_to_vec(&mut comp, &device, &queue, &d, d.bounds()).expect("16f render");
     let mut worst = 0.0f32;

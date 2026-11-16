@@ -83,6 +83,12 @@ from the documented formulas and constants, never from pasted pseudocode, and ra
 analysis stays outside the repository. Evidence, inference and unknowns are recorded in
 `docs/filter-analysis.md`.
 
+On 2026-11-16 the maintainer also asked to rebuild Image › Adjustments (Filter-menu items
+excluded) from their research notes and from screenshots of Photoshop's own dialogs. The same
+boundary applies. Where the research notes give a formula read from the binary, Prism uses it as
+written (2026-11-17: no measured comparison needed), in code written independently from the
+formulas and constants. Records: `docs/adjust-analysis.md`.
+
 ## 4. Picking work
 
 Priorities: important infrastructure first, then low-hanging parity, then the long tail.
