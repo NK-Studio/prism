@@ -117,10 +117,13 @@ pub struct Dab {
     pub depth: f32,
     /// Position in the stroke (0 = first).
     pub index: u64,
-    /// Brush Projection: direction (radians, counter-clockwise, y up) along which the tip is
-    /// foreshortened, and the factor (1 = no projection).
+    /// Brush Projection: the direction the pen leans (radians, counter-clockwise, y up), and the
+    /// tip's scale along it and across it (1 = no projection; a leaning pen stretches the tip).
     pub proj_angle: f32,
     pub proj_scale: f32,
+    pub proj_cross: f32,
+    /// Tilt Scale: the factor on the tip's height (its own y axis, before the angle), 1 = as is.
+    pub tall: f32,
     /// Mixer Brush multipliers of Wet and Mix (Transfer › Wetness/Mix Jitter), 1 = as set.
     pub wet: f32,
     pub mix: f32,
@@ -151,6 +154,8 @@ impl Dab {
             index: 0,
             proj_angle: 0.0,
             proj_scale: 1.0,
+            proj_cross: 1.0,
+            tall: 1.0,
             wet: 1.0,
             mix: 1.0,
             paint_amount: 1.0,
@@ -230,9 +235,24 @@ impl Falloff {
     /// The profile of a tip with this hardness and radius in pixels (for an ellipse, the minor
     /// radius, which sets how small the tip is).
     pub fn new(hardness: f32, radius: f32) -> Self {
+        Self::of_dab(hardness, radius, false)
+    }
+
+    /// The profile of one dab. `shrunk`: the dab is a larger tip (5 px or more) made smaller by a
+    /// size control or jitter. Photoshop keeps the large tip's edge on it rather than drawing the
+    /// small tip of that size: under pen pressure a 60 px hard brush lays a 2.6 px line where the
+    /// dab is 2.6 px across, which the small tips' narrower profile would draw 1.8 px wide
+    /// (measured with a synthetic pen, docs/pen-input-validation.md › Photoshop pressure and
+    /// tilt). The tail then starts [`HARD_TAIL_START`] inside the edge at every size, so a dab
+    /// under 2 px no longer reaches full ink at its centre. Soft tips are not measured and keep
+    /// their profile.
+    pub fn of_dab(hardness: f32, radius: f32, shrunk: bool) -> Self {
         let r = if radius.is_finite() { radius.max(0.5) } else { 0.5 };
         let d = 2.0 * r;
         let h = if hardness.is_finite() { hardness.clamp(0.0, 1.0) } else { 1.0 };
+        if shrunk && h >= 1.0 {
+            return Self { hard: true, radius: r, a: 1.0, s: 0.0, edge: HARD_TAIL_START, tail: HARD_TAIL_WIDTH };
+        }
         let hard = |r: f32| {
             // Small tips start their tail further in (4 px: 1.25 px; 3 px: at the centre).
             let edge = (HARD_TAIL_START + ((5.0 - d) / 4.0).max(0.0)).min(r);

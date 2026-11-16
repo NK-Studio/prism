@@ -197,6 +197,61 @@ fn prepare_pattern(b: &BrushSettings) -> (Option<Arc<PatternImage>>, f32) {
     (Some(Arc::new(img)), t.scale)
 }
 
+/// The furthest, in pixels from its centre, that Tilt Scale and Brush Projection may stretch a
+/// dab (a tip that reaches further unstretched keeps its own reach).
+const MAX_STRETCHED_REACH: f32 = 6000.0;
+
+/// A dab's Brush Projection and Tilt Scale, as the map from a pixel offset back to the tip as it
+/// was before them (the rasterizer samples the tip there, so its edge stretches with it, as
+/// Photoshop's does).
+#[derive(Clone, Copy, Debug)]
+struct Stretch {
+    /// Unit vector of the projection direction (y up).
+    ax: f32,
+    ay: f32,
+    /// 1 / scale along and across the projection direction, and 1 / the height factor.
+    along: f32,
+    across: f32,
+    tall: f32,
+}
+
+impl Stretch {
+    /// The limits keep a hostile dab from dividing by zero or asking for an endless rectangle
+    /// (the dab generator stays within 1..3.1).
+    fn factor(v: f32) -> f32 {
+        if v.is_finite() { v.clamp(0.05, 4.0) } else { 1.0 }
+    }
+
+    /// `None` for a dab that is neither projected nor stretched (and for a Dual Brush dab).
+    fn of(d: &Dab, dual: bool) -> Option<Self> {
+        let (along, across, tall) = (Self::factor(d.proj_scale), Self::factor(d.proj_cross), Self::factor(d.tall));
+        let same = |v: f32| (v - 1.0).abs() < 1e-3;
+        if dual || (same(along) && same(across) && same(tall)) {
+            return None;
+        }
+        let (ay, ax) = if d.proj_angle.is_finite() { d.proj_angle.sin_cos() } else { (0.0, 1.0) };
+        Some(Self { ax, ay, along: 1.0 / along, across: 1.0 / across, tall: 1.0 / tall })
+    }
+
+    /// A pixel offset from the dab centre (y up) with the projection undone.
+    #[inline]
+    fn unproject(&self, ux: f32, uy: f32) -> (f32, f32) {
+        let (p, q) = ((ux * self.ax + uy * self.ay) * self.along, (-ux * self.ay + uy * self.ax) * self.across);
+        (p * self.ax - q * self.ay, p * self.ay + q * self.ax)
+    }
+
+    /// How far a dab reaches with its stretch, given the plain tip's `reach` in pixels (a bound:
+    /// the factors multiply). A stretched giant tip is cut off at [`MAX_STRETCHED_REACH`] rather
+    /// than rasterized over a rectangle no machine holds.
+    fn reach(d: &Dab, dual: bool, reach: f32) -> f32 {
+        if dual {
+            return reach;
+        }
+        let k = Self::factor(d.tall).max(1.0) * Self::factor(d.proj_scale).max(Self::factor(d.proj_cross)).max(1.0);
+        (reach * k).min(reach.max(MAX_STRETCHED_REACH))
+    }
+}
+
 /// A computed tip's roundness and minor radius, as the rasterizer uses them.
 fn tip_axes(d: &Dab) -> (f32, f32) {
     let ro = d.roundness.max(0.5 / d.radius).min(1.0);
@@ -206,10 +261,10 @@ fn tip_axes(d: &Dab) -> (f32, f32) {
 /// How far from its centre, in pixels, a computed tip's texels reach: its major radius plus the
 /// hard edge's tail, or out to the end of a soft tip's falloff (bilinear placement adds a pixel,
 /// which [`rect_around`]'s slack covers).
-pub(crate) fn round_reach(d: &Dab, hardness: f32) -> f32 {
+pub(crate) fn round_reach(d: &Dab, hardness: f32, shrunk: bool) -> f32 {
     let (ro, rm) = tip_axes(d);
     let major = rm / ro;
-    let falloff = Falloff::new(hardness, rm);
+    let falloff = Falloff::of_dab(hardness, rm, shrunk);
     if falloff.is_hard() { major + falloff.reach_past_edge() } else { major * falloff.reach() }
 }
 
@@ -350,10 +405,18 @@ impl BrushContext {
         }
     }
 
+    /// Whether a small dab of this brush is its large computed tip made smaller (see
+    /// [`Falloff::of_dab`]): a Photoshop round tip of 5 px or more. A CLIP STUDIO brush draws its
+    /// own edge.
+    fn shrinks_tip(&self) -> bool {
+        let b = &self.brush;
+        b.size >= 5.0 && matches!(b.tip, crate::brush::TipShape::Round) && b.csp_anti_alias.is_none() && b.csp_tip_scale.is_none()
+    }
+
     /// Bounds of the dab's tip square at any rotation.
     pub(crate) fn quad_rect(&self, d: &Dab) -> Rect {
         let scale = self.tip_scale(d, false);
-        rect_around(d, d.radius * std::f32::consts::SQRT_2 * scale[0].max(scale[1]))
+        rect_around(d, Stretch::reach(d, false, d.radius * std::f32::consts::SQRT_2 * scale[0].max(scale[1])))
     }
 
     /// Whether a point (pixel space) lies in the dab's tip square, rotated and scaled with the
@@ -398,9 +461,8 @@ impl BrushContext {
             (self.tip.is_some() || !self.sequence.is_empty(), b.hardness)
         };
         let scale = self.tip_scale(d, dual);
-        let reach = if sampled { d.radius * std::f32::consts::SQRT_2 } else { round_reach(d, hardness) };
-        let reach = reach * scale[0].max(scale[1]);
-        rect_around(d, reach)
+        let reach = if sampled { d.radius * std::f32::consts::SQRT_2 } else { round_reach(d, hardness, !dual && self.shrinks_tip()) };
+        rect_around(d, Stretch::reach(d, dual, reach * scale[0].max(scale[1])))
     }
 
     fn tip_scale(&self, d: &Dab, dual: bool) -> [f32; 2] {
@@ -576,23 +638,16 @@ impl BrushContext {
         let (sn, cs) = d.angle.sin_cos();
         let (fx, fy) = (if d.flip_x { -1.0 } else { 1.0 }, if d.flip_y { -1.0 } else { 1.0 });
         let scale = self.tip_scale(d, false);
-        let proj = (d.proj_scale < 0.999).then(|| {
-            let (ps, pc) = d.proj_angle.sin_cos();
-            (pc, ps, 1.0 / d.proj_scale.max(0.05) - 1.0)
-        });
+        let stretch = Stretch::of(d, false);
+        let inv_tall = stretch.map_or(1.0, |s| s.tall);
         let (tw, th) = (*w0 as f32, *h0 as f32);
         let inv_scale = *w0.max(h0) as f32 / (2.0 * r);
         let (lwf, lhf) = (*lw as f32, *lh as f32);
         // The texel under a pixel-space offset from the dab centre, exactly as `to_tip` and
         // `Mips::sample_nearest` find it.
         let normalised = |dx: f32, dy: f32| -> (f32, f32) {
-            let (mut ux, mut uy) = (dx, -dy);
-            if let Some((ax, ay, k)) = proj {
-                let t = (ux * ax + uy * ay) * k;
-                ux += t * ax;
-                uy += t * ay;
-            }
-            let (u, v) = ((ux * cs + uy * sn) * fx / scale[0], (-ux * sn + uy * cs) * fy / scale[1]);
+            let (ux, uy) = stretch.map_or((dx, -dy), |s| s.unproject(dx, -dy));
+            let (u, v) = ((ux * cs + uy * sn) * fx / scale[0], (-ux * sn + uy * cs) * fy / scale[1] * inv_tall);
             let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
             (px / tw, py / th)
         };
@@ -704,29 +759,21 @@ impl BrushContext {
         let (sn, cs) = d.angle.sin_cos();
         let (fx, fy) = (if d.flip_x { -1.0 } else { 1.0 }, if d.flip_y { -1.0 } else { 1.0 });
         let scale = self.tip_scale(d, dual);
-        // Brush Projection: stretch the sampling coordinates along the tilt direction, which
-        // foreshortens the tip there by `proj_scale`.
-        let proj = (!dual && d.proj_scale < 0.999).then(|| {
-            let (ps, pc) = d.proj_angle.sin_cos();
-            (pc, ps, 1.0 / d.proj_scale.max(0.05) - 1.0)
-        });
+        // Brush Projection and Tilt Scale: sample the tip where the pixel lies with them undone.
+        let stretch = Stretch::of(d, dual);
+        let inv_tall = stretch.map_or(1.0, |s| s.tall);
         let r = d.radius;
         let (ro, rm) = tip_axes(d);
         let (inv_major, inv_minor) = (ro / rm, 1.0 / rm);
-        let falloff = Falloff::new(hardness, rm);
+        let falloff = Falloff::of_dab(hardness, rm, !dual && self.shrinks_tip());
         // In q² (relative radius squared): beyond `outside_q2` the texels are empty; within
         // `inside_q2` they are full (-1: nowhere, for a tip narrower than its tail).
         let (outside_q2, inside_q2) = (falloff.reach().powi(2), if falloff.full_to() > 0.0 { falloff.full_to().powi(2) } else { -1.0 });
         // Pixel or texel offset from the dab centre (y down) into tip space: y up, projected,
         // rotated by −angle, flipped.
         let to_tip = |dx: f32, dy: f32| {
-            let (mut ux, mut uy) = (dx, -dy);
-            if let Some((ax, ay, k)) = proj {
-                let t = (ux * ax + uy * ay) * k;
-                ux += t * ax;
-                uy += t * ay;
-            }
-            ((ux * cs + uy * sn) * fx / scale[0], (-ux * sn + uy * cs) * fy / scale[1])
+            let (ux, uy) = stretch.map_or((dx, -dy), |s| s.unproject(dx, -dy));
+            ((ux * cs + uy * sn) * fx / scale[0], (-ux * sn + uy * cs) * fy / scale[1] * inv_tall)
         };
         // A computed tip's texel at tip-space (u, v): the relative radius on the ellipse (semi-axes
         // `major` along u, `rm` along v), and for a hard tip the signed distance to its edge in

@@ -45,8 +45,13 @@ Reply to the maintainer in Korean; commands, paths and ids stay as they are.
   pressure and pose and the event's timestamp. Other tools follow the mouse events: one entry
   per tool event, timed per egui frame. Pressure arrives in 1/255 steps (Quartz).
 - The first stroke right after activation did commit on macOS (2026-11-16); still check `down`.
-- CLIP STUDIO PAINT / Photoshop on macOS have not been driven with the synthetic pen yet: if you
-  do, record whether they read its pressure before comparing anything.
+- **Photoshop on macOS reads the synthetic pen** (pressure and both tilt axes, 2026-11-16). Drive
+  it with `osascript -e 'tell application id "com.adobe.Photoshop" to do javascript file "…"'`
+  and Action Manager, not the UI: save the Brush tool's options (`toStream`), colours and tool
+  first, work in a new document, export with a duplicate's `saveAs` PNG, then close it without
+  saving and put everything back. The recipe, the option keys (several are char IDs) and the
+  measured numbers: `docs/pen-input-validation.md` › Photoshop pressure and tilt. Inject one
+  warm-up stroke after another app was in front. CLIP STUDIO PAINT on macOS is still untested.
 
 ## 1. Start Prism with the control channel
 

@@ -40,8 +40,12 @@ fn stroke_accepts_full_points_brush_and_preset() {
     let brush = json!({"size": 30, "roundness": 0.2, "pressureSize": false, "spacing": 0.1,
         "shapeDynamics": {"enabled": true, "angle": {"control": "penTilt"}}});
     s.execute("paint.stroke", json!({"points": [[50, 50, 1, 0, -45, 0, 0], [52, 50, 1, 0, -45, 0, 16]], "brush": brush})).unwrap();
-    // Tilt up = 90°: the flat tip stands vertically.
-    assert!(rgba(&s, 50, 40)[3] > 0.9 && rgba(&s, 50, 60)[3] > 0.9 && rgba(&s, 60, 50)[3] < 0.01);
+    // A pen leaning up the screen: the flat tip lies across the lean, as in Photoshop (its height
+    // turns towards the lean).
+    assert!(rgba(&s, 40, 50)[3] > 0.9 && rgba(&s, 62, 50)[3] > 0.9 && rgba(&s, 50, 40)[3] < 0.01);
+    // Leaning sideways stands it up.
+    s.execute("paint.stroke", json!({"points": [[100, 50, 1, 45, 0, 0, 0], [100, 52, 1, 45, 0, 0, 16]], "brush": brush})).unwrap();
+    assert!(rgba(&s, 100, 40)[3] > 0.9 && rgba(&s, 100, 62)[3] > 0.9 && rgba(&s, 110, 50)[3] < 0.01);
     // Object points.
     s.execute("paint.stroke", json!({"points": [{"x": 150, "y": 20}, {"x": 180, "y": 20, "pressure": 1.0}], "size": 4, "brush": {"pressureSize": false}}))
         .unwrap();

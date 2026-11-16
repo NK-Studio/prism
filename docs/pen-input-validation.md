@@ -422,6 +422,102 @@ Details and what is still open: `docs/sut-analysis.md` › 가을낙엽_낙엽 a
 For a brush without pressure input CLIP STUDIO can stay on Wintab: the synthetic pen then draws
 as a mouse at full pressure, and no preference has to be changed.
 
+## Photoshop pressure and tilt with the synthetic pen (macOS, 2026-11-16)
+
+Photoshop 2026 (27.4) on macOS reads the synthetic pen (`pen_inject`): its pressure, both tilt
+axes and their direction. That makes it a measuring oracle for pen dynamics, which Stroke Path
+(`brush-compare`) can't reach. The same stroke files went into Photoshop and into Prism
+(`target/agent-pen/fast/prism`, `ui.penTrace` on), both at 100 % on a 1600×900 px white RGB/8
+document, black paint, Normal, smoothing off. Observation of outputs only; nothing of
+Photoshop's is copied. The maintainer's brush options, colours and tool were saved first and
+put back afterwards (read back identical), and the test document was closed without saving.
+
+How Photoshop was driven: `osascript … do javascript file` with Action Manager. The Brush tool's
+options are read with `executeActionGet` (`tool` of the application) and set with `setd` on
+`paintbrushTool` (`T   ` = the `currentToolOptions` descriptor); `toStream`/`fromStream` round
+trips the whole descriptor for the restore. `szVr`, `brVr`, `bVTy`, `fStp`, `prVr` and `opVr`
+are char IDs (as string IDs they are silently unknown keys); a control's `bVTy` is 0 off, 1 fade,
+2 pen pressure, 3 pen tilt. Canvas origin and scale come from a window screenshot (the white
+rectangle); results are exported with `saveAs` PNG from a duplicate. Quartz pressure arrives in
+1/255 steps in both apps.
+
+### Pressure
+
+60 px hard round, 5 % spacing. Stroke width is the ink summed across the line.
+
+| Control on Pen Pressure | Photoshop | Prism (before any change) |
+|---|---|---|
+| Size, ramp 0 → 1 over 1400 px | linear: 30.1 px at 0.5, 60.4 px at 1 | linear, 0.4–0.9 px wider |
+| Size, steps of 0.1 | 6.65, 12.7, 18.9, 24.7, 30.1, 36.5, 42.4, 48.6, 54.4, 60.4 | 6.75, 12.9, 19.2, 25.3, 31.1, 37.1, 42.9, 49.0, 54.8, 60.9 |
+| Size, thin end (dab 1.9 / 2.6 / 3.9 px) | 1.76 / 2.60 / 4.08 px | 1.44 / 1.82 / 3.70 px |
+| Opacity (ramp, steps, triangle, taps) | value = pressure | the same to 0.002 |
+| Flow at 5 % and 25 % spacing (ramp, steps) | — | the same to 0.01 |
+
+So pressure itself needed no curve: both are linear. The thin end did differ: a dab made small
+by the size control was drawn with the profile of a small tip of that size (which Photoshop's
+1–4 px tips really have when the brush is that size), a third too thin. Photoshop keeps the
+large tip's edge on it. **Fixed:** `Falloff::of_dab(.., shrunk)` for round tips of 5 px or more
+(hard tips only; soft ones are not measured). After: 2.07 / 2.73 / 4.42 px, the same
+0.1–0.4 px above Photoshop as every other size.
+
+### Tilt
+
+Photoshop's tilt, `f`, is the length of AppKit's tilt vector, 0 upright to 1 at the device's
+full tilt (Prism: 60°). 60 and 80 px hard round, taps with held pressure 1, tilt 0–60° along x,
+along y and over both axes, and eight directions.
+
+| Setting | Photoshop | Prism before |
+|---|---|---|
+| Roundness on Pen Tilt, minimum 25 % | `min + (1 − min)(1 − f)`: 25 % at full tilt | `1 − tilt / 90°`: 50 % at full tilt |
+| Opacity on Pen Tilt | `1 − f`: nothing at full tilt | 33 % at full tilt |
+| Size on Pen Tilt, Tilt Scale 0 / 100 / 200 % | diameter unchanged at every tilt and Minimum Diameter; height × `1 + scale × f` (59.4 × 178.1 px at 200 %, full tilt) | diameter shrunk to a third, height squashed |
+| Angle on Pen Tilt, 40 % round tip | long axis across the lean (the height points along it); adds to the brush angle; same at every amount of lean | long axis along the lean (90° off) |
+| Angle on Pen Tilt, fully round tip, with Tilt Scale | not turned: the stretched height stays upright | turned |
+| Brush Projection, 60 px round | along the lean 64.3 / 84.8 / 110.8 / 178.4 px at 20 / 40 / 50 / 60°, across 59.6 / 60.9 / 62.7 / 68.2 px, centre moved 3.0 / 9.4 / 17.8 / 43.7 px away from the lean; over both axes at 60°: 117.1 × 63.2 px, 20.0 px | foreshortened along the lean (59.9 × 29.9 at 60°), not moved |
+
+The projection fits a cone: the tip stands across the pen's axis and is thrown onto the canvas
+from a point up the pen, `1 / 0.24` tip radii away; the lean per axis is 64° × the axis's tilt
+fraction, and the pen's direction is `(tan θx, tan θy, 1)` (which is why 60° over both axes
+gives less than 60° along one). With `α = atan 0.24` and lean `θ`, the footprint reaches
+`r cos α / cos(θ + α)` away from the lean and `r cos α / cos(θ − α)` towards it, and is
+`2 r cos α cos θ / √(cos(θ + α) cos(θ − α))` across. All twelve measured dabs fit to 1 %.
+The stretched tips' edges are soft in proportion (a scaled bitmap), so Prism samples the tip
+through the inverse map rather than drawing a new ellipse.
+
+**Fixed** in `prism-paint` (`dynamics.rs`: `tilt_fraction`, `tilt_tall`, `tilt_projection`;
+`render.rs`: `Stretch`; `Dab::tall`, `Dab::proj_cross`). Re-measured: every row above within
+1 % (the dab size offset below), angles equal, projection shift within 0.7 px at full tilt.
+Strokes with the tilt changing along them (0 → 60° along x and y, a full turn of the lean at
+40°, a wavy line): ink within ±1.2 %, column widths within 0.5 px, and at 150 % spacing the
+separate dabs coincide (mean pixel difference 0.0015), so spacing follows the unstretched
+diameter in both. A CLIP STUDIO brush (`csp_anti_alias` or `csp_tip_scale` set) keeps its own
+tilt direction (docs/sut-analysis.md).
+
+Not measured: sampled tips with Tilt Scale or projection (the round-tip geometry is applied to
+them), which way round an asymmetric tip faces the lean (an ellipse can't show it), barrel
+rotation, soft tips, an upright pen with the angle on Pen Tilt (Prism: not turned), and
+Windows (Prism treats 60° as full tilt there too).
+
+### Open gaps found on the way
+
+- **Dense spacing.** A hard 60 px line at 5 % spacing is 60.2–60.4 px wide in Photoshop (pen or
+  mouse, with or without dynamics) and 60.9 px in Prism; at 25 % spacing the two match to
+  0.01 px (39.75 / 39.76), and so does a single plain tap. Photoshop's stroke edge at 5 % is
+  crisper than the accumulated dab tails. Cause not found.
+- **Taps with a dynamics section on.** A static-size tap with Shape Dynamics or Transfer on is a
+  plain tip 0.53 px smaller in Photoshop (59.3 against 59.8 px by area; profile fitted). Not
+  applied: lines don't show the same offset.
+- **A resting pen keeps painting.** With the airbrush off, Photoshop lays a dab about every
+  100 ms while the pen rests, and one more when it lifts: at 10 % flow a 0.1 / 0.2 / 0.4 /
+  0.8 s hold leaves 3 / 4 / 6 / 10 dabs (2 for any shorter hold with a second sample, 1 for a
+  single sample). The same happens when the pen creeps (1 px or less per sample; from 1.5 px
+  per sample at 20 Hz or more it doesn't). A mouse held still for 1.6 s leaves one dab: it
+  takes the tablet's events. Stroke Catch-up on or off makes no difference. Prism lays one dab,
+  and, unlike Photoshop, one more for every pressure increase while resting (a 0.3 → 1 press at
+  10 % flow: 99.6 % ink against Photoshop's 47.6 %). Not changed here.
+- The first stroke injected into Photoshop right after another app had been in front was lost
+  once (the same open observation as for Prism above).
+
 ## Remaining physical acceptance
 
 No physical tablet stroke has been driven or observed by this validation run.

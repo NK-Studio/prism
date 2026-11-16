@@ -50,7 +50,9 @@ Photoshop renders each case with **Stroke Path** (no simulated pressure) on a ne
 document at 72 ppi, in black on white. Prism uses `paint.stroke` / `paint.pencil` with
 pressure 1 and no smoothing. Pen pressure, tilt and other per-point input can't be scripted in
 Photoshop, so the cases cover deterministic settings only. Jittered dynamics need statistical
-cases, which the tool doesn't support yet.
+cases, which the tool doesn't support yet. Pressure and tilt are measured another way: the
+synthetic pen (`pen_inject`) drives Photoshop itself
+([pen input validation](pen-input-validation.md) › Photoshop pressure and tilt).
 
 ## Limits
 

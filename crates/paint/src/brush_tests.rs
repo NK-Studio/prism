@@ -845,13 +845,36 @@ fn fade_ramps_over_steps() {
 
 #[test]
 fn tilt_direction_and_rotation_drive_angle() {
-    let mk = |c: Control| BrushSettings { shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(c), ..Default::default() }, ..brush() };
+    // A flat tip shows the turn; a fully round one is not turned at all (below).
+    let mk = |c: Control| BrushSettings {
+        roundness: 0.4,
+        shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(c), ..Default::default() },
+        ..brush()
+    };
     let mut p = StrokePoint::new(0.0, 0.0, 1.0);
     p.tilt_x = 0.0;
     p.tilt_y = -45.0; // pen leaning "up" the screen
     let pts = vec![p, StrokePoint { x: 50.0, ..p }];
+    // Photoshop turns the tip's height towards the lean: its long axis lies across it (measured:
+    // a pen leaning up or down leaves a 40 % round tip level, one leaning sideways stands it up).
     let d = dabs_of(&mk(Control::PenTilt), &pts);
-    assert!((d[0].angle.to_degrees() - 90.0).abs() < 1e-3, "{}", d[0].angle.to_degrees());
+    assert!((d[0].angle.to_degrees() - 180.0).abs() < 1e-3, "{}", d[0].angle.to_degrees());
+    let side = [StrokePoint { tilt_x: 30.0, tilt_y: 0.0, ..p }];
+    assert!((dabs_of(&mk(Control::PenTilt), &side)[0].angle.to_degrees() - 90.0).abs() < 1e-3);
+    // The brush's own angle adds to it; the amount of lean doesn't matter.
+    let turned = BrushSettings { angle: 30.0, ..mk(Control::PenTilt) };
+    for tilt in [10.0, 60.0] {
+        let d = dabs_of(&turned, &[StrokePoint { tilt_x: tilt, tilt_y: 0.0, ..p }]);
+        assert!((d[0].angle.to_degrees() - 120.0).abs() < 1e-3, "{}", d[0].angle.to_degrees());
+    }
+    // An upright pen (or a mouse) doesn't turn the tip.
+    assert_eq!(dabs_of(&mk(Control::PenTilt), &[StrokePoint::new(0.0, 0.0, 1.0)])[0].angle, 0.0);
+    // A fully round computed tip is never turned.
+    let round = BrushSettings { roundness: 1.0, ..mk(Control::PenTilt) };
+    assert_eq!(dabs_of(&round, &side)[0].angle, 0.0);
+    // A CLIP STUDIO brush keeps its own reading of the lean (the tip points along it).
+    let csp = BrushSettings { csp_anti_alias: Some(1), ..mk(Control::PenTilt) };
+    assert!((dabs_of(&csp, &pts)[0].angle.to_degrees() - 90.0).abs() < 1e-3);
     // Direction: travelling down the screen = -90° (counter-clockwise positive).
     let pts = vec![StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(0.0, 50.0, 1.0)];
     let d = dabs_of(&mk(Control::Direction), &pts);
@@ -861,7 +884,8 @@ fn tilt_direction_and_rotation_drive_angle() {
     q.rotation = 30.0;
     let d = dabs_of(&mk(Control::Rotation), &[q, StrokePoint { x: 20.0, ..q }]);
     assert!((d[0].angle.to_degrees() - 30.0).abs() < 1e-3);
-    // Pen tilt on size: upright pen full size, flat pen minimum.
+    // Pen tilt on size leaves the diameter alone (Photoshop, measured at every tilt and Minimum
+    // Diameter); Tilt Scale stretches the height instead (its own test).
     let b = BrushSettings {
         shape_dynamics: ShapeDynamics { enabled: true, size: Dynamic::controlled(Control::PenTilt), ..Default::default() },
         size: 20.0,
@@ -869,13 +893,38 @@ fn tilt_direction_and_rotation_drive_angle() {
     };
     let mut flat = StrokePoint::new(0.0, 0.0, 1.0);
     flat.tilt_x = 90.0;
-    // A tip shrunk to nothing paints nothing (as Photoshop's size Fade to 0 does) …
-    assert!(dabs_of(&b, &[flat]).is_empty());
-    // … and a minimum diameter keeps it painting.
-    let mut b = b;
-    b.shape_dynamics.size.minimum = 0.25;
-    let d = dabs_of(&b, &[flat]);
-    assert!((d[0].radius - 2.5).abs() < 1e-6, "{}", d[0].radius);
+    for minimum in [0.0, 0.25, 1.0] {
+        let mut b = b.clone();
+        b.shape_dynamics.size.minimum = minimum;
+        let d = dabs_of(&b, &[flat]);
+        assert!((d[0].radius - 10.0).abs() < 1e-6 && d[0].tall == 1.0, "{:?}", d[0]);
+    }
+}
+
+#[test]
+fn pen_tilt_controls_run_out_at_the_pens_full_tilt() {
+    // Photoshop, measured: roundness and opacity on Pen Tilt run 1 − f, f being the tilt as a
+    // fraction of the device's full tilt (60°), over both axes.
+    let round = BrushSettings {
+        size: 80.0,
+        shape_dynamics: ShapeDynamics { enabled: true, roundness: Dynamic { control: Control::PenTilt, minimum: 0.25, ..Default::default() }, ..Default::default() },
+        ..brush()
+    };
+    for (tilt, roundness) in [(0.0, 1.0), (10.0, 0.875), (30.0, 0.625), (60.0, 0.25), (80.0, 0.25)] {
+        let d = dabs_of(&round, &[pen(50.0, 50.0, tilt, 0.0, 0.0)])[0];
+        assert!((d.roundness - roundness).abs() < 1e-4, "{tilt}°: {}", d.roundness);
+    }
+    let diagonal = 30.0 / std::f32::consts::SQRT_2;
+    let d = dabs_of(&round, &[pen(50.0, 50.0, diagonal, -diagonal, 0.0)])[0];
+    assert!((d.roundness - 0.625).abs() < 1e-4, "{}", d.roundness);
+    let fade = BrushSettings { transfer: Transfer { enabled: true, opacity: Dynamic::controlled(Control::PenTilt), ..Default::default() }, ..brush() };
+    for (tilt, opacity) in [(0.0, 1.0), (20.0, 2.0 / 3.0), (30.0, 0.5), (60.0, 0.0)] {
+        let d = dabs_of(&fade, &[pen(50.0, 50.0, 0.0, tilt, 0.0)])[0];
+        assert!((d.opacity - opacity).abs() < 1e-4, "{tilt}°: {}", d.opacity);
+    }
+    // Hostile tilt is an upright pen, not a panic or a NaN dab.
+    let d = dabs_of(&round, &[pen(50.0, 50.0, f32::NAN, f32::INFINITY, 0.0)])[0];
+    assert_eq!(d.roundness, 1.0);
 }
 
 #[test]
@@ -1836,60 +1885,96 @@ fn pen(x: f64, y: f64, tilt_x: f32, tilt_y: f32, rotation: f32) -> StrokePoint {
 }
 
 #[test]
-fn tilt_scale_squashes_the_tip_height_with_pen_tilt() {
-    // Size control on Pen Tilt with a 100 % minimum, so only Tilt Scale changes the shape.
+fn tilt_scale_stretches_the_tip_height_with_pen_tilt() {
     let mk = |scale: f32| BrushSettings {
         size: 40.0,
-        shape_dynamics: ShapeDynamics {
-            enabled: true,
-            size: Dynamic { control: Control::PenTilt, minimum: 1.0, ..Default::default() },
-            tilt_scale: scale,
-            ..Default::default()
-        },
+        shape_dynamics: ShapeDynamics { enabled: true, size: Dynamic::controlled(Control::PenTilt), tilt_scale: scale, ..Default::default() },
         ..brush()
     };
     let upright = [pen(50.0, 50.0, 0.0, 0.0, 0.0)];
-    let tilted = [pen(50.0, 50.0, 45.0, 0.0, 0.0)];
-    // 0 % (the default) and an upright pen leave the tip round.
-    let d = dabs_of(&mk(0.0), &tilted)[0];
-    assert_eq!(d.roundness, 1.0);
-    let d = dabs_of(&mk(2.0), &upright)[0];
-    assert_eq!(d.roundness, 1.0);
-    // 100 % at 45° tilt: height × (1 − 0.5 × 0.5) = 0.75; 200 %: 0.5.
-    let d = dabs_of(&mk(1.0), &tilted)[0];
-    assert!((d.roundness - 0.75).abs() < 1e-4, "{}", d.roundness);
-    let d2 = dabs_of(&mk(2.0), &tilted)[0];
-    assert!((d2.roundness - 0.5).abs() < 1e-4, "{}", d2.roundness);
-    let (w, h) = extents(&mk(2.0), &d2);
-    assert!(w >= 38 && (h as i32 - 20).abs() <= 2, "{w}×{h}");
+    let half = [pen(50.0, 50.0, 30.0, 0.0, 0.0)];
+    let full = [pen(50.0, 50.0, 0.0, 60.0, 0.0)];
+    // 0 % (the default) and an upright pen leave the tip alone.
+    assert_eq!(dabs_of(&mk(0.0), &full)[0].tall, 1.0);
+    assert_eq!(dabs_of(&mk(2.0), &upright)[0].tall, 1.0);
+    // Photoshop, measured on a 60 px tip: 79.2, 98.9 … 178.1 px tall at 10°, 20° … 60° with
+    // 200 % (the width stays 59.4), and 118.7 px at 60° with 100 %: height × (1 + scale × f).
+    for (scale, pts, tall) in [(2.0, &half, 2.0), (2.0, &full, 3.0), (1.0, &full, 2.0), (1.0, &half, 1.5)] {
+        let d = dabs_of(&mk(scale), pts)[0];
+        assert!((d.tall - tall).abs() < 1e-4 && d.roundness == 1.0 && d.radius == 20.0, "{scale} {d:?}");
+    }
+    // The stretched tip is as wide as before and that much taller (upright: the tip isn't turned).
+    let d = dabs_of(&mk(2.0), &full)[0];
+    let (w, h) = extents(&mk(2.0), &d);
+    assert!((w as i32 - 40).abs() <= 1 && (h as i32 - 120).abs() <= 2, "{w}×{h}");
+    // On a flat tip turned by the pen's lean, the height is stretched towards the lean: twice a
+    // 40 % tip's height at half tilt, and past its width at full tilt.
+    let flat = |pts: &[StrokePoint]| {
+        let mut b = mk(2.0);
+        b.size = 50.0;
+        b.roundness = 0.4;
+        b.shape_dynamics.angle = Dynamic::controlled(Control::PenTilt);
+        let d = dabs_of(&b, pts)[0];
+        extents(&b, &d)
+    };
+    let (w, h) = flat(&half);
+    assert!((w as i32 - 40).abs() <= 1 && (h as i32 - 50).abs() <= 1, "{w}×{h}");
+    let (w, h) = flat(&[pen(50.0, 50.0, 60.0, 0.0, 0.0)]);
+    assert!((w as i32 - 60).abs() <= 2 && (h as i32 - 50).abs() <= 1, "{w}×{h}");
     // Only with the size control on Pen Tilt (Photoshop greys the slider otherwise).
     let mut b = mk(2.0);
     b.shape_dynamics.size.control = Control::PenPressure;
-    assert_eq!(dabs_of(&b, &tilted)[0].roundness, 1.0);
-    // Rendered strokes differ.
-    let a = paint(&mk(0.0), &[pen(20.0, 40.0, 60.0, 0.0, 0.0), pen(120.0, 40.0, 60.0, 0.0, 0.0)], 0, 0);
-    let c = paint(&mk(2.0), &[pen(20.0, 40.0, 60.0, 0.0, 0.0), pen(120.0, 40.0, 60.0, 0.0, 0.0)], 0, 0);
-    let area = Rect::new(0, 0, 160, 80);
-    assert!(alpha_sum(&c, area) < alpha_sum(&a, area) * 0.75, "{} vs {}", alpha_sum(&c, area), alpha_sum(&a, area));
+    assert_eq!(dabs_of(&b, &full)[0].tall, 1.0);
+    // A hostile scale or dab neither panics nor asks for an endless rectangle.
+    let mut b = mk(f32::NAN);
+    assert_eq!(dabs_of(&b, &full)[0].tall, 1.0);
+    b.shape_dynamics.tilt_scale = 1e9;
+    assert_eq!(dabs_of(&b, &full)[0].tall, 3.0);
+    let ctx = BrushContext::new(&mk(2.0));
+    for tall in [f32::NAN, f32::INFINITY, -4.0, 0.0, 1e30] {
+        let d = Dab { tall, proj_scale: tall, proj_cross: tall, proj_angle: tall, ..Dab::round(Point::new(50.0, 50.0), 20.0, 1.0) };
+        let r = ctx.dab_rect(&d, false);
+        assert!(r.width() <= 2000 && r.height() <= 2000, "{tall}: {r:?}");
+        let mut out = Vec::new();
+        ctx.rasterize(&d, false, r, &mut out);
+        assert!(out.iter().all(|v| v.is_finite()), "{tall}");
+    }
 }
 
 #[test]
-fn brush_projection_foreshortens_along_tilt_and_turns_with_rotation() {
-    let mk = |on: bool| BrushSettings { size: 40.0, shape_dynamics: ShapeDynamics { enabled: true, brush_projection: on, ..Default::default() }, ..brush() };
-    // Tilted 60° towards +x: the tip is foreshortened to cos 60° = ½ along x.
-    let pts = [pen(50.0, 50.0, 60.0, 0.0, 0.0)];
-    let d = dabs_of(&mk(true), &pts)[0];
-    assert!((d.proj_scale - 0.5).abs() < 1e-4 && d.proj_angle.abs() < 1e-5, "{d:?}");
+fn brush_projection_stretches_away_from_the_lean_and_turns_with_rotation() {
+    let mk = |on: bool| BrushSettings { size: 60.0, shape_dynamics: ShapeDynamics { enabled: true, brush_projection: on, ..Default::default() }, ..brush() };
+    // Photoshop, measured on a 60 px round tip (59.4 px by its moments), as the footprint's
+    // length along the lean, width across it and the distance its centre moves away from the
+    // lean: 40° → 84.8 × 60.9, 9.4 px; 60° (full tilt) → 178.4 × 68.2, 43.7 px; 60° over both
+    // axes → 117.1 × 63.2, 20.0 px.
+    let diagonal = 60.0 / std::f32::consts::SQRT_2;
+    for (tilt_x, tilt_y, along, across, shift) in [(40.0, 0.0, 84.8, 60.9, 9.4), (60.0, 0.0, 178.4, 68.2, 43.7), (diagonal, diagonal, 117.1, 63.2, 20.0)] {
+        let d = dabs_of(&mk(true), &[pen(200.0, 200.0, tilt_x, tilt_y, 0.0)])[0];
+        assert!((d.proj_scale * 59.4 - along).abs() < 1.5, "{tilt_x},{tilt_y}: along {}", d.proj_scale * 59.4);
+        assert!((d.proj_cross * 59.4 - across).abs() < 0.6, "{tilt_x},{tilt_y}: across {}", d.proj_cross * 59.4);
+        let moved = (d.center.x - 200.0).hypot(d.center.y - 200.0);
+        assert!((moved - shift).abs() < 0.8, "{tilt_x},{tilt_y}: moved {moved}");
+        // Away from the lean: left for a pen leaning right, up-left for one leaning down-right.
+        assert!(d.center.x < 200.0 && (tilt_y == 0.0 || d.center.y < 200.0), "{d:?}");
+    }
+    // Leaning right at 40°: the footprint is that much longer along x, about as tall as before.
+    let d = dabs_of(&mk(true), &[pen(200.0, 200.0, 40.0, 0.0, 0.0)])[0];
     let (w, h) = extents(&mk(true), &d);
-    assert!((w as i32 - 20).abs() <= 2 && h >= 38, "{w}×{h}");
-    // Tilted along y instead: foreshortened vertically.
-    let d = dabs_of(&mk(true), &[pen(50.0, 50.0, 0.0, 60.0, 0.0)])[0];
+    assert!((w as i32 - 85).abs() <= 2 && (h as i32 - 61).abs() <= 2, "{w}×{h}");
+    // Leaning up the screen instead: longer along y.
+    let d = dabs_of(&mk(true), &[pen(200.0, 200.0, 0.0, -40.0, 0.0)])[0];
     let (w, h) = extents(&mk(true), &d);
-    assert!(w >= 38 && (h as i32 - 20).abs() <= 2, "{w}×{h}");
-    // Off: the tilt doesn't touch the tip.
-    let d = dabs_of(&mk(false), &pts)[0];
-    assert_eq!((d.proj_scale, d.angle), (1.0, 0.0));
-    assert_eq!(extents(&mk(false), &d), (40, 40));
+    assert!((w as i32 - 61).abs() <= 2 && (h as i32 - 85).abs() <= 2 && d.center.y > 200.0, "{w}×{h} {d:?}");
+    // Off, or an upright pen: the tilt doesn't touch the tip.
+    let d = dabs_of(&mk(false), &[pen(200.0, 200.0, 40.0, 0.0, 0.0)])[0];
+    assert_eq!((d.proj_scale, d.proj_cross, d.angle, d.center.x), (1.0, 1.0, 0.0, 200.0));
+    assert_eq!(extents(&mk(false), &d), (60, 60));
+    let d = dabs_of(&mk(true), &[pen(200.0, 200.0, 0.0, 0.0, 0.0)])[0];
+    assert_eq!((d.proj_scale, d.proj_cross, d.center.x), (1.0, 1.0, 200.0));
+    // Tilt past the device's range is held at full tilt (no endless footprint).
+    let d = dabs_of(&mk(true), &[pen(200.0, 200.0, 90.0, 90.0, 0.0)])[0];
+    assert!(d.proj_scale.is_finite() && d.proj_scale < 3.5 && d.center.x.is_finite(), "{d:?}");
     // Barrel rotation turns the tip (an elliptical one shows it).
     let mut b = mk(true);
     b.roundness = 0.5;
@@ -1899,10 +1984,10 @@ fn brush_projection_foreshortens_along_tilt_and_turns_with_rotation() {
     assert!(w < h, "{w}×{h}");
     // Dual-brush dabs are never projected.
     let ctx = BrushContext::new(&mk(true));
-    let dd = Dab { proj_scale: 0.3, ..Dab::round(Point::new(50.0, 50.0), 20.0, 1.0) };
+    let dd = Dab { proj_scale: 2.0, proj_cross: 1.2, tall: 2.0, ..Dab::round(Point::new(50.0, 50.0), 20.0, 1.0) };
     let (r, mut a, mut c) = (ctx.dab_rect(&dd, true), Vec::new(), Vec::new());
     ctx.rasterize(&dd, true, r, &mut a);
-    ctx.rasterize(&Dab { proj_scale: 1.0, ..dd }, true, r, &mut c);
+    ctx.rasterize(&Dab { proj_scale: 1.0, proj_cross: 1.0, tall: 1.0, ..dd }, true, r, &mut c);
     assert_eq!(a, c);
 }
 
@@ -2459,5 +2544,40 @@ fn batched_and_row_parallel_dabs_equal_dabs_laid_one_at_a_time() {
             }
         }
         assert!(inked > 200, "brush {k}: {inked}");
+    }
+}
+
+/// Line width (ink across the stroke, in pixels) of a 60 px hard brush at 5 % spacing whose size
+/// follows pen pressure, held at `pressure` along a horizontal line.
+fn pressure_line_width(pressure: f32) -> f32 {
+    let b = BrushSettings {
+        size: 60.0,
+        spacing: 0.05,
+        pressure_size: false,
+        shape_dynamics: ShapeDynamics { enabled: true, size: Dynamic::controlled(Control::PenPressure), ..Default::default() },
+        ..brush()
+    };
+    let pts: Vec<StrokePoint> = (0..=100).map(|i| StrokePoint::new(100.0 + 2.0 * f64::from(i), 100.0, pressure)).collect();
+    let s = paint(&b, &pts, 0, 0);
+    // Mean over a few columns: dabs 1 px apart leave a slight ripple along a thin line.
+    (190..210).map(|x| alpha_sum(&s, Rect::new(x, 40, x + 1, 160))).sum::<f32>() / 20.0
+}
+
+#[test]
+fn a_pressure_thinned_line_is_as_wide_as_photoshops() {
+    // Photoshop 2026, synthetic pen, 60 px hard round at 5 % spacing, size on Pen Pressure
+    // (docs/pen-input-validation.md › Photoshop pressure and tilt): (pressure in 1/255 steps,
+    // line width in px). Prism's lines at this spacing are still 0.3–1.2 px wider at every size
+    // (an open gap, also without pressure); the bound keeps that from growing.
+    let photoshop = [(4, 0.72), (5, 0.84), (8, 1.76), (11, 2.60), (16, 4.08), (22, 5.37), (27, 6.84), (33, 8.07), (38, 9.20), (51, 12.75), (128, 30.07), (255, 60.40)];
+    for (level, width) in photoshop {
+        let ours = pressure_line_width(level as f32 / 255.0);
+        eprintln!("p={level}/255 d={:.2}: Photoshop {width:.2}, Prism {ours:.2}", 60.0 * level as f32 / 255.0);
+        assert!((ours - width).abs() <= 1.3, "pressure {level}/255: {ours} vs Photoshop's {width}");
+    }
+    // The thin end, where the small tips' own profile would draw the line a third too thin.
+    for (level, width) in [(8, 1.76), (11, 2.60), (16, 4.08)] {
+        let ours = pressure_line_width(level as f32 / 255.0);
+        assert!((ours - width).abs() <= 0.45, "pressure {level}/255: {ours} vs Photoshop's {width}");
     }
 }

@@ -185,8 +185,9 @@ pub struct ShapeDynamics {
     /// Size jitter / control; `minimum` is Photoshop's Minimum Diameter.
     pub size: Dynamic,
     /// Tilt Scale, 0..2 (0–200 %): with the size control on Pen Tilt, how much a tilted pen
-    /// squashes the tip's height (before the tip angle is applied). At full tilt the height is
-    /// scaled by `1 − tiltScale / 2`, so 0 leaves the tip alone and 200 % flattens it.
+    /// stretches the tip's height (before the tip angle is applied). At the pen's full tilt the
+    /// height is scaled by `1 + tiltScale`, so 0 leaves the tip alone and 200 % makes it three
+    /// times as tall (measured in Photoshop; the diameter itself doesn't follow the tilt).
     pub tilt_scale: f32,
     /// Angle jitter (fraction of ±180°) / control.
     pub angle: Dynamic,
@@ -195,7 +196,8 @@ pub struct ShapeDynamics {
     pub flip_x_jitter: bool,
     pub flip_y_jitter: bool,
     /// Brush Projection: the pen's tilt and barrel rotation are applied to the tip as a
-    /// projection (the tip is foreshortened along the tilt direction and turns with the pen).
+    /// projection (the tip stretches along the tilt direction, away from the lean, and turns
+    /// with the pen).
     pub brush_projection: bool,
 }
 

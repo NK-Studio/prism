@@ -411,6 +411,49 @@ impl PathWalker {
 // Dynamics
 // ---------------------------------------------------------------------------
 
+/// The tilt, in degrees, at which Photoshop's Pen Tilt controls reach their end: the full tilt a
+/// pen reports (AppKit's tilt of 1; Wacom pens stop at about 60°). Measured on macOS with a
+/// synthetic pen (docs/pen-input-validation.md › Photoshop pressure and tilt): roundness and
+/// opacity on Pen Tilt run `1 − f` exactly, `f` being the tilt as a fraction of the full tilt.
+pub const FULL_TILT_DEGREES: f32 = 60.0;
+
+/// The pen's lean as a fraction of the device's full tilt: 0 upright (or a mouse), 1 at
+/// [`FULL_TILT_DEGREES`] or more. Both axes count (the length of the tilt vector).
+pub fn tilt_fraction(p: &StrokePoint) -> f32 {
+    let t = p.tilt_x.hypot(p.tilt_y) / FULL_TILT_DEGREES;
+    if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 }
+}
+
+/// Brush Projection, as Photoshop draws it (measured, same section): the tip stands across the
+/// pen's axis and is thrown onto the canvas from a point up the pen, 1 / [`PROJECTION_CONE`] tip
+/// radii from the tip (a cone, so the footprint of a round tip is an ellipse). The pen's lean per
+/// axis is [`PROJECTION_FULL_DEGREES`] at the device's full tilt.
+pub const PROJECTION_FULL_DEGREES: f32 = 64.0;
+/// Tangent of the projection cone's half angle (the tip's radius over the distance to the apex).
+pub const PROJECTION_CONE: f32 = 0.24;
+
+/// A tilted pen's Brush Projection: the direction the pen leans (radians, counter-clockwise, y
+/// up), the tip's scale along that direction and across it, and how far the footprint's centre
+/// moves away from the lean, in tip radii. `None` for an upright pen.
+pub fn tilt_projection(p: &StrokePoint) -> Option<(f32, f32, f32, f32)> {
+    let axis = |degrees: f32| {
+        let t = if degrees.is_finite() { (degrees / FULL_TILT_DEGREES).clamp(-1.0, 1.0) } else { 0.0 };
+        (t * PROJECTION_FULL_DEGREES).to_radians().tan()
+    };
+    // The pen's direction is (tan θx, tan θy, 1): its lean from upright and where it points.
+    let (lx, ly) = (axis(p.tilt_x), -axis(p.tilt_y));
+    let lean = lx.hypot(ly).atan().min(PROJECTION_FULL_DEGREES.to_radians());
+    if lean <= 1e-4 {
+        return None;
+    }
+    let cone = PROJECTION_CONE.atan();
+    // Where the cone's two edge rays in the plane of the lean meet the canvas, in tip radii from
+    // the pen tip: further on the side the pen leans away from.
+    let (far, near) = (cone.cos() / (lean + cone).cos().max(0.02), cone.cos() / (lean - cone).cos().max(0.02));
+    let across = cone.cos() * lean.cos() / ((lean + cone).cos() * (lean - cone).cos()).max(1e-4).sqrt();
+    Some((ly.atan2(lx), (far + near) / 2.0, across, (far - near) / 2.0))
+}
+
 /// Scalar control value in 0..1.
 pub fn control_value(c: Control, fade_steps: u32, s: &StepInput) -> f32 {
     let p = &s.point;
@@ -418,8 +461,9 @@ pub fn control_value(c: Control, fade_steps: u32, s: &StepInput) -> f32 {
         Control::Off | Control::InitialDirection | Control::Direction => 1.0,
         Control::Fade => 1.0 - (s.step as f32 / fade_steps.max(1) as f32).min(1.0),
         Control::PenPressure => p.pressure.clamp(0.0, 1.0),
-        // Upright pen = 1, flat pen = 0 (a mouse reports no tilt, so paints at full value).
-        Control::PenTilt => 1.0 - (p.tilt_x.hypot(p.tilt_y) / 90.0).clamp(0.0, 1.0),
+        // Upright pen = 1, pen at the device's full tilt = 0 (a mouse reports no tilt, so paints
+        // at full value).
+        Control::PenTilt => 1.0 - tilt_fraction(p),
         Control::StylusWheel => p.wheel.clamp(0.0, 1.0),
         Control::Rotation => (p.rotation.rem_euclid(360.0)) / 360.0,
     }
@@ -568,7 +612,11 @@ pub fn dynamic_color(b: &BrushSettings, s: &StepInput, seed: u64, index: u64) ->
 /// × the size jitter, `r` being the jitter's random number.
 pub fn dab_diameter(b: &BrushSettings, s: &StepInput, r: f32) -> f32 {
     let sd = &b.shape_dynamics;
-    let cv = if sd.enabled && sd.size.control != Control::Off {
+    let cv = if sd.enabled && sd.size.control == Control::PenTilt {
+        // Photoshop's size control on Pen Tilt leaves the diameter alone at every tilt and Minimum
+        // Diameter (measured): it stretches the tip's height by Tilt Scale instead (`tilt_tall`).
+        1.0
+    } else if sd.enabled && sd.size.control != Control::Off {
         dynamic_control(&sd.size, s)
     } else if b.pressure_size {
         s.point.pressure.clamp(0.0, 1.0)
@@ -576,6 +624,23 @@ pub fn dab_diameter(b: &BrushSettings, s: &StepInput, r: f32) -> f32 {
         1.0
     };
     (b.size * if sd.enabled { jittered(&sd.size, cv, r) * csp_tilt(&sd.size, s) * csp_speed(&sd.size, s) * csp_random(&sd.size, r) } else { cv }).min(crate::brush::MAX_BRUSH_SIZE)
+}
+
+/// Tilt Scale: the factor on the tip's height with the size control on Pen Tilt. Photoshop
+/// stretches the height by `1 + tiltScale × f` (measured: ×3 at 200 % and full tilt, ×2 at 100 %,
+/// nothing at 0 %), `f` being [`tilt_fraction`].
+pub fn tilt_tall(b: &BrushSettings, p: &StrokePoint) -> f32 {
+    let sd = &b.shape_dynamics;
+    if !sd.enabled || sd.size.control != Control::PenTilt || !sd.tilt_scale.is_finite() {
+        return 1.0;
+    }
+    1.0 + sd.tilt_scale.clamp(0.0, 2.0) * tilt_fraction(p)
+}
+
+/// Whether the brush's Pen Tilt controls follow Photoshop (a CLIP STUDIO brush keeps its own
+/// tilt direction: docs/sut-analysis.md).
+fn photoshop_tilt(b: &BrushSettings) -> bool {
+    b.csp_anti_alias.is_none() && b.csp_tip_scale.is_none()
 }
 
 /// Builds the primary dabs of a step (Shape Dynamics, Scattering, Transfer, Color, Texture depth).
@@ -682,11 +747,21 @@ impl DabBuilder {
                 // orientation, `jit2-angle-25`).
                 let controlled_angle = if sd.angle.control == Control::PenPressure {
                     360.0 * dynamic_control(&sd.angle, s)
+                } else if sd.angle.control == Control::PenTilt && photoshop_tilt(b) && (s.point.tilt_x != 0.0 || s.point.tilt_y != 0.0) {
+                    // Photoshop turns the tip's height towards the pen's lean (measured: the long
+                    // axis of a flat tip lies across it), a quarter turn from the lean itself.
+                    control_angle(Control::PenTilt, 0, s) + 90.0
                 } else {
                     control_angle(sd.angle.control, sd.angle.fade_steps, s)
                 };
-                angle += controlled_angle + rand_signed(seed, i, stream::ANGLE) * sd.angle.jitter.clamp(0.0, 1.0) * 360.0;
                 roundness = (roundness * scalar(&sd.roundness, s, r(stream::ROUNDNESS))).clamp(0.01, 1.0);
+                // Photoshop doesn't turn a fully round computed tip (measured with the angle on Pen
+                // Tilt: with Tilt Scale its stretched height stays upright; taken to hold for the
+                // other angle controls and the jitter, which only Tilt Scale could show).
+                let turns = !(matches!(b.tip, crate::brush::TipShape::Round) && roundness >= 0.999 && photoshop_tilt(b));
+                if turns {
+                    angle += controlled_angle + rand_signed(seed, i, stream::ANGLE) * sd.angle.jitter.clamp(0.0, 1.0) * 360.0;
+                }
                 if sd.flip_x_jitter && r(stream::FLIP_X) < 0.5 {
                     fx = !fx;
                 }
@@ -700,19 +775,12 @@ impl DabBuilder {
                 angle = spray.angle;
             }
             // Tilt Scale and Brush Projection (Shape Dynamics).
-            let (mut proj_angle, mut proj_scale) = (0.0, 1.0);
-            if sd.enabled {
-                let tilt = s.point.tilt_x.hypot(s.point.tilt_y).clamp(0.0, 90.0);
-                if sd.size.control == Control::PenTilt && sd.tilt_scale > 0.0 {
-                    let k = 1.0 - sd.tilt_scale.clamp(0.0, 2.0) * 0.5 * tilt / 90.0;
-                    roundness = (roundness * k).clamp(0.01, 1.0);
-                }
-                if sd.brush_projection {
-                    angle += s.point.rotation;
-                    if tilt > 0.0 {
-                        proj_angle = (-s.point.tilt_y).atan2(s.point.tilt_x);
-                        proj_scale = tilt.to_radians().cos().max(0.05);
-                    }
+            let (mut proj_angle, mut proj_scale, mut proj_cross, mut proj_shift) = (0.0, 1.0, 1.0, 0.0);
+            let tall = tilt_tall(b, &s.point);
+            if sd.enabled && sd.brush_projection {
+                angle += s.point.rotation;
+                if let Some((lean, along, across, shift)) = tilt_projection(&s.point) {
+                    (proj_angle, proj_scale, proj_cross, proj_shift) = (lean, along, across, shift);
                 }
             }
             // A dab shrunk to nothing paints nothing (Photoshop's size Fade to 0 % stops painting);
@@ -724,6 +792,12 @@ impl DabBuilder {
             let radius = (diameter / 2.0).max(0.5);
             // Scatter.
             let mut c = Point::new(s.point.x, s.point.y);
+            if proj_shift != 0.0 {
+                // The projected footprint lies away from the pen's lean (y-down image space).
+                let d = f64::from(proj_shift * radius);
+                c.x -= d * f64::from(proj_angle.cos());
+                c.y += d * f64::from(proj_angle.sin());
+            }
             if let Some(spray) = spray {
                 let radial = crate::csp_spray::radial(spray.bias, r(stream::SPRAY_RADIUS_A), r(stream::SPRAY_RADIUS_B));
                 let distance = f64::from(area_diameter.max(0.0) * 0.5 * radial);
@@ -807,6 +881,8 @@ impl DabBuilder {
                 index: i,
                 proj_angle,
                 proj_scale,
+                proj_cross,
+                tall,
                 wet,
                 mix,
                 paint_amount,
@@ -869,6 +945,8 @@ impl DualBuilder {
                 index: i,
                 proj_angle: 0.0,
                 proj_scale: 1.0,
+                proj_cross: 1.0,
+                tall: 1.0,
                 wet: 1.0,
                 mix: 1.0,
                 paint_amount: 1.0,
