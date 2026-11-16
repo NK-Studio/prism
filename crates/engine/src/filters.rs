@@ -5,7 +5,8 @@
 //! undoable. `filter.lastFilter` re-runs the most recent filter command.
 
 use prism_algo::{
-    self as algo, Distribution, FilterParams, PolarMode, Preserve, RadialMethod, RadialQuality, RippleSize, SpherizeMode, UndefinedAreas, WaveType,
+    self as algo, Distribution, FilterParams, PolarMode, Preserve, RadialMethod, RadialQuality, RippleSize, SharpenRemove, SpherizeMode, UndefinedAreas,
+    WaveType,
 };
 use prism_doc::{LayerContent, SmartFilter};
 use serde_json::{Value, json};
@@ -44,11 +45,11 @@ fn preserve(p: &Value) -> Preserve {
 /// algorithm's) and the fixed parameters, tuned to match the reference app's fixed-strength filters.
 fn preset(id: &str) -> Option<(&'static str, FilterParams)> {
     Some(match id {
-        "filter.blur.blur" => ("Blur", FilterParams::GaussianBlur { radius: 0.6 }),
-        "filter.blur.blurMore" => ("Blur More", FilterParams::GaussianBlur { radius: 1.4 }),
-        "filter.sharpen.sharpen" => ("Sharpen", FilterParams::UnsharpMask { amount: 60.0, radius: 0.5, threshold: 0.0 }),
-        "filter.sharpen.sharpenMore" => ("Sharpen More", FilterParams::UnsharpMask { amount: 150.0, radius: 0.6, threshold: 0.0 }),
-        "filter.sharpen.sharpenEdges" => ("Sharpen Edges", FilterParams::UnsharpMask { amount: 100.0, radius: 0.8, threshold: 6.0 }),
+        "filter.blur.blur" => ("Blur", FilterParams::BlurKernel { more: false }),
+        "filter.blur.blurMore" => ("Blur More", FilterParams::BlurKernel { more: true }),
+        "filter.sharpen.sharpen" => ("Sharpen", FilterParams::Sharpen { more: false }),
+        "filter.sharpen.sharpenMore" => ("Sharpen More", FilterParams::Sharpen { more: true }),
+        "filter.sharpen.sharpenEdges" => ("Sharpen Edges", FilterParams::SharpenEdges),
         "filter.noise.despeckle" => ("Despeckle", FilterParams::SurfaceBlur { radius: 2.0, threshold: 12.0 }),
         _ => return None,
     })
@@ -88,6 +89,13 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             amount: f(p, "amount", 100.0).clamp(1.0, 500.0),
             radius: f(p, "radius", 1.0).clamp(0.1, 64.0),
             reduce_noise: f(p, "reduceNoise", 10.0).clamp(0.0, 100.0),
+            remove: match s(p, "remove", "gaussianBlur") {
+                "lensBlur" => SharpenRemove::LensBlur,
+                "motionBlur" => SharpenRemove::MotionBlur,
+                _ => SharpenRemove::GaussianBlur,
+            },
+            angle: f(p, "angle", 0.0).clamp(-180.0, 180.0),
+            legacy: b(p, "legacy", false),
         },
         "filter.other.highPass" => FilterParams::HighPass { radius: f(p, "radius", 10.0).clamp(0.1, 1000.0) },
         "filter.noise.addNoise" => FilterParams::AddNoise {
@@ -335,7 +343,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "filter.sharpen.smartSharpen",
             "Smart Sharpen…",
             ["Filter", "Sharpen"],
-            r##"{"amount":1..500=100,"radius":0.1..64=1,"reduceNoise":0..100=10}"##
+            r##"{"amount":1..500=100,"radius":0.1..64=1,"reduceNoise":0..100=10,"remove":"gaussianBlur|lensBlur|motionBlur","angle":-180..180=0,"legacy":bool}"##
         ),
         filter_cmd!(
             "filter.noise.addNoise",

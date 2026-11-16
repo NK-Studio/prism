@@ -206,7 +206,8 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
         // Photoshop doesn't dim the window behind dialogs: previews must be judged at true contrast.
         let modal = modal.show(ctx, |ui| {
             sizing = ui.is_sizing_pass();
-            ui.set_min_width(380.0);
+            let classic_filter = crate::filter_ps_ui::owns(&fields);
+            ui.set_min_width(if classic_filter { crate::filter_ps_ui::WIDTH } else { 380.0 });
             let wide = crate::prefs_ui::width(&d.fields);
             if let Some(w) = wide {
                 ui.set_min_width(w.min(460.0));
@@ -229,6 +230,8 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 crate::about_ui::width(ctx)
             } else if d.kind == DialogKind::LayerStyle {
                 crate::layer_style::WIDTH
+            } else if classic_filter {
+                crate::filter_ps_ui::WIDTH
             } else if d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) || crate::new_layer_ui::owns(&d.fields) {
                 600.0
             } else {
@@ -292,6 +295,17 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 if close {
                     outcome = Some(false);
                 }
+            } else if crate::filter_ps_ui::owns(&fields) {
+                // Photoshop centres a filter dialog's title over a hairline.
+                let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(13.0))).selectable(false);
+                let t = ui.vertical_centered(|ui| ui.add(label).rect).inner;
+                let bar = egui::Rect::from_min_max(egui::pos2(ui.max_rect().left(), t.top()), egui::pos2(ui.max_rect().right(), t.bottom()));
+                let r = ui.interact(bar, id.with("title"), egui::Sense::drag());
+                drag = r.drag_delta();
+                drag_started |= r.drag_started_by(egui::PointerButton::Primary);
+                ui.add_space(4.0);
+                crate::widgets::hairline(ui);
+                ui.add_space(10.0);
             } else {
                 let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
                 let t = if color_picker { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };
@@ -339,6 +353,8 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 DialogKind::Command if fields.contains_key("__export") => crate::export_dialog::body(app, ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__sizing") => crate::sizing::body(app, ui, &mut fields),
                 DialogKind::Command if crate::adjust_dialog::owns(&fields) => crate::adjust_dialog::body(app, ui, &mut fields),
+                // Photoshop's classic filter dialog: preview, OK / Cancel / Preview on the right.
+                DialogKind::Command if crate::filter_ps_ui::owns(&fields) => outcome = crate::filter_ps_ui::body(app, ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__filter") => {
                     // Color Settings: the monitor profile in use can change while it is open.
                     if fields.get("__command").and_then(Value::as_str) == Some("edit.colorSettings") {
@@ -357,7 +373,11 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
             }
             if new_doc {
                 // Its body drew Close / Create and took Enter.
-            } else if crate::color_picker_ui::owns(&fields) || d.kind == DialogKind::LayerStyle || crate::new_layer_ui::owns(&fields) {
+            } else if crate::color_picker_ui::owns(&fields)
+                || d.kind == DialogKind::LayerStyle
+                || crate::new_layer_ui::owns(&fields)
+                || crate::filter_ps_ui::owns(&fields)
+            {
                 if outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     outcome = Some(true);
                 }

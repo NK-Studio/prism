@@ -42,7 +42,7 @@ fn all_filters() -> Vec<FilterParams> {
         FilterParams::RadialBlur { amount: 30.0, method: RadialMethod::Zoom, quality: RadialQuality::Good, center_x: 0.3, center_y: 0.6 },
         FilterParams::SurfaceBlur { radius: 3.0, threshold: 20.0 },
         FilterParams::UnsharpMask { amount: 150.0, radius: 1.5, threshold: 2.0 },
-        FilterParams::SmartSharpen { amount: 100.0, radius: 1.0, reduce_noise: 20.0 },
+        FilterParams::SmartSharpen { amount: 100.0, radius: 1.0, reduce_noise: 20.0, remove: SharpenRemove::GaussianBlur, angle: 0.0, legacy: false },
         FilterParams::HighPass { radius: 3.0 },
         FilterParams::AddNoise { amount: 25.0, distribution: Distribution::Gaussian, monochromatic: false, seed: 3 },
         FilterParams::Median { radius: 2.0 },
@@ -173,20 +173,24 @@ fn float_surfaces_keep_hdr_values() {
 
 #[test]
 fn gaussian_sigma_matches_radius() {
-    // A single bright pixel blurs into a Gaussian with sigma = radius.
+    // A single bright pixel blurs into Photoshop's kernel: at radius 2 the measured kernel falls to
+    // 0.654 of its centre two pixels out; past 3 pixels it is a Gaussian of σ = radius.
     let mut s = Surface::new(fmt(SampleType::F32));
     s.write_pixel(20, 15, &[1.0, 1.0, 1.0, 1.0]);
-    let out = apply(&s, &FilterParams::GaussianBlur { radius: 2.0 }, R, R, None);
-    let a0 = out.pixel(20, 15)[3];
-    let a2 = out.pixel(22, 15)[3];
-    // exp(-d²/2σ²) at d = σ = 2 → e^-0.5
-    assert!((a2 / a0 - (-0.5f32).exp()).abs() < 1e-3, "{}", a2 / a0);
+    let ratio = |radius: f32| {
+        let out = apply(&s, &FilterParams::GaussianBlur { radius }, R, R, None);
+        out.pixel(20 + radius as i32, 15)[3] / out.pixel(20, 15)[3]
+    };
+    assert!((ratio(2.0) - 0.12157 / 0.18582).abs() < 1e-3, "{}", ratio(2.0));
+    // exp(-d²/2σ²) at d = σ = 4 → e^-0.5
+    assert!((ratio(4.0) - (-0.5f32).exp()).abs() < 1e-3, "{}", ratio(4.0));
 }
 
 #[test]
 fn unsharp_threshold_and_contrast() {
     let s = pattern(SampleType::F32, R);
-    let none = run(&s, &FilterParams::UnsharpMask { amount: 200.0, radius: 2.0, threshold: 255.0 });
+    // The threshold comes off the amount-scaled difference: at 100 % no difference exceeds 255 levels.
+    let none = run(&s, &FilterParams::UnsharpMask { amount: 100.0, radius: 2.0, threshold: 255.0 });
     assert_eq!(none.read_region(R), s.read_region(R), "threshold 255 disables sharpening");
     let sharp = run(&s, &FilterParams::UnsharpMask { amount: 200.0, radius: 2.0, threshold: 0.0 });
     let var = |surf: &Surface| {
@@ -216,7 +220,8 @@ fn noise_is_deterministic_monochrome_and_centred() {
     for px in v.as_chunks::<4>().0 {
         assert_eq!(px[0], px[1]);
         assert_eq!(px[1], px[2]);
-        assert!((px[0] - 0.5).abs() <= 0.25 + 1e-6);
+        // Uniform 50 %: ±(round(2.55 × 50) + 0.5) levels, half a level above zero.
+        assert!((px[0] - 0.5).abs() <= 129.0 / 255.0 + 1e-6);
         mean += px[0];
     }
     mean /= (v.len() / 4) as f32;

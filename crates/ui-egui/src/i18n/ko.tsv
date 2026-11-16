@@ -476,7 +476,7 @@
 	Field Blur…	필드 흐림 효과…
 	Iris Blur…	조리개 흐림 효과…
 	Tilt-Shift…	기울기-이동…
-	Path Blur…	패스 흐림 효과…
+	Path Blur…	경로 흐림 효과…
 	Spin Blur…	회전 흐림 효과…
 	Blur More	더 흐리게
 	Box Blur…	상자 흐림 효과…
@@ -489,18 +489,18 @@
 	Surface Blur…	표면 흐림 효과…
 	Average	평균
 	Displace…	변위…
-	Pinch…	오므리기…
+	Pinch…	핀치…
 	Polar Coordinates…	극좌표…
 	Ripple…	잔물결…
-	Shear…	전단…
+	Shear…	기울임…
 	Spherize…	구형화…
 	Twirl…	돌리기…
-	Wave…	파동…
+	Wave…	파형…
 	ZigZag…	지그재그…
 	Noise	노이즈
 	Add Noise…	노이즈 추가…
 	Despeckle	반점 제거
-	Dust & Scratches…	더스트와 스크래치…
+	Dust & Scratches…	먼지와 스크래치…
 	Median…	중간값…
 	Reduce Noise…	노이즈 감소…
 	Pixelate	픽셀화
@@ -2435,7 +2435,7 @@ cameraRaw	Color	색상
 	Field Blur	필드 흐림 효과
 	Iris Blur	조리개 흐림 효과
 	Tilt-Shift	기울기-이동
-	Path Blur	패스 흐림 효과
+	Path Blur	경로 흐림 효과
 	Spin Blur	회전 흐림 효과
 	Box Blur	상자 흐림 효과
 	Gaussian Blur	가우시안 흐림 효과
@@ -2446,16 +2446,16 @@ cameraRaw	Color	색상
 	Smart Blur	고급 흐림 효과
 	Surface Blur	표면 흐림 효과
 	Displace	변위
-	Pinch	오므리기
+	Pinch	핀치
 	Polar Coordinates	극좌표
 	Ripple	잔물결
-	Shear	전단
+	Shear	기울임
 	Spherize	구형화
 	Twirl	돌리기
-	Wave	파동
+	Wave	파형
 	ZigZag	지그재그
 	Add Noise	노이즈 추가
-	Dust & Scratches	더스트와 스크래치
+	Dust & Scratches	먼지와 스크래치
 	Color Halftone	색상 하프톤
 	Crystallize	수정화
 	Mezzotint	메조틴트
@@ -2552,7 +2552,7 @@ cameraRaw	Color	색상
 	Edge Extension	가장자리 확장
 	Edge Only	가장자리만
 	Enlarged	확대
-	Even Fields	짝수 필드
+	Even Fields	짝수 행
 	Faded Film	바랜 필름
 	Film Grain	필름 그레인
 	Fine	미세하게
@@ -2592,7 +2592,7 @@ cameraRaw	Color	색상
 	Medium Strokes	중간 획
 	Mono Contrast	단색 대비
 	Mosaic Tiles	모자이크 타일
-	Movie Prime	영화용 단렌즈
+	Movie Prime	동영상 프라임
 	Multiple Flames Along Path	패스를 따른 여러 불꽃
 	Multiple Flames One Direction	한 방향으로 여러 불꽃
 	Multiple Flames Path Directions	패스 방향으로 여러 불꽃
@@ -2601,7 +2601,7 @@ cameraRaw	Color	색상
 	Note Paper	메모지
 	Ocean Ripple	바다 물결
 	Octagon	팔각형
-	Odd Fields	홀수 필드
+	Odd Fields	홀수 행
 	One Flame Along Path	패스를 따른 단일 불꽃
 	Out From Center	중심에서 바깥쪽으로
 	Oval	타원
@@ -2689,6 +2689,7 @@ cameraRaw	Color	색상
 	Wrap	감싸기
 	Zigzag	지그재그
 @id	filter.sharpen.sharpen	선명하게
+@id	filter.blur.blur	흐리게
 	Hold Alt while drawing for straight segments	그리는 중 Alt를 누르면 직선 구간
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	드래그하거나 다각형 점 클릭 · 올가미 중 Alt를 누르면 직선 구간 · {add} 추가 · 그리기 전 {sub} 빼기
 	Move	이동
@@ -3724,3 +3725,121 @@ hand	Grip	꽉 쥐기
 	Underlying Layer:	아래 레이어:
 	Shallow	얕게
 	Deep	깊게
+	Randomize	임의화
+	Create New Fields By	새 칸 추가 방법
+	Lens Type	렌즈 유형
+	50-300mm Zoom	50-300mm 확대/축소
+	35mm Prime	35mm 프라임
+	105mm Prime	105mm 프라임
+filter	Edge	가장자리
+filter	Lower	지정 레벨 이하
+filter	Upper	지정 레벨 이상
+filter	Level	레벨
+filter	Number Of Tiles	타일 수
+filter	Maximum Offset	최대 오프셋
+filter	Fill Empty Area With	이동 후 빈 영역 채우기
+filter	Background Color	배경색
+filter	Foreground Color	전경색
+filter	Inverse Image	반전된 이미지
+filter	Unaltered Image	원본 이미지
+filter	Type	유형
+filter	Blocks	블럭
+filter	Pyramids	피라미드
+filter	Size	크기
+filter	Depth	깊이
+filter	Random	임의
+filter	Level-based	레벨에 기초
+filter	Solid Front Faces	전면을 단일색으로 칠하기
+filter	Mask Incomplete Blocks	불완전한 블럭 마스크
+filter	Method	방법
+filter	Wind	바람
+filter	Blast	강풍
+filter	Stagger	돌풍
+filter	Direction	방향
+filter	From Right	오른쪽에서
+filter	From Left	왼쪽에서
+filter	Mode	모드
+filter	Normal	표준
+filter	Darken Only	어둡게만 하기
+filter	Lighten Only	밝게만 하기
+filter	Anisotropic	비등방성
+filter	Brush	브러시
+filter	Stylization	스타일화
+filter	Cleanliness	정확성
+filter	Scale	비율
+filter	Bristle Detail	강모 상세정보
+filter	Lighting	조명
+filter	Shine	빛
+filter	Angle	각도
+filter	Height	높이
+filter	Amount	양
+filter	Variance	분산
+filter	Strength	강도
+filter	Brightness	밝기
+filter	Rectangular To Polar	직교좌표를 극좌표로
+filter	Polar To Rectangular	극좌표를 직교좌표로
+filter	Small	소
+filter	Medium	중
+filter	Large	대
+filter	Horizontal Only	수평 방향으로만
+filter	Vertical Only	수직 방향으로만
+filter	Ridges	산등성이
+filter	Style	스타일
+filter	Pond Ripples	연못 잔물결
+filter	Out From Center	중심부터
+filter	Around Center	중심 둘레
+filter	Undefined Areas	비정의 영역
+filter	Wrap	감싸기
+filter	Repeat	가장자리 픽셀 반복
+filter	Generators	제네레이터 수
+filter	Sine	사인파
+filter	Triangle	삼각파
+filter	Square	사각파
+	degrees	도
+filter	Screen Angles (Degrees):	스크린 각도(도):
+filter	Max. Radius	최대 반경
+filter	Channel 1	채널 1
+filter	Channel 2	채널 2
+filter	Channel 3	채널 3
+filter	Channel 4	채널 4
+filter	Fine Dots	작은 점
+filter	Medium Dots	중간 점
+filter	Grainy Dots	거친 점
+filter	Coarse Dots	굵은 점
+filter	Short Lines	짧은 선
+filter	Medium Lines	중간 선
+filter	Long Lines	긴 선
+filter	Short Strokes	짧은 획
+filter	Medium Strokes	중간 획
+filter	Long Strokes	긴 획
+filter	Cell Size	셀 크기
+	square	정사각형
+	(Pixels)	(픽셀)
+filter	Blur Method	흐림 효과 방법
+filter	Spin	회전
+filter	Zoom	돋보기
+filter	Quality	품질
+filter	Draft	기본
+filter	Good	양호
+filter	Best	최적
+filter	High	고
+filter	Low	저
+filter	Edge Only	가장자리만
+filter	Overlay Edge	가장자리 오버레이
+filter	Blur Center	흐림 효과 중심
+filter	Horizontal	가로 방향
+filter	Vertical	세로 방향
+filter	Set to Background	배경으로 설정
+filter	Repeat Edge Pixels	가장자리 픽셀 반복
+filter	Wrap Around	감싸기
+filter	Input Mode	입력 모드
+filter	Row Order	행 순서
+filter	Preserve	보존
+filter	Squareness	방형
+filter	Roundness	원형
+filter	Distance	거리
+filter	Radius	반경
+filter	Threshold	한계값
+	pixels right	픽셀 오른쪽
+	pixels down	픽셀 아래
+submenu	Other…	기타

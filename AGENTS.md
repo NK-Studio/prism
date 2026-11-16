@@ -75,6 +75,14 @@ The same read-only analysis and independent implementation boundary applies to i
 SUT/brush processing and directly related resources. Keep raw analysis and local SUT
 files ignored; record evidence and remaining uncertainties in `docs/sut-analysis.md`.
 
+On 2026-11-16 the maintainer explicitly authorized using their local, read-only analysis
+of the installed Photoshop 2026 (macOS) Filter menu (`Standard Multiplugin.plugin`, the
+main executable's filter glue and `AdbePM.framework`) to rebuild Prism's Filter ›
+Noise … Other filters. The same boundary applies: Prism's code is written independently
+from the documented formulas and constants, never from pasted pseudocode, and raw
+analysis stays outside the repository. Evidence, inference and unknowns are recorded in
+`docs/filter-analysis.md`.
+
 ## 4. Picking work
 
 Priorities: important infrastructure first, then low-hanging parity, then the long tail.

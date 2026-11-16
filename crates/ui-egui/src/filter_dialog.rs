@@ -37,6 +37,18 @@ pub enum Kind {
 pub struct Param {
     pub key: String,
     pub kind: Kind,
+    /// A choice's default when the spec names one (`"draft|good|best"="good"`); else the first.
+    pub choice_default: Option<String>,
+}
+
+impl Param {
+    /// The value a dialog starts a choice at.
+    pub fn initial_choice(&self) -> Option<String> {
+        match &self.kind {
+            Kind::Choice(c) => self.choice_default.clone().filter(|d| c.contains(d)).or_else(|| c.first().cloned()),
+            _ => None,
+        }
+    }
 }
 
 /// Parse the registry's parameter notation, e.g.
@@ -76,8 +88,14 @@ pub fn parse_spec(spec: &str) -> Vec<Param> {
             continue;
         }
         let v = v.trim();
+        let mut choice_default = None;
         let kind = if let Some(choices) = v.strip_prefix('"') {
-            let body = choices.split('"').next().unwrap_or("");
+            let mut pieces = choices.split('"');
+            let body = pieces.next().unwrap_or("");
+            // `"a|b"="b"`: the default follows `=` in quotes.
+            if pieces.next().is_some_and(|eq| eq.trim() == "=") {
+                choice_default = pieces.next().map(str::to_string);
+            }
             Kind::Choice(body.split('|').map(str::to_string).collect())
         } else if let Some(rest) = v.strip_prefix("bool") {
             Kind::Bool(rest.trim_start_matches('=').trim() == "true")
@@ -101,13 +119,13 @@ pub fn parse_spec(spec: &str) -> Vec<Param> {
         } else {
             continue;
         };
-        out.push(Param { key, kind });
+        out.push(Param { key, kind, choice_default });
     }
     out
 }
 
 /// Parameter keys measured in pixels (scaled for proxy previews).
-fn is_pixel_param(key: &str) -> bool {
+pub(crate) fn is_pixel_param(key: &str) -> bool {
     matches!(
         key,
         "radius"
@@ -178,7 +196,7 @@ pub fn open(app: &mut PrismApp, command: &str) -> Option<u64> {
     for p in parse_spec(spec.params) {
         let v = match &p.kind {
             Kind::Range { default, .. } => json!(default),
-            Kind::Choice(c) => json!(c.first().cloned().unwrap_or_default()),
+            Kind::Choice(_) => json!(p.initial_choice().unwrap_or_default()),
             Kind::Bool(default) => json!(default),
             Kind::Int { default } => json!(default),
             Kind::Text => json!(""),
@@ -228,7 +246,7 @@ pub fn open_with_spec(app: &mut PrismApp, command: &str, label: &str, spec: &str
     for p in parse_spec(spec) {
         let v = match &p.kind {
             Kind::Range { default, .. } => json!(default),
-            Kind::Choice(c) => json!(c.first().cloned().unwrap_or_default()),
+            Kind::Choice(_) => json!(p.initial_choice().unwrap_or_default()),
             Kind::Bool(default) => json!(default),
             Kind::Int { default } => json!(default),
             _ => continue,
@@ -439,7 +457,7 @@ mod tests {
     #[test]
     fn parses_registry_notation() {
         let p = parse_spec(r#"{"radius":0.1..1000=1,"method":"spin|zoom","monochromatic":bool,"seed":u32=0,"horizontal":px=0}"#);
-        assert_eq!(p[0], Param { key: "radius".into(), kind: Kind::Range { min: 0.1, max: 1000.0, default: 1.0 } });
+        assert_eq!(p[0], Param { key: "radius".into(), kind: Kind::Range { min: 0.1, max: 1000.0, default: 1.0 }, choice_default: None });
         assert_eq!(p[1].kind, Kind::Choice(vec!["spin".into(), "zoom".into()]));
         assert_eq!(p[2].kind, Kind::Bool(false));
         assert_eq!(p[3].kind, Kind::Int { default: 0 });

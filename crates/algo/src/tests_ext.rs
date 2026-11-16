@@ -359,12 +359,15 @@ fn diffuse_only_moves_pixels_locally() {
 fn trace_contour_draws_line_at_level_crossing() {
     let mut s = flat(SampleType::F32, R, [0.2, 0.2, 0.2, 1.0]);
     s.fill_rect(Rect::new(20, 0, 40, 30), &[0.8, 0.8, 0.8, 1.0]);
+    // As Photoshop draws it: Upper outlines the dark pixels touching the bright area, Lower the
+    // bright pixels touching the dark one.
     let up = run(&s, &FilterParams::TraceContour { level: 128.0, upper: true });
-    assert_eq!(up.pixel(20, 10)[0], 0.0, "line on the bright side");
-    assert_eq!(up.pixel(19, 10)[0], 1.0);
+    assert_eq!(up.pixel(19, 10)[0], 0.0, "Upper: line on the dark side");
+    assert_eq!(up.pixel(20, 10)[0], 1.0);
     assert_eq!(up.pixel(30, 10)[0], 1.0);
     let lo = run(&s, &FilterParams::TraceContour { level: 128.0, upper: false });
-    assert_eq!(lo.pixel(19, 10)[0], 0.0, "line on the dark side");
+    assert_eq!(lo.pixel(20, 10)[0], 0.0, "Lower: line on the bright side");
+    assert_eq!(lo.pixel(19, 10)[0], 1.0);
 }
 
 #[test]
@@ -661,10 +664,23 @@ fn displace_shifts_by_map_and_shear_by_curve() {
 fn wind_streaks_downwind_from_edges() {
     let mut s = flat(SampleType::F32, R, BLACK);
     s.fill_rect(Rect::new(10, 0, 12, 30), &WHITE);
-    let right = run(&s, &FilterParams::Wind { method: WindMethod::Blast, from_right: false, seed: 1 });
-    let left_side: f32 = (0..30).map(|y| right.pixel(8, y)[0]).sum();
-    let right_side: f32 = (0..30).map(|y| right.pixel(14, y)[0]).sum();
-    assert!(right_side > left_side + 0.5, "{left_side} {right_side}");
+    // Photoshop: "From the Right" trails streaks to the right of a bright edge, "From the Left"
+    // to its left.
+    for method in [WindMethod::Wind, WindMethod::Blast] {
+        let right = run(&s, &FilterParams::Wind { method, from_right: true, seed: 1 });
+        let left_side: f32 = (0..30).map(|y| right.pixel(9, y)[0]).sum();
+        let right_side: f32 = (0..30).map(|y| right.pixel(12, y)[0]).sum();
+        assert!(right_side > left_side + 0.5 && left_side == 0.0, "{method:?} {left_side} {right_side}");
+        let left = run(&s, &FilterParams::Wind { method, from_right: false, seed: 1 });
+        let left_side: f32 = (0..30).map(|y| left.pixel(9, y)[0]).sum();
+        let right_side: f32 = (0..30).map(|y| left.pixel(12, y)[0]).sum();
+        assert!(left_side > right_side + 0.5 && right_side == 0.0, "{method:?} {left_side} {right_side}");
+    }
+    // Wind averages a streak into the dark (never a full copy); Blast copies it whole.
+    let wind = run(&s, &FilterParams::Wind { method: WindMethod::Wind, from_right: true, seed: 1 });
+    assert!((0..30).all(|y| wind.pixel(12, y)[0] < 1.0));
+    let blast = run(&s, &FilterParams::Wind { method: WindMethod::Blast, from_right: true, seed: 1 });
+    assert!((0..30).all(|y| [0.0, 1.0].contains(&blast.pixel(12, y)[0])));
 }
 
 #[test]
@@ -698,4 +714,103 @@ fn cancelled_filters_return_none_and_progress_never_regresses() {
     assert_eq!(f32::from_bits(high.load(Ordering::Relaxed)), 1.0);
     assert!(calls.load(Ordering::Relaxed) >= 1);
     assert_eq!(out.read_region(R), apply_tiled(&s, &p, area, R, None, 16, Some(R)).read_region(R));
+}
+
+/// A surface whose red channel is its x and green its y (in 1/64ths), for reading back where a
+/// distortion sampled each pixel.
+fn coords() -> Surface {
+    let mut surf = Surface::new(fmt(SampleType::F32));
+    let mut v = Vec::new();
+    for y in R.y0..R.y1 {
+        for x in R.x0..R.x1 {
+            v.extend_from_slice(&[(x as f32 + 0.5) / 64.0, (y as f32 + 0.5) / 64.0, 0.0, 1.0]);
+        }
+    }
+    surf.write_region(R, &v);
+    surf
+}
+
+fn sampled_at(s: &Surface, x: i32, y: i32) -> (f32, f32) {
+    let p = s.pixel(x, y);
+    (p[0] * 64.0, p[1] * 64.0)
+}
+
+#[test]
+fn twirl_and_pinch_follow_photoshops_formulas_in_the_inscribed_ellipse() {
+    let s = coords();
+    // Pixel (25, 15) has its centre at (25.5, 15.5): 5.5 and 0.5 px from the centre (20, 15) of
+    // the 40 × 30 bounds, so (nx, ny) = (5.5/20, 0.5/15) in half-size units.
+    let (nx, ny) = (5.5f32 / 20.0, 0.5f32 / 15.0);
+    let r = nx.hypot(ny);
+    // Twirl 57°: θ = −1 rad × (1 − r)².
+    let tw = run(&s, &FilterParams::Twirl { angle: 57.0 });
+    let (sx, sy) = sampled_at(&tw, 25, 15);
+    let th = -(1.0 - r).powi(2);
+    let (ex, ey) = (20.0 + (nx * th.cos() - ny * th.sin()) * 20.0, 15.0 + (nx * th.sin() + ny * th.cos()) * 15.0);
+    assert!((sx - ex).abs() < 0.05 && (sy - ey).abs() < 0.05, "{sx} {sy} vs {ex} {ey}");
+    // Outside the ellipse (a corner) nothing moves.
+    assert_eq!(sampled_at(&tw, 0, 0), sampled_at(&s, 0, 0));
+    // Pinch 64: u = 1 − r, the offset scaled by 1 + u²(1 − u/2)² × 64/32.
+    let pi = run(&s, &FilterParams::Pinch { amount: 64.0 });
+    let (sx, sy) = sampled_at(&pi, 25, 15);
+    let u = 1.0 - r;
+    let k = u * u * (1.0 - u / 2.0).powi(2) * 2.0;
+    assert!((sx - (20.0 + 5.5 * (1.0 + k))).abs() < 0.05 && (sy - (15.0 + 0.5 * (1.0 + k))).abs() < 0.05, "{sx} {sy}");
+}
+
+#[test]
+fn polar_coordinates_run_counter_clockwise_from_twelve() {
+    // Rectangular to Polar: a point left of the centre (9 o'clock, a quarter turn
+    // counter-clockwise) samples the source a quarter of the way across.
+    let s = coords();
+    let out = run(&s, &FilterParams::PolarCoordinates { mode: PolarMode::RectangularToPolar });
+    let (sx, _) = sampled_at(&out, 10, 15);
+    assert!((sx - 10.5).abs() < 1.0, "{sx}");
+    let (sx, _) = sampled_at(&out, 30, 15);
+    assert!((sx - 30.5).abs() < 1.0, "{sx}");
+}
+
+#[test]
+fn zigzag_reaches_the_inscribed_ellipse() {
+    let s = coords();
+    for style in [ZigZagStyle::AroundCenter, ZigZagStyle::OutFromCenter] {
+        let out = run(&s, &FilterParams::ZigZag { amount: 40.0, ridges: 3.0, style });
+        // Inside the ellipse something moves; past it (a corner) nothing does.
+        let moved = (12..28).any(|x| sampled_at(&out, x, 12) != sampled_at(&s, x, 12));
+        assert!(moved, "{style:?}");
+        assert_eq!(sampled_at(&out, 0, 0), sampled_at(&s, 0, 0));
+    }
+}
+
+#[test]
+fn fragment_averages_diagonal_copies() {
+    let mut s = flat(SampleType::F32, R, [0.0, 0.0, 0.0, 1.0]);
+    s.write_pixel(20, 15, &[1.0, 1.0, 1.0, 1.0]);
+    let out = run(&s, &FilterParams::Fragment);
+    for (x, y) in [(16, 11), (24, 11), (16, 19), (24, 19)] {
+        assert!((out.pixel(x, y)[0] - 0.25).abs() < 1e-6, "({x},{y})");
+    }
+    assert_eq!(out.pixel(16, 15)[0], 0.0);
+}
+
+#[test]
+fn find_edges_is_white_less_the_sobel_size() {
+    // A 40/255 step: Sobel 160/255 on both sides of it, so 1 − 160/255 there.
+    let mut s = flat(SampleType::F32, R, [0.5, 0.5, 0.5, 1.0]);
+    s.fill_rect(Rect::new(20, 0, 40, 30), &[0.5 + 40.0 / 255.0, 0.5 + 40.0 / 255.0, 0.5 + 40.0 / 255.0, 1.0]);
+    let out = run(&s, &FilterParams::FindEdges);
+    for x in [19, 20] {
+        assert!((out.pixel(x, 10)[0] - (1.0 - 160.0 / 255.0)).abs() < 1e-4, "x={x}");
+    }
+    assert!((out.pixel(5, 10)[0] - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn radial_zoom_blurs_both_ways_along_the_ray() {
+    // A ring at radius 10 from the centre blurs inward and outward alike.
+    let mut s = flat(SampleType::F32, R, [0.0, 0.0, 0.0, 1.0]);
+    s.fill_rect(Rect::new(30, 10, 31, 20), &[1.0, 1.0, 1.0, 1.0]);
+    let out = run(&s, &FilterParams::RadialBlur { amount: 60.0, method: RadialMethod::Zoom, quality: RadialQuality::Good, center_x: 0.5, center_y: 0.5 });
+    let (inner, outer) = (out.pixel(29, 15)[0], out.pixel(31, 15)[0]);
+    assert!(inner > 0.0 && outer > 0.0 && (inner - outer).abs() < 0.1, "{inner} {outer}");
 }

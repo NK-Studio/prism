@@ -92,26 +92,33 @@ pub(crate) fn shear(src: &Image, out: Rect, ctx: &Ctx, points: &[[f32; 2]], unde
 
 /// ZigZag: radial ripples inside the bounds' inscribed circle — angular
 /// (around centre), radial (out from centre) or both (pond ripples).
+/// ZigZag (research formula from Photoshop's plug-in, with the reach measured: the inscribed
+/// ellipse, `docs/filter-analysis.md`): with u = 1 − r, w = u(1 − cos 2π·ridges·u). Around Center
+/// turns by −amount/57 × w radians; Out From Center moves the sample amount × w / 4 pixels (of the
+/// long side's scale) toward the centre; Pond Ripples (not solved) does half of each.
 pub(crate) fn zigzag(src: &Image, out: Rect, ctx: &Ctx, amount: f32, ridges: f32, style: ZigZagStyle) -> Vec<f32> {
-    let (cx, cy, rr) = centre(ctx.bounds);
-    let a = (amount / 100.0).clamp(-1.0, 1.0);
-    let k = ridges.clamp(0.0, 20.0).max(0.5);
+    let b = ctx.bounds;
+    let (cx, cy, _) = centre(b);
+    let (hx, hy) = ((b.width() as f32 / 2.0).max(0.5), (b.height() as f32 / 2.0).max(0.5));
+    let a = amount.clamp(-100.0, 100.0);
+    let k = ridges.clamp(0.0, 20.0);
+    let long = hx.max(hy);
     remap(src, out, ctx, crate::image::Edge::Repeat, |x, y| {
-        let (dx, dy) = (x - cx, y - cy);
-        let r = (dx * dx + dy * dy).sqrt();
-        if r >= rr || r <= 0.0 || a == 0.0 {
+        let (nx, ny) = ((x - cx) / hx, (y - cy) / hy);
+        let d = nx.hypot(ny);
+        let u = 1.0 - d;
+        if u <= 0.0 || d <= 0.0 || a == 0.0 {
             return (x, y);
         }
-        let rn = r / rr;
-        let wave = (std::f32::consts::TAU * k * rn).sin() * (1.0 - rn);
-        let (radial, angular) = match style {
-            ZigZagStyle::OutFromCenter => (a * wave * rr / (4.0 * k), 0.0),
-            ZigZagStyle::AroundCenter => (0.0, a * wave * std::f32::consts::PI / (2.0 * k)),
-            ZigZagStyle::PondRipples => (a * wave * rr / (8.0 * k), a * wave * std::f32::consts::PI / (4.0 * k)),
+        let w = u * (1.0 - (std::f32::consts::TAU * k * u).cos());
+        let (turn, push) = match style {
+            ZigZagStyle::AroundCenter => (-a / 57.0 * w, 0.0),
+            ZigZagStyle::OutFromCenter => (0.0, a * w / 4.0),
+            ZigZagStyle::PondRipples => (-a / 57.0 * w * 0.5, a * w / 2.0),
         };
-        let th = dy.atan2(dx) + angular;
-        let rs = (r + radial).max(0.0);
-        (cx + rs * th.cos(), cy + rs * th.sin())
+        let scale = (d - push / long) / d;
+        let (s, c) = turn.sin_cos();
+        (cx + (nx * c - ny * s) * scale * hx, cy + (nx * s + ny * c) * scale * hy)
     })
 }
 

@@ -218,7 +218,8 @@ pub(crate) fn fragment(src: &Image, out: Rect, ctx: &Ctx) -> Vec<f32> {
     for y in out.y0..out.y1 {
         for x in out.x0..out.x1 {
             acc[..n].fill(0.0);
-            for (dx, dy) in [(-4, 0), (4, 0), (0, -4), (0, 4)] {
+            // Photoshop averages four copies offset 4 px diagonally (measured within 0.06 levels).
+            for (dx, dy) in [(-4, -4), (4, -4), (-4, 4), (4, 4)] {
                 let a = if ctx.alpha { src.get(x + dx, y + dy, n - 1) } else { 1.0 };
                 for (c, v) in acc.iter_mut().enumerate().take(n) {
                     let s = src.get(x + dx, y + dy, c);

@@ -111,30 +111,39 @@ pub(crate) fn mosaic(src: &Image, out: Rect, ctx: &Ctx, cell: f32) -> Vec<f32> {
 }
 
 /// Emboss: gray relief from luminance differences along the light angle.
+/// Emboss, per colour channel (the research formula, `docs/filter-analysis.md`): mid grey plus
+/// `amount` × the difference between the two points half the height away on either side along
+/// `angle`, each sampled bilinearly (edge pixels repeated).
 pub(crate) fn emboss(src: &Image, out: Rect, ctx: &Ctx, angle: f32, height: f32, amount: f32) -> Vec<f32> {
     let n = src.ch;
-    let (s, c) = angle.to_radians().sin_cos();
-    let h = height.max(1.0);
-    let (dx, dy) = ((c * h).round() as i32, (-s * h).round() as i32);
+    let cc = if ctx.alpha { n - 1 } else { n };
+    let (s, c) = if angle.is_finite() { angle.to_radians().sin_cos() } else { (0.0, 1.0) };
+    let h = if height.is_finite() { height.clamp(1.0, 100.0) } else { 1.0 };
+    let (hx, hy) = (c * h / 2.0, -s * h / 2.0);
     let k = amount / 100.0;
-    let mut res = src.crop(out);
-    let mut tmp = vec![0.0f32; n];
-    let lum_at = |x: i32, y: i32, tmp: &mut Vec<f32>| {
-        for (ci, t) in tmp.iter_mut().enumerate() {
-            *t = src.get(x, y, ci);
-        }
-        luma(ctx, tmp)
+    let area = src.rect;
+    let sample = |x: f32, y: f32, ch: usize| {
+        let (x0, y0) = (x.floor(), y.floor());
+        let (fx, fy) = (x - x0, y - y0);
+        let (x0, y0) = (x0 as i32, y0 as i32);
+        let g = |xx: i32, yy: i32| src.get_edge(xx, yy, ch, crate::image::Edge::Repeat, area);
+        let top = g(x0, y0) + (g(x0 + 1, y0) - g(x0, y0)) * fx;
+        let bottom = g(x0, y0 + 1) + (g(x0 + 1, y0 + 1) - g(x0, y0 + 1)) * fx;
+        top + (bottom - top) * fy
     };
+    let mut res = src.crop(out);
     let w = out.width() as usize;
     for (i, px) in res.chunks_exact_mut(n).enumerate() {
-        let (x, y) = (out.x0 + (i % w) as i32, out.y0 + (i / w) as i32);
-        let g = 0.5 + k * (lum_at(x + dx, y + dy, &mut tmp) - lum_at(x - dx, y - dy, &mut tmp));
-        set_gray(ctx, px, g.clamp(0.0, 1.0));
+        let (x, y) = ((out.x0 + (i % w) as i32) as f32, (out.y0 + (i / w) as i32) as f32);
+        for (ch, v) in px.iter_mut().enumerate().take(cc) {
+            *v = (0.5 + k * (sample(x + hx, y + hy, ch) - sample(x - hx, y - hy, ch))).clamp(0.0, 1.0);
+        }
     }
     res
 }
 
-/// Find Edges: Sobel magnitude per colour channel, dark edges on white.
+/// Find Edges: white less the Sobel gradient size, per colour channel (measured: a 40-level step
+/// leaves 255 − 160 on both sides of it).
 pub(crate) fn find_edges(src: &Image, out: Rect, ctx: &Ctx) -> Vec<f32> {
     let n = src.ch;
     let cc = if ctx.alpha { n - 1 } else { n };
@@ -146,7 +155,7 @@ pub(crate) fn find_edges(src: &Image, out: Rect, ctx: &Ctx) -> Vec<f32> {
             let g = |dx: i32, dy: i32| src.get(x + dx, y + dy, c);
             let gx = (g(1, -1) + 2.0 * g(1, 0) + g(1, 1)) - (g(-1, -1) + 2.0 * g(-1, 0) + g(-1, 1));
             let gy = (g(-1, 1) + 2.0 * g(0, 1) + g(1, 1)) - (g(-1, -1) + 2.0 * g(0, -1) + g(1, -1));
-            *v = (1.0 - (gx * gx + gy * gy).sqrt() / 4.0).clamp(0.0, 1.0);
+            *v = (1.0 - (gx * gx + gy * gy).sqrt()).clamp(0.0, 1.0);
         }
     }
     res

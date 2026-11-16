@@ -323,6 +323,8 @@ pub(crate) fn tiles(src: &Image, out: Rect, ctx: &Ctx, count: u32, max_offset: f
 /// Trace Contour: per channel, outlines where values cross `level` (0–255)
 /// with a 1 px line (dark in additive models) on a white canvas.
 pub(crate) fn trace_contour(src: &Image, out: Rect, ctx: &Ctx, level: f32, upper: bool) -> Vec<f32> {
+    // Samples equal to the level (stored as floats) count as equal.
+    const EPS: f32 = 1e-5;
     let n = src.ch;
     let cc = ncol(ctx, n);
     let sub = subtractive(ctx);
@@ -337,8 +339,17 @@ pub(crate) fn trace_contour(src: &Image, out: Rect, ctx: &Ctx, level: f32, upper
     for (i, px) in res.chunks_exact_mut(n).enumerate() {
         let (x, y) = xy(out, i);
         for (c, v) in px.iter_mut().enumerate().take(cc) {
-            let me = bright(x, y, c) > t;
-            let line = me == upper && [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| (bright(x + dx, y + dy, c) > t) != me);
+            // Photoshop (measured): Upper outlines the pixels at or under the level that touch one
+            // above it; Lower the pixels at or over the level that touch one under it.
+            let me = bright(x, y, c);
+            let near = |test: &dyn Fn(f32) -> bool| [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| test(bright(x + dx, y + dy, c)));
+            // Upper also outlines full-white pixels against anything darker, whatever the level
+            // (Photoshop does, measured on 255-level areas at levels 60 and 128).
+            let line = if upper {
+                (me <= t + EPS && near(&|v| v > t + EPS)) || (me >= 1.0 - EPS && near(&|v| v < 1.0 - EPS))
+            } else {
+                me >= t - EPS && near(&|v| v < t - EPS)
+            };
             let paper = if line { 0.0 } else { 1.0 };
             *v = if sub { 1.0 - paper } else { paper };
         }
@@ -349,30 +360,28 @@ pub(crate) fn trace_contour(src: &Image, out: Rect, ctx: &Ctx, level: f32, upper
 /// Longest streak (or stagger shift) of a Wind method, px.
 pub(crate) fn wind_reach(method: WindMethod) -> f32 {
     match method {
-        WindMethod::Wind => 16.0,
-        WindMethod::Blast => 40.0,
+        WindMethod::Wind => 48.0,
+        WindMethod::Blast => 100.0,
         WindMethod::Stagger => 12.0,
     }
 }
 
-/// Wind: streaks trail downwind from edges (Blast: longer and denser);
-/// Stagger shifts random row segments along the wind.
+/// Wind and Blast as Photoshop draws them (`docs/filter-analysis.md`): every row gets about one
+/// streak start per pixel, at random places and in random order. From a start, while the pixel is
+/// brighter (sum of its colour channels) than the next one downwind, Wind sets the next pixel to the
+/// mean of the two and moves on, so a bright edge trails a fading streak; Blast copies the start
+/// over the next 10 pixels, so streaks grow in solid steps of 10. "From the right" streaks to the
+/// right, as Photoshop does. Stagger shifts random row segments along the wind (not measured).
 pub(crate) fn wind(src: &Image, out: Rect, ctx: &Ctx, method: WindMethod, from_right: bool, seed: u32) -> Vec<f32> {
     let n = src.ch;
     let lmax = wind_reach(method) as i32;
-    // Streaks move downwind: from the left they extend to the right (+x).
-    let d = if from_right { -1 } else { 1 };
+    let d = if from_right { 1 } else { -1 };
     let mut res = src.crop(out);
-    let mut tmp = [0.0f32; MAXC];
-    let mut tmp2 = [0.0f32; MAXC];
-    let lum = |x: i32, y: i32, buf: &mut [f32; MAXC]| {
-        read_px(src, x, y, &mut buf[..n]);
-        luma(ctx, &buf[..n])
-    };
     let w = out.width() as usize;
-    for (i, px) in res.chunks_exact_mut(n).enumerate() {
-        let (x, y) = (out.x0 + (i % w) as i32, out.y0 + (i / w) as i32);
-        if method == WindMethod::Stagger {
+    if method == WindMethod::Stagger {
+        let mut tmp = [0.0f32; MAXC];
+        for (i, px) in res.chunks_exact_mut(n).enumerate() {
+            let (x, y) = (out.x0 + (i % w) as i32, out.y0 + (i / w) as i32);
             // Rows split into segments of 8–40 px, each shifted downwind by 0–lmax px.
             let seg_len = 8 + (hash01(0, y, 41, seed) * 32.0) as i32;
             let phase = (hash01(1, y, 42, seed) * seg_len as f32) as i32;
@@ -380,29 +389,73 @@ pub(crate) fn wind(src: &Image, out: Rect, ctx: &Ctx, method: WindMethod, from_r
             let shift = (hash01(seg, y, 43, seed).powi(2) * lmax as f32) as i32;
             read_px(src, x - d * shift, y, &mut tmp[..n]);
             px.copy_from_slice(&tmp[..n]);
-            continue;
         }
-        let strength = if method == WindMethod::Blast { 8.0 } else { 4.0 };
-        let mut best = (0.0f32, x);
-        for k in 1..=lmax {
-            let s = x - d * k;
-            // Each source pixel starts a streak of random length; only edges start visible ones.
-            let len = (hash01(s, y, 44, seed).powi(2) * lmax as f32).max(1.0);
-            if (k as f32) > len {
+        return res;
+    }
+    let cc = ncol(ctx, n);
+    let sub = subtractive(ctx);
+    // The row window the streaks reaching `out` can start in (upwind by the reach).
+    let (wx0, wx1) = if d > 0 { (out.x0 - lmax, out.x1) } else { (out.x0, out.x1 + lmax) };
+    let ww = (wx1 - wx0).max(0) as usize;
+    let mut row = vec![0.0f32; ww * n];
+    let mut starts: Vec<(u32, i32)> = Vec::with_capacity(ww * 2);
+    for y in out.y0..out.y1 {
+        for (k, x) in (wx0..wx1).enumerate() {
+            read_px(src, x, y, &mut row[k * n..(k + 1) * n]);
+        }
+        // About one start per pixel (a Poisson count), each with its own random time.
+        starts.clear();
+        for x in wx0..wx1 {
+            let u = hash01(x, y, 60, seed);
+            let count = if u < 0.3679 { 0 } else if u < 0.7358 { 1 } else if u < 0.9197 { 2 } else { 3 };
+            for c in 0..count {
+                starts.push(((hash01(x, y, 61 + c, seed) * 16_777_216.0) as u32, x));
+            }
+        }
+        starts.sort_unstable();
+        let bright = |row: &[f32], k: usize| {
+            let v: f32 = row[k * n..k * n + cc].iter().sum();
+            if sub { -v } else { v }
+        };
+        for &(_, x) in &starts {
+            let mut cur = (x - wx0) as usize;
+            if method == WindMethod::Blast {
+                for step in 1..=10 {
+                    let j = x - wx0 + d * step;
+                    if j < 0 || j as usize >= ww {
+                        break;
+                    }
+                    let j = j as usize;
+                    if bright(&row, cur) <= bright(&row, j) {
+                        break;
+                    }
+                    let (a, b) = (cur.min(j), cur.max(j));
+                    let (lo, hi) = row.split_at_mut(b * n);
+                    let (from, to) = if cur < j { (&lo[a * n..a * n + n], &mut hi[..n]) } else { (&hi[..n], &mut lo[a * n..a * n + n]) };
+                    to.copy_from_slice(from);
+                }
                 continue;
             }
-            let edge = ((lum(s, y, &mut tmp) - lum(s - d, y, &mut tmp2)).abs() * strength).min(1.0);
-            let wgt = edge * (1.0 - k as f32 / (len + 1.0));
-            if wgt > best.0 {
-                best = (wgt, s);
+            loop {
+                let j = cur as i32 + d;
+                if j < 0 || j as usize >= ww {
+                    break;
+                }
+                let j = j as usize;
+                // Photoshop works in whole levels, so a streak halves down to nothing; stop once
+                // it is less than half a level brighter.
+                if bright(&row, cur) <= bright(&row, j) + 0.5 / 255.0 {
+                    break;
+                }
+                for c in 0..n {
+                    row[j * n + c] = (row[cur * n + c] + row[j * n + c]) * 0.5;
+                }
+                cur = j;
             }
         }
-        if best.0 > 0.0 {
-            read_px(src, best.1, y, &mut tmp[..n]);
-            for c in 0..n {
-                px[c] += (tmp[c] - px[c]) * best.0;
-            }
-        }
+        let oy = (y - out.y0) as usize;
+        let off = (out.x0 - wx0) as usize;
+        res[oy * w * n..(oy + 1) * w * n].copy_from_slice(&row[off * n..(off + w) * n]);
     }
     res
 }

@@ -18,13 +18,18 @@ pub(crate) fn hash01(x: i32, y: i32, c: u32, seed: u32) -> f32 {
     (h >> 8) as f32 / (1u32 << 24) as f32
 }
 
-/// Amount 100 % spans ±50 % of the range (uniform); Gaussian uses the same
-/// amount as ~2σ.
+/// Add Noise as Photoshop draws it (measured on flat grey, `docs/filter-analysis.md`): Uniform
+/// adds a value spread evenly over ±(round(2.55 · amount) + 0.5) levels, half a level above zero;
+/// Gaussian adds a bell of σ = 2.6 · amount levels whose tails stop near 3.5σ (the sum of four even
+/// draws). Monochromatic adds one value to every colour channel. Levels are 1/255 at every depth.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn add(src: &Image, out: Rect, ctx: &Ctx, amount: f32, dist: Distribution, mono: bool, seed: u32) -> Vec<f32> {
     let n = src.ch;
     let cc = if ctx.alpha { n - 1 } else { n };
-    let a = amount.max(0.0) / 100.0 * 0.5;
+    let amount = if amount.is_finite() { amount.max(0.0) } else { 0.0 };
+    let half_width = ((2.55 * amount).round() + 0.5) / 255.0;
+    // Four even draws on (-0.5, 0.5) have a variance of 1/3, so this scale gives σ.
+    let gauss_scale = 2.6 * amount / 255.0 * 3.0f32.sqrt();
     let mut res = src.crop(out);
     let w = out.width() as usize;
     for (i, px) in res.chunks_exact_mut(n).enumerate() {
@@ -35,11 +40,10 @@ pub(crate) fn add(src: &Image, out: Rect, ctx: &Ctx, amount: f32, dist: Distribu
         for (c, pv) in px.iter_mut().enumerate().take(cc) {
             let ch = if mono { 0 } else { c as u32 };
             let v = match dist {
-                Distribution::Uniform => (hash01(x, y, ch, seed) - 0.5) * 2.0 * a,
+                Distribution::Uniform => (hash01(x, y, ch, seed) - 0.5) * 2.0 * half_width + 0.5 / 255.0,
                 Distribution::Gaussian => {
-                    let u1 = hash01(x, y, ch * 2 + 101, seed).max(1e-7);
-                    let u2 = hash01(x, y, ch * 2 + 102, seed);
-                    (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos() * a * 0.5
+                    let sum: f32 = (0..4).map(|k| hash01(x, y, ch * 4 + 101 + k, seed) - 0.5).sum();
+                    sum * gauss_scale
                 }
             };
             // Integer storage clamps on write; float surfaces keep the value.
@@ -49,51 +53,51 @@ pub(crate) fn add(src: &Image, out: Rect, ctx: &Ctx, amount: f32, dist: Distribu
     res
 }
 
-/// Median over a disc of `radius`; with `threshold`, a pixel is replaced only
-/// when it differs from the median by more than `threshold` levels.
-pub(crate) fn median(src: &Image, out: Rect, radius: f32, threshold: Option<f32>) -> Vec<f32> {
-    let r = radius.max(0.0).round() as i32;
+/// Median over the square of side `2 · radius + 1` (Photoshop's Median and Dust & Scratches
+/// window). With `threshold` (Dust & Scratches), a pixel takes the median only when one of its
+/// colour channels differs from its median by more than `threshold` levels, and then in every
+/// channel; otherwise it keeps all of its samples.
+pub(crate) fn median(src: &Image, out: Rect, radius: f32, threshold: Option<f32>, ctx: &Ctx) -> Vec<f32> {
+    let r = if radius.is_finite() { radius.max(0.0).round().min(i32::MAX as f32) as i32 } else { 0 };
     if r == 0 {
         return src.crop(out);
     }
-    let t = threshold.map(|t| t / 255.0);
-    if r >= 2 {
-        return median_ranked(src, out, r, t);
+    let mut res = if r >= 2 { median_ranked(src, out, r) } else { median_direct(src, out, r) };
+    if let Some(t) = threshold {
+        // Compared in levels, with a hair of slack so a difference of exactly `threshold` levels
+        // (stored as floats) is not taken as larger.
+        let t = t + 1e-3;
+        let n = src.ch;
+        let colour = if ctx.alpha { n - 1 } else { n };
+        let orig = src.crop(out);
+        for (m, o) in res.chunks_exact_mut(n).zip(orig.chunks_exact(n)) {
+            let far = m.iter().zip(o).take(colour).any(|(a, b)| (a - b).abs() * 255.0 > t);
+            if !far {
+                m.copy_from_slice(o);
+            }
+        }
     }
-    median_direct(src, out, r, t)
+    res
 }
 
-/// Half-width of the median disc on each row `dy` in `-r..=r`: the largest `dx` with
-/// `dx^2 + dy^2 <= r^2 + r`.
-fn disc_rows(r: i32) -> Vec<i32> {
-    (-r..=r)
-        .map(|dy| {
-            let lim = r * r + r - dy * dy;
-            let mut hw = (lim as f64).sqrt() as i32;
-            while hw * hw > lim {
-                hw -= 1;
-            }
-            while (hw + 1) * (hw + 1) <= lim {
-                hw += 1;
-            }
-            hw
-        })
-        .collect()
+/// Half-width of the median window on each row `dy` in `-r..=r` (a square: every row is `r`).
+fn window_rows(r: i32) -> Vec<i32> {
+    (-r..=r).map(|_| r).collect()
 }
 
 /// [`median`] with a sliding histogram, at any depth: every sample of a channel's window is
 /// replaced by its rank among the window's distinct values (its level for 8-bit samples), so the
-/// histogram of the disc slides from pixel to pixel, removing one end and adding the other end of
-/// each disc row (or column) per step, and the median rank is tracked as it moves (Huang). Ranks are counted
+/// histogram of the window slides from pixel to pixel, removing one end and adding the other end of
+/// each window row (or column) per step, and the median rank is tracked as it moves (Huang). Ranks are counted
 /// in fine bins and in blocks of bins, so the median crosses empty stretches of a large rank range
 /// a block at a time. A pixel costs O(radius) instead of a selection over O(radius^2) samples, and
 /// the value picked is the sample the selection picks (ranks follow `total_cmp`), so the output is
 /// identical.
-fn median_ranked(src: &Image, out: Rect, r: i32, t: Option<f32>) -> Vec<f32> {
+fn median_ranked(src: &Image, out: Rect, r: i32) -> Vec<f32> {
     let n = src.ch;
     let win = out.inflate(r);
     let (ww, wh) = (win.width() as usize, win.height() as usize);
-    let rows = disc_rows(r);
+    let rows = window_rows(r);
     let count: usize = rows.iter().map(|&hw| (2 * hw + 1) as usize).sum();
     let mid = count / 2;
     let (ow, oh) = (out.width() as usize, out.height() as usize);
@@ -134,7 +138,7 @@ fn median_ranked(src: &Image, out: Rect, r: i32, t: Option<f32>) -> Vec<f32> {
         blocks.resize(k.div_ceil(bs), 0u32);
         hist.fill(0);
         blocks.fill(0);
-        // Disc of output pixel (0, 0), centred on window pixel (r, r).
+        // Window of output pixel (0, 0), centred on window pixel (r, r).
         for (j, &hw) in rows.iter().enumerate() {
             for &q in &plane[j * ww + ru - hw as usize..=j * ww + ru + hw as usize] {
                 hist[q as usize] += 1;
@@ -143,13 +147,13 @@ fn median_ranked(src: &Image, out: Rect, r: i32, t: Option<f32>) -> Vec<f32> {
         }
         // `m` is the median rank and `below` the number of samples ranked under it.
         let (mut m, mut below) = (0usize, 0usize);
-        // The disc visits the rows in a serpentine (left to right, down one, right to left, ...),
-        // so every move swaps one end of each disc row or column and the histogram is never
-        // rebuilt. The disc is symmetric, so a column's half-height is the row's half-width.
+        // The window visits the rows in a serpentine (left to right, down one, right to left, ...),
+        // so every move swaps one end of each window row or column and the histogram is never
+        // rebuilt. The window is a square, so a column's half-height is the row's half-width.
         for oy in 0..oh {
             for step in 0..ow {
                 let ox = if oy % 2 == 0 { step } else { ow - 1 - step };
-                // Window pixel at the disc's centre, and the two ends of each row or column.
+                // Window pixel at the window's centre, and the two ends of each row or column.
                 let (cx, cy) = (ox + ru, oy + ru);
                 let moves = rows.iter().enumerate().map(|(j, &hw)| {
                     let hw = hw as usize;
@@ -198,22 +202,17 @@ fn median_ranked(src: &Image, out: Rect, r: i32, t: Option<f32>) -> Vec<f32> {
                         break;
                     }
                 }
-                let mv = levels[m];
-                let o = src.get(out.x0 + ox as i32, out.y0 + oy as i32, c);
-                res[(oy * ow + ox) * n + c] = match t {
-                    Some(t) if (o - mv).abs() <= t => o,
-                    _ => mv,
-                };
+                res[(oy * ow + ox) * n + c] = levels[m];
             }
         }
     }
     res
 }
 
-/// [`median`] by selecting the middle of every disc's samples.
-fn median_direct(src: &Image, out: Rect, r: i32, t: Option<f32>) -> Vec<f32> {
+/// [`median`] by selecting the middle of every window's samples.
+fn median_direct(src: &Image, out: Rect, r: i32) -> Vec<f32> {
     let n = src.ch;
-    let offs: Vec<(i32, i32)> = (-r..=r).flat_map(|dy| (-r..=r).map(move |dx| (dx, dy))).filter(|(dx, dy)| dx * dx + dy * dy <= r * r + r).collect();
+    let offs: Vec<(i32, i32)> = (-r..=r).flat_map(|dy| (-r..=r).map(move |dx| (dx, dy))).collect();
     let mut vals = Vec::with_capacity(offs.len());
     let mut res = Vec::with_capacity(out.width() as usize * out.height() as usize * n);
     for y in out.y0..out.y1 {
@@ -223,12 +222,7 @@ fn median_direct(src: &Image, out: Rect, r: i32, t: Option<f32>) -> Vec<f32> {
                 vals.extend(offs.iter().map(|(dx, dy)| src.get(x + dx, y + dy, c)));
                 let mid = vals.len() / 2;
                 let (_, m, _) = vals.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
-                let m = *m;
-                let o = src.get(x, y, c);
-                res.push(match t {
-                    Some(t) if (o - m).abs() <= t => o,
-                    _ => m,
-                });
+                res.push(*m);
             }
         }
     }
@@ -270,12 +264,78 @@ mod tests {
         for kind in 0..3 {
             let img = noisy(src_rect, kind);
             for r in [2, 3, 7, 16] {
-                for t in [None, Some(0.0), Some(10.0 / 255.0), Some(1.0)] {
-                    let bits = |v: Vec<f32>| v.into_iter().map(f32::to_bits).collect::<Vec<_>>();
-                    let fast = bits(median_ranked(&img, out, r, t));
-                    assert_eq!(fast, bits(median_direct(&img, out, r, t)), "kind {kind} r {r} threshold {t:?}");
-                }
+                let bits = |v: Vec<f32>| v.into_iter().map(f32::to_bits).collect::<Vec<_>>();
+                assert_eq!(bits(median_ranked(&img, out, r)), bits(median_direct(&img, out, r)), "kind {kind} r {r}");
             }
+        }
+    }
+
+    fn ctx(rect: Rect, alpha: bool) -> Ctx {
+        Ctx { bounds: rect, mode: prism_color::ColorMode::Rgb, alpha }
+    }
+
+    #[test]
+    fn median_window_is_the_full_square() {
+        // A 3×3 window (radius 1) holds the four corners too: five bright corner-and-centre
+        // samples out of nine win the median, where a disc of radius 1 (five samples) would not.
+        let rect = Rect::new(0, 0, 3, 3);
+        let mut img = Image::new(rect, 1);
+        for (i, v) in img.data.iter_mut().enumerate() {
+            *v = if [0, 2, 4, 6, 8].contains(&i) { 1.0 } else { 0.0 };
+        }
+        let out = median(&img, Rect::new(1, 1, 2, 2), 1.0, None, &ctx(rect, false));
+        assert_eq!(out, vec![1.0]);
+    }
+
+    #[test]
+    fn dust_and_scratches_replaces_whole_pixels_by_their_largest_channel_difference() {
+        // Centre pixel: red 40 levels above its neighbours, green and blue equal to them.
+        let rect = Rect::new(0, 0, 3, 3);
+        let mut img = Image::new(rect, 3);
+        for px in img.data.chunks_exact_mut(3) {
+            px.copy_from_slice(&[100.0 / 255.0, 50.0 / 255.0, 20.0 / 255.0]);
+        }
+        img.data[12] = 140.0 / 255.0;
+        img.data[13] = 60.0 / 255.0;
+        let centre = Rect::new(1, 1, 2, 2);
+        // Threshold under the red difference: every channel takes the median, green too.
+        let replaced = median(&img, centre, 1.0, Some(39.0), &ctx(rect, false));
+        assert_eq!(replaced, vec![100.0 / 255.0, 50.0 / 255.0, 20.0 / 255.0]);
+        // Threshold at the red difference: the pixel keeps every channel, green's 10 levels too.
+        let kept = median(&img, centre, 1.0, Some(40.0), &ctx(rect, false));
+        assert_eq!(kept, vec![140.0 / 255.0, 60.0 / 255.0, 20.0 / 255.0]);
+    }
+
+    fn noise_stats(dist: Distribution, amount: f32) -> (f32, f32, f32) {
+        let rect = Rect::new(0, 0, 256, 256);
+        let mut img = Image::new(rect, 3);
+        img.data.fill(0.5);
+        let out = add(&img, rect, &ctx(rect, false), amount, dist, false, 3);
+        let d: Vec<f32> = out.iter().map(|v| (v - 0.5) * 255.0).collect();
+        let mean = d.iter().sum::<f32>() / d.len() as f32;
+        let sd = (d.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / d.len() as f32).sqrt();
+        let peak = d.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        (mean, sd, peak)
+    }
+
+    #[test]
+    fn add_noise_spreads_like_photoshop() {
+        // Measured in Photoshop 27.4 on flat grey (8-bit levels): Uniform 10 % spreads over
+        // -26..27 (σ 15.4), Gaussian 10 % has σ 26.2 with tails near ±90.
+        let (mean, sd, peak) = noise_stats(Distribution::Uniform, 10.0);
+        assert!((mean - 0.5).abs() < 0.3 && (sd - 15.4).abs() < 0.4 && peak <= 27.0, "uniform {mean} {sd} {peak}");
+        let (mean, sd, peak) = noise_stats(Distribution::Gaussian, 10.0);
+        assert!(mean.abs() < 0.5 && (sd - 26.0).abs() < 0.8 && peak < 92.0, "gaussian {mean} {sd} {peak}");
+    }
+
+    #[test]
+    fn add_noise_ignores_non_finite_amounts() {
+        let rect = Rect::new(0, 0, 4, 4);
+        let mut img = Image::new(rect, 3);
+        img.data.fill(0.25);
+        for a in [f32::NAN, f32::NEG_INFINITY] {
+            let out = add(&img, rect, &ctx(rect, false), a, Distribution::Gaussian, true, 0);
+            assert!(out.iter().all(|v| (*v - 0.25).abs() < 1e-6), "{a}");
         }
     }
 }

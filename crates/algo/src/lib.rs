@@ -122,6 +122,16 @@ pub enum RadialQuality {
     Best,
 }
 
+/// The blur Smart Sharpen removes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SharpenRemove {
+    #[default]
+    GaussianBlur,
+    LensBlur,
+    MotionBlur,
+}
+
 /// Noise distribution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -228,11 +238,18 @@ pub enum FilterParams {
         radius: f32,
         threshold: f32,
     },
-    /// Amount %, radius px, noise reduction % (basic: Gaussian unsharp).
+    /// Amount %, radius px, noise reduction %, the blur it removes (and the motion's angle), and
+    /// Photoshop's "Use Legacy" (which is Unsharp Mask).
     SmartSharpen {
         amount: f32,
         radius: f32,
         reduce_noise: f32,
+        #[serde(default)]
+        remove: SharpenRemove,
+        #[serde(default)]
+        angle: f32,
+        #[serde(default)]
+        legacy: bool,
     },
     HighPass {
         radius: f32,
@@ -277,6 +294,18 @@ pub enum FilterParams {
         amount: f32,
     },
     FindEdges,
+    /// Sharpen (`more`: Sharpen More): Photoshop's fixed 3×3 kernels.
+    Sharpen {
+        #[serde(default)]
+        more: bool,
+    },
+    /// Sharpen Edges: Sharpen, weighted by the edge strength.
+    SharpenEdges,
+    /// Blur (`more`: Blur More): Photoshop's fixed 3×3 kernels.
+    BlurKernel {
+        #[serde(default)]
+        more: bool,
+    },
     Solarize,
     Invert,
     Desaturate,
@@ -541,7 +570,12 @@ impl FilterParams {
         let g = |sigma: f32| Halo::Radius((sigma.max(0.0) * 3.0).ceil() as i32 + 1);
         match self {
             FilterParams::GaussianBlur { radius } | FilterParams::HighPass { radius } => g(*radius),
-            FilterParams::UnsharpMask { radius, .. } | FilterParams::SmartSharpen { radius, .. } => g(*radius),
+            FilterParams::UnsharpMask { radius, .. } => g(*radius),
+            FilterParams::SmartSharpen { radius, remove, .. } => match remove {
+                SharpenRemove::GaussianBlur => g(*radius),
+                SharpenRemove::LensBlur => Halo::Radius(radius.max(0.0).ceil() as i32 + 1),
+                SharpenRemove::MotionBlur => Halo::Radius(radius.max(0.0).ceil() as i32 + 2),
+            },
             FilterParams::BoxBlur { radius }
             | FilterParams::SurfaceBlur { radius, .. }
             | FilterParams::Median { radius }
@@ -551,7 +585,7 @@ impl FilterParams {
             FilterParams::MotionBlur { distance, .. } => Halo::Radius((distance.abs() / 2.0).ceil() as i32 + 2),
             FilterParams::Mosaic { cell_size } => Halo::Radius(cell_size.max(1.0).ceil() as i32 + 1),
             FilterParams::Emboss { height, .. } => Halo::Radius(height.abs().ceil() as i32 + 2),
-            FilterParams::FindEdges => Halo::Radius(1),
+            FilterParams::FindEdges | FilterParams::Sharpen { .. } | FilterParams::SharpenEdges | FilterParams::BlurKernel { .. } => Halo::Radius(1),
             FilterParams::AddNoise { .. } | FilterParams::Solarize | FilterParams::Invert | FilterParams::Desaturate => Halo::Radius(0),
             FilterParams::RadialBlur { .. }
             | FilterParams::Offset { .. }
@@ -600,6 +634,11 @@ impl FilterParams {
             FilterParams::Mosaic { .. } => "Mosaic",
             FilterParams::Emboss { .. } => "Emboss",
             FilterParams::FindEdges => "Find Edges",
+            FilterParams::Sharpen { more: false } => "Sharpen",
+            FilterParams::Sharpen { more: true } => "Sharpen More",
+            FilterParams::SharpenEdges => "Sharpen Edges",
+            FilterParams::BlurKernel { more: false } => "Blur",
+            FilterParams::BlurKernel { more: true } => "Blur More",
             FilterParams::Solarize => "Solarize",
             FilterParams::Invert => "Invert",
             FilterParams::Desaturate => "Desaturate",
@@ -710,17 +749,26 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         }
         FilterParams::SurfaceBlur { radius, threshold } => blur::surface(src, out, ctx, *radius, *threshold),
         FilterParams::UnsharpMask { amount, radius, threshold } => sharpen::unsharp(src, out, ctx, *amount, *radius, *threshold),
-        FilterParams::SmartSharpen { amount, radius, reduce_noise } => sharpen::smart(src, out, ctx, *amount, *radius, *reduce_noise),
+        FilterParams::SmartSharpen { amount, radius, reduce_noise, remove, angle, legacy } => {
+            if *legacy {
+                sharpen::unsharp(src, out, ctx, *amount, *radius, 0.0)
+            } else {
+                sharpen::smart(src, out, ctx, *amount, *radius, *reduce_noise, *remove, *angle)
+            }
+        }
         FilterParams::HighPass { radius } => sharpen::high_pass(src, out, ctx, *radius),
         FilterParams::AddNoise { amount, distribution, monochromatic, seed } => noise::add(src, out, ctx, *amount, *distribution, *monochromatic, *seed),
-        FilterParams::Median { radius } => noise::median(src, out, *radius, None),
-        FilterParams::DustAndScratches { radius, threshold } => noise::median(src, out, *radius, Some(*threshold)),
+        FilterParams::Median { radius } => noise::median(src, out, *radius, None, ctx),
+        FilterParams::DustAndScratches { radius, threshold } => noise::median(src, out, *radius, Some(*threshold), ctx),
         FilterParams::Minimum { radius, preserve } => other::min_max_preserve(src, out, *radius, false, *preserve),
         FilterParams::Maximum { radius, preserve } => other::min_max_preserve(src, out, *radius, true, *preserve),
         FilterParams::Offset { horizontal, vertical, undefined } => other::offset(src, out, ctx, *horizontal, *vertical, *undefined),
         FilterParams::Mosaic { cell_size } => stylize::mosaic(src, out, ctx, *cell_size),
         FilterParams::Emboss { angle, height, amount } => stylize::emboss(src, out, ctx, *angle, *height, *amount),
         FilterParams::FindEdges => stylize::find_edges(src, out, ctx),
+        FilterParams::Sharpen { more } => sharpen::sharpen(src, out, ctx, *more),
+        FilterParams::SharpenEdges => sharpen::sharpen_edges(src, out, ctx),
+        FilterParams::BlurKernel { more } => sharpen::blur_kernel(src, out, ctx, *more),
         FilterParams::Solarize => stylize::per_pixel(src, out, ctx, |v| if v > 0.5 { 1.0 - v } else { v }),
         FilterParams::Invert => stylize::per_pixel(src, out, ctx, |v| 1.0 - v),
         FilterParams::Desaturate => stylize::desaturate(src, out, ctx),

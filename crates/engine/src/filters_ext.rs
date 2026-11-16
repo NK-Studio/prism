@@ -137,7 +137,7 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             background: colour(p, "background", WHITE),
             seed: seed(p),
         },
-        "filter.stylize.traceContour" => FilterParams::TraceContour { level: f(p, "level", 128.0).clamp(0.0, 255.0), upper: s(p, "edge", "lower") == "upper" },
+        "filter.stylize.traceContour" => FilterParams::TraceContour { level: f(p, "level", 128.0).clamp(0.0, 255.0), upper: s(p, "edge", "upper") == "upper" },
         "filter.stylize.wind" => FilterParams::Wind {
             method: match s(p, "method", "wind") {
                 "blast" => WindMethod::Blast,
@@ -573,7 +573,7 @@ pub fn specs() -> Vec<CommandSpec> {
             ["Filter", "Stylize"],
             r##"{"count":1..99=10,"maxOffset":1..99=10,"fill":"background|foreground|inverse|unaltered","seed":u32=0,"foreground":json,"background":json}"##
         ),
-        cmd!("filter.stylize.traceContour", "Trace Contour…", ["Filter", "Stylize"], r##"{"level":0..255=128,"edge":"lower|upper"}"##),
+        cmd!("filter.stylize.traceContour", "Trace Contour…", ["Filter", "Stylize"], r##"{"level":0..255=128,"edge":"lower|upper"="upper"}"##),
         cmd!("filter.stylize.wind", "Wind…", ["Filter", "Stylize"], r##"{"method":"wind|blast|stagger","direction":"fromRight|fromLeft","seed":u32=0}"##),
         // Distort
         cmd!(
@@ -683,7 +683,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "filter.video.deInterlace",
             "De-Interlace…",
             ["Filter", "Video"],
-            r##"{"eliminate":"oddFields|evenFields","createBy":"interpolation|duplication"}"##
+            r##"{"eliminate":"oddFields|evenFields","createBy":"duplication|interpolation"="interpolation"}"##
         ),
         cmd!("filter.video.ntscColors", "NTSC Colors", ["Filter", "Video"], "{}"),
     ]

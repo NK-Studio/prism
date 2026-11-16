@@ -74,6 +74,8 @@ pub mod file_open;
 pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
+pub mod filter_ps_layout;
+pub mod filter_ps_ui;
 pub mod first_run_ui;
 pub mod floating_window;
 pub mod gallery_ui;

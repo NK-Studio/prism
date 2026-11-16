@@ -20,9 +20,69 @@ mod motion_fft_tests;
 mod motion_tests;
 
 /// Normalized Gaussian kernel with standard deviation `sigma` (radius 3σ).
+/// Photoshop's Gaussian Blur kernels for radii 0.1 … 3.0 in steps of 0.1 (one half, centre first,
+/// summing to 1 over both sides), measured from its output on a test image by least squares
+/// (`docs/filter-analysis.md`). Photoshop rounds its small kernels, so neighbouring radii can share one.
+const PS_GAUSS: [&[f32]; 30] = [
+    &[1.0],
+    &[0.92433, 0.037833],
+    &[0.71218, 0.14391],
+    &[0.61888, 0.19056],
+    &[0.56397, 0.21364, 0.0043805],
+    &[0.52615, 0.2241, 0.012825],
+    &[0.47388, 0.23542, 0.027641],
+    &[0.43602, 0.23945, 0.042538],
+    &[0.39813, 0.23811, 0.058553, 0.0042702],
+    &[0.37421, 0.23457, 0.069583, 0.0087403],
+    &[0.3426, 0.23056, 0.082728, 0.015414],
+    &[0.31208, 0.22701, 0.093376, 0.019623, 0.0039507],
+    &[0.29601, 0.21837, 0.1021, 0.027627, 0.0039011],
+    &[0.27324, 0.21061, 0.10983, 0.035047, 0.0078915],
+    &[0.25719, 0.20354, 0.11309, 0.043038, 0.011728],
+    &[0.2326, 0.19922, 0.11781, 0.047205, 0.015548, 0.0039196],
+    &[0.23278, 0.19187, 0.11732, 0.054886, 0.015652, 0.0038804],
+    &[0.20986, 0.18319, 0.12178, 0.058836, 0.02342, 0.0078368],
+    &[0.20988, 0.17583, 0.12115, 0.063126, 0.027203, 0.0077508],
+    &[0.18582, 0.17178, 0.12157, 0.066689, 0.031289, 0.01186, 0.0039099],
+    &[0.17573, 0.15851, 0.12397, 0.076, 0.038035, 0.012175, 0.0034486],
+    &[0.16311, 0.15249, 0.12065, 0.079286, 0.042346, 0.016611, 0.0065064, 0.00054969],
+    &[0.16311, 0.15249, 0.12065, 0.079286, 0.042346, 0.016611, 0.0065064, 0.00054969],
+    &[0.16307, 0.15243, 0.12075, 0.079301, 0.042359, 0.016582, 0.0064668, 0.00057972],
+    &[0.14734, 0.13981, 0.11428, 0.082399, 0.050772, 0.026496, 0.0095022, 0.0030707],
+    &[0.14734, 0.13981, 0.11428, 0.082399, 0.050772, 0.026496, 0.0095022, 0.0030707],
+    &[0.14325, 0.13326, 0.11061, 0.0829, 0.053958, 0.028303, 0.014611, 0.0040576, 0.0006696],
+    &[0.13685, 0.12919, 0.10936, 0.082732, 0.054831, 0.031619, 0.016005, 0.0068077, 0.0010296],
+    &[0.13036, 0.12452, 0.10613, 0.082789, 0.057974, 0.034728, 0.017189, 0.0077152, 0.003238, 0.00052967],
+    &[0.13036, 0.12452, 0.10613, 0.082789, 0.057974, 0.034728, 0.017189, 0.0077152, 0.003238, 0.00052967],
+];
+
+/// One full kernel from [`PS_GAUSS`] for `radius` ≤ 3 (between two tabulated radii, the halves are
+/// mixed by how far `radius` lies between them).
+fn ps_gauss_kernel(radius: f32) -> Vec<f32> {
+    let t = (radius * 10.0).clamp(1.0, 30.0);
+    let i = (t.floor() as usize).clamp(1, 30);
+    let f = t - i as f32;
+    let a = PS_GAUSS[i - 1];
+    let b = PS_GAUSS[i.min(29)];
+    let len = a.len().max(b.len());
+    let half: Vec<f32> = (0..len).map(|k| a.get(k).copied().unwrap_or(0.0) * (1.0 - f) + b.get(k).copied().unwrap_or(0.0) * f).collect();
+    let mut k: Vec<f32> = half.iter().rev().chain(half.iter().skip(1)).copied().collect();
+    let s: f32 = k.iter().sum();
+    if s > 0.0 {
+        k.iter_mut().for_each(|v| *v /= s);
+    }
+    k
+}
+
+/// The Gaussian kernel of Photoshop's radius `sigma`: its measured kernels up to 3 pixels, then a
+/// sampled Gaussian of σ = radius (which matches Photoshop within a level from there on).
 pub(crate) fn gaussian_kernel(sigma: f32) -> Vec<f32> {
-    if sigma < 0.05 {
+    // NaN and tiny radii leave the image as it is.
+    if sigma.is_nan() || sigma < 0.05 {
         return vec![1.0];
+    }
+    if sigma <= 3.0 {
+        return ps_gauss_kernel(sigma);
     }
     let r = (sigma * 3.0).ceil() as i32;
     let k: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp()).collect();
@@ -504,11 +564,12 @@ pub(crate) fn radial(src: &Image, out: Rect, ctx: &Ctx, amount: f32, method: Rad
                 }
             }
             RadialMethod::Zoom => {
-                // Samples along the ray, up to amount/2 % closer to the centre.
+                // Samples along the ray, amount/2 % of the distance in all, centred on the pixel
+                // (measured: 2.4 levels from Photoshop at amount 20, against 13.8 inward only).
                 let span = amount / 200.0;
                 let n = radial_intervals(span * r, quality);
                 for i in 0..=n {
-                    let k = 1.0 - span * i as f32 / n as f32;
+                    let k = 1.0 + span * (i as f32 / n as f32 - 0.5);
                     pts.push((cx + dx * k, cy + dy * k));
                 }
             }
