@@ -28,7 +28,9 @@ VOLUME = "Prism"
 WIDTH, HEIGHT = 660, 400  # window content, pt; the background's 1x size
 TITLE_BAR = 32
 ICON_SIZE = 128
-ICONS = {"Prism.app": (326, 205), "Applications": (574, 205)}
+# Either side of the arrow make-background.swift draws at y = 190.
+ICONS = {"Prism.app": (170, 190), "Applications": (490, 190)}
+TEXT_SIZE = 13
 # A fixed date for the alias and the colour profile. Finder never matches it against the image
 # (each build is a new volume): it finds the background by volume name and path.
 FIXED_DATE = datetime.datetime(2026, 10, 8, tzinfo=datetime.timezone.utc)
@@ -62,7 +64,7 @@ def write_tiff(svg, out):
             render(svg, WIDTH * s, os.path.join(tmp, f"{s}x.png")) for s in (1, 2)
         )
     two.encoderinfo = {"dpi": (144, 144)}  # the rest as the first page
-    # Lossless RGB + Deflate preserves the textured Prism logo and smooth text edges.
+    # Lossless RGB + Deflate keeps the gradient free of banding and the text edges smooth.
     one.save(
         out,
         "TIFF",
@@ -132,7 +134,7 @@ def write_ds_store(out):
             "showIconPreview": True,
             "showItemInfo": False,
             "labelOnBottom": True,
-            "textSize": 16.0,
+            "textSize": float(TEXT_SIZE),
             "iconSize": float(ICON_SIZE),
         }
         d["."]["vSrn"] = ("long", 1)

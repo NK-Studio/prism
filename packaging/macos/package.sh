@@ -151,6 +151,11 @@ ln -s /Applications "$STAGE/Applications"
 mkdir -p "$STAGE/.background"
 cp "$HERE/dmg/background.tiff" "$STAGE/.background/background.tiff"
 cp "$HERE/dmg/dmg-layout.DS_Store" "$STAGE/.DS_Store"
+# The mounted disk shows the app icon instead of the stock white drive. Finder reads it from
+# .VolumeIcon.icns when the volume's root has the "custom icon" Finder flag (0x0400), which
+# makehybrid copies from the staged folder.
+cp "$ROOT/assets/app-icon/prism.icns" "$STAGE/.VolumeIcon.icns"
+xattr -wx com.apple.FinderInfo 0000000000000000040000000000000000000000000000000000000000000000 "$STAGE"
 rm -f "$DMG" "$WORK/raw.dmg"
 # makehybrid + convert builds the image without attaching a device, unlike `create -srcfolder`,
 # which is flaky on CI runners ("Resource busy") and hangs in sandboxed sessions.

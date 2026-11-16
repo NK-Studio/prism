@@ -82,7 +82,8 @@ in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/deve
   to drag onto). The DMG is signed, notarized and stapled too. The script checks the results
   with `codesign --verify --strict`, `stapler validate` and `spctl -a -vvv`.
   Its Finder window (background, icon size and positions) comes from
-  [`packaging/macos/dmg/`](../packaging/macos/dmg/README.md), and its volume is named `Prism`
+  [`packaging/macos/dmg/`](../packaging/macos/dmg/README.md), the mounted disk shows the app
+  icon, and its volume is named `Prism`
   without the version, which the window's background needs; the DMG file name keeps the version.
 - **CLI:** the universal `prism-cli` is signed with the same Developer ID, the hardened
   runtime and a secure timestamp (identifier `com.nkstudio.prism-cli`), zipped, and the zip
