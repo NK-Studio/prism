@@ -1,4 +1,5 @@
-//! Help › Check for Updates… and the once-a-day automatic check.
+//! Help › Check for Updates… and the automatic check: at every launch, then every
+//! [`RECHECK_EVERY`] while Prism stays open, so a release published mid-session still pops up.
 //!
 //! The network, signature checks and installation live in the desktop app (`prism-updater`),
 //! injected as [`Services::updater`](crate::Services::updater): this crate stays free of I/O.
@@ -16,6 +17,9 @@ use serde_json::{Map, Value, json};
 use crate::PrismApp;
 use crate::state::DialogKind;
 use crate::theme::Tokens;
+
+/// How often a running Prism looks again (people leave an editor open for days).
+pub const RECHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(4 * 60 * 60);
 
 /// An update found by a check, as the UI shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,9 +81,13 @@ pub struct UpdateUi {
     pub manual: bool,
     /// The downloaded update installs when Prism quits.
     pub install_on_exit: bool,
-    /// The automatic check ran (or was skipped) this session.
+    /// When the next automatic check is due; `None` before the first (at launch).
     #[serde(skip)]
-    auto_done: bool,
+    next_auto: Option<std::time::Instant>,
+    /// The version an automatic check already announced this session: a later automatic check
+    /// that finds it again stays quiet ("Later" means not now, not every few hours).
+    #[serde(skip)]
+    announced: String,
     /// Quit now to install (set by "Restart to Update"; acted on in [`tick`], which has the context).
     #[serde(skip)]
     quit_requested: bool,
@@ -143,19 +151,30 @@ fn today() -> String {
     civil_date(i64::try_from(secs / 86_400).unwrap_or(0))
 }
 
-/// Once per frame: the daily automatic check, updater events, and quitting to install.
+/// The automatic check is due and nothing is in the way of it.
+fn auto_check_due(app: &PrismApp, now: std::time::Instant) -> bool {
+    let due = app.ui.update.next_auto.is_none_or(|at| now >= at);
+    // Not over a check, download or install in progress, nor under an open update dialog.
+    let busy = matches!(app.ui.update.status, Status::Checking | Status::Downloading { .. } | Status::Ready { .. }) || dialog_open(app);
+    due && !busy
+}
+
+/// Once per frame: the automatic check, updater events, and quitting to install.
 pub fn tick(app: &mut PrismApp, ctx: &egui::Context) {
-    if !app.ui.update.auto_done {
-        app.ui.update.auto_done = true;
-        let prefs = app.session.prefs();
-        let due = prefs.integrations.check_for_updates && prefs.updates.last_check != today();
-        if due && let Some(updater) = app.services.updater.as_mut() {
+    let now = std::time::Instant::now();
+    if auto_check_due(app, now) {
+        app.ui.update.next_auto = Some(now + RECHECK_EVERY);
+        let enabled = app.session.prefs().integrations.check_for_updates;
+        if enabled && let Some(updater) = app.services.updater.as_mut() {
             updater.check();
             app.ui.update.status = Status::Checking;
             app.ui.update.manual = false;
             let date = today();
             app.session.prefs.edit(|p| p.updates.last_check = date);
         }
+    }
+    if let Some(at) = app.ui.update.next_auto {
+        ctx.request_repaint_after(at.saturating_duration_since(now));
     }
     let events = app.services.updater.as_mut().map(|u| u.poll()).unwrap_or_default();
     for event in events {
@@ -187,10 +206,14 @@ fn apply(app: &mut PrismApp, event: UpdateEvent) {
     match event {
         UpdateEvent::Checked(Ok(Some(offer))) => {
             let skipped = app.session.prefs().updates.skipped_version == offer.version;
-            app.ui.update.status = Status::Available { offer };
-            if manual || !skipped {
+            let announced = app.ui.update.announced == offer.version;
+            if manual || !(skipped || announced) {
+                if !manual {
+                    app.ui.update.announced = offer.version.clone();
+                }
                 open_dialog(app);
             }
+            app.ui.update.status = Status::Available { offer };
         }
         UpdateEvent::Checked(Ok(None)) => app.ui.update.status = Status::UpToDate,
         UpdateEvent::Checked(Err(message)) => {
@@ -266,70 +289,208 @@ fn state_name(s: &Status) -> &'static str {
     }
 }
 
+/// Content width of the update window.
+pub const WIDTH: f32 = 404.0;
+/// The app icon beside the headline (points).
+const ICON: f32 = 56.0;
+/// The icon file keeps the macOS template's clear margin (100 of 1024 px a side); it is cropped
+/// away so the artwork lines up with the window's left edge.
+const ICON_MARGIN: f32 = 100.0 / 1024.0;
+const ICON_GAP: f32 = 16.0;
+
+/// The app icon, box-filtered down once (the 1024 px original shimmers when drawn this small).
+fn icon(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new("prism-update-icon");
+    if let Some(cached) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
+        return cached;
+    }
+    let texture = eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/app-icon/prism-1024.png"))
+        .inspect_err(|e| log::warn!("Prism update icon: {e}"))
+        .ok()
+        .and_then(|icon| downscale(&icon.rgba, icon.width as usize, icon.height as usize, 256))
+        .map(|image| ctx.load_texture("prism-update-icon", image, egui::TextureOptions::LINEAR));
+    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+    texture
+}
+
+/// Averages whole blocks of an unmultiplied RGBA image down to about `target` pixels wide
+/// (alpha-weighted, so transparent pixels don't darken the edge).
+fn downscale(rgba: &[u8], w: usize, h: usize, target: usize) -> Option<egui::ColorImage> {
+    let factor = (w / target.max(1)).max(1);
+    let (ow, oh) = (w / factor, h / factor);
+    if ow == 0 || oh == 0 || rgba.len() < w.checked_mul(h)?.checked_mul(4)? {
+        return None;
+    }
+    let n = u64::try_from(factor.checked_mul(factor)?).ok()?;
+    let mut out = Vec::with_capacity(ow * oh * 4);
+    for oy in 0..oh {
+        for ox in 0..ow {
+            let mut sum = [0u64; 4];
+            for dy in 0..factor {
+                let at = ((oy * factor + dy) * w + ox * factor) * 4;
+                for &[r, g, b, a] in rgba.get(at..at + factor * 4)?.as_chunks::<4>().0 {
+                    let a = u64::from(a);
+                    sum = [sum[0] + u64::from(r) * a, sum[1] + u64::from(g) * a, sum[2] + u64::from(b) * a, sum[3] + a];
+                }
+            }
+            let premultiplied = |c: u64| u8::try_from(c / (255 * n)).unwrap_or(u8::MAX);
+            out.extend([premultiplied(sum[0]), premultiplied(sum[1]), premultiplied(sum[2]), u8::try_from(sum[3] / n).unwrap_or(u8::MAX)]);
+        }
+    }
+    Some(egui::ColorImage::from_rgba_premultiplied([ow, oh], &out))
+}
+
+/// The headline and the line under it, per state.
+fn headline(status: &Status) -> (String, String) {
+    let version = |text: &str, v: &str| text.replace("{version}", v);
+    match status {
+        Status::Idle | Status::Checking => {
+            (tl!("Checking for updates…").to_string(), version(tl!("You have version {version}."), prism_engine::build_info::VERSION))
+        }
+        Status::UpToDate => (tl!("Prism is up to date").to_string(), version(tl!("You have the latest version ({version})."), prism_engine::build_info::VERSION)),
+        Status::Failed { message } => (tl!("Couldn't update Prism").to_string(), message.clone()),
+        Status::Available { offer } => {
+            let sub = match &offer.note {
+                Some(note) => tl!(note.as_str()).to_string(),
+                None => tl!("Do you want to update now?").to_string(),
+            };
+            (version(tl!("Prism {version} is available"), &offer.version), sub)
+        }
+        Status::Downloading { offer, .. } => (version(tl!("Downloading Prism {version}…"), &offer.version), tl!("You can keep working while it downloads.").to_string()),
+        Status::Ready { offer } => (
+            version(tl!("Prism {version} is ready to install"), &offer.version),
+            tl!("Prism will quit, update and open again. Choose Later to install it the next time you quit.").to_string(),
+        ),
+    }
+}
+
+/// The top of the window: the app icon beside the headline. Returns its rectangle (the window's
+/// drag handle).
+pub fn header(app: &PrismApp, ui: &mut egui::Ui) -> egui::Rect {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(WIDTH);
+    let (title, sub) = headline(&app.ui.update.status);
+    let checking = matches!(app.ui.update.status, Status::Idle | Status::Checking);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = ICON_GAP;
+        match icon(ui.ctx()) {
+            Some(icon) => {
+                let art = egui::Rect::from_min_max(egui::pos2(ICON_MARGIN, ICON_MARGIN), egui::pos2(1.0 - ICON_MARGIN, 1.0 - ICON_MARGIN));
+                ui.add(egui::Image::new(&icon).uv(art).fit_to_exact_size(egui::vec2(ICON, ICON)).alt_text("Prism"));
+            }
+            None => {
+                ui.allocate_space(egui::vec2(ICON, ICON));
+            }
+        }
+        ui.vertical(|ui| {
+            ui.set_width(WIDTH - ICON - ICON_GAP);
+            ui.spacing_mut().item_spacing.y = 6.0;
+            // The two lines sit centred against the icon when they are shorter than it.
+            let title_font = crate::theme::semibold(17.0);
+            let lines = ui.fonts_mut(|f| f.row_height(&title_font)) + 6.0 + ui.text_style_height(&egui::TextStyle::Body);
+            ui.add_space(((ICON - lines) / 2.0 - 1.0).max(0.0));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                if checking {
+                    ui.add(egui::Spinner::new().size(14.0));
+                }
+                ui.add(egui::Label::new(egui::RichText::new(title).font(title_font.clone()).color(t.text)).selectable(false));
+            });
+            ui.add(egui::Label::new(egui::RichText::new(sub).color(t.text_dim)).wrap().selectable(false));
+        });
+    })
+    .response
+    .rect
+}
+
+/// "1.4.2 → 1.4.3": what is installed and what the update brings.
+fn versions(ui: &mut egui::Ui, t: &Tokens, offer: &Offer) {
+    let half = (WIDTH - 36.0 - 28.0) / 2.0;
+    let cell = |ui: &mut egui::Ui, caption: &str, version: &str, new: bool| {
+        ui.vertical(|ui| {
+            ui.set_width(half);
+            ui.spacing_mut().item_spacing.y = 3.0;
+            ui.add(egui::Label::new(egui::RichText::new(caption).size(11.0).color(if new { t.accent } else { t.text_faint })).selectable(false));
+            ui.add(egui::Label::new(egui::RichText::new(version).font(crate::theme::semibold(16.0)).color(if new { t.text } else { t.text_dim })).truncate());
+        });
+    };
+    egui::Frame::new().fill(t.field).stroke(egui::Stroke::new(1.0, t.field_border)).corner_radius(t.radius).inner_margin(egui::Margin::symmetric(18, 11)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            cell(ui, tl!("Current version"), &offer.current, false);
+            let (arrow, _) = ui.allocate_exact_size(egui::vec2(28.0, 34.0), egui::Sense::hover());
+            let (tip, stroke) = (arrow.center() + egui::vec2(-4.0, 0.0), egui::Stroke::new(1.5, t.text_faint));
+            ui.painter().line_segment([tip - egui::vec2(14.0, 0.0), tip], stroke);
+            ui.painter().line_segment([tip - egui::vec2(5.0, 4.5), tip], stroke);
+            ui.painter().line_segment([tip - egui::vec2(5.0, -4.5), tip], stroke);
+            cell(ui, tl!("New version"), &offer.version, true);
+        });
+    });
+}
+
+/// A slim download bar with the amounts under it.
+fn progress(ui: &mut egui::Ui, t: &Tokens, received: u64, total: u64) {
+    let frac = if total > 0 { (received as f64 / total as f64).clamp(0.0, 1.0) as f32 } else { 0.0 };
+    let (bar, _) = ui.allocate_exact_size(egui::vec2(WIDTH, 6.0), egui::Sense::hover());
+    ui.painter().rect_filled(bar, 3.0, t.field);
+    if frac > 0.0 {
+        let done = egui::Rect::from_min_size(bar.min, egui::vec2((bar.width() * frac).max(bar.height()), bar.height()));
+        ui.painter().rect_filled(done, 3.0, t.accent);
+    }
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let amounts = if total > 0 { format!("{:.1} / {:.1} MB", received as f64 / 1e6, total as f64 / 1e6) } else { tl!("Starting…").to_string() };
+        ui.label(egui::RichText::new(amounts).size(11.5).color(t.text_faint));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(format!("{:.0}%", frac * 100.0)).size(11.5).color(t.text_dim));
+        });
+    });
+}
+
 pub fn body(app: &mut PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let status = app.ui.update.status.clone();
     f.insert("__state".into(), json!(state_name(&status)));
     let can_install = matches!(&status, Status::Available { offer } if offer.can_install);
     f.insert("__canInstall".into(), json!(can_install));
-    let heading = |ui: &mut egui::Ui, text: &str| {
-        ui.label(egui::RichText::new(text).font(crate::theme::semibold(14.0)).color(t.text));
-        ui.add_space(4.0);
-    };
-    let dim = |ui: &mut egui::Ui, text: &str| {
-        ui.label(egui::RichText::new(text).color(t.text_dim));
-    };
+    ui.set_width(WIDTH);
     match &status {
-        Status::Idle | Status::Checking => {
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new());
-                ui.label(tl!("Checking for updates…"));
-            });
-        }
-        Status::UpToDate => {
-            heading(ui, tl!("Prism is up to date"));
-            dim(ui, &tl!("You have the latest version ({version}).").replace("{version}", prism_engine::build_info::VERSION));
-        }
-        Status::Failed { message } => {
-            heading(ui, tl!("Couldn't update Prism"));
-            dim(ui, message);
-        }
         Status::Available { offer } => {
-            heading(ui, &tl!("Prism {version} is available").replace("{version}", &offer.version));
-            dim(ui, &tl!("You have version {version}.").replace("{version}", &offer.current));
-            if let Some(note) = &offer.note {
-                ui.add_space(4.0);
-                dim(ui, note);
-            }
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if let Some(url) = offer.notes_url.clone()
-                    && ui.link(tl!("Release Notes")).clicked()
-                {
+            versions(ui, &t, offer);
+            if let Some(url) = offer.notes_url.clone() {
+                ui.add_space(6.0);
+                if ui.link(tl!("Release Notes")).clicked() {
                     crate::links::open(app, ui.ctx(), &url);
                 }
-                if ui.link(tl!("Skip This Version")).clicked() {
-                    let v = offer.version.clone();
-                    app.session.prefs.edit(|p| p.updates.skipped_version = v);
-                    app.ui.update.close_requested = true;
-                }
-            });
+            }
         }
-        Status::Downloading { offer, received, total } => {
-            heading(ui, &tl!("Downloading Prism {version}…").replace("{version}", &offer.version));
-            let frac = if *total > 0 { (*received as f64 / *total as f64).clamp(0.0, 1.0) as f32 } else { 0.0 };
-            ui.add(egui::ProgressBar::new(frac).show_percentage());
-            dim(ui, &format!("{:.1} / {:.1} MB", *received as f64 / 1e6, *total as f64 / 1e6));
-        }
-        Status::Ready { offer } => {
-            heading(ui, &tl!("Prism {version} is ready to install").replace("{version}", &offer.version));
-            dim(ui, tl!("Prism will quit, update and open again. Choose Later to install it the next time you quit."));
-        }
+        Status::Downloading { received, total, .. } => progress(ui, &t, *received, *total),
+        Status::Idle | Status::Checking | Status::UpToDate | Status::Failed { .. } | Status::Ready { .. } => {}
     }
     if let Some(e) = f.get("__error").and_then(Value::as_str) {
         ui.add_space(4.0);
         ui.colored_label(t.warning, e);
     }
+}
+
+/// "Skip This Version", at the left of the button row while an update is offered.
+pub fn footer(app: &mut PrismApp, ui: &mut egui::Ui) {
+    let Status::Available { offer } = &app.ui.update.status else { return };
+    let version = offer.version.clone();
+    let t = Tokens::get(ui.ctx());
+    let row = egui::vec2(ui.available_width(), ui.min_rect().height().max(1.0));
+    ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        let quiet = ui.add(egui::Label::new(egui::RichText::new(tl!("Skip This Version")).color(t.text_faint)).selectable(false).sense(egui::Sense::click()));
+        if quiet.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            let y = quiet.rect.bottom() - 1.0;
+            ui.painter().line_segment([egui::pos2(quiet.rect.left(), y), egui::pos2(quiet.rect.right(), y)], egui::Stroke::new(1.0, t.text_faint));
+        }
+        if quiet.clicked() {
+            app.session.prefs.edit(|p| p.updates.skipped_version = version);
+            app.ui.update.close_requested = true;
+        }
+    });
 }
 
 /// OK: the state's main action. The dialog reopens for states that continue.

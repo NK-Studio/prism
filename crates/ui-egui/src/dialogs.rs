@@ -169,6 +169,12 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
             let frame = if own_window { crate::floating_window::frame(ctx) } else { egui::Frame::popup(&ctx.global_style()) };
             modal = modal.frame(frame.inner_margin(egui::Margin { left: 22, right: 22, top: 16, bottom: 18 }));
         }
+        // Software Update: the app icon and a headline instead of a title row.
+        let update_card = crate::update_ui::owns(&fields);
+        if update_card {
+            let frame = if own_window { crate::floating_window::frame(ctx) } else { egui::Frame::popup(&ctx.global_style()) };
+            modal = modal.frame(frame.inner_margin(egui::Margin { left: 24, right: 24, top: 22, bottom: 18 }));
+        }
         // File › New draws its own title row and panes edge to edge, as Photoshop's window does.
         let new_doc = d.kind == DialogKind::NewDocument;
         if new_doc {
@@ -244,6 +250,12 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 drag = r.drag_delta();
                 drag_started |= r.drag_started_by(egui::PointerButton::Primary);
                 ui.add_space(if crate::about_ui::compact(ctx) { 16.0 } else { 42.0 });
+            } else if update_card {
+                let header = crate::update_ui::header(app, ui);
+                let r = ui.interact(header.with_max_x(ui.max_rect().right()), id.with("title"), egui::Sense::drag());
+                drag = r.drag_delta();
+                drag_started |= r.drag_started_by(egui::PointerButton::Primary);
+                ui.add_space(8.0);
             } else if new_doc {
                 // On macOS its own window has the system's title bar (as Photoshop's): none here.
                 if !crate::floating_window::system_title_bar(own_window) {
@@ -335,7 +347,13 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                     outcome = Some(true);
                 }
             } else {
-                ui.add_space(if about_card && !crate::about_ui::compact(ctx) { 34.0 } else { 8.0 });
+                ui.add_space(if about_card && !crate::about_ui::compact(ctx) {
+                    34.0
+                } else if update_card {
+                    12.0
+                } else {
+                    8.0
+                });
                 // Align::Min, not Center: a centred row fills the height left over from last frame's
                 // (larger) size, so a dialog whose body gets shorter would never shrink back.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
@@ -355,7 +373,9 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                             row.push(DialogButton::new(ButtonRole::Cancel, cancel, 84.0));
                         }
                         let enter = b.ok_enabled && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        match dialog_buttons(ui, &row) {
+                        let clicked = dialog_buttons(ui, &row);
+                        crate::update_ui::footer(app, ui);
+                        match clicked {
                             Some(ButtonRole::Default) => outcome = Some(true),
                             Some(_) => outcome = Some(false),
                             None if enter => outcome = Some(true),
@@ -424,7 +444,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
             ui.min_rect().expand(ui.spacing().menu_margin.sum().max_elem() + 2.0)
         });
         // The picker has a larger frame margin; include that whole frame in the canvas hit guard.
-        let covered = if color_picker || about_card || own_window || padded || new_doc || layer_style { modal.response.rect } else { modal.inner };
+        let covered = if color_picker || about_card || own_window || padded || update_card || new_doc || layer_style { modal.response.rect } else { modal.inner };
         // The system's close button of the dialog's own window (File › New, Layer Style on macOS)
         // cancels it.
         if outcome.is_none() && own_window && ctx.input(|i| i.viewport().close_requested()) {

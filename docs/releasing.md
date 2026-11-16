@@ -190,8 +190,9 @@ and lists the tarball, which checks the layout without a FreeBSD machine.
 Installed copies find new versions through a signed feed on a Cloudflare Workers static site
 (`https://prism-updates.a62201631.workers.dev`; `crates/updater`,
 `crates/ui-egui/src/update_ui.rs`). Help › Check for Updates… checks on demand. With
-*Preferences › Integrations › Check for updates* on (the default), Prism also checks once a day
-at launch. It announces a new version unless the user chose *Skip This Version*.
+*Preferences › Integrations › Check for updates* on (the default), Prism also checks at every
+launch and every four hours while it stays open. It pops up "Do you want to update now?" for a new
+version unless the user chose *Skip This Version*; after *Later* it asks again at the next launch.
 
 **How it stays safe.** `stable/latest.json` lists each platform's package with its URL, size and
 SHA-256. It is signed with a minisign (Ed25519) key whose public half is compiled into Prism, so a

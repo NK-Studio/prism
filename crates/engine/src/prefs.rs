@@ -746,7 +746,8 @@ pub struct Integrations {
     pub allow_agent_control: bool,
     /// Default control port (0 = only when `--control` is given).
     pub control_port: u32,
-    /// Look for a new Prism version once a day (Help › Check for Updates… works either way).
+    /// Look for a new Prism version at launch and every few hours while open (Help › Check for
+    /// Updates… works either way).
     pub check_for_updates: bool,
 }
 
@@ -762,7 +763,8 @@ impl Default for Integrations {
 pub struct UpdateState {
     /// The version the user chose to skip ("Skip This Version"); empty for none.
     pub skipped_version: String,
-    /// UTC date (`YYYY-MM-DD`) of the last automatic check; empty before the first.
+    /// UTC date (`YYYY-MM-DD`) of the last automatic check; empty before the first. Informational:
+    /// it no longer gates the check.
     pub last_check: String,
 }
 

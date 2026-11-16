@@ -19,10 +19,50 @@
 //! `--drag-from X,Y --drag-to X,Y` holds a screen-space drag for transient-preview QA.
 //! `--cursor-pack DIR --hover-at X,Y` paints optional cursor artwork for offscreen review.
 //! `--click-at X,Y` opens a screen-space menu (for example the top Select menu) after the script.
+//! `--update-offer VERSION` fakes an update server offering VERSION, so the launch check pops up
+//! the "Do you want to update now?" dialog. `--update-offer none` reports no update,
+//! `--update-offer offline` a failed check. Confirming the dialog (`ui.dialog.confirm`) shows a
+//! download stopped at 43%; `--update-ready` finishes it at once.
 
 use prism_ui_egui::control::{ControlRequest, Outcome, handle};
+use prism_ui_egui::update_ui::{Offer, UpdateEvent, Updater};
 use prism_ui_egui::{PrismApp, Services};
 use serde_json::Value;
+
+/// `--update-offer`: every check finds `version` as an installable update.
+struct FakeUpdater {
+    version: String,
+    /// The download completes instead of stopping part-way.
+    ready: bool,
+    events: Vec<UpdateEvent>,
+}
+
+impl Updater for FakeUpdater {
+    fn check(&mut self) {
+        let offer = Offer {
+            version: self.version.clone(),
+            current: prism_engine::build_info::VERSION.into(),
+            notes_url: Some("https://example.com/notes".into()),
+            can_install: true,
+            ..Default::default()
+        };
+        self.events.push(UpdateEvent::Checked(match self.version.as_str() {
+            "none" => Ok(None),
+            "offline" => Err("couldn't reach the update server: no connection".into()),
+            _ => Ok(Some(offer)),
+        }));
+    }
+    fn download(&mut self) {
+        self.events.push(if self.ready { UpdateEvent::Ready } else { UpdateEvent::Progress { received: 12_274_000, total: 28_544_573 } });
+    }
+    fn cancel(&mut self) {}
+    fn poll(&mut self) -> Vec<UpdateEvent> {
+        std::mem::take(&mut self.events)
+    }
+    fn install_on_exit(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+}
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
@@ -38,7 +78,7 @@ fn main() {
     let script: Vec<(String, Value)> =
         arg(&args, "--script").map(|s| serde_json::from_str::<Vec<(String, Value)>>(&s).expect("--script must be [[method, params], …]")).unwrap_or_default();
 
-    let services = Services {
+    let mut services = Services {
         import: Some(Box::new(|name: &str, bytes: &[u8]| prism_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))),
         export: Some(Box::new(|doc: &prism_doc::Document, path: &str, settings: &prism_ui_egui::ExportSettings| {
             let mut opts = prism_io::ExportOptions::default();
@@ -54,6 +94,10 @@ fn main() {
         write: Some(Box::new(|path: &str, bytes: &[u8]| prism_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string()))),
         ..Default::default()
     };
+    if let Some(version) = arg(&args, "--update-offer") {
+        let ready = args.iter().any(|a| a == "--update-ready");
+        services.updater = Some(Box::new(FakeUpdater { version, ready, events: Vec::new() }));
+    }
     let open = arg(&args, "--open");
     let cursor_pack = arg(&args, "--cursor-pack");
     let safe_gpu = args.iter().any(|a| a == "--safe-gpu");

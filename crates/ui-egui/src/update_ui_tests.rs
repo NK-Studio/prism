@@ -34,14 +34,13 @@ fn offer(can_install: bool) -> Offer {
     Offer { version: "9.0.0".into(), current: "1.0.0".into(), can_install, download_url: Some("https://example.com".into()), ..Default::default() }
 }
 
-/// An app whose automatic check already ran today unless `auto` is set.
+/// An app whose automatic check isn't due unless `auto` is set.
 fn app(auto: bool) -> (PrismApp, Rc<RefCell<Log>>, egui::Context) {
     let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
     let log = Rc::new(RefCell::new(Log::default()));
     app.services.updater = Some(Box::new(Fake(log.clone())));
     if !auto {
-        let d = today();
-        app.session.prefs.edit(|p| p.updates.last_check = d);
+        app.ui.update.next_auto = Some(std::time::Instant::now() + RECHECK_EVERY);
     }
     (app, log, egui::Context::default())
 }
@@ -62,17 +61,31 @@ fn civil_dates() {
     assert_eq!(civil_date(-1), "1969-12-31");
 }
 
+/// Makes the automatic check due now, as if `RECHECK_EVERY` had passed.
+fn time_passes(a: &mut PrismApp) {
+    a.ui.update.next_auto = Some(std::time::Instant::now());
+}
+
 #[test]
-fn checks_once_a_day_and_only_when_enabled() {
+fn checks_at_every_launch_and_while_open() {
     let (mut a, log, ctx) = app(true);
+    // An earlier launch today already checked: this launch checks again anyway.
+    a.session.prefs.edit(|p| p.updates.last_check = today());
     tick(&mut a, &ctx);
     tick(&mut a, &ctx);
     assert_eq!(log.borrow().calls, ["check"]);
     assert_eq!(a.session.prefs().updates.last_check, today());
+    assert!(a.ui.update.next_auto.is_some_and(|at| at > std::time::Instant::now()), "next check scheduled");
+
+    push(&log, UpdateEvent::Checked(Ok(None)));
+    tick(&mut a, &ctx);
+    time_passes(&mut a);
+    tick(&mut a, &ctx);
+    assert_eq!(log.borrow().calls, ["check", "check"], "checks again while open");
 
     let (mut a, log, ctx) = app(false);
     tick(&mut a, &ctx);
-    assert!(log.borrow().calls.is_empty(), "already checked today");
+    assert!(log.borrow().calls.is_empty(), "not due yet");
 
     let (mut a, log, ctx) = app(true);
     a.session.prefs.edit(|p| p.integrations.check_for_updates = false);
@@ -100,6 +113,53 @@ fn quiet_automatic_checks() {
     push(&log, UpdateEvent::Checked(Ok(Some(offer(true)))));
     tick(&mut a, &ctx);
     assert!(update_dialog(&a).is_some(), "a new version is announced");
+}
+
+#[test]
+fn later_isnt_nagged_until_the_next_launch() {
+    let (mut a, log, ctx) = app(true);
+    tick(&mut a, &ctx);
+    push(&log, UpdateEvent::Checked(Ok(Some(offer(true)))));
+    tick(&mut a, &ctx);
+    let id = update_dialog(&a).unwrap();
+    // Later.
+    a.ui.close_dialog(id);
+    cancel(&mut a);
+
+    time_passes(&mut a);
+    tick(&mut a, &ctx);
+    assert_eq!(log.borrow().calls, ["check", "check"]);
+    push(&log, UpdateEvent::Checked(Ok(Some(offer(true)))));
+    tick(&mut a, &ctx);
+    assert!(update_dialog(&a).is_none(), "the same version stays quiet this session");
+
+    // A newer one is announced.
+    time_passes(&mut a);
+    tick(&mut a, &ctx);
+    push(&log, UpdateEvent::Checked(Ok(Some(Offer { version: "9.1.0".into(), ..offer(true) }))));
+    tick(&mut a, &ctx);
+    assert!(update_dialog(&a).is_some(), "a newer version pops up");
+
+    // A manual check always shows it.
+    let (mut a, log, ctx) = app(false);
+    a.ui.update.announced = "9.0.0".into();
+    check_now(&mut a).unwrap();
+    push(&log, UpdateEvent::Checked(Ok(Some(offer(true)))));
+    tick(&mut a, &ctx);
+    assert!(update_dialog(&a).is_some());
+}
+
+#[test]
+fn no_automatic_check_over_a_download() {
+    let (mut a, log, ctx) = app(false);
+    check_now(&mut a).unwrap();
+    push(&log, UpdateEvent::Checked(Ok(Some(offer(true)))));
+    tick(&mut a, &ctx);
+    let id = update_dialog(&a).unwrap();
+    crate::dialogs::confirm(&mut a, id).unwrap();
+    time_passes(&mut a);
+    tick(&mut a, &ctx);
+    assert_eq!(log.borrow().calls, ["check", "download"], "the download isn't interrupted");
 }
 
 #[test]
@@ -203,4 +263,59 @@ fn buttons_follow_the_state() {
     assert!(!f("downloading", true).ok_enabled);
     assert_eq!(f("upToDate", false).cancel, None);
     assert_eq!(f("failed", false).cancel, None);
+}
+
+#[test]
+fn icon_downscale_averages_blocks_and_survives_bad_input() {
+    // 4×2 → 2×1: an opaque white block, and a block that is half transparent black.
+    let white = [255, 255, 255, 255];
+    let clear = [0, 0, 0, 0];
+    let rgba: Vec<u8> = [white, white, white, clear, white, white, clear, white].concat();
+    let image = downscale(&rgba, 4, 2, 2).unwrap();
+    assert_eq!(image.size, [2, 1]);
+    assert_eq!(image.pixels[0], egui::Color32::WHITE);
+    // Alpha-weighted: the clear pixels thin the block out, they don't darken it.
+    assert_eq!(image.pixels[1], egui::Color32::from_rgba_premultiplied(127, 127, 127, 127));
+
+    assert!(downscale(&rgba, 4, 3, 2).is_none(), "fewer bytes than the size says");
+    assert!(downscale(&[], 0, 0, 256).is_none());
+    assert!(downscale(&rgba, usize::MAX, 2, 2).is_none(), "an absurd size doesn't overflow");
+    assert!(downscale(&rgba, 4, 2, 0).is_none(), "a zero target doesn't divide by zero");
+}
+
+#[test]
+fn headline_names_the_version_and_asks() {
+    let (title, sub) = headline(&Status::Available { offer: offer(true) });
+    assert!(title.contains("9.0.0"), "{title}");
+    assert_eq!(sub, tl!("Do you want to update now?"));
+
+    // Why Prism can't install it replaces the question.
+    let manual = Offer { note: Some("Portable copy.".into()), ..offer(false) };
+    assert_eq!(headline(&Status::Available { offer: manual }).1, "Portable copy.");
+    assert_eq!(headline(&Status::Failed { message: "offline".into() }).1, "offline");
+    assert!(headline(&Status::UpToDate).1.contains(prism_engine::build_info::VERSION));
+}
+
+#[test]
+fn the_window_draws_in_every_state() {
+    let states = [
+        Status::Checking,
+        Status::UpToDate,
+        Status::Available { offer: offer(true) },
+        Status::Available { offer: Offer { note: Some("Portable copy.".into()), ..offer(false) } },
+        Status::Downloading { offer: offer(true), received: 0, total: 0 },
+        Status::Downloading { offer: offer(true), received: u64::MAX, total: 1 },
+        Status::Ready { offer: offer(true) },
+        Status::Failed { message: "x".repeat(4000) },
+    ];
+    for status in states {
+        let (mut a, _log, ctx) = app(false);
+        PrismApp::setup_context(&ctx, Default::default());
+        a.ui.update.status = status;
+        open_dialog(&mut a);
+        for _ in 0..3 {
+            ctx.run_ui(Default::default(), |ui| crate::dialogs::show(&mut a, ui.ctx())).textures_delta.clear();
+        }
+        assert!(update_dialog(&a).is_some());
+    }
 }
