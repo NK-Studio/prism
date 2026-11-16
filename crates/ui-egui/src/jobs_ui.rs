@@ -186,6 +186,7 @@ fn on_event(app: &mut PrismApp, e: JobEvent) {
             }
         }
         JobOutcome::Done(v) if e.command == "brush.cspLibrary.import" => crate::csp_library_ui::imported(app, &v),
+        JobOutcome::Done(v) if e.command == prism_engine::neural_cmds::COMMAND => crate::neural_ui::finished(app, &v),
         JobOutcome::Done(_) => {
             app.sync_views();
             app.ui.status = e.label;

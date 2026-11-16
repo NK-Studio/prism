@@ -32,6 +32,7 @@ prism-vector = { path = "crates/vector" }
 prism-format = { path = "crates/format" }
 prism-automation = { path = "crates/automation" }
 prism-plugins = { path = "crates/plugins" }
+prism-ml = { path = "crates/ml" }
 prism-engine = { path = "crates/engine" }
 prism-ui-egui = { path = "crates/ui-egui" }
 prism-testkit = { path = "crates/testkit" }

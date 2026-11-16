@@ -1,0 +1,21 @@
+[package]
+name = "prism-ml"
+description = "Machine-learning features: Real-ESRGAN Super Zoom through the official realesrgan-ncnn-vulkan sidecar (located, verified-installed and run as a child process)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+flate2 = { workspace = true }
+# PNG hand-off with the sidecar (MIT OR Apache-2.0).
+png = "0.18"
+# Verified download of the pinned Real-ESRGAN package (same versions as prism-updater).
+sha2 = "0.10"
+ureq = "3"
+
+[dev-dependencies]

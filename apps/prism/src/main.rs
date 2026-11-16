@@ -282,6 +282,8 @@ fn main() -> eframe::Result {
     let monitor = monitor_profile::detect_async();
     // Brush presets load in the background; the app attaches them when they arrive.
     let presets = services::presets_dir().map(prism_engine::preset_store::open_dir_async);
+    // Filter › Neural Filters installs Real-ESRGAN under the same per-user folder.
+    prism_engine::neural_cmds::configure(services::config_dir());
     let custom_titlebar = custom_titlebar(services::prefs_file().as_deref());
     let mut options = native_options(custom_titlebar);
     #[cfg(target_os = "windows")]

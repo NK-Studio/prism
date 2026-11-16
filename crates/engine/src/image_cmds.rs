@@ -173,32 +173,40 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
             doc.resolution_dpi = r.clamp(1.0, 10_000.0);
         }
         let Some(filter) = resample else { return Ok(()) };
-        let (sx, sy) = (nw as f64 / ow.max(1) as f64, nh as f64 / oh.max(1) as f64);
-        if (sx - 1.0).abs() < 1e-12 && (sy - 1.0).abs() < 1e-12 {
-            return Ok(());
-        }
-        // Content that reaches the canvas edge keeps it: a Background stays opaque to the border.
-        let canvas = Rect::new(0, 0, ow as i32, oh as i32);
-        for_each_surface(&mut doc.layers, true, &mut |surf, is_mask| {
-            *surf = resize_surface_in_canvas(surf, sx, sy, if is_mask { Resample::Bilinear } else { filter }, canvas);
-        });
-        let k = ((sx + sy) / 2.0) as f32;
-        if scale_styles {
-            for_each_layer(&mut doc.layers, &mut |l| scale_effects(&mut l.effects, k));
-        }
-        for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
-            ch.surface = resize_surface_in_canvas(&ch.surface, sx, sy, Resample::Bilinear, canvas);
-        }
-        if let Some(sel) = &doc.selection {
-            doc.selection = Some(resize_surface_in_canvas(sel, sx, sy, Resample::Bilinear, canvas));
-        }
-        // Vector geometry, guides and marks scale with the pixels; vectors re-render sharp.
-        crate::canvas_geom::transform_geometry(doc, &prism_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
-        doc.size = Size::new(nw, nh);
-        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
+        resize_document(doc, nw, nh, filter, scale_styles);
         Ok(())
     })?;
     Ok(json!({ "width": nw, "height": nh }))
+}
+
+/// Image Size's resampling of a whole document to `nw`×`nh`: every layer, mask, channel and the
+/// selection (masks, channels and the selection bilinear), vector geometry and guides, and
+/// (with `scale_styles`) layer-effect sizes. Content reaching the canvas edge keeps it.
+pub(crate) fn resize_document(doc: &mut Document, nw: u32, nh: u32, filter: Resample, scale_styles: bool) {
+    let (ow, oh) = (doc.size.width, doc.size.height);
+    let (sx, sy) = (nw as f64 / ow.max(1) as f64, nh as f64 / oh.max(1) as f64);
+    if (sx - 1.0).abs() < 1e-12 && (sy - 1.0).abs() < 1e-12 {
+        return;
+    }
+    // Content that reaches the canvas edge keeps it: a Background stays opaque to the border.
+    let canvas = Rect::new(0, 0, ow as i32, oh as i32);
+    for_each_surface(&mut doc.layers, true, &mut |surf, is_mask| {
+        *surf = resize_surface_in_canvas(surf, sx, sy, if is_mask { Resample::Bilinear } else { filter }, canvas);
+    });
+    let k = ((sx + sy) / 2.0) as f32;
+    if scale_styles {
+        for_each_layer(&mut doc.layers, &mut |l| scale_effects(&mut l.effects, k));
+    }
+    for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
+        ch.surface = resize_surface_in_canvas(&ch.surface, sx, sy, Resample::Bilinear, canvas);
+    }
+    if let Some(sel) = &doc.selection {
+        doc.selection = Some(resize_surface_in_canvas(sel, sx, sy, Resample::Bilinear, canvas));
+    }
+    // Vector geometry, guides and marks scale with the pixels; vectors re-render sharp.
+    crate::canvas_geom::transform_geometry(doc, &prism_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
+    doc.size = Size::new(nw, nh);
+    crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {

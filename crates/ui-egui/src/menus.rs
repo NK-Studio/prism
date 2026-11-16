@@ -438,6 +438,7 @@ pub(crate) fn invoke_unguarded(app: &mut PrismApp, ctx: &egui::Context, id: &str
             crate::transform_tool::edit_session_warp(app, id, &params).map(|_| json!({"transform": app.ui.transform}))
         }
         "image.duplicate" if params.as_object().is_none_or(|o| o.is_empty()) => Ok(json!({"dialog":crate::duplicate_ui::open(app)?})),
+        prism_engine::neural_cmds::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => Ok(json!({"dialog":crate::neural_ui::open(app)?})),
         sz if crate::sizing::is_sizing(sz) && params.as_object().is_none_or(|o| o.is_empty()) => {
             Ok(json!({"dialog": crate::sizing::open(app, sz).ok_or("no document")?}))
         }

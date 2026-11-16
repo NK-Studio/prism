@@ -535,6 +535,8 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Filter"], "---", None, "---"),
     (&["Filter"], "Convert for Smart Filters", None, "filter.convertForSmartFilters"),
     (&["Filter"], "---", None, "---"),
+    (&["Filter"], "Neural Filters…", None, "filter.neuralFilters"),
+    (&["Filter"], "---", None, "---"),
     (&["Filter"], "Filter Gallery…", None, "filter.filterGallery"),
     (&["Filter"], "Camera Raw Filter…", Some("Cmd+Shift+A"), "filter.cameraRaw"),
     (&["Filter"], "Adaptive Wide Angle…", Some("Cmd+Alt+Shift+A"), "filter.adaptiveWideAngle"),

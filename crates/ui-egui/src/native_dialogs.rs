@@ -75,6 +75,7 @@ fn size(d: &Dialog) -> egui::Vec2 {
     match d.fields.get("__command").and_then(Value::as_str) {
         Some("image.imageSize") => vec2(860.0, 460.0),
         Some("image.canvasSize") => vec2(500.0, 480.0),
+        Some(prism_engine::neural_cmds::COMMAND) => vec2(560.0, 330.0),
         _ => vec2(520.0, 220.0),
     }
 }
@@ -159,6 +160,8 @@ pub fn show(app: &mut PrismApp, ctx: &Context) {
                     }
                     if fields.contains_key("__duplicate") {
                         crate::duplicate_ui::body(ui, &mut fields);
+                    } else if crate::neural_ui::owns(&fields) {
+                        crate::neural_ui::body(ui, &mut fields);
                     } else {
                         crate::sizing::body(app, ui, &mut fields);
                     }

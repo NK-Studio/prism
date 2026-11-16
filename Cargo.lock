@@ -4494,6 +4494,7 @@ dependencies = [
  "prism-format",
  "prism-geom",
  "prism-io",
+ "prism-ml",
  "prism-ops",
  "prism-paint",
  "prism-plugins",
@@ -4587,6 +4588,17 @@ dependencies = [
  "roxmltree",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "prism-ml"
+version = "1.4.3"
+dependencies = [
+ "flate2",
+ "png 0.18.1",
+ "sha2",
+ "thiserror 2.0.21",
+ "ureq",
 ]
 
 [[package]]

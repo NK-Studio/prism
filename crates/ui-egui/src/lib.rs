@@ -65,6 +65,7 @@ pub mod dock_float;
 pub mod dock_model;
 mod document_menu;
 mod duplicate_ui;
+mod neural_ui;
 pub mod enable_rules;
 pub mod enclose_fill_ui;
 pub mod eraser_ui;

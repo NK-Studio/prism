@@ -49,6 +49,17 @@ The other built-in ICC profiles and the generated LUT looks are produced by code
 (`crates/cms/src/builtin.rs`, `crates/cms/src/lutfile.rs`) and dedicated to the public domain
 (CC0-1.0); they are not separate files.
 
+## Downloaded at runtime (not in this repo, not shipped)
+
+Filter › Neural Filters (Super Zoom) downloads these on first use into the per-user folder
+(`<settings dir>/realesrgan`), from the pinned upstream package checked by size and SHA-256
+(`crates/ml/src/install.rs`); a `SOURCE.txt` beside them repeats the notices.
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `<settings dir>/realesrgan/realesrgan-ncnn-vulkan` (`.exe`, `vcomp140*.dll` on Windows) | Real-ESRGAN ncnn Vulkan executable (built on Tencent ncnn) | Xintao Wang | <https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan>, package `realesrgan-ncnn-vulkan-20220424-{macos,windows}.zip` from <https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0> | MIT (ncnn: BSD-3-Clause) |
+| `<settings dir>/realesrgan/models/realesrgan-x4plus.{param,bin}`, `realesrgan-x4plus-anime.{param,bin}`, `realesr-animevideov3-x{2,3,4}.{param,bin}` | Real-ESRGAN x4plus, x4plus anime and animevideov3 models (ncnn) | Xintao Wang | same package | BSD-3-Clause |
+
 ## Documentation and README
 
 | Path | Title | Author | Source | License |

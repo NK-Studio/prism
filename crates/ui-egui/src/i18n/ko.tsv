@@ -3845,4 +3845,19 @@ filter	Threshold	한계값
 	pixels right	픽셀 오른쪽
 	pixels down	픽셀 아래
 submenu	Other…	기타
+	Neural Filters…	뉴럴 필터…
+	Super Zoom	슈퍼 줌
+	Enlarges the image with Real-ESRGAN.	Real-ESRGAN으로 이미지를 확대합니다.
+	Model:	모델:
+	Scale:	배율:
+	Photo, best quality (Real-ESRGAN x4plus)	사진, 최고 품질 (Real-ESRGAN x4plus)
+	Illustration (Real-ESRGAN x4plus anime)	일러스트 (Real-ESRGAN x4plus anime)
+	The first run downloads Real-ESRGAN (about 50 MB) from GitHub.	처음 실행할 때 GitHub에서 Real-ESRGAN(약 50MB)을 내려받습니다.
+	Real-ESRGAN is not installed.	Real-ESRGAN이 설치되어 있지 않습니다.
 	Input Levels:	입력 레벨:
+	Super Zoom: new document, {size}	슈퍼 줌: 새 문서, {size}
+	Install	설치
+	This document (undoable)	현재 문서 (실행 취소 가능)
+	Super Zoom: enlarged to {size} (Undo to go back)	슈퍼 줌: {size}로 확대 (실행 취소로 되돌리기)
+	Output	출력
+	Fast (Real-ESRGAN animevideov3)	빠름 (Real-ESRGAN animevideov3)

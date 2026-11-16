@@ -679,6 +679,11 @@ pub fn open_command_dialog(app: &mut PrismApp, command: &str, label: &str) -> u6
     {
         return id;
     }
+    if command == prism_engine::neural_cmds::COMMAND
+        && let Ok(id) = crate::neural_ui::open(app)
+    {
+        return id;
+    }
     if crate::sizing::is_sizing(command)
         && let Some(id) = crate::sizing::open(app, command)
     {
