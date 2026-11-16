@@ -1168,7 +1168,7 @@
 	Not in Dictionary:	사전에 없는 단어:
 	OK	확인
 	Offset	오프셋
-	Only Web Colors	웹 색상만
+	Only Web Colors	웹 색상 전용
 	Opacity	불투명도
 	Opacity Jitter	불투명도 지터
 	Opacity:	불투명도:
@@ -2756,8 +2756,17 @@ cameraRaw	Color	색상
 	Apply At Canvas Bounds	캔버스 경계에 효과 적용
 
 # Shared screen eyedropper and text Color Picker (#1128).
-	Color Picker (Text Color)	색상 선택기 (텍스트 색상)
-	Color Picker (Solid Color)	색상 피커 (단색)
+	Color Picker (Text Color)	색상 피커(텍스트 색상)
+	Color Picker (Solid Color)	색상 피커(단색)
+# Photoshop's Color Picker everywhere: titles, the swatch labels, the web-safe warning.
+	Color Picker	색상 피커
+	Color Picker…	색상 피커…
+	Color Picker (Foreground Color)	색상 피커(전경색)
+	Color Picker (Background Color)	색상 피커(배경색)
+	Color Picker (Stop Color)	색상 피커(정지점 색상)
+	Not a web-safe color: click to use the nearest web-safe color	웹 안전 색상이 아닙니다. 클릭하면 가장 가까운 웹 안전 색상을 사용합니다
+colorPicker	new	새로운 색
+colorPicker	current	현재 색
 	Pick screen color	화면 색상 선택
 	Sample a pixel anywhere on the screen	화면의 아무 픽셀에서 색상 추출
 	Click to pick · Esc to cancel	클릭하여 선택 · Esc로 취소

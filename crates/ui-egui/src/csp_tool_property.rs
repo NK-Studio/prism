@@ -344,7 +344,7 @@ fn field(app: &mut PrismApp, ui: &mut egui::Ui, item: &Item, fl: &Field, label: 
                 if let Some(t) = text {
                     ui.add_enabled(enabled, egui::Label::new(t));
                 }
-                let r = ui.add_enabled_ui(enabled, |ui| ui.color_edit_button_srgb(&mut rgb)).inner;
+                let r = ui.add_enabled_ui(enabled, |ui| crate::widgets::color_edit_button_srgb(ui, &mut rgb)).inner;
                 if r.changed() {
                     // 255 × 0x01010101 is the full 32-bit channel CLIP STUDIO stores.
                     for (key, c) in [fl.key, green, blue].into_iter().zip(rgb) {
@@ -453,7 +453,7 @@ fn gradient_field(app: &mut PrismApp, ui: &mut egui::Ui, enabled: bool, e: &mut 
                             };
                         }
                         if let CspStopColor::Rgb(c) = &mut next.color {
-                            ui.color_edit_button_rgb(c).on_hover_text(tl!("Stop color"));
+                            crate::widgets::color_edit_button_rgb(ui, c).on_hover_text(tl!("Stop color"));
                         }
                         let mut pct = next.opacity * 100.0;
                         if ui.add(egui::DragValue::new(&mut pct).range(0.0..=100.0).suffix(" %").max_decimals(0)).on_hover_text(tl!("Stop opacity")).changed() {

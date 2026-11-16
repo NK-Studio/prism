@@ -64,6 +64,7 @@ pub fn free_press(ctx: &egui::Context, canvas: egui::Rect) -> Option<egui::Pos2>
 }
 
 pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
+    crate::color_picker_ui::serve_swatches(app, ctx);
     crate::native_dialogs::show(app, ctx);
     let dialogs = app.ui.dialogs.clone();
     let mut shown = Vec::new();
@@ -88,7 +89,7 @@ pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
 /// Style from any window: Photoshop's are windows of their own, moved anywhere on screen by their
 /// title bars.
 pub fn floats(d: &Dialog) -> bool {
-    d.presentation == crate::state::DialogPresentation::Embedded && (d.window.is_some() || system_window(d.kind))
+    d.presentation == crate::state::DialogPresentation::Embedded && (d.window.is_some() || system_window(d.kind) || crate::color_picker_ui::floats(&d.fields))
 }
 
 /// Dialogs that are one of the system's own windows, as in Photoshop: the system's window buttons
@@ -304,7 +305,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 DialogKind::Command if crate::update_ui::owns(&fields) => crate::update_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::color_picker_ui::owns(&fields) => {
                     outcome = crate::color_picker_ui::body(ui, &mut fields);
-                    crate::color_picker_ui::take_add_swatch(app, &mut fields);
+                    crate::color_picker_ui::after_body(app, &mut fields);
                 }
                 DialogKind::Command if crate::color_range_ui::owns(&fields) => crate::color_range_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::prefs_ui::owns(&fields) => crate::prefs_ui::body(app, ui, &mut fields),

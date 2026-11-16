@@ -1165,20 +1165,32 @@ fn swatch_with_none(ui: &mut egui::Ui, fill: Option<&prism_doc::Fill>, tip: &str
     };
     ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Outside);
     let resp = resp.on_hover_text(tip);
-    let screen_id = resp.id.with("screen-color");
-    let mut out = crate::screen_picker::take(ui.ctx(), screen_id).map(crate::color_picker_ui::hex);
-    crate::widgets::swatch_popup(&resp).show(|ui| {
-        let mut c = current.unwrap_or(Color32::BLACK);
-        if egui::color_picker::color_picker_color32(ui, &mut c, egui::color_picker::Alpha::Opaque) {
-            out = Some(format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()));
+    let rgb = current.map_or([0.0; 3], |c| [c.r(), c.g(), c.b()].map(|v| f32::from(v) / 255.0));
+    // Photoshop's Color Picker; with "No Color" on offer the click opens a small menu first
+    // (Photoshop's fill-type choice), whose Color Picker… opens it for this swatch.
+    let offer_none = allow_none && fill.is_some();
+    // Shape fills and strokes are Photoshop's Solid Color; the arrow colour is the foreground.
+    let label = if allow_none { "Color Picker (Solid Color)" } else { "Color Picker" };
+    if resp.clicked() && !offer_none {
+        crate::color_picker_ui::open_swatch(ui.ctx(), resp.id, rgb, label);
+    }
+    let mut out = crate::color_picker_ui::take_swatch(ui.ctx(), resp.id).map(crate::color_picker_ui::hex);
+    if offer_none {
+        let mut pick = false;
+        crate::widgets::swatch_popup(&resp).show(|ui| {
+            if ui.button(tl!("No Color")).clicked() {
+                out = Some("none".into());
+                ui.close();
+            }
+            if ui.button(tl!("Color Picker…")).clicked() {
+                pick = true;
+                ui.close();
+            }
+        });
+        if pick {
+            crate::color_picker_ui::open_swatch(ui.ctx(), resp.id, rgb, label);
         }
-        if let Some(rgb) = crate::screen_picker::button(ui, screen_id) {
-            out = Some(crate::color_picker_ui::hex(rgb));
-        }
-        if allow_none && fill.is_some() && ui.button(tl!("No Color")).clicked() {
-            out = Some("none".into());
-        }
-    });
+    }
     out
 }
 
@@ -2520,12 +2532,11 @@ mod tests {
         assert_eq!(get_radii(&app), [12.0; 4]);
     }
 
-    /// #534: dragging in a shape's fill picker, opened from the Properties panel at the right edge
-    /// of the window, keeps the picker in place (it flipped from side to side as its width
-    /// followed the colour readouts, which moved it under the pointer).
+    /// The Properties panel's Fill swatch offers No Color and Photoshop's Color Picker, which
+    /// edits the fill live and puts it back on Cancel.
     #[test]
-    fn shape_colour_picker_stays_put_while_dragging() {
-        use egui::{PointerButton, vec2};
+    fn shape_fill_swatch_offers_no_color_and_photoshops_picker() {
+        use egui::vec2;
         use egui_kittest::kittest::Queryable;
         let mut app = app();
         let id = app.run("shape.create", json!({"kind": "rect", "rect": [10, 10, 100, 60], "fill": "#3070c0"})).unwrap()["layer"].as_u64().unwrap();
@@ -2536,49 +2547,53 @@ mod tests {
                     return;
                 }
                 egui::Panel::right("properties").resizable(false).exact_size(285.0).show(ui, |ui| shape_properties(app, ui, prism_doc::LayerId(id)));
+                crate::dialogs::show(app, ui.ctx());
             },
             app,
         );
         PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
         h.run_steps(4);
-        let label = h.query_all(egui_kittest::kittest::by().label("Fill").include_labels()).next().expect("the Fill label").rect();
-        // The swatch is right of its label.
-        let swatch = egui::pos2(label.right() + 17.0, label.center().y);
-        let press = |h: &mut egui_kittest::Harness<'_, PrismApp>, pos, pressed| {
-            h.event(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
-            h.step();
-        };
-        h.hover_at(swatch);
-        h.step();
-        press(&mut h, swatch, true);
-        press(&mut h, swatch, false);
-        h.run_steps(3);
-        let popup = |h: &egui_kittest::Harness<'_, PrismApp>| {
-            h.ctx.memory(|m| m.areas().visible_layer_ids().into_iter().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id)))
-        };
-        let opened = popup(&h).expect("the picker opened");
         let fill = |h: &egui_kittest::Harness<'_, PrismApp>| {
             let st = h.state().session.active().unwrap();
             match &st.doc.layer(prism_doc::LayerId(id)).unwrap().content {
-                LayerContent::Shape(sh) => sh.fill.clone(),
+                LayerContent::Shape(sh) => match &sh.fill {
+                    Some(prism_doc::Fill::Solid(c)) => Some(crate::color_picker_ui::hex(c.to_rgb())),
+                    _ => None,
+                },
                 _ => None,
             }
         };
-        let before = fill(&h);
-        // Drag across the picker's colour area.
-        let start = opened.min + vec2(60.0, opened.height() * 0.5);
-        h.hover_at(start);
-        h.step();
-        press(&mut h, start, true);
-        for i in 1..=10 {
-            h.event(egui::Event::PointerMoved(start + vec2(i as f32 * 5.0, i as f32)));
+        let label = h.query_all(egui_kittest::kittest::by().label("Fill").include_labels()).next().expect("the Fill label").rect();
+        // The swatch is right of its label.
+        let swatch = egui::pos2(label.right() + 17.0, label.center().y);
+        let click_at = |h: &mut egui_kittest::Harness<'_, PrismApp>, pos: egui::Pos2| {
+            h.hover_at(pos);
             h.step();
-            let r = popup(&h).expect("the picker stays open");
-            assert_eq!(r.left_top(), opened.left_top(), "step {i}: the picker moved from {opened:?} to {r:?}");
-            assert!(h.ctx.content_rect().contains_rect(r), "step {i}: {r:?} runs off the window");
-        }
-        press(&mut h, start, false);
-        assert_ne!(fill(&h), before, "the drag picked a colour");
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.step();
+            }
+        };
+        click_at(&mut h, swatch);
+        h.run_steps(3);
+        h.get_by_label("Color Picker…").click();
+        h.run_steps(4);
+        let dialog = h.state().ui.dialogs.last().expect("the Color Picker opened").id;
+        assert_eq!(h.state().ui.dialogs.last().unwrap().fields["__label"], "Color Picker (Solid Color)");
+        assert_eq!(h.state().ui.dialogs.last().unwrap().fields["color"], "#3070c0");
+        h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff0000"));
+        h.run_steps(4);
+        assert_eq!(fill(&h).as_deref(), Some("#ff0000"), "the fill follows the picker");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(4);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(fill(&h).as_deref(), Some("#3070c0"), "Cancel puts the fill back");
+
+        click_at(&mut h, swatch);
+        h.run_steps(3);
+        h.get_by_label("No Color").click();
+        h.run_steps(3);
+        assert_eq!(fill(&h), None);
     }
 }
 

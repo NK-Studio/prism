@@ -878,6 +878,13 @@ pub struct SavePrefs {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiState {
     pub tool: Tool,
+    /// The Color Picker's component radio last used (`h`, `s`, `v`, `r`, `g`, `b`, `lab-l`…):
+    /// the next picker opens on it, as in Photoshop.
+    #[serde(default)]
+    pub color_picker_mode: Option<String>,
+    /// Color Pickers open for swatches in panels and dialogs (`color_picker_ui::swatch`).
+    #[serde(skip)]
+    pub swatch_pickers: Vec<crate::color_picker_ui::SwatchSession>,
     /// Recently opened file paths, most-recent first (File › Open Recent). Capped; de-duplicated.
     #[serde(default)]
     pub recent_files: Vec<String>,
@@ -1083,6 +1090,8 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             tool: Tool::Brush,
+            color_picker_mode: None,
+            swatch_pickers: Vec::new(),
             recent_files: Vec::new(),
             save: SavePrefs::default(),
             text_edit: None,

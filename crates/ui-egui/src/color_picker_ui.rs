@@ -4,6 +4,10 @@
 //! floats so hue survives greys), so `ui.dialog.set` drives it; OK runs `tools.setColors`.
 //! While it is the top dialog the image is its eyedropper, as in Photoshop: the pointer over the
 //! canvas is a pipette, and a click or drag there samples into the new colour ([`sample_at`]).
+//!
+//! Every colour swatch in a panel or another dialog (Layer Style, Fill, Preferences…) opens this
+//! same dialog through [`swatch`]: the swatch has no app, so it posts a request the dialog host
+//! serves ([`serve_swatches`]), and the picked colour flows back to it live; Cancel restores it.
 
 use egui::{Color32, Mesh, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Map, Value, json};
@@ -15,6 +19,23 @@ use crate::widgets;
 
 /// Radio components, Photoshop order: H, S, B, R, G, B.
 pub const MODES: &[(&str, &str)] = &[("h", "H:"), ("s", "S:"), ("v", "B:"), ("r", "R:"), ("g", "G:"), ("b", "B:")];
+
+/// The Lab radios beside them (L, a, b): the field shows the other two Lab components.
+pub const LAB_MODES: &[(&str, &str)] = &[("lab-l", "L:"), ("lab-a", "a:"), ("lab-b", "b:")];
+
+/// sRGB of a Lab colour, clipped into the sRGB cube (the field shows out-of-gamut Lab clipped,
+/// as Photoshop does).
+fn lab_rgb(lab: [f32; 3]) -> [f32; 3] {
+    prism_color::convert::lab_to_srgb(lab).map(|c| c.clamp(0.0, 1.0))
+}
+
+/// Lab a or b from a 0..1 position, and back.
+fn ab(t: f32) -> f32 {
+    t * 255.0 - 128.0
+}
+fn ab_t(v: f32) -> f32 {
+    ((v + 128.0) / 255.0).clamp(0.0, 1.0)
+}
 
 pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     let h = (h.rem_euclid(360.0)) / 60.0;
@@ -66,6 +87,9 @@ pub fn parse_hex(s: &str) -> Option<[f32; 3]> {
 /// given the current HSV/RGB (used for the components the field doesn't vary).
 pub fn field_color(mode: &str, z: f32, x: f32, y: f32) -> [f32; 3] {
     match mode {
+        "lab-l" => lab_rgb([z * 100.0, ab(x), ab(1.0 - y)]),
+        "lab-a" => lab_rgb([(1.0 - y) * 100.0, ab(z), ab(x)]),
+        "lab-b" => lab_rgb([(1.0 - y) * 100.0, ab(x), ab(z)]),
         "s" => hsv_to_rgb(x * 360.0, z, 1.0 - y),
         "v" => hsv_to_rgb(x * 360.0, 1.0 - y, z),
         "r" => [z, 1.0 - y, x],
@@ -75,10 +99,25 @@ pub fn field_color(mode: &str, z: f32, x: f32, y: f32) -> [f32; 3] {
     }
 }
 
-/// Field position and slider value of a colour in `mode` (inverse of [`field_color`]).
-pub fn locate(mode: &str, hsv: [f32; 3], rgb: [f32; 3]) -> (f32, f32, f32) {
-    let h = hsv[0] / 360.0;
+/// Lab components of field position (x, y) with the slider at `z` in a Lab mode.
+fn field_lab(mode: &str, z: f32, x: f32, y: f32) -> Option<[f32; 3]> {
     match mode {
+        "lab-l" => Some([z * 100.0, ab(x), ab(1.0 - y)]),
+        "lab-a" => Some([(1.0 - y) * 100.0, ab(z), ab(x)]),
+        "lab-b" => Some([(1.0 - y) * 100.0, ab(x), ab(z)]),
+        _ => None,
+    }
+}
+
+/// Field position and slider value of a colour in `mode` (inverse of [`field_color`]).
+pub fn locate(mode: &str, now: &Components) -> (f32, f32, f32) {
+    let &Components { rgb, hsv, lab, .. } = now;
+    let h = hsv[0] / 360.0;
+    let l = (lab[0] / 100.0).clamp(0.0, 1.0);
+    match mode {
+        "lab-l" => (ab_t(lab[1]), 1.0 - ab_t(lab[2]), l),
+        "lab-a" => (ab_t(lab[2]), 1.0 - l, ab_t(lab[1])),
+        "lab-b" => (ab_t(lab[1]), 1.0 - l, ab_t(lab[2])),
         "s" => (h, 1.0 - hsv[2], hsv[1]),
         "v" => (h, 1.0 - hsv[1], hsv[2]),
         "r" => (rgb[2], 1.0 - rgb[1], rgb[0]),
@@ -89,8 +128,12 @@ pub fn locate(mode: &str, hsv: [f32; 3], rgb: [f32; 3]) -> (f32, f32, f32) {
 }
 
 /// Colour for slider position `z` (0..1) in `mode`, other components from the current colour.
-fn slider_color(mode: &str, z: f32, hsv: [f32; 3], rgb: [f32; 3]) -> [f32; 3] {
+fn slider_color(mode: &str, z: f32, now: &Components) -> [f32; 3] {
+    let &Components { rgb, hsv, lab, .. } = now;
     match mode {
+        "lab-l" => lab_rgb([z * 100.0, lab[1], lab[2]]),
+        "lab-a" => lab_rgb([lab[0], ab(z), lab[2]]),
+        "lab-b" => lab_rgb([lab[0], lab[1], ab(z)]),
         "s" => hsv_to_rgb(hsv[0], z, hsv[2]),
         "v" => hsv_to_rgb(hsv[0], hsv[1], z),
         "r" => [z, rgb[1], rgb[2]],
@@ -105,41 +148,137 @@ fn c32(c: [f32; 3]) -> Color32 {
     Color32::from_rgb(q(c[0]), q(c[1]), q(c[2]))
 }
 
+/// The fields every picker opens with: `rgb` as the new and current colour, under `label`. The
+/// component radio is the one last used, as in Photoshop.
+fn fields_for(app: &PrismApp, target: &str, label: &str, rgb: [f32; 3]) -> Map<String, Value> {
+    let mut f = Map::new();
+    f.insert("__colorPicker".into(), json!(target));
+    f.insert("__label".into(), json!(label));
+    f.insert("color".into(), json!(hex(rgb)));
+    f.insert("__orig".into(), json!(hex(rgb)));
+    f.insert("__hsv".into(), json!(rgb_to_hsv(rgb)));
+    f.insert("__mode".into(), json!(app.ui.color_picker_mode.clone().unwrap_or_else(|| "h".into())));
+    f.insert("__webOnly".into(), json!(false));
+    f
+}
+
 /// Open the picker for the foreground or background colour.
 pub fn open(app: &mut PrismApp, target: &str) -> u64 {
     let c = if target == "background" { app.session.tools.background } else { app.session.tools.foreground };
-    let rgb = [c[0], c[1], c[2]];
-    let hsv = rgb_to_hsv(rgb);
-    let mut f = Map::new();
-    f.insert("__colorPicker".into(), json!(target));
-    f.insert("__label".into(), json!(if target == "background" { "Color Picker (Background Color)" } else { "Color Picker (Foreground Color)" }));
-    f.insert("color".into(), json!(hex(rgb)));
-    f.insert("__orig".into(), json!(hex(rgb)));
-    f.insert("__hsv".into(), json!(hsv));
-    f.insert("__mode".into(), json!("h"));
-    f.insert("__webOnly".into(), json!(false));
+    let label = if target == "background" { "Color Picker (Background Color)" } else { "Color Picker (Foreground Color)" };
+    let target = if target == "background" { "background" } else { "foreground" };
+    let f = fields_for(app, target, label, [c[0], c[1], c[2]]);
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
 /// Open the picker on `rgb` for something other than the tool colours: OK runs `command` with
 /// `params` plus `"color": "#rrggbb"` (e.g. a gradient stop's colour).
 pub fn open_for_command(app: &mut PrismApp, label: &str, rgb: [f32; 3], command: &str, params: Value) -> u64 {
-    let hsv = rgb_to_hsv(rgb);
-    let mut f = Map::new();
-    f.insert("__colorPicker".into(), json!("command"));
-    f.insert("__label".into(), json!(label));
+    let mut f = fields_for(app, "command", label, rgb);
     f.insert("__command".into(), json!(command));
     f.insert("__params".into(), params);
-    f.insert("color".into(), json!(hex(rgb)));
-    f.insert("__orig".into(), json!(hex(rgb)));
-    f.insert("__hsv".into(), json!(hsv));
-    f.insert("__mode".into(), json!("h"));
-    f.insert("__webOnly".into(), json!(false));
     app.ui.open_dialog(DialogKind::Command, f)
+}
+
+/// A swatch's open picker: which dialog edits which swatch, and what the swatch was last given.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwatchSession {
+    dialog: u64,
+    swatch: u64,
+    orig: [f32; 3],
+    last: String,
+    /// The colour OK confirmed; a session whose dialog closed without one was cancelled.
+    done: Option<[f32; 3]>,
+}
+
+/// A swatch asking for the picker (posted to egui memory: the swatch has no app).
+#[derive(Clone)]
+struct SwatchRequest {
+    swatch: u64,
+    rgb: [f32; 3],
+    label: String,
+    floats: bool,
+}
+
+const SWATCH_REQUESTS: &str = "pc-swatch-picker-requests";
+
+fn swatch_pick(swatch: u64) -> egui::Id {
+    egui::Id::new(("pc-swatch-pick", swatch))
+}
+
+/// Photoshop's Color Picker for a colour swatch drawn anywhere (a panel, Layer Style, Fill…).
+/// `response` is the swatch's (its id names it across frames) and `rgb` its colour, sRGB 0..1.
+/// A click opens the picker dialog on the next frame; returns the colour the picker set this
+/// frame, live while it is open, the original again on Cancel.
+pub fn swatch(ui: &egui::Ui, response: &egui::Response, rgb: [f32; 3], label: &str) -> Option<[f32; 3]> {
+    if response.clicked() {
+        open_swatch(ui.ctx(), response.id, rgb, label);
+    }
+    take_swatch(ui.ctx(), response.id)
+}
+
+/// Ask for the picker for swatch `id` (see [`swatch`]), e.g. from a menu beside the swatch.
+pub fn open_swatch(ctx: &egui::Context, id: egui::Id, rgb: [f32; 3], label: &str) {
+    let request = SwatchRequest {
+        swatch: id.value(),
+        rgb: rgb.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 }),
+        label: label.to_string(),
+        // Drawn in a window of its own (Layer Style's): the picker gets one too, above it.
+        floats: ctx.viewport_id() != egui::ViewportId::ROOT,
+    };
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<SwatchRequest>>(egui::Id::new(SWATCH_REQUESTS)).push(request));
+    // The dialog host runs in the main window's pass.
+    ctx.request_repaint();
+    ctx.request_repaint_of(egui::ViewportId::ROOT);
+}
+
+/// The colour the picker set for swatch `id` since it last asked (see [`swatch`]).
+pub fn take_swatch(ctx: &egui::Context, id: egui::Id) -> Option<[f32; 3]> {
+    ctx.data_mut(|d| d.remove_temp::<[f32; 3]>(swatch_pick(id.value())))
+}
+
+/// Open the pickers swatches asked for, and hand each open one's colour back to its swatch.
+/// Called by the dialog host every frame.
+pub fn serve_swatches(app: &mut PrismApp, ctx: &egui::Context) {
+    let requests = ctx.data_mut(|d| d.remove_temp::<Vec<SwatchRequest>>(egui::Id::new(SWATCH_REQUESTS))).unwrap_or_default();
+    for r in requests {
+        let open = app.ui.swatch_pickers.iter().any(|s| s.swatch == r.swatch && app.ui.dialogs.iter().any(|d| d.id == s.dialog));
+        if open {
+            continue;
+        }
+        let mut f = fields_for(app, "swatch", &r.label, r.rgb);
+        f.insert("__swatch".into(), json!(r.swatch));
+        if r.floats {
+            f.insert("__floats".into(), json!(true));
+        }
+        let dialog = app.ui.open_dialog(DialogKind::Command, f);
+        app.ui.swatch_pickers.push(SwatchSession { dialog, swatch: r.swatch, orig: r.rgb, last: hex(r.rgb), done: None });
+    }
+    let mut kept = Vec::new();
+    for mut s in std::mem::take(&mut app.ui.swatch_pickers) {
+        let live = app.ui.dialogs.iter().find(|d| d.id == s.dialog).and_then(|d| d.fields.get("color")).and_then(Value::as_str).and_then(parse_hex);
+        let want = live.or(s.done).unwrap_or(s.orig);
+        if hex(want) != s.last {
+            s.last = hex(want);
+            // The original goes back exactly, not through `#rrggbb`.
+            let rgb = if live.is_none() && s.done.is_none() { s.orig } else { want };
+            ctx.data_mut(|d| d.insert_temp(swatch_pick(s.swatch), rgb));
+            ctx.request_repaint();
+        }
+        if live.is_some() {
+            kept.push(s);
+        }
+    }
+    app.ui.swatch_pickers = kept;
 }
 
 pub fn owns(f: &Map<String, Value>) -> bool {
     f.contains_key("__colorPicker")
+}
+
+/// A swatch's picker drawn from a window of its own floats in one too ([`swatch`]).
+pub fn floats(f: &Map<String, Value>) -> bool {
+    owns(f) && f.get("__floats").and_then(Value::as_bool) == Some(true)
 }
 
 /// The Color Picker, when it is the top dialog (another dialog opened over it takes the input).
@@ -293,14 +432,16 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let mode = f.get("__mode").and_then(Value::as_str).unwrap_or("h").to_string();
     let now = current(f);
-    let (rgb, hsv) = (now.rgb, now.hsv);
-    let (fx, fy, fz) = locate(&mode, hsv, rgb);
+    let (rgb, hsv, lab) = (now.rgb, now.hsv, now.lab);
+    let (fx, fy, fz) = locate(&mode, &now);
     // Colour field.
-    let (field, resp) = ui.allocate_exact_size(vec2(280.0, 280.0), Sense::click_and_drag());
+    let (field, resp) = ui.allocate_exact_size(vec2(FIELD, FIELD), Sense::click_and_drag());
     ui.painter().add(grid_mesh(field, 32, |x, y| field_color(&mode, fz, x, y)));
     ui.painter().rect_stroke(field, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     let marker = pos2(field.left() + fx * field.width(), field.top() + fy * field.height());
-    ui.painter().circle_stroke(marker, 5.0, Stroke::new(1.5, if hsv[2] > 0.6 && hsv[1] < 0.4 { Color32::BLACK } else { Color32::WHITE }));
+    // Black on light colours, white on dark, as Photoshop's ring.
+    let ring = if prism_color::convert::srgb_to_lab(rgb)[0] > 60.0 { Color32::BLACK } else { Color32::WHITE };
+    ui.painter().with_clip_rect(field.expand(6.0)).circle_stroke(marker, 5.5, Stroke::new(1.2, ring));
     if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.clicked()) {
         let (x, y) = (((p.x - field.left()) / field.width()).clamp(0.0, 1.0), ((p.y - field.top()) / field.height()).clamp(0.0, 1.0));
         let c = field_color(&mode, fz, x, y);
@@ -308,17 +449,19 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             "h" => Keep::Hsv([fz * 360.0, x, 1.0 - y]),
             "s" => Keep::Hsv([x * 360.0, fz, 1.0 - y]),
             "v" => Keep::Hsv([x * 360.0, 1.0 - y, fz]),
-            _ => Keep::Nothing,
+            m => field_lab(m, fz, x, y).map_or(Keep::Nothing, Keep::Lab),
         };
         set_rgb(f, c, keep);
     }
     // Component slider (hue runs 360° at the top to 0° at the bottom, like Photoshop).
-    let (strip, sresp) = ui.allocate_exact_size(vec2(20.0, 280.0), Sense::click_and_drag());
-    ui.painter().add(grid_mesh(strip, 32, |_, y| slider_color(&mode, 1.0 - y, hsv, rgb)));
+    let (strip, sresp) = ui.allocate_exact_size(vec2(20.0, FIELD), Sense::click_and_drag());
+    ui.painter().add(grid_mesh(strip, 32, |_, y| slider_color(&mode, 1.0 - y, &now)));
+    ui.painter().rect_stroke(strip, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     let sy = strip.top() + (1.0 - fz) * strip.height();
+    // Photoshop's slider: two white arrowheads with a dark rim pointing in at the value.
     for (x, dir) in [(strip.left() - 1.0, 1.0f32), (strip.right() + 1.0, -1.0)] {
-        let tri = vec![pos2(x, sy), pos2(x - 6.0 * dir, sy - 4.0), pos2(x - 6.0 * dir, sy + 4.0)];
-        ui.painter().add(egui::Shape::convex_polygon(tri, t.text, Stroke::NONE));
+        let tri = vec![pos2(x, sy), pos2(x - 7.0 * dir, sy - 5.0), pos2(x - 7.0 * dir, sy + 5.0)];
+        ui.painter().add(egui::Shape::convex_polygon(tri, Color32::WHITE, Stroke::new(1.0, Color32::from_black_alpha(160))));
     }
     if let Some(p) = sresp.interact_pointer_pos().filter(|_| sresp.dragged() || sresp.clicked()) {
         let z = 1.0 - ((p.y - strip.top()) / strip.height()).clamp(0.0, 1.0);
@@ -328,32 +471,106 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             "v" => Some([hsv[0], hsv[1], z]),
             _ => None,
         };
-        match h {
-            Some(h) => set_rgb(f, hsv_to_rgb(h[0], h[1], h[2]), Keep::Hsv(h)),
-            None => set_rgb(f, slider_color(&mode, z, hsv, rgb), Keep::Nothing),
+        let l = match mode.as_str() {
+            "lab-l" => Some([z * 100.0, lab[1], lab[2]]),
+            "lab-a" => Some([lab[0], ab(z), lab[2]]),
+            "lab-b" => Some([lab[0], lab[1], ab(z)]),
+            _ => None,
+        };
+        match (h, l) {
+            (Some(h), _) => set_rgb(f, hsv_to_rgb(h[0], h[1], h[2]), Keep::Hsv(h)),
+            (_, Some(l)) => set_rgb(f, lab_rgb(l), Keep::Lab(l)),
+            _ => set_rgb(f, slider_color(&mode, z, &now), Keep::Nothing),
         }
     }
 }
 
+/// The colour field's side, in points.
+const FIELD: f32 = 256.0;
+
 fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let rgb = current(f).rgb;
-    ui.allocate_ui_with_layout(vec2(64.0, 104.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-        // new / current swatches.
-        ui.label(egui::RichText::new(tl!("new")).size(11.0).color(t.text_dim));
-        let (sw, _) = ui.allocate_exact_size(vec2(64.0, 72.0), Sense::hover());
+    let lang = crate::i18n::current();
+    ui.allocate_ui_with_layout(vec2(SWATCH.x, SWATCH.y + 40.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.y = 3.0;
+        // "new" over the new colour, "current" under the colour the picker opened with.
+        ui.label(egui::RichText::new(crate::i18n::tr_ctx(lang, "colorPicker", "new")).size(12.0).color(t.text_dim));
+        let (sw, _) = ui.allocate_exact_size(SWATCH, Sense::hover());
+        let half = SWATCH.y / 2.0;
         let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or(rgb);
-        ui.painter().rect_filled(Rect::from_min_size(sw.min, vec2(64.0, 36.0)), 0.0, c32(rgb));
-        let cur = Rect::from_min_size(sw.min + vec2(0.0, 36.0), vec2(64.0, 36.0));
+        ui.painter().rect_filled(Rect::from_min_size(sw.min, vec2(SWATCH.x, half)), 0.0, c32(rgb));
+        let cur = Rect::from_min_size(sw.min + vec2(0.0, half), vec2(SWATCH.x, half));
         ui.painter().rect_filled(cur, 0.0, c32(orig));
-        ui.painter().rect_stroke(sw, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
+        ui.painter().rect_stroke(sw, 0.0, Stroke::new(1.0, t.text_faint), StrokeKind::Outside);
         let click_cur = ui.interact(cur, ui.id().with("cp-current"), Sense::click());
         click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Click to restore the current colour")));
         if click_cur.on_hover_text(tl!("Click to restore the current colour")).clicked() {
             set_rgb(f, orig, Keep::Nothing);
         }
-        ui.label(egui::RichText::new(tl!("current")).size(11.0).color(t.text_dim));
+        ui.label(egui::RichText::new(crate::i18n::tr_ctx(lang, "colorPicker", "current")).size(12.0).color(t.text_dim));
     });
+    web_warning(ui, f, rgb);
+}
+
+/// The new / current swatch pair.
+const SWATCH: egui::Vec2 = vec2(64.0, 72.0);
+
+/// The nearest web-safe colour (each channel a multiple of 0x33).
+pub fn web_safe(rgb: [f32; 3]) -> [f32; 3] {
+    rgb.map(|v| (v.clamp(0.0, 1.0) * 5.0).round() / 5.0)
+}
+
+/// Photoshop's "not a web-safe colour" cube beside the swatches, over the nearest web-safe
+/// colour; a click on either picks that colour. The column is kept when the colour is safe.
+fn web_warning(ui: &mut egui::Ui, f: &mut Map<String, Value>, rgb: [f32; 3]) {
+    let (column, _) = ui.allocate_exact_size(vec2(18.0, SWATCH.y + 40.0), Sense::hover());
+    let safe = web_safe(rgb);
+    if hex(safe) == hex(rgb) {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let mid = column.top() + 20.0 + SWATCH.y / 2.0;
+    let cube = Rect::from_center_size(pos2(column.center().x, mid - 9.0), vec2(14.0, 14.0));
+    let chip = Rect::from_center_size(pos2(column.center().x, mid + 8.0), vec2(13.0, 13.0));
+    let tip = tl!("Not a web-safe color: click to use the nearest web-safe color");
+    let r = ui.interact(cube.union(chip), ui.id().with("cp-web-safe"), Sense::click());
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
+    let ink = if r.hovered() { t.text } else { t.text_dim };
+    paint_cube(ui.painter(), cube, ink);
+    ui.painter().rect_filled(chip, 0.0, c32(safe));
+    ui.painter().rect_stroke(chip, 0.0, Stroke::new(1.0, t.text_faint), StrokeKind::Outside);
+    if r.on_hover_text(tip).clicked() {
+        set_rgb(f, safe, Keep::Nothing);
+    }
+}
+
+/// An isometric cube outline in `rect`.
+fn paint_cube(p: &egui::Painter, rect: Rect, ink: Color32) {
+    let (c, w, h) = (rect.center(), rect.width() / 2.0, rect.height() / 2.0);
+    let top = pos2(c.x, rect.top());
+    let (ul, ur) = (pos2(c.x - w, c.y - h * 0.5), pos2(c.x + w, c.y - h * 0.5));
+    let (ll, lr) = (pos2(c.x - w, c.y + h * 0.5), pos2(c.x + w, c.y + h * 0.5));
+    let (mid, bottom) = (pos2(c.x, c.y), pos2(c.x, rect.bottom()));
+    let s = Stroke::new(1.2, ink);
+    p.add(egui::Shape::closed_line(vec![top, ur, lr, bottom, ll, ul], s));
+    p.line_segment([ul, mid], s);
+    p.line_segment([ur, mid], s);
+    p.line_segment([mid, bottom], s);
+}
+
+/// A component radio: Photoshop's ring, filled while selected. Returns the click.
+fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, label));
+    let ring = if resp.hovered() { t.text } else { t.text_dim };
+    ui.painter().circle_filled(r.center(), 7.0, t.field);
+    ui.painter().circle_stroke(r.center(), 7.0, Stroke::new(1.0, ring));
+    if on {
+        ui.painter().circle_filled(r.center(), 3.5, t.text);
+    }
+    resp.clicked()
 }
 
 /// Component radios and numeric fields: HSB, RGB, Lab, CMYK and hex.
@@ -363,7 +580,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
     let mut edit: Option<([f32; 3], Keep)> = None;
     let mut new_mode: Option<&str> = None;
     ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 28.0;
+        ui.spacing_mut().item_spacing.x = 22.0;
         ui.vertical(|ui| {
             egui::Grid::new("cp-hsb-rgb").min_row_height(0.0).num_columns(4).spacing([6.0, 4.0]).show(ui, |ui| {
                 let vals = [hsv[0], hsv[1] * 100.0, hsv[2] * 100.0, rgb[0] * 255.0, rgb[1] * 255.0, rgb[2] * 255.0];
@@ -371,13 +588,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 let ranges = [0.0..=360.0, 0.0..=100.0, 0.0..=100.0, 0.0..=255.0, 0.0..=255.0, 0.0..=255.0];
                 for i in 0..6 {
                     let (key, label) = MODES[i];
-                    let on = mode == key;
-                    let (r, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click());
-                    ui.painter().circle_stroke(r.center(), 5.5, Stroke::new(1.2, if on { t.accent } else { t.text_faint }));
-                    if on {
-                        ui.painter().circle_filled(r.center(), 3.0, t.accent);
-                    }
-                    if resp.clicked() {
+                    if radio(ui, mode == key, label) {
                         new_mode = Some(key);
                     }
                     ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
@@ -401,15 +612,17 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                     }
                 }
             });
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                ui.label(egui::RichText::new("#").color(t.text_dim));
+                // Under the radios' column, as Photoshop's "#".
+                ui.add_sized(vec2(16.0, 18.0), egui::Label::new(egui::RichText::new("#").color(t.text_dim)));
                 // While the field has focus it shows what is being typed, not the colour: rebuilding it from
                 // the colour every frame would throw away every keystroke until six valid digits were in.
                 let id = ui.id().with("cp-hex");
                 let typing = if ui.memory(|m| m.has_focus(id)) { ui.data(|d| d.get_temp::<String>(id)) } else { None };
                 let mut h = typing.unwrap_or_else(|| hex(rgb).trim_start_matches('#').to_string());
-                let r = ui.add(egui::TextEdit::singleline(&mut h).id(id).char_limit(6).desired_width(80.0).font(crate::theme::mono(12.0)));
+                let r = ui.add(egui::TextEdit::singleline(&mut h).id(id).char_limit(6).desired_width(84.0).font(crate::theme::mono(12.0)));
                 if r.has_focus() {
                     ui.data_mut(|d| d.insert_temp(id, h.clone()));
                 } else {
@@ -422,22 +635,27 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 }
             });
         });
-        egui::Grid::new("cp-lab-cmyk").min_row_height(0.0).num_columns(3).spacing([6.0, 4.0]).show(ui, |ui| {
-            for (i, (label, v, range)) in [("L:", lab[0], 0.0..=100.0), ("a:", lab[1], -128.0..=127.0), ("b:", lab[2], -128.0..=127.0)].into_iter().enumerate()
-            {
+        egui::Grid::new("cp-lab-cmyk").min_row_height(0.0).num_columns(4).spacing([6.0, 4.0]).show(ui, |ui| {
+            let ranges = [0.0..=100.0, -128.0..=127.0, -128.0..=127.0];
+            for (i, &(key, label)) in LAB_MODES.iter().enumerate() {
+                if radio(ui, mode == key, label) {
+                    new_mode = Some(key);
+                }
                 ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
-                let mut x = v.round();
-                if widgets::value_field(ui, &mut x, range, "", 54.0).changed() {
+                let mut x = lab[i].round();
+                if widgets::value_field(ui, &mut x, ranges[i].clone(), "", 54.0).changed() {
                     let mut l = lab;
                     l[i] = x;
-                    edit = Some((prism_color::convert::lab_to_srgb(l).map(|c| c.clamp(0.0, 1.0)), Keep::Lab(l)));
+                    edit = Some((lab_rgb(l), Keep::Lab(l)));
                 }
                 ui.label("");
                 ui.end_row();
             }
             ui.allocate_exact_size(vec2(0.0, 6.0), Sense::hover());
             ui.end_row();
+            // CMYK has no radios in Photoshop: its labels line up with Lab's.
             for (i, label) in ["C:", "M:", "Y:", "K:"].into_iter().enumerate() {
+                ui.label("");
                 ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
                 let mut x = (cmyk[i] * 100.0).round();
                 if widgets::value_field(ui, &mut x, 0.0..=100.0, "", 54.0).changed() {
@@ -458,10 +676,14 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
     }
 }
 
-/// Add to Swatches was clicked: add the picked colour to the Swatches panel.
-pub fn take_add_swatch(app: &mut PrismApp, f: &mut Map<String, Value>) {
+/// After the body drew: Add to Swatches adds the picked colour to the Swatches panel, and the
+/// component radio is remembered for the next picker, as in Photoshop.
+pub fn after_body(app: &mut PrismApp, f: &mut Map<String, Value>) {
     if f.remove("__addSwatch").and_then(|v| v.as_bool()) == Some(true) {
         crate::swatches_ui::add_from_picker(app, f);
+    }
+    if let Some(mode) = f.get("__mode").and_then(Value::as_str).filter(|m| MODES.iter().chain(LAB_MODES).any(|(k, _)| k == m)) {
+        app.ui.color_picker_mode = Some(mode.to_string());
     }
 }
 
@@ -472,6 +694,15 @@ pub fn confirm(app: &mut PrismApp, f: &Map<String, Value>) -> Result<Value, Stri
     }
     let target = f.get("__colorPicker").and_then(Value::as_str).unwrap_or("foreground");
     let color = f.get("color").and_then(Value::as_str).unwrap_or("#000000");
+    if target == "swatch" {
+        // The swatch takes it on the next frame ([`serve_swatches`]).
+        let rgb = parse_hex(color).ok_or("enter a six-digit hex colour")?;
+        let swatch = f.get("__swatch").and_then(Value::as_u64);
+        if let Some(s) = app.ui.swatch_pickers.iter_mut().find(|s| Some(s.swatch) == swatch) {
+            s.done = Some(rgb);
+        }
+        return Ok(json!({"color": hex(rgb)}));
+    }
     if let Some(cmd) = f.get("__command").and_then(Value::as_str) {
         let mut p = f.get("__params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
         p["color"] = json!(color);
@@ -662,9 +893,11 @@ mod tests {
     #[test]
     fn field_and_locate_are_inverse_in_every_mode() {
         let rgb = [0.8, 0.3, 0.2];
-        let hsv = rgb_to_hsv(rgb);
-        for (m, _) in MODES {
-            let (x, y, z) = locate(m, hsv, rgb);
+        let mut f = Map::new();
+        f.insert("color".into(), json!(hex(rgb)));
+        let now = current(&f);
+        for (m, _) in MODES.iter().chain(LAB_MODES) {
+            let (x, y, z) = locate(m, &now);
             let c = field_color(m, z, x, y);
             assert_eq!(hex(c), hex(rgb), "mode {m}");
         }
