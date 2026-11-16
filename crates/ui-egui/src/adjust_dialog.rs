@@ -76,13 +76,22 @@ pub fn sample_at(app: &mut PrismApp, x: f64, y: f64) -> bool {
     true
 }
 
-fn picker_button(ui: &mut egui::Ui, selected: bool, enabled: bool, tooltip: &str, color: egui::Color32) -> egui::Response {
-    let response = ui.add_enabled_ui(enabled, |ui| crate::icons::button(ui, "pipette", 28.0, selected, tooltip)).inner;
-    let tokens = crate::theme::Tokens::get(ui.ctx());
-    ui.painter().circle_filled(response.rect.right_bottom() - egui::vec2(5.5, 5.5), 3.5, color);
-    ui.painter().circle_stroke(response.rect.right_bottom() - egui::vec2(5.5, 5.5), 3.5, egui::Stroke::new(1.0, tokens.field_border));
+/// A Set Point eyedropper: the glyph's barrel is filled with `tone`, the tone the picker maps the
+/// sample to (image data, like the Curves gradient bars, so the same in every theme).
+fn picker_button(ui: &mut egui::Ui, selected: bool, enabled: bool, tooltip: &str, tone: egui::Color32) -> egui::Response {
+    const BOX: f32 = 28.0;
+    const GLYPH: f32 = 22.0;
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(BOX), if enabled { egui::Sense::click() } else { egui::Sense::hover() });
+    let response = if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response };
+    let (tint, tone) = if enabled {
+        (crate::icons::button_chrome(ui, rect, selected, response.hovered()), tone)
+    } else {
+        (crate::theme::Tokens::get(ui.ctx()).text_faint, tone.gamma_multiply(0.4))
+    };
+    crate::icons::paint(ui, rect, "adjust-eyedropper-fill", GLYPH, tone);
+    crate::icons::paint(ui, rect, "adjust-eyedropper", GLYPH, tint);
     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, tooltip));
-    response
+    response.on_hover_text(tooltip)
 }
 
 fn curves_picker_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mode: prism_doc::ColorMode) {
@@ -92,8 +101,6 @@ fn curves_picker_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mo
     ui.horizontal(|ui| {
         let tokens = crate::theme::Tokens::get(ui.ctx());
         ui.label(egui::RichText::new(tl!("Eyedroppers:")).color(tokens.text_dim).size(12.0));
-        // The swatch is the tone the picker maps the sample to (image data, like the Curves
-        // gradient bars), not chrome, so it is the same in every theme; its ring is a token.
         for (id, eyedropper, label, tone) in [
             ("black", CurvesEyedropper::Black, tl!("Set Black Point"), 0),
             ("gray", CurvesEyedropper::NeutralGray, tl!("Set Neutral Gray Point"), 128),
