@@ -2,8 +2,11 @@
 //! The `tool-*` glyphs (`assets/icons/tools/`) are Prism's own artwork: solid toolbar glyphs.
 //! The `opt-*` glyphs (`assets/icons/options/`) are Prism's own artwork for the options bar.
 //! The `layers-*` glyphs (`assets/icons/layers/`) are Prism's own artwork for the Layers panel footer.
+//! The `adjust-*` glyphs (`assets/icons/adjust/`) are Prism's own artwork for the adjustment dialogs.
 
 pub static ICONS: &[(&str, &[u8])] = &[
+    ("adjust-eyedropper", include_bytes!("../../../assets/icons/adjust/eyedropper.svg")),
+    ("adjust-eyedropper-fill", include_bytes!("../../../assets/icons/adjust/eyedropper-fill.svg")),
     ("align-center", include_bytes!("../../../assets/icons/align-center.svg")),
     ("align-justify", include_bytes!("../../../assets/icons/align-justify.svg")),
     ("align-left", include_bytes!("../../../assets/icons/align-left.svg")),

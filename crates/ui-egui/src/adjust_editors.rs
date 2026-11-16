@@ -479,9 +479,11 @@ fn write_levels(v: &mut Value, key: &str, l: &Lv) {
     }
 }
 
-/// A triangular slider handle below a bar.
+/// A slider handle below a bar: a pointed top on a square foot, its tip at (`x`, `y`).
 fn handle(p: &egui::Painter, x: f32, y: f32, fill: Color32, stroke: Color32) {
-    p.add(egui::Shape::convex_polygon(vec![pos2(x, y), pos2(x + 5.5, y + 9.0), pos2(x - 5.5, y + 9.0)], fill, Stroke::new(1.0, stroke)));
+    let (hw, shoulder, foot) = (5.5, 5.5, 11.0);
+    let pts = vec![pos2(x, y), pos2(x + hw, y + shoulder), pos2(x + hw, y + foot), pos2(x - hw, y + foot), pos2(x - hw, y + shoulder)];
+    p.add(egui::Shape::convex_polygon(pts, fill, Stroke::new(1.0, stroke)));
 }
 
 /// Input level (0–255) where the gamma slider sits: the input that maps to 50% grey.
