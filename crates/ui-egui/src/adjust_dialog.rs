@@ -441,9 +441,9 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
         PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-        // (Brightness/Contrast, Levels, Curves and Exposure reset: their Photoshop layout is
+        // (Brightness/Contrast, Levels, Curves, Exposure and Vibrance reset: their Photoshop layout is
         // `adjust_ps_ui`.)
-        open(h.state_mut(), "image.adjustments.vibrance").unwrap();
+        open(h.state_mut(), "image.adjustments.posterize").unwrap();
         h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
         h.run_steps(3);
         assert!(h.query_by_label("Cancel").is_some() && h.query_by_label("Reset").is_none());

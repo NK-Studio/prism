@@ -51,7 +51,7 @@ fn kind(f: &Map<String, Value>) -> &str {
 
 /// Is this dialog drawn in Photoshop's classic adjustment layout?
 pub fn owns(f: &Map<String, Value>) -> bool {
-    matches!(kind(f), "brightnessContrast" | "levels" | "curves" | "exposure")
+    matches!(kind(f), "brightnessContrast" | "levels" | "curves" | "exposure" | "vibrance")
 }
 
 /// The dialog's content width.
@@ -120,6 +120,7 @@ pub fn body(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
         "levels" => levels(app, ui, f),
         "curves" => curves(app, ui, f),
         "exposure" => exposure(app, ui, f),
+        "vibrance" => vibrance(ui, f),
         _ => brightness_contrast(app, ui, f),
     };
     settle(ui, f);
@@ -424,6 +425,49 @@ fn exposure(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
     if changed {
         crate::adjust_dialog::rebase_picker(f);
     }
+    outcome
+}
+
+fn whole_text(v: f64) -> String {
+    signed(v, 0)
+}
+
+/// Image › Adjustments › Vibrance in Photoshop 27.4's layout (measured): Vibrance and Saturation,
+/// each a label with its field ("+53", "-100") and a linear -100..100 slider; OK, Cancel (Alt:
+/// Reset) and Preview (Opt+P) at the right.
+fn vibrance(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
+    let mut outcome = None;
+    let mut v = num(f, "vibrance").clamp(-100.0, 100.0);
+    let mut s = num(f, "saturation").clamp(-100.0, 100.0);
+    let alt = ui.input(|i| i.modifiers.alt);
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(OPTIONS_W);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            fine_row(ui, label("Vibrance"), &mut v, -100.0..=100.0, 1.0, whole_text, |x| x, |p| p);
+            ui.add_space(6.0);
+            fine_row(ui, tl!("Saturation"), &mut s, -100.0..=100.0, 1.0, whole_text, |x| x, |p| p);
+        });
+        ui.add_space(GAP);
+        ui.vertical(|ui| {
+            ui.set_width(BUTTON_W);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            if widgets::primary_button(ui, tl!("OK"), BUTTON_W).clicked() {
+                outcome = Some(true);
+            }
+            if widgets::secondary_button(ui, if alt { tl!("Reset") } else { tl!("Cancel") }, BUTTON_W).clicked() {
+                if alt {
+                    (v, s) = (0.0, 0.0);
+                } else {
+                    outcome = Some(false);
+                }
+            }
+            ui.add_space(4.0);
+            preview_checkbox(ui, f, true);
+        });
+    });
+    f.insert("vibrance".into(), json!(v));
+    f.insert("saturation".into(), json!(s));
     outcome
 }
 
@@ -996,6 +1040,33 @@ mod tests {
         assert!((field(&h, id, "gamma").as_f64().unwrap() - 0.01).abs() < 1e-6);
     }
 
+    /// Photoshop 27.4's Vibrance (measured): two linear -100..100 rows written "+53" / "-100",
+    /// OK / Cancel (Alt: Reset), Preview; Cmd+Z steps back.
+    #[test]
+    fn vibrance_dialog_works_like_photoshops() {
+        assert_eq!([100.0, 53.0, 0.0, -100.0].map(whole_text), ["+100", "+53", "0", "-100"]);
+        let (mut h, id) = dialog_for("image.adjustments.vibrance");
+        assert!(owns(&h.state().ui.dialogs[0].fields));
+        for label in ["Saturation", "OK", "Cancel"] {
+            assert!(h.query_by_label(label).is_some(), "{label}");
+        }
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("vibrance".into(), json!(53));
+        h.run_steps(3);
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("saturation".into(), json!(-1e9));
+        h.run_steps(3);
+        assert_eq!(field(&h, id, "saturation"), json!(-100.0));
+        key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert_eq!((field(&h, id, "vibrance"), field(&h, id, "saturation")), (json!(53.0), json!(0.0)));
+        click(&mut h, "Reset", egui::Modifiers::ALT);
+        assert_eq!(field(&h, id, "vibrance"), json!(0.0));
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("vibrance".into(), json!(40));
+        h.run_steps(2);
+        let steps = h.state().session.active().unwrap().history.past_len();
+        click(&mut h, "OK", egui::Modifiers::NONE);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    }
+
     /// Run explicitly for visual QA: the Exposure dialog in two themes.
     #[test]
     #[ignore = "writes target/exposure-dialog/*.png for visual inspection"]
@@ -1018,6 +1089,13 @@ mod tests {
             d.fields.insert("gamma".into(), json!(0.42));
             h.run_steps(5);
             h.render().unwrap().save(out.join(format!("{kind:?}.png"))).unwrap();
+            let ok = h.state().ui.dialogs.last().map(|d| d.id).unwrap();
+            h.state_mut().ui.dialogs.retain(|d| d.id != ok);
+            let id = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.vibrance").unwrap();
+            h.run_steps(3);
+            h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("vibrance".into(), json!(53));
+            h.run_steps(5);
+            h.render().unwrap().save(out.join(format!("{kind:?}-vibrance.png"))).unwrap();
         }
     }
 

@@ -208,6 +208,23 @@ Exposure so it goes to middle grey (level 128). Prism (`adjust_params::exposure_
 (0.299 R + 0.587 G + 0.114 B) in the same linear light; the luminance weighting is inferred, not
 measured.
 
+## Vibrance
+
+### Dialog (Photoshop 27.4, measured by driving it)
+
+Title centred over a hairline; Vibrance and Saturation (ko: 생동감 / 채도), each a label with its
+field at the right and a slider under it, both linear over −100..+100 (0 in the middle); fields
+written "+100", "+53", "0", "-100". Right column: OK, Cancel, "Preview(Opt+P)". No preset.
+
+Prism (`ui-egui/src/adjust_ps_ui.rs` `vibrance`): the same; Alt turns Cancel into Reset; Cmd+Z /
+Shift+Cmd+Z as in the other dialogs. The menu item and the dialog say 생동감 as Photoshop 27.4
+does (the plain "Vibrance" string elsewhere stays 활기).
+
+### Maths
+
+Unchanged: the research notes only estimate Vibrance; Prism's `compose::adjust::vibrance_lin` is
+already fitted to Photoshop's output.
+
 ## Still open
 
 - Auto's target curve (Photoshop's trained model) is a stand-in.
