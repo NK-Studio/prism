@@ -149,23 +149,57 @@ const FIELD_LIFT: f32 = 1.75;
 /// Space between a [`value_field`]'s box and its number, on the left.
 const FIELD_PAD: f32 = 3.0;
 
+/// How a [`value_field`] is drawn: its box height, the number's font, and how far that font's
+/// digits are raised to sit centred in the box.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldLook {
+    pub height: f32,
+    pub font: egui::FontId,
+    pub lift: f32,
+}
+
+impl FieldLook {
+    /// Panels and option bars: a 24 pt box with 12 pt monospace digits.
+    pub fn compact() -> Self {
+        Self { height: 24.0, font: theme::mono(12.0), lift: FIELD_LIFT }
+    }
+
+    /// Photoshop's larger dialog fields (File › New): a 30 pt box with 14 pt proportional digits.
+    pub fn large() -> Self {
+        Self { height: 30.0, font: egui::FontId::proportional(14.0), lift: 0.5 }
+    }
+}
+
 /// Monospace numeric field with a dimmed unit suffix, Photoshop style. Drag to scrub.
 pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
-    value_field_in(ui, value, range, suffix, width, 0.0).0
+    value_field_in(ui, value, range, suffix, width, 0.0, &FieldLook::compact()).0
+}
+
+/// A [`value_field`] drawn with `look` (its height and font).
+pub fn value_field_look(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32, look: &FieldLook) -> Response {
+    value_field_in(ui, value, range, suffix, width, 0.0, look).0
 }
 
 /// A [`value_field`] that leaves `trailing` points free inside its box, right of the suffix, and
 /// returns the box with the number's response.
-fn value_field_in(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32, trailing: f32) -> (Response, Rect) {
+fn value_field_in(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+    trailing: f32,
+    look: &FieldLook,
+) -> (Response, Rect) {
     let t = Tokens::get(ui.ctx());
-    let (rect, slot) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
+    let (rect, slot) = ui.allocate_exact_size(vec2(width, look.height), Sense::hover());
     surface(ui, rect, t.field, false);
     if !t.bevel {
         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     }
     let suffix_w = if suffix.is_empty() { 0.0 } else { 16.0 };
-    // Raised by FIELD_LIFT: the monospace digits otherwise sit low in the box, under the suffix.
-    let field = Rect::from_min_max(rect.min + vec2(4.0, 2.0), rect.max - vec2(4.0 + suffix_w + trailing, 2.0)).translate(vec2(0.0, -FIELD_LIFT));
+    // Raised by the look's lift: the monospace digits otherwise sit low in the box, under the suffix.
+    let field = Rect::from_min_max(rect.min + vec2(4.0, 2.0), rect.max - vec2(4.0 + suffix_w + trailing, 2.0)).translate(vec2(0.0, -look.lift));
     // Small ranges (gamma 0.01–9.99, 0–1 centres) need two decimals and a finer drag, like Photoshop.
     let fine = range.end() - range.start() <= 10.0;
     let (lo, hi) = (*range.start(), *range.end());
@@ -188,9 +222,9 @@ fn value_field_in(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<
             style.visuals.selection.stroke.width = 0.0;
             style.visuals.text_edit_bg_color = Some(Color32::TRANSPARENT);
             style.spacing.button_padding.x = FIELD_PAD;
-            style.override_font_id = Some(theme::mono(12.0));
+            style.override_font_id = Some(look.font.clone());
             // The same font while typing: the edit box takes the drag value style, not the override.
-            style.text_styles.insert(egui::TextStyle::Monospace, theme::mono(12.0));
+            style.text_styles.insert(egui::TextStyle::Monospace, look.font.clone());
             style.drag_value_text_style = egui::TextStyle::Monospace;
             // Left-aligned, as in Photoshop: a number that gains a digit grows to the right
             // instead of shifting sideways.
@@ -216,7 +250,7 @@ fn value_field_in(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<
             let typed = ui.data(|d| d.get_temp::<String>(resp.id.with("typed")));
             let typed = typed.filter(|s| plain(s).is_some_and(|v| (v - f64::from(*value)).abs() < 1e-4));
             let shown = typed.unwrap_or_else(|| if fine { fmt_num2(f64::from(*value)) } else { fmt_num(f64::from(*value)) });
-            let number = ui.painter().layout_no_wrap(shown, theme::mono(12.0), t.text).size().x;
+            let number = ui.painter().layout_no_wrap(shown, look.font.clone(), t.text).size().x;
             let gap = if matches!(suffix, "%" | "°") { 1.0 } else { 4.0 };
             (field.left() + FIELD_PAD + number + gap).min(slot_left)
         };
@@ -260,7 +294,7 @@ pub struct PopupFieldResponse {
 pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> PopupFieldResponse {
     let t = Tokens::get(ui.ctx());
     let (lo, hi) = (*range.start(), *range.end());
-    let (field, rect) = value_field_in(ui, value, range.clone(), suffix, width, POPUP_ARROW_W);
+    let (field, rect) = value_field_in(ui, value, range.clone(), suffix, width, POPUP_ARROW_W, &FieldLook::compact());
     let arrow = Rect::from_min_max(pos2(rect.right() - POPUP_ARROW_W - 2.0, rect.top() + 2.0), rect.max - vec2(2.0, 2.0));
     let resp = ui.interact(arrow, field.id.with("popup-slider"), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let name = name.trim_end_matches([':', '：']).to_string();

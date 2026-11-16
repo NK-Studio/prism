@@ -1405,6 +1405,10 @@ impl eframe::App for PrismApp {
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);
         discard_ui::block(self, &ctx);
+        // File › New in its own window: this window behind it takes no pointer or keys.
+        if self.discard.is_none() && dialogs::blocks_host(self, &ctx) {
+            floating_window::block(&ctx, false);
+        }
         if doc_windows::dialogs_here(self, &ctx) {
             tiff_options_ui::show(self, &ctx);
             distort_ui::show(self, &ctx);

@@ -13,6 +13,41 @@ pub fn show(
     key: egui::Id,
     viewport: egui::ViewportId,
     title: String,
+    add: impl FnMut(&mut PrismApp, &egui::Context) -> Option<egui::Rect>,
+) {
+    show_impl(app, ctx, key, viewport, title, false, add);
+}
+
+/// [`show`] for a window that is one of the system's own (File › New, as in Photoshop): on macOS
+/// it wears the system's title bar (the title centred, the traffic lights, rounded corners, moved
+/// by its title bar), in the theme's light or dark appearance; the close button is live (its click
+/// is the window's close request, for `add` to read and cancel on), minimise and zoom are off.
+/// The contents then draw no title row of their own ([`system_title_bar`]). Elsewhere it is the
+/// same borderless window as [`show`].
+pub fn show_titled(
+    app: &mut PrismApp,
+    ctx: &egui::Context,
+    key: egui::Id,
+    viewport: egui::ViewportId,
+    title: String,
+    add: impl FnMut(&mut PrismApp, &egui::Context) -> Option<egui::Rect>,
+) {
+    show_impl(app, ctx, key, viewport, title, true, add);
+}
+
+/// Whether a [`show_titled`] window's contents sit under the system's title bar (macOS, in a
+/// window of its own: `own_window`), so they draw none themselves.
+pub fn system_title_bar(own_window: bool) -> bool {
+    own_window && cfg!(target_os = "macos")
+}
+
+fn show_impl(
+    app: &mut PrismApp,
+    ctx: &egui::Context,
+    key: egui::Id,
+    viewport: egui::ViewportId,
+    title: String,
+    titled: bool,
     mut add: impl FnMut(&mut PrismApp, &egui::Context) -> Option<egui::Rect>,
 ) {
     if ctx.embed_viewports() {
@@ -39,15 +74,17 @@ pub fn show(
         }
     };
     // macOS: a titled window with its title bar and buttons hidden and the content under it, for
-    // the system's rounded corners and shadow. Elsewhere a plain borderless window.
+    // the system's rounded corners and shadow (or, `titled`, with them shown). Elsewhere a plain
+    // borderless window.
     let mac = cfg!(target_os = "macos");
+    let system_bar = mac && titled;
     let builder = egui::ViewportBuilder::default()
         .with_title(title)
         .with_decorations(mac)
-        .with_fullsize_content_view(mac)
-        .with_titlebar_shown(false)
-        .with_title_shown(false)
-        .with_titlebar_buttons_shown(false)
+        .with_fullsize_content_view(mac && !system_bar)
+        .with_titlebar_shown(system_bar)
+        .with_title_shown(system_bar)
+        .with_titlebar_buttons_shown(system_bar)
         .with_resizable(false)
         .with_taskbar(false)
         .with_minimize_button(false)
@@ -62,6 +99,16 @@ pub fn show(
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |_| {});
         if child.input(|i| i.viewport().close_requested()) {
             child.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+        if system_bar {
+            // The system's title bar in the theme's appearance (a dark bar over Prism's dark
+            // themes even when macOS is light), sent when it changes.
+            let theme = if crate::theme::Tokens::get(&child).dark() { egui::SystemTheme::Dark } else { egui::SystemTheme::Light };
+            let sent = key.with("theme");
+            if child.data(|m| m.get_temp::<egui::SystemTheme>(sent)) != Some(theme) {
+                child.data_mut(|m| m.insert_temp(sent, theme));
+                child.send_viewport_cmd(egui::ViewportCommand::SetTheme(theme));
+            }
         }
         if let Some(size) = add(app, &child).map(|r| r.size().round()).filter(|s| s.is_finite() && s.x >= 1.0 && s.y >= 1.0)
             && measured != Some(size)

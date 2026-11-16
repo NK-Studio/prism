@@ -82,17 +82,30 @@ pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
 
 /// A dialog opened from a detached document window gets an OS window of its own, above the
 /// document windows, like Photoshop's floating dialogs: drawn inside the document window it would
-/// be clipped to that window and could not be dragged past its edges.
+/// be clipped to that window and could not be dragged past its edges. So does File › New from any
+/// window: Photoshop's is a window of its own, moved anywhere on screen by its title bar.
 pub fn floats(d: &Dialog) -> bool {
-    d.presentation == crate::state::DialogPresentation::Embedded && d.window.is_some()
+    d.presentation == crate::state::DialogPresentation::Embedded && (d.window.is_some() || d.kind == DialogKind::NewDocument)
 }
 
-/// [`floats`]: the dialog in its own borderless window, dragged by the title row.
+/// [`floats`]: the dialog in its own borderless window, dragged by the title row (File › New with
+/// the system's window buttons on macOS).
 fn floating(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog) {
     let key = egui::Id::new(("floating-dialog", d.id));
-    crate::floating_window::show(app, ctx, key, crate::native_dialogs::viewport(d.id), display_title(d), |app, child| {
-        show_one(app, child, d, !child.embed_viewports())
-    });
+    let viewport = crate::native_dialogs::viewport(d.id);
+    let add = |app: &mut PrismApp, child: &egui::Context| show_one(app, child, d, !child.embed_viewports());
+    if d.kind == DialogKind::NewDocument {
+        crate::floating_window::show_titled(app, ctx, key, viewport, display_title(d), add);
+    } else {
+        crate::floating_window::show(app, ctx, key, viewport, display_title(d), add);
+    }
+}
+
+/// File › New is app-modal, as in Photoshop: while it floats in a window of its own, the window it
+/// came from takes no input. (Drawn inside that window, egui's modal layer blocks it instead.)
+pub fn blocks_host(app: &PrismApp, ctx: &egui::Context) -> bool {
+    !ctx.embed_viewports()
+        && app.ui.dialogs.iter().any(|d| d.kind == DialogKind::NewDocument && floats(d) && crate::doc_windows::viewport(d.window) == ctx.viewport_id())
 }
 
 /// Draws one dialog in `ctx`'s window. `own_window`: `ctx` is the dialog's own viewport
@@ -137,10 +150,16 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
         }
         // The Save window and the setup breathe: wider padding on every side, shared by title,
         // body and buttons.
-        let padded = crate::save_ui::owns(&fields) || crate::first_run_ui::owns(&fields) || d.kind == DialogKind::NewDocument;
+        let padded = crate::save_ui::owns(&fields) || crate::first_run_ui::owns(&fields);
         if padded {
             let frame = if own_window { crate::floating_window::frame(ctx) } else { egui::Frame::popup(&ctx.global_style()) };
             modal = modal.frame(frame.inner_margin(egui::Margin { left: 22, right: 22, top: 16, bottom: 18 }));
+        }
+        // File › New draws its own title row and panes edge to edge, as Photoshop's window does.
+        let new_doc = d.kind == DialogKind::NewDocument;
+        if new_doc {
+            let frame = if own_window { crate::floating_window::frame(ctx) } else { egui::Frame::popup(&ctx.global_style()) };
+            modal = modal.frame(frame.inner_margin(0));
         }
         if about_card {
             let t = crate::about_ui::palette();
@@ -160,8 +179,9 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
             if let Some(w) = wide {
                 ui.set_min_width(w.min(460.0));
             }
-            if d.kind == DialogKind::NewDocument {
+            if new_doc {
                 ui.set_min_width(crate::new_doc_ui::WIDTH);
+                ui.spacing_mut().item_spacing.y = 0.0;
             }
             // A single studio-branded About card, constrained to the window.
             let about_overview = about_card;
@@ -203,6 +223,16 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 drag = r.drag_delta();
                 drag_started |= r.drag_started_by(egui::PointerButton::Primary);
                 ui.add_space(if crate::about_ui::compact(ctx) { 16.0 } else { 42.0 });
+            } else if new_doc {
+                // On macOS its own window has the system's title bar (as Photoshop's): none here.
+                if !crate::floating_window::system_title_bar(own_window) {
+                    let (r, close) = crate::new_doc_ui::title_bar(ui, &title, id);
+                    drag = r.drag_delta();
+                    drag_started |= r.drag_started_by(egui::PointerButton::Primary);
+                    if close {
+                        outcome = Some(false);
+                    }
+                }
             } else {
                 let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
                 let t = if color_picker { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };
@@ -215,7 +245,12 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                 ui.add_space(8.0);
             }
             match d.kind {
-                DialogKind::NewDocument => crate::new_doc_ui::body(app, ui, &mut fields),
+                // Close / Create sit in Preset Details, as in Photoshop.
+                DialogKind::NewDocument => {
+                    if let Some(answer) = crate::new_doc_ui::body(app, ui, &mut fields, !own_window) {
+                        outcome = Some(answer);
+                    }
+                }
                 DialogKind::About if fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => {
                     let lines = crate::gpu_status::system_info(app);
                     for l in &lines {
@@ -261,7 +296,9 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                     ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
                 }
             }
-            if crate::color_picker_ui::owns(&fields) || d.kind == DialogKind::LayerStyle || crate::new_layer_ui::owns(&fields) {
+            if new_doc {
+                // Its body drew Close / Create and took Enter.
+            } else if crate::color_picker_ui::owns(&fields) || d.kind == DialogKind::LayerStyle || crate::new_layer_ui::owns(&fields) {
                 if outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     outcome = Some(true);
                 }
@@ -293,9 +330,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                             None => {}
                         }
                     } else {
-                        let ok_label = if d.kind == DialogKind::NewDocument {
-                            tl!("Create")
-                        } else if d.fields.contains_key("__export") {
+                        let ok_label = if d.fields.contains_key("__export") {
                             tl!("Export")
                         } else {
                             crate::file_ui::ok_label(&d.fields)
@@ -304,15 +339,11 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                                 .or_else(|| crate::first_run_ui::owns(&fields).then(|| crate::first_run_ui::ok_label(&fields)))
                                 .unwrap_or(tl!("OK"))
                         };
-                        // An empty Saved tab in File › New has nothing to create.
-                        let ok_enabled = d.kind != DialogKind::NewDocument || crate::new_doc_ui::can_create(&fields);
-                        let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(ok_enabled);
+                        let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0);
                         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
                         let reset = ui.input(|i| i.modifiers.alt) && crate::adjust_dialog::resets(&fields);
                         let cancel_label = if reset {
                             tl!("Reset")
-                        } else if d.kind == DialogKind::NewDocument {
-                            tl!("Close")
                         } else if crate::first_run_ui::owns(&fields) {
                             crate::first_run_ui::cancel_label(&fields)
                         } else {
@@ -330,7 +361,7 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
                         }
                         // The setup's two steps: Next and Back move between them in this window.
                         let setup_step = crate::first_run_ui::owns(&fields).then(|| crate::first_run_ui::step(&fields));
-                        let enter = clicked.is_none() && ok_enabled && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let enter = clicked.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         match (setup_step, clicked) {
                             (Some(0), Some(ButtonRole::Default)) => {
                                 fields.insert("step".into(), Value::from(1));
@@ -361,7 +392,11 @@ fn show_one(app: &mut PrismApp, ctx: &egui::Context, d: &Dialog, own_window: boo
             ui.min_rect().expand(ui.spacing().menu_margin.sum().max_elem() + 2.0)
         });
         // The picker has a larger frame margin; include that whole frame in the canvas hit guard.
-        let covered = if color_picker || about_card || own_window || padded { modal.response.rect } else { modal.inner };
+        let covered = if color_picker || about_card || own_window || padded || new_doc { modal.response.rect } else { modal.inner };
+        // The system's close button of the dialog's own window (File › New on macOS) cancels it.
+        if outcome.is_none() && own_window && ctx.input(|i| i.viewport().close_requested()) {
+            outcome = Some(false);
+        }
         if own_window && drag_started {
             // The OS moves its own window (egui would see the pointer move with the window).
             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);

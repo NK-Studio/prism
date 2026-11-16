@@ -12,30 +12,47 @@ use prism_engine::document_preset_cmds::{DocumentPreset, DocumentSettings};
 use crate::theme::Tokens;
 use crate::widgets;
 
+// The window is laid out like Photoshop 2026's (measured in points on its macOS window): a title
+// row, the tabs over a full-width line, then two panes reaching the window's edges: the preset
+// cards on a darker ground on the left, Preset Details with Close / Create on the right.
+
+/// The title row: the dialog's name, centred, and the handle that moves its window.
+pub const TITLE_H: f32 = 28.0;
+/// The tab row, down to the line the selected tab's underline sits on.
+const TABS_H: f32 = 46.0;
+/// Padding of the preset pane on the left (and where the tabs start).
+const PAD: f32 = 24.0;
+/// The preset pane's top padding, above the grid's heading.
+const GRID_TOP: f32 = 18.0;
 /// A preset card (four to a row).
-const CARD: egui::Vec2 = vec2(158.0, 172.0);
+const CARD: egui::Vec2 = vec2(166.0, 166.0);
 /// The gap between cards, across and down.
-const CARD_GAP: f32 = 8.0;
-/// Padding inside the dark grid ground, on every side.
-const GRID_PAD: f32 = 20.0;
+const CARD_GAP: f32 = 14.0;
 /// Room kept right of the cards for the grid's scrollbar, so it never covers a card.
 const GRID_BAR: f32 = 12.0;
-/// Width of the preset grid on the left: four cards, their gaps, the padding and the scrollbar.
-const GRID_W: f32 = 2.0 * GRID_PAD + 4.0 * CARD.x + 3.0 * CARD_GAP + GRID_BAR;
+/// The preset pane: four cards, their gaps, the scrollbar and the padding.
+const LEFT_W: f32 = 2.0 * PAD + 4.0 * CARD.x + 3.0 * CARD_GAP + GRID_BAR;
 /// The grid's heading row ("BLANK DOCUMENT PRESETS (14)") and the space under it.
-const HEADING_H: f32 = 26.0;
-/// Height of the scrolling preset grid: the heading and three whole rows of cards, so the
-/// view ends between rows instead of cutting a card's text.
-const GRID_H: f32 = HEADING_H + 3.0 * CARD.y + 2.0 * CARD_GAP;
-/// Between the grid and Preset Details.
-const COLUMN_GAP: f32 = 24.0;
-/// Width of Preset Details on the right.
-const DETAILS_W: f32 = 276.0;
+const HEADING_H: f32 = 30.0;
+/// The Preset Details pane, and its padding on each side.
+const RIGHT_W: f32 = 308.0;
+const DETAILS_PAD: f32 = 20.0;
+/// Width of the controls in Preset Details.
+const DETAILS_W: f32 = RIGHT_W - 2.0 * DETAILS_PAD;
+/// Height of the two panes, under the tabs.
+const BODY_H: f32 = 640.0;
 /// The horizontal gap between controls in a Preset Details row.
-const FIELD_GAP: f32 = 6.0;
-/// The dialog's content width: the grid, the gap and Preset Details, so the details' right edge
-/// lines up with Create / Close.
-pub const WIDTH: f32 = GRID_W + COLUMN_GAP + DETAILS_W;
+const FIELD_GAP: f32 = 12.0;
+/// Width of the Width, Height and Resolution fields; their unit menus take the rest of the row.
+const FIELD_W: f32 = 72.0;
+/// A Preset Details label's line, the space between it and its control, and between rows.
+const LABEL_H: f32 = 15.0;
+const LABEL_GAP: f32 = 5.0;
+const ROW_GAP: f32 = 10.0;
+/// Height of the Preset Details controls (fields, menus, buttons), as in Photoshop.
+const CONTROL_H: f32 = 30.0;
+/// The window's width: the two panes.
+pub const WIDTH: f32 = LEFT_W + RIGHT_W;
 
 /// A blank-document preset: (name, width, height, ppi, unit). Width and height are in `unit`
 /// (`px`, `in`, `cm`, `mm`), as Photoshop shows them ("8.5 x 11 in @ 300 ppi").
@@ -358,15 +375,43 @@ fn get_s(f: &Map<String, Value>, k: &str, d: &str) -> String {
     f.get(k).and_then(Value::as_str).unwrap_or(d).to_string()
 }
 
-fn small_label(ui: &mut egui::Ui, s: &str) {
+/// A Preset Details label over its control, on a line of fixed height so every row lines up.
+fn field_label(ui: &mut egui::Ui, s: &str) {
     let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(s).size(11.5).color(t.text_dim));
+    ui.allocate_ui_with_layout(vec2(DETAILS_W, LABEL_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_height(LABEL_H);
+        ui.add(egui::Label::new(RichText::new(s).size(12.5).color(t.text_dim)).selectable(false));
+    });
+    ui.add_space(LABEL_GAP);
+}
+
+/// A row of Preset Details controls, `CONTROL_H` tall with its items centred on one line.
+fn control_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.allocate_ui_with_layout(vec2(DETAILS_W, CONTROL_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_height(CONTROL_H);
+        ui.spacing_mut().item_spacing.x = FIELD_GAP;
+        add(ui)
+    })
+    .inner
+}
+
+/// The ground of the preset pane: a step darker than the window, as Photoshop draws it (its
+/// fields share it). The Studio themes, whose fields are lighter than their windows, take the
+/// canvas colour instead.
+fn pane_fill(t: &Tokens) -> Color32 {
+    if t.pro { t.field } else { t.canvas }
+}
+
+/// The line under the tabs: lighter than both panes in the dark themes, like Photoshop's.
+fn divider_color(t: &Tokens) -> Color32 {
+    let mix = |a: u8, b: u8| ((u16::from(a) + u16::from(b)) / 2) as u8;
+    Color32::from_rgb(mix(t.card.r(), t.field_border.r()), mix(t.card.g(), t.field_border.g()), mix(t.card.b(), t.field_border.b()))
 }
 
 /// Lay out a preset card's title centred in `width`: wrapped onto at most two lines, the rest
 /// elided, so long translations stay inside the card.
 fn card_title(painter: &egui::Painter, title: &str, width: f32, color: Color32) -> std::sync::Arc<egui::Galley> {
-    let mut job = egui::text::LayoutJob::simple(title.to_owned(), egui::FontId::proportional(12.0), color, width);
+    let mut job = egui::text::LayoutJob::simple(title.to_owned(), egui::FontId::proportional(13.0), color, width);
     job.wrap.max_rows = 2;
     job.halign = egui::Align::Center;
     painter.layout_job(job)
@@ -603,18 +648,20 @@ fn card(ui: &mut egui::Ui, g: Glyph, (w, h): (f32, f32), scale: f32, title: &str
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(CARD, Sense::click());
     if resp.hovered() && !selected {
-        ui.painter().rect_filled(r.shrink(2.0), t.radius, t.hover);
+        ui.painter().rect_filled(r, t.radius, t.hover.gamma_multiply(0.55));
     }
     if selected {
-        ui.painter().rect_stroke(r.shrink(3.0), t.radius, Stroke::new(2.0, t.accent), StrokeKind::Inside);
+        ui.painter().rect_stroke(r, t.radius, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     }
-    let icon_area = Rect::from_min_size(r.min + vec2(20.0, 16.0), vec2(CARD.x - 40.0, 96.0));
-    paint_glyph(ui.painter(), icon_area, g, w, h, scale, t.text_dim);
+    // Photoshop's proportions: the icon in the top half, the name under it (its last line at a
+    // fixed height, so the names of a row line up), then the size.
+    let icon_area = Rect::from_min_size(r.min + vec2(24.0, 14.0), vec2(CARD.x - 48.0, 80.0));
+    paint_glyph(ui.painter(), icon_area, g, w, h, scale, t.icon);
     let title_g = card_title(ui.painter(), title, CARD.x - 16.0, t.text);
     let elided = title_g.elided;
-    let rows = title_g.rows.len() as f32;
-    ui.painter().galley(pos2(r.center().x, r.top() + 122.0 - (rows - 1.0) * 7.0), title_g, t.text);
-    ui.painter().text(pos2(r.center().x, r.top() + 152.0), Align2::CENTER_CENTER, size, egui::FontId::proportional(11.0), t.text_dim);
+    let top = r.top() + 128.0 - title_g.size().y;
+    ui.painter().galley(pos2(r.center().x, top), title_g, t.text);
+    ui.painter().text(pos2(r.center().x, r.top() + 140.0), Align2::CENTER_CENTER, size, egui::FontId::proportional(12.0), t.text_dim);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, title));
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     if elided { resp.on_hover_text(title) } else { resp }
@@ -649,10 +696,10 @@ fn grid<T>(ui: &mut egui::Ui, items: &[T], mut each: impl FnMut(&mut egui::Ui, u
 /// The grid's heading, in a row of fixed height so three rows of cards fill the view exactly.
 fn heading(ui: &mut egui::Ui, text: &str, n: usize) {
     let t = Tokens::get(ui.ctx());
-    let label = RichText::new(crate::i18n::fmt(text, &[("n", &n.to_string())])).size(12.0).color(t.text_dim).strong();
+    let label = RichText::new(crate::i18n::fmt(text, &[("n", &n.to_string())])).size(13.0).color(t.text_dim);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), HEADING_H), egui::Layout::left_to_right(egui::Align::Min), |ui| {
         ui.set_min_height(HEADING_H);
-        ui.label(label);
+        ui.add(egui::Label::new(label).selectable(false));
     });
 }
 
@@ -782,12 +829,12 @@ fn save_icon(ui: &mut egui::Ui) -> egui::Response {
 
 fn orientation_button(ui: &mut egui::Ui, portrait: bool, on: bool) -> egui::Response {
     let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(26.0, CONTROL_H), Sense::click());
     let fill = if on { t.accent } else if resp.hovered() { t.hover } else { t.field };
     ui.painter().rect_filled(r, t.radius_sm, fill);
     ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, if on { t.accent } else { t.field_border }), StrokeKind::Inside);
     // A person on a page.
-    let page = if portrait { Rect::from_center_size(r.center(), vec2(16.0, 22.0)) } else { Rect::from_center_size(r.center(), vec2(22.0, 16.0)) };
+    let page = if portrait { Rect::from_center_size(r.center(), vec2(14.0, 20.0)) } else { Rect::from_center_size(r.center(), vec2(20.0, 14.0)) };
     let ink = if on { Color32::WHITE } else { t.text_dim };
     let (bg_page, fg) = if on { (t.accent, ink) } else { (Color32::from_gray(220), Color32::from_gray(60)) };
     ui.painter().rect_filled(page, 1.0, if on { Color32::from_white_alpha(40) } else { bg_page });
@@ -803,13 +850,13 @@ fn orientation_button(ui: &mut egui::Ui, portrait: bool, on: bool) -> egui::Resp
 /// The Background Contents swatch.
 fn background_swatch(app: &crate::PrismApp, ui: &mut egui::Ui, f: &Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(vec2(31.0, CONTROL_H), Sense::hover());
     let rgb = |c: [f32; 3]| Color32::from_rgb((c[0].clamp(0.0, 1.0) * 255.0) as u8, (c[1].clamp(0.0, 1.0) * 255.0) as u8, (c[2].clamp(0.0, 1.0) * 255.0) as u8);
     match get_s(f, "background", "white").as_str() {
         "transparent" => {
-            let half = r.width() / 2.0;
+            let half = r.size() / 2.0;
             for (i, j) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                let cell = Rect::from_min_size(r.min + vec2(i as f32 * half, j as f32 * half), vec2(half, half));
+                let cell = Rect::from_min_size(r.min + vec2(i as f32 * half.x, j as f32 * half.y), half);
                 ui.painter().rect_filled(cell, 0.0, if (i + j) % 2 == 0 { Color32::WHITE } else { Color32::from_gray(204) });
             }
         }
@@ -857,19 +904,55 @@ fn profile_options(app: &crate::PrismApp, mode: &str) -> Vec<(String, String)> {
     v
 }
 
+/// Width of the Orientation buttons and the space after them, up to the Artboards checkbox.
+const ORIENT_W: f32 = 71.0;
+
+/// A heading over Preset Details ("PRESET DETAILS", "SAVE DOCUMENT PRESET").
+fn details_heading(ui: &mut egui::Ui, text: &str) {
+    let t = Tokens::get(ui.ctx());
+    ui.allocate_ui_with_layout(vec2(DETAILS_W, 16.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_height(16.0);
+        ui.add(egui::Label::new(RichText::new(text).size(13.0).color(t.text_dim)).selectable(false));
+    });
+}
+
+/// Photoshop's Advanced Options disclosure: a chevron and the name. Returns whether it was
+/// clicked.
+fn advanced_header(ui: &mut egui::Ui, open: bool) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let label = tl!("Advanced Options");
+    let (row, _) = ui.allocate_exact_size(vec2(DETAILS_W, 16.0), Sense::hover());
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), egui::FontId::proportional(13.0), t.text_dim);
+    let hit = Rect::from_min_size(row.min, vec2(16.0 + galley.size().x, row.height()));
+    let resp = ui.interact(hit, ui.id().with("nd-advanced"), Sense::click());
+    let color = if resp.hovered() { t.text } else { t.text_dim };
+    let (c, s) = (pos2(row.left() + 5.0, row.center().y), 3.5);
+    let st = Stroke::new(1.4, color);
+    let pts = if open {
+        vec![c + vec2(-s, -s * 0.5), c + vec2(0.0, s * 0.5), c + vec2(s, -s * 0.5)]
+    } else {
+        vec![c + vec2(-s * 0.5, -s), c + vec2(s * 0.5, 0.0), c + vec2(-s * 0.5, s)]
+    };
+    ui.painter().add(Shape::line(pts, st));
+    ui.painter().galley_with_override_text_color(pos2(row.left() + 16.0, row.center().y - galley.size().y / 2.0), galley, color);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, label));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+}
+
 fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let saving = f.get("__savingPreset").and_then(Value::as_bool) == Some(true);
-    ui.label(RichText::new(if saving { tl!("SAVE DOCUMENT PRESET") } else { tl!("PRESET DETAILS") }).size(12.0).color(t.text_dim).strong());
-    ui.add_space(8.0);
+    details_heading(ui, if saving { tl!("SAVE DOCUMENT PRESET") } else { tl!("PRESET DETAILS") });
+    ui.add_space(10.0);
     if saving {
         save_preset_form(app, ui, f);
     } else {
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
             let mut name = get_s(f, "name", tl!("Untitled-1"));
-            let edit = egui::TextEdit::singleline(&mut name).desired_width(DETAILS_W - 26.0 - 2.0 * FIELD_GAP).font(egui::FontId::proportional(14.0)).frame(egui::Frame::NONE);
+            let edit = egui::TextEdit::singleline(&mut name).desired_width(DETAILS_W - 30.0).font(egui::FontId::proportional(15.0)).frame(egui::Frame::NONE);
             let r = ui.add(edit);
-            ui.painter().line_segment([r.rect.left_bottom() + vec2(0.0, 3.0), r.rect.right_bottom() + vec2(0.0, 3.0)], Stroke::new(1.0, t.field_border));
+            ui.painter().hline(r.rect.x_range(), r.rect.bottom() + 3.5, Stroke::new(1.0, t.text_faint));
             if r.changed() {
                 f.insert("name".into(), json!(name));
             }
@@ -879,16 +962,16 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
                 f.remove("__presetError");
             }
         });
-        ui.add_space(16.0);
+        ui.add_space(14.0);
     }
+    let look = widgets::FieldLook::large();
     let ppi = get_f(f, "resolution", 72.0);
     let mut unit = get_s(f, "__unit", "px");
-    let field_w = 96.0;
-    let menu_w = DETAILS_W - field_w - FIELD_GAP;
-    small_label(ui, tl!("Width"));
-    ui.horizontal(|ui| {
+    let menu_w = DETAILS_W - FIELD_W - FIELD_GAP;
+    field_label(ui, tl!("Width"));
+    control_row(ui, |ui| {
         let mut w = shown_size(f, "width", 1920.0, &unit, ppi);
-        if widgets::value_field(ui, &mut w, 0.01..=300_000.0, "", field_w).changed() {
+        if widgets::value_field_look(ui, &mut w, 0.01..=300_000.0, "", FIELD_W, &look).changed() {
             set_size(f, "width", w, &unit, ppi);
         }
         let opts: Vec<(String, &str)> = UNITS.iter().map(|u| (u.0.to_string(), u.1)).collect();
@@ -898,45 +981,51 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             f.remove("__recent");
         }
     });
-    ui.add_space(10.0);
-    ui.horizontal(|ui| {
-        // Left-aligned column heads over the field, the Orientation buttons and the checkbox.
+    ui.add_space(ROW_GAP);
+    // Left-aligned column heads over the field, the Orientation buttons and the checkbox.
+    ui.allocate_ui_with_layout(vec2(DETAILS_W, LABEL_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_height(LABEL_H);
+        ui.spacing_mut().item_spacing.x = 0.0;
         let head = |ui: &mut egui::Ui, text: &str, w: f32| {
-            ui.allocate_ui_with_layout(vec2(w, 16.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.allocate_ui_with_layout(vec2(w, LABEL_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.set_min_width(w);
-                ui.label(RichText::new(text).size(11.5).color(t.text_dim));
+                ui.set_max_width(w);
+                ui.add(egui::Label::new(RichText::new(text).size(12.5).color(t.text_dim)).selectable(false).truncate());
             });
         };
-        head(ui, tl!("Height"), field_w);
-        head(ui, tl!("Orientation"), 84.0);
-        head(ui, tl!("Artboards"), 60.0);
+        head(ui, tl!("Height"), FIELD_W + FIELD_GAP);
+        head(ui, tl!("Orientation"), ORIENT_W + FIELD_GAP);
+        head(ui, tl!("Artboards"), DETAILS_W - FIELD_W - ORIENT_W - 2.0 * FIELD_GAP);
     });
-    ui.horizontal(|ui| {
+    ui.add_space(LABEL_GAP);
+    control_row(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
         let mut h = shown_size(f, "height", 1080.0, &unit, ppi);
-        let r = widgets::value_field(ui, &mut h, 0.01..=300_000.0, "", field_w);
-        if r.changed() {
+        if widgets::value_field_look(ui, &mut h, 0.01..=300_000.0, "", FIELD_W, &look).changed() {
             set_size(f, "height", h, &unit, ppi);
         }
+        ui.add_space(FIELD_GAP);
         let (w, h) = (get_f(f, "width", 1920.0), get_f(f, "height", 1080.0));
         for portrait in [true, false] {
             if orientation_button(ui, portrait, (h > w) == portrait).clicked() && (h > w) != portrait {
                 swap_size(f);
             }
+            ui.add_space(4.0);
         }
-        ui.add_space(18.0);
+        ui.add_space(ORIENT_W + FIELD_GAP - 2.0 * (26.0 + 4.0));
         let mut on = f.get("artboards").and_then(Value::as_bool).unwrap_or(false);
-        if ui.checkbox(&mut on, "").on_hover_text(tl!("Artboards")).changed() {
+        if widgets::checkbox(ui, &mut on, "").on_hover_text(tl!("Artboards")).changed() {
             f.insert("artboards".into(), json!(on));
             f.remove("__savedPreset");
             f.remove("__recent");
         }
     });
-    ui.add_space(10.0);
-    small_label(ui, tl!("Resolution"));
-    ui.horizontal(|ui| {
+    ui.add_space(ROW_GAP);
+    field_label(ui, tl!("Resolution"));
+    control_row(ui, |ui| {
         let per_cm = get_s(f, "__resUnit", "in") == "cm";
         let mut r = if per_cm { ppi / 2.54 } else { ppi };
-        if widgets::value_field(ui, &mut r, 1.0..=30_000.0, "", field_w).changed() {
+        if widgets::value_field_look(ui, &mut r, 1.0..=30_000.0, "", FIELD_W, &look).changed() {
             set_resolution(f, if per_cm { r * 2.54 } else { r });
         }
         let mut ru = get_s(f, "__resUnit", "in");
@@ -946,9 +1035,10 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             f.remove("__recent");
         }
     });
-    ui.add_space(10.0);
-    small_label(ui, tl!("Color Mode"));
-    ui.horizontal(|ui| {
+    ui.add_space(ROW_GAP);
+    field_label(ui, tl!("Color Mode"));
+    control_row(ui, |ui| {
+        let depth_w = 89.0;
         let mut mode = get_s(f, "mode", "rgb");
         let modes = [
             ("gray".to_string(), tl!("Grayscale")),
@@ -956,7 +1046,7 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             ("cmyk".to_string(), tl!("CMYK Color")),
             ("lab".to_string(), tl!("Lab Color")),
         ];
-        if widgets::dropdown(ui, "nd-mode", &mut mode, &modes, DETAILS_W - 100.0 - FIELD_GAP) {
+        if widgets::dropdown(ui, "nd-mode", &mut mode, &modes, DETAILS_W - depth_w - FIELD_GAP) {
             f.insert("mode".into(), json!(mode));
             // A profile of the old mode's colour space can't tag the new one.
             let p = get_s(f, "profile", "none");
@@ -970,15 +1060,15 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             f.remove("__recent");
         }
         let mut depth = f.get("depth").and_then(Value::as_u64).unwrap_or(8);
-        if widgets::dropdown_with_tooltips(ui, "nd-depth", &mut depth, DEPTH_OPTIONS, 100.0) {
+        if widgets::dropdown_with_tooltips(ui, "nd-depth", &mut depth, DEPTH_OPTIONS, depth_w) {
             f.insert("depth".into(), json!(depth));
             f.remove("__savedPreset");
             f.remove("__recent");
         }
     });
-    ui.add_space(10.0);
-    small_label(ui, tl!("Background Contents"));
-    ui.horizontal(|ui| {
+    ui.add_space(ROW_GAP);
+    field_label(ui, tl!("Background Contents"));
+    control_row(ui, |ui| {
         let mut bg = get_s(f, "background", "white");
         let opts = [
             ("white".to_string(), tl!("White")),
@@ -986,7 +1076,7 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             ("backgroundColor".to_string(), tl!("Background Color")),
             ("transparent".to_string(), tl!("Transparent")),
         ];
-        if widgets::dropdown(ui, "nd-bg", &mut bg, &opts, DETAILS_W - 32.0 - FIELD_GAP) {
+        if widgets::dropdown(ui, "nd-bg", &mut bg, &opts, DETAILS_W - 31.0 - FIELD_GAP) {
             f.insert("background".into(), json!(bg));
             f.remove("__savedPreset");
             f.remove("__recent");
@@ -996,18 +1086,15 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
         }
         background_swatch(app, ui, f);
     });
-    ui.add_space(16.0);
+    ui.add_space(14.0);
     // Advanced Options: open by default, like Photoshop.
     let open = f.get("__advanced").and_then(Value::as_bool).unwrap_or(true);
-    let header = ui.add(
-        egui::Label::new(RichText::new(format!("{}  {}", if open { "⌄" } else { "›" }, tl!("Advanced Options"))).size(12.0).color(t.text_dim)).sense(Sense::click()),
-    );
-    if header.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+    if advanced_header(ui, open) {
         f.insert("__advanced".into(), json!(!open));
     }
     if open {
         ui.add_space(10.0);
-        small_label(ui, tl!("Color Profile"));
+        field_label(ui, tl!("Color Profile"));
         let mode = get_s(f, "mode", "rgb");
         let opts = profile_options(app, &mode);
         let mut profile = get_s(f, "profile", "none");
@@ -1015,16 +1102,18 @@ fn details(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Val
             profile = "none".into();
         }
         let refs: Vec<(String, &str)> = opts.iter().map(|(k, l)| (k.clone(), l.as_str())).collect();
-        if widgets::dropdown(ui, "nd-profile", &mut profile, &refs, DETAILS_W) {
-            f.insert("profile".into(), json!(profile));
-            f.remove("__savedPreset");
-            f.remove("__recent");
-        }
-        ui.add_space(10.0);
-        small_label(ui, tl!("Pixel Aspect Ratio"));
+        control_row(ui, |ui| {
+            if widgets::dropdown(ui, "nd-profile", &mut profile, &refs, DETAILS_W) {
+                f.insert("profile".into(), json!(profile));
+                f.remove("__savedPreset");
+                f.remove("__recent");
+            }
+        });
+        ui.add_space(ROW_GAP);
+        field_label(ui, tl!("Pixel Aspect Ratio"));
         // Prism's pixels are always square.
         let mut par = "square".to_string();
-        widgets::dropdown(ui, "nd-par", &mut par, &[("square".to_string(), tl!("Square Pixels"))], DETAILS_W);
+        control_row(ui, |ui| widgets::dropdown(ui, "nd-par", &mut par, &[("square".to_string(), tl!("Square Pixels"))], DETAILS_W));
     }
 }
 
@@ -1033,17 +1122,26 @@ fn save_preset_form(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<St
     // Consume before TextEdit sees Enter, so naming can never confirm the outer dialog.
     let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
     let mut name = get_s(f, "__presetName", "");
-    let r = ui.add(
-        egui::TextEdit::singleline(&mut name).id_salt("document-preset-name").desired_width(DETAILS_W).font(egui::FontId::proportional(14.0)).frame(egui::Frame::NONE).char_limit(255),
-    );
-    ui.painter().line_segment([r.rect.left_bottom() + vec2(0.0, 3.0), r.rect.right_bottom() + vec2(0.0, 3.0)], Stroke::new(1.0, t.accent));
+    let r = control_row(ui, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut name)
+                .id_salt("document-preset-name")
+                .desired_width(DETAILS_W)
+                .font(egui::FontId::proportional(15.0))
+                .frame(egui::Frame::NONE)
+                .char_limit(255),
+        )
+    });
+    ui.painter().hline(r.rect.x_range(), r.rect.bottom() + 3.5, Stroke::new(1.0, t.accent));
     let r = r.on_hover_text(tl!("Preset Name"));
     if r.changed() {
         f.insert("__presetName".into(), json!(name));
     }
     ui.add_space(14.0);
-    ui.horizontal(|ui| {
-        ui.add_space(DETAILS_W - 2.0 * 100.0 - 8.0);
+    ui.allocate_ui_with_layout(vec2(DETAILS_W, CONTROL_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        // Right to left: Cancel at the edge, Save Preset before it.
+        let cancel = widgets::secondary_button(ui, tl!("Cancel"), 100.0).clicked();
         if widgets::primary_button(ui, tl!("Save Preset"), 100.0).clicked() || enter {
             match app.run("document.presets.save", json!({"name":name,"settings":settings_params(f)})) {
                 Ok(_) => {
@@ -1060,82 +1158,151 @@ fn save_preset_form(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<St
                     f.insert("__presetError".into(), json!(e.to_string()));
                 }
             }
-        }
-        if widgets::secondary_button(ui, tl!("Cancel"), 100.0).clicked() {
+        } else if cancel {
             f.remove("__savingPreset");
             f.remove("__presetError");
         }
     });
     if let Some(error) = f.get("__presetError").and_then(Value::as_str) {
+        ui.add_space(6.0);
         ui.add(egui::Label::new(RichText::new(error).color(t.danger)).wrap());
     }
-    ui.add_space(12.0);
+    ui.add_space(14.0);
 }
 
-pub fn body(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+/// The title row (see [`TITLE_H`]): the dialog's name centred, the whole row a handle that moves
+/// the window, as Photoshop's window title bar. On macOS, in a window of its own, the system's
+/// traffic lights sit at its left; elsewhere a close button sits at its right. Returns the row's
+/// response (drag it to move the dialog) and whether that close button was clicked.
+pub fn title_bar(ui: &mut egui::Ui, title: &str, id: egui::Id) -> (egui::Response, bool) {
+    let t = Tokens::get(ui.ctx());
+    let (bar, _) = ui.allocate_exact_size(vec2(WIDTH, TITLE_H), Sense::hover());
+    let drag = ui.interact(bar, id.with("title"), Sense::drag());
+    let galley = ui.painter().layout_no_wrap(title.to_owned(), crate::theme::semibold(13.0), t.text);
+    ui.painter().galley(bar.center() - galley.size() / 2.0, galley, t.text);
+    ui.painter().rect_filled(Rect::from_min_max(pos2(bar.left(), bar.bottom() - 1.0), bar.max), 0.0, t.separator);
+    let mut close = false;
+    if !cfg!(target_os = "macos") {
+        // The same answer as Close below (no accessibility name of its own, so it never doubles it).
+        let r = Rect::from_center_size(pos2(bar.right() - 22.0, bar.center().y), vec2(32.0, TITLE_H - 6.0));
+        let resp = ui.interact(r, id.with("close"), Sense::click());
+        if resp.hovered() {
+            ui.painter().rect_filled(r, t.radius_sm, t.hover);
+        }
+        let (c, s) = (r.center(), 4.5);
+        let st = Stroke::new(1.3, if resp.hovered() { t.text } else { t.text_dim });
+        ui.painter().line_segment([c + vec2(-s, -s), c + vec2(s, s)], st);
+        ui.painter().line_segment([c + vec2(-s, s), c + vec2(s, -s)], st);
+        close = resp.clicked();
+    }
+    (drag, close)
+}
+
+/// The tabs across `row`, from the preset pane's padding; the selected one underlined on the line
+/// under them. 15 pt as in Photoshop, smaller only when a long translation would run past the window.
+fn tab_row(app: &crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, row: Rect) {
     let t = Tokens::get(ui.ctx());
     let cat = get_s(f, "__category", "Recent");
-    // Tabs.
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 24.0;
-        ui.add_space(8.0);
-        for name in tabs() {
-            let on = cat == name;
-            let text = RichText::new(tl!(name)).size(14.0).color(if on { t.text } else { t.text_dim });
-            let r = ui
-                .horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if name == "Recent" {
-                        let (ir, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-                        crate::icons::paint(ui, ir, "clock", 15.0, if on { t.text } else { t.text_dim });
-                    }
-                    ui.add(egui::Label::new(if on { text.strong() } else { text }).sense(Sense::click()))
-                })
-                .inner;
-            if on {
-                ui.painter().line_segment([r.rect.left_bottom() + vec2(if name == "Recent" { -22.0 } else { 0.0 }, 8.0), r.rect.right_bottom() + vec2(0.0, 8.0)], Stroke::new(2.0, t.text));
-            }
-            if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && !on {
-                select_tab(app, f, name);
+    let (gap, icon_w) = (24.0, 22.0);
+    let names: Vec<&str> = tabs().collect();
+    let layout = |size: f32| -> Vec<std::sync::Arc<egui::Galley>> {
+        names.iter().map(|n| ui.painter().layout_no_wrap(tl!(n).to_owned(), egui::FontId::proportional(size), t.text)).collect()
+    };
+    let total = |g: &[std::sync::Arc<egui::Galley>]| g.iter().map(|g| g.size().x).sum::<f32>() + gap * g.len().saturating_sub(1) as f32 + icon_w;
+    let mut size = 15.0;
+    let mut galleys = layout(size);
+    while total(&galleys) > row.width() - 2.0 * PAD && size > 11.0 {
+        size -= 1.0;
+        galleys = layout(size);
+    }
+    let mut x = row.left() + PAD;
+    let mut pick = None;
+    for (name, galley) in names.iter().zip(galleys) {
+        let on = cat == *name;
+        let icon = if *name == "Recent" { icon_w } else { 0.0 };
+        let w = galley.size().x + icon;
+        let hit = Rect::from_min_size(pos2(x, row.top()), vec2(w, row.height()));
+        let resp = ui.interact(hit, ui.id().with(("nd-tab", *name)), Sense::click());
+        let color = if on || resp.hovered() { t.text } else { t.text_dim };
+        if icon > 0.0 {
+            let ir = Rect::from_center_size(pos2(x + 8.0, row.center().y), vec2(16.0, 16.0));
+            crate::icons::paint(ui, ir, "clock", 15.0, color);
+        }
+        ui.painter().galley_with_override_text_color(pos2(x + icon, row.center().y - galley.size().y / 2.0), galley, color);
+        if on {
+            ui.painter().rect_filled(Rect::from_min_max(pos2(x, row.bottom() - 2.0), pos2(x + w, row.bottom())), 0.0, t.text);
+        }
+        let label = tl!(name);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
+        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && !on {
+            pick = Some(*name);
+        }
+        x += w + gap;
+    }
+    if let Some(name) = pick {
+        select_tab(app, f, name);
+    }
+}
+
+/// File › New under its title row: the tabs, then the preset cards on a darker pane on the left
+/// and Preset Details on the right, Close / Create in its bottom corner. `rounded`: the dialog is
+/// drawn inside another window, in a frame with rounded corners the panes keep to. Returns Create
+/// (`Some(true)`, also Enter) or Close (`Some(false)`) when chosen this frame.
+pub fn body(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, rounded: bool) -> Option<bool> {
+    let t = Tokens::get(ui.ctx());
+    let (area, _) = ui.allocate_exact_size(vec2(WIDTH, TABS_H + BODY_H), Sense::hover());
+    let row = Rect::from_min_size(area.min, vec2(WIDTH, TABS_H));
+    let left = Rect::from_min_max(pos2(area.left(), row.bottom()), pos2(area.left() + LEFT_W, area.bottom()));
+    let right = Rect::from_min_max(pos2(left.right(), row.bottom()), area.max);
+    let corner = if rounded { ui.visuals().menu_corner_radius.sw.saturating_sub(1) } else { 0 };
+    ui.painter().rect_filled(left, egui::CornerRadius { sw: corner, ..Default::default() }, pane_fill(&t));
+    ui.painter().rect_filled(Rect::from_min_max(pos2(area.left(), row.bottom() - 1.0), pos2(area.right(), row.bottom())), 0.0, divider_color(&t));
+    tab_row(app, ui, f, row);
+    let cat = get_s(f, "__category", "Recent");
+    // Left: the cards, padded on every side; the scrollbar sits in the room right of them.
+    let inner = Rect::from_min_max(pos2(left.left() + PAD, left.top() + GRID_TOP), pos2(left.right() - PAD, left.bottom() - 12.0));
+    let mut grid_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)));
+    egui::ScrollArea::vertical().id_salt(("nd-grid", cat.as_str())).max_height(inner.height()).auto_shrink([false, false]).show(&mut grid_ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        match cat.as_str() {
+            "Recent" => recent_cards(app, ui, f),
+            "Saved" => saved_cards(app, ui, f),
+            c => {
+                let presets = CATEGORIES.iter().find(|x| x.0 == c).map_or(PHOTO, |x| x.1);
+                preset_cards(ui, f, c, presets);
             }
         }
     });
-    ui.add_space(10.0);
-    widgets::hairline(ui);
-    let cat = get_s(f, "__category", "Recent");
-    ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        // Left: the cards, on a darker ground.
-        let (left, _) = ui.allocate_exact_size(vec2(GRID_W, GRID_H + 2.0 * GRID_PAD), Sense::hover());
-        ui.painter().rect_filled(left, t.radius, t.canvas);
-        // The cards keep GRID_PAD on every side; the scrollbar sits in the right padding.
-        let inner = Rect::from_min_max(left.min + vec2(GRID_PAD, GRID_PAD), left.max - vec2(GRID_PAD - GRID_BAR, GRID_PAD));
-        let mut grid_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)));
-        egui::ScrollArea::vertical().id_salt(("nd-grid", cat.as_str())).max_height(GRID_H).auto_shrink([false, false]).show(&mut grid_ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            match cat.as_str() {
-                "Recent" => recent_cards(app, ui, f),
-                "Saved" => saved_cards(app, ui, f),
-                c => {
-                    let presets = CATEGORIES.iter().find(|x| x.0 == c).map_or(PHOTO, |x| x.1);
-                    preset_cards(ui, f, c, presets);
-                }
-            }
-        });
-        // Right: Preset Details (nothing on an empty Saved tab, like Photoshop), its heading level
-        // with the grid's.
-        ui.add_space(COLUMN_GAP);
-        ui.vertical(|ui| {
-            ui.set_width(DETAILS_W);
-            ui.spacing_mut().item_spacing = vec2(FIELD_GAP, 4.0);
-            ui.add_space(GRID_PAD);
-            if can_create(f) {
-                details(app, ui, f);
-            }
-        });
-    });
-    // Create / Close sit clear of the grid, as in Photoshop.
-    ui.add_space(10.0);
+    // Right: Preset Details (nothing on an empty Saved tab, like Photoshop) over Close / Create.
+    let saving = f.get("__savingPreset").and_then(Value::as_bool) == Some(true);
+    let foot =
+        Rect::from_min_max(pos2(right.left() + DETAILS_PAD, right.bottom() - 24.0 - CONTROL_H), pos2(right.right() - DETAILS_PAD, right.bottom() - 24.0));
+    let pane = Rect::from_min_max(pos2(right.left() + DETAILS_PAD, right.top() + 16.0), pos2(right.right() - DETAILS_PAD, foot.top() - 8.0));
+    let mut details_ui = ui.new_child(egui::UiBuilder::new().max_rect(pane).layout(egui::Layout::top_down(egui::Align::Min)));
+    {
+        let ui = &mut details_ui;
+        ui.spacing_mut().item_spacing = vec2(FIELD_GAP, 0.0);
+        // Photoshop's taller menus, with its larger text.
+        ui.spacing_mut().interact_size.y = CONTROL_H;
+        ui.spacing_mut().button_padding = vec2(10.0, 4.0);
+        ui.style_mut().text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
+        if can_create(f) {
+            details(app, ui, f);
+        }
+    }
+    let ok_enabled = can_create(f);
+    let mut foot_ui = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    foot_ui.spacing_mut().item_spacing.x = 16.0;
+    let buttons = [
+        widgets::DialogButton::new(widgets::ButtonRole::Default, tl!("Create"), 72.0).enabled(ok_enabled),
+        widgets::DialogButton::new(widgets::ButtonRole::Cancel, tl!("Close"), 72.0),
+    ];
+    match widgets::dialog_buttons(&mut foot_ui, &buttons) {
+        Some(widgets::ButtonRole::Cancel) => Some(false),
+        Some(_) => Some(true),
+        // Enter creates, unless the Saved tab is empty (naming a preset took its own Enter).
+        None => (ok_enabled && !saving && ui.input(|i| i.key_pressed(egui::Key::Enter))).then_some(true),
+    }
 }
 
 #[cfg(test)]
@@ -1486,6 +1653,44 @@ mod tests {
             assert!(h.get_by_label("Create").accesskit_node().is_disabled());
             enter(&mut h);
             assert!(h.state().session.documents().is_empty(), "Enter doesn't create either");
+        }
+
+        /// Like Photoshop's, File › New is a window of its own (moved anywhere on screen), not a
+        /// panel clipped to the window it came from: from the main window too.
+        #[test]
+        fn new_document_gets_a_window_of_its_own() {
+            let mut app = PrismApp::new(prism_engine::Session::new(), crate::Services::default());
+            let id = app.ui.open_dialog(DialogKind::NewDocument, UiState::new_document_fields());
+            let d = app.ui.dialogs.iter().find(|d| d.id == id).cloned().expect("the dialog");
+            assert!(d.window.is_none(), "opened from the main window");
+            assert!(crate::dialogs::floats(&d) && crate::native_dialogs::own_window(&d));
+            // Headless (embedded viewports) it stays in the window and blocks it as a modal.
+            let ctx = egui::Context::default();
+            assert!(!crate::dialogs::blocks_host(&app, &ctx));
+        }
+
+        /// Its title row moves it (here drawn inside the window: there it moves the OS window).
+        #[test]
+        fn dragging_the_title_row_moves_the_dialog() {
+            let mut h = harness();
+            let before = h.get_by_label("Recent").rect();
+            // The title row sits right over the tabs.
+            let grab = egui::pos2(before.left() + 300.0, before.top() - super::super::TITLE_H / 2.0);
+            let to = grab + egui::vec2(-120.0, -80.0);
+            h.hover_at(grab);
+            h.run_steps(1);
+            h.drag_at(grab);
+            h.run_steps(1);
+            for k in 1..=4 {
+                h.hover_at(grab + (to - grab) * (k as f32 / 4.0));
+                h.run_steps(1);
+            }
+            h.drop_at(to);
+            h.run_steps(3);
+            let after = h.get_by_label("Recent").rect();
+            let moved = after.min - before.min;
+            assert!((moved - egui::vec2(-120.0, -80.0)).length() < 1.5, "moved {moved:?}");
+            assert_eq!(h.state().ui.dialogs.len(), 1, "still open");
         }
 
         fn harness() -> Harness<'static, PrismApp> {
