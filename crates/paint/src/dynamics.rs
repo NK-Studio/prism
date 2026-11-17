@@ -14,6 +14,14 @@ use crate::{Dab, StrokePoint};
 /// Maximum pulled-string length at 100 % smoothing, in screen pixels.
 pub const MAX_STRING_PX: f64 = 100.0;
 
+/// Photoshop's pulled string at Smoothing 255, in document pixels at every zoom (1.188 × the
+/// 0–255 value). Measured with the synthetic pen: a steady line ends 77.5 / 152.5 / 300.5 px
+/// behind the pen at 64 / 128 / 255, at 0.25–2 px/ms and at 50 / 100 / 200 % zoom, and right-angle
+/// corners follow the string within 0.4 px (docs/pen-input-validation.md › Photoshop pulled
+/// string). Adjust for Zoom lengthens it below 100 % like the ordinary smoothing
+/// ([`photoshop_zoom_amount`]).
+pub const PS_STRING_PX: f64 = 303.0;
+
 /// With Spacing unchecked, one dab per this many milliseconds of stroke time, so faster strokes
 /// space their dabs further apart (Photoshop: "the speed of the cursor determines the spacing").
 pub const SPEED_SPACING_MS: f64 = 8.0;
@@ -168,15 +176,21 @@ impl Smoother {
         };
         let amount = f64::from(self.cfg.amount.clamp(0.0, 1.0));
         if self.cfg.pulled_string {
-            let mut len = amount * MAX_STRING_PX;
-            if self.cfg.adjust_for_zoom {
-                len /= self.zoom;
-            }
+            let len = if self.photoshop {
+                PS_STRING_PX * if self.cfg.adjust_for_zoom { photoshop_zoom_amount(amount, self.zoom) } else { amount }
+            } else if self.cfg.adjust_for_zoom {
+                amount * MAX_STRING_PX / self.zoom
+            } else {
+                amount * MAX_STRING_PX
+            };
             let (dx, dy) = (p.x - pos.x, p.y - pos.y);
             let d = (dx * dx + dy * dy).sqrt();
             if d > len {
                 let k = (d - len) / d;
-                let np = StrokePoint { time: p.time, ..lerp_pt(&pos, &p, k) };
+                let to = lerp_pt(&pos, &p, k);
+                // Photoshop paints with the pen's pressure and pose of the moment (measured: a
+                // pressure step turns the width sharply, a string length behind the pen).
+                let np = if self.photoshop { StrokePoint { x: to.x, y: to.y, ..p } } else { StrokePoint { time: p.time, ..to } };
                 self.pos = Some(np);
                 out.push(np);
             } else if prev_input.is_some_and(|q| q.x == p.x && q.y == p.y) && (stylus_changed(&pos, &p) || p.time > pos.time) {
@@ -259,7 +273,9 @@ impl Smoother {
 
     /// End of stroke: with Catch-Up On Stroke End the brush finishes at the last pointer position.
     pub fn finish(&mut self, out: &mut Vec<StrokePoint>) {
-        if !self.active() || !self.cfg.catch_up_on_end {
+        // Photoshop greys Catch-up on Stroke End out in pulled-string mode, and a set one does
+        // nothing there (measured: the brush stays a string length behind).
+        if !self.active() || !self.cfg.catch_up_on_end || (self.photoshop && self.cfg.pulled_string) {
             return;
         }
         if let (Some(pos), Some(last)) = (self.pos, self.last_input)

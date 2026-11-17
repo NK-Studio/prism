@@ -695,6 +695,50 @@ the position only and takes pressure, tilt and rotation from the current sample,
 Prism's Photoshop pen rules now do. Test:
 `photoshop_smoothing_paints_with_the_pens_pressure_and_pose_of_the_moment` (prism-paint).
 
+## Photoshop pulled string (2026-11-17)
+
+Synthetic-pen strokes into Photoshop 27.4 with Pulled String Mode on: an 800×450 white RGB/8
+document, 6 px hard round at 5 % spacing, one stroke at a time with a 2 s pause after each (strokes
+injected back to back joined into each other in this mode). Lag is the pen's end (x 700) minus
+where the ink stops, less the tip radius.
+
+| Smoothing | 0.25 | 0.5 | 1 | 2 px/ms |
+| --- | --- | --- | --- | --- |
+| 33 | | 40.5 | | 48.5 |
+| 64 | | 77.5 | | 85.5 |
+| 128 | 154.5 | 152.5 | 152.5 | 160.5 |
+| 191 | | 229.5 | | 233.5 |
+| 255 | 302.5 | 300.5 | 308.5 | 308.5 |
+
+| Zoom, Adjust for Zoom | 64 | 128 | 255 |
+| --- | --- | --- | --- |
+| 50 %, on | 102.5 | 202.5 | 300.5 |
+| 50 %, off | 77.5 | 152.5 | 300.5 |
+| 200 %, on | 77.5 | 152.5–156.5 | 300.5–304.5 |
+| 200 %, off | 81.5–85.5 | 152.5 | 300.5–304.5 |
+
+- **The string is 1.188 × the Smoothing value (0–255), in document pixels**, at every speed and
+  zoom (a faster line ends up to one sample further back, as the last sample isn't drawn yet).
+  Adjust for Zoom lengthens it only below 100 %, by the ordinary smoothing's factor (× 1.33 at
+  50 %, up to the 255 string).
+- **Corners.** A right-angle path (270 px right, then 360 px down) at 64 and 128 curves into the
+  pulled-string tractrix: the ink's centreline lies within 0.41 / 0.31 px on average (1.14 /
+  0.57 px at most) of a brush moved, at each sample, by however far the pen is beyond the string.
+- **Pressure.** A 24 px pressure-size line with pressure stepping 0.25 ↔ 1 at x 400 turns the
+  width within 8 px at x ≈ 321 (64) and ≈ 246 (128): the pen's pressure of the moment, where the
+  brush is.
+- **Catch-up does nothing.** Stroke Catch-up and Catch-up on Stroke End (greyed out in the menu)
+  change nothing: a line that rests 800 ms, and one lifted with Catch-up on Stroke End set, both
+  stop a string length behind.
+
+**Prism** (Photoshop's pen rules): the string is `PS_STRING_PX` (303 px) × the amount, through
+`photoshop_zoom_amount` with Adjust for Zoom; the brush paints with the pen's pressure and pose
+of the moment; Catch-up on Stroke End is ignored in this mode. The Clip Studio workspace keeps
+the earlier screen-pixel string (100 px ÷ zoom). Tests: `pulled_string_length_follows_photoshop`,
+`photoshop_pulled_string_paints_with_the_pens_pressure_of_the_moment` (prism-paint).
+
+Photoshop crashed once more during the 200 % run (a seventh time that day); the run was redone.
+
 ## Remaining physical acceptance
 
 No physical tablet stroke has been driven or observed by this validation run.

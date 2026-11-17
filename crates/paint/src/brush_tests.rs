@@ -2898,6 +2898,81 @@ fn photoshop_smoothing_paints_with_the_pens_pressure_and_pose_of_the_moment() {
     }
 }
 
+/// Where Photoshop's pulled string leaves the brush on a steady line from x 100 to 700 at `v`
+/// px/ms (8 ms samples): its lag behind the pen, in document pixels.
+fn photoshop_string_lag(value: f64, v: f64, zoom: f32, compensate: bool) -> f64 {
+    let cfg = Smoothing { amount: (value / 255.0) as f32, pulled_string: true, adjust_for_zoom: compensate, catch_up_on_end: true, ..Default::default() };
+    let mut s = crate::dynamics::Smoother::new(&cfg, zoom).photoshop();
+    let mut out = Vec::new();
+    let n = (600.0 / v / 8.0).round() as u32;
+    for i in 0..=n {
+        let t = f64::from(i) * 8.0;
+        s.push(StrokePoint { time: t, ..StrokePoint::new(100.0 + v * t, 0.0, 1.0) }, &mut out);
+    }
+    // Catch-up on Stroke End is set but does nothing in pulled-string mode.
+    s.finish(&mut out);
+    700.0 - out.last().map_or(700.0, |p| p.x)
+}
+
+#[test]
+fn pulled_string_length_follows_photoshop() {
+    // Photoshop 27.4, synthetic pen (docs/pen-input-validation.md › Photoshop pulled string):
+    // (Smoothing value, speed px/ms, zoom, Adjust for Zoom, lag in px at the lift).
+    let measured = [
+        (33.0, 0.5, 1.0, true, 40.5),
+        (64.0, 0.5, 1.0, true, 77.5),
+        (128.0, 0.25, 1.0, true, 154.5),
+        (128.0, 0.5, 1.0, true, 152.5),
+        (128.0, 1.0, 1.0, true, 152.5),
+        (128.0, 2.0, 1.0, true, 160.5),
+        (191.0, 0.5, 1.0, true, 229.5),
+        (255.0, 0.5, 1.0, true, 300.5),
+        (255.0, 2.0, 1.0, true, 308.5),
+        (64.0, 0.5, 0.5, true, 102.5),
+        (128.0, 0.5, 0.5, true, 202.5),
+        (255.0, 0.5, 0.5, true, 300.5),
+        (64.0, 0.5, 0.5, false, 77.5),
+        (128.0, 1.0, 0.5, false, 152.5),
+        (64.0, 0.5, 2.0, true, 77.5),
+        (128.0, 1.0, 2.0, true, 152.5),
+        (255.0, 1.0, 2.0, false, 300.5),
+    ];
+    for (value, v, zoom, compensate, lag) in measured {
+        let ours = photoshop_string_lag(value, v, zoom, compensate);
+        // Photoshop's lags run up to one sample's step further than the string (its last
+        // sample is not drawn yet when the pen lifts).
+        assert!(ours - 4.0 <= lag && lag <= ours + 8.0 * v + 4.0, "{value} at {v} px/ms, zoom {zoom}, {compensate}: {ours} vs {lag}");
+    }
+}
+
+#[test]
+fn photoshop_pulled_string_paints_with_the_pens_pressure_of_the_moment() {
+    // Measured: a 24 px pressure-size line at 0.5 px/ms, pressure stepping 0.25 ↔ 1 at x 400,
+    // turns the width sharply where the brush is: x ≈ 321 at 64, ≈ 246 at 128.
+    let mut b = BrushSettings { size: 24.0, hardness: 1.0, spacing: 0.05, ..brush() };
+    b.shape_dynamics.enabled = true;
+    b.shape_dynamics.size.control = Control::PenPressure;
+    for (value, at) in [(64.0, 321.0), (128.0, 246.0)] {
+        b.smoothing = Smoothing { amount: (value / 255.0) as f32, pulled_string: true, ..Default::default() };
+        for up in [true, false] {
+            let pts: Vec<_> = (0..=150u32)
+                .map(|i| {
+                    let t = f64::from(i * 8);
+                    let p = if (t >= 600.0) == up { 1.0 } else { 0.25 };
+                    StrokePoint { time: t, ..StrokePoint::new(100.0 + 0.5 * t, 50.0, p) }
+                })
+                .collect();
+            let d = photoshop_dabs(&b, &pts, 1.0);
+            let first = d.iter().position(|d| (d.radius > 7.5) == up).unwrap();
+            let x = d[first].center.x;
+            assert!((x - at).abs() <= 4.0, "{value}, up {up}: step at {x}, Photoshop {at}");
+            let before = d[first.saturating_sub(4)].radius;
+            let old = if up { 3.0 } else { 12.0 };
+            assert!((before - old).abs() < 0.5, "{value}: {before} just before the step");
+        }
+    }
+}
+
 #[test]
 fn a_frozen_brush_still_lays_resting_dabs() {
     // Without Stroke Catch-up the brush stays put while the pen rests, but Photoshop's resting
