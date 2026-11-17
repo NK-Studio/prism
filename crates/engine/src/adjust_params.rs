@@ -914,6 +914,80 @@ pub fn exposure_eyedropper_from_params(s: &crate::Session, p: &Value) -> Result<
     exposure_eyedropper(&without_eyedropper(p), picker, sample, d.mode, d.depth).map(Some)
 }
 
+/// Hue/Saturation's range eyedroppers: pick the range at a colour, add a colour to it, take one
+/// out of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HueRangePick {
+    Sample,
+    Add,
+    Subtract,
+}
+
+/// HSV hue of a colour in degrees; `None` for a grey (no hue).
+pub fn hue_of(c: [f32; 3]) -> Option<f32> {
+    if c.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let mx = c[0].max(c[1]).max(c[2]);
+    let mn = c[0].min(c[1]).min(c[2]);
+    let d = mx - mn;
+    if d <= 1e-4 {
+        return None;
+    }
+    let h = if mx == c[0] {
+        ((c[1] - c[2]) / d).rem_euclid(6.0)
+    } else if mx == c[1] {
+        (c[2] - c[0]) / d + 2.0
+    } else {
+        (c[0] - c[1]) / d + 4.0
+    };
+    Some(h * 60.0)
+}
+
+/// A range's four sliders after an eyedropper click on `sample` (Photoshop's tools; the exact
+/// rules are inferred, not measured): Sample centres the fully-on part on the sample's hue,
+/// keeping every width; Add stretches the nearer fully-on edge out to it; Subtract pulls the nearer
+/// fully-on edge in to it. Each fall-off moves with its edge. A grey sample has no hue: an error.
+pub fn hue_range_eyedropper(bounds: [f32; 4], pick: HueRangePick, sample: [f32; 3]) -> Result<[f32; 4]> {
+    const CMD: &str = "hue/saturation eyedropper";
+    let h = hue_of(sample).ok_or_else(|| bad(CMD, "the sample is grey: it has no hue"))?;
+    let b = prism_doc::adjust::HueRange::canonical_bounds(bounds);
+    let (f0, f1) = (b[1] - b[0], b[3] - b[2]);
+    // The sample's hue nearest the fully-on part's centre.
+    let centre = (b[1] + b[2]) / 2.0;
+    let h = centre + (h - centre + 180.0).rem_euclid(360.0) - 180.0;
+    let (mut lo, mut hi) = (b[1], b[2]);
+    match pick {
+        HueRangePick::Sample => {
+            let half = (hi - lo) / 2.0;
+            (lo, hi) = (h - half, h + half);
+        }
+        HueRangePick::Add if h < lo => lo = h,
+        HueRangePick::Add if h > hi => hi = h,
+        HueRangePick::Subtract if h >= lo && h <= hi => {
+            if h - lo < hi - h {
+                lo = h;
+            } else {
+                hi = h;
+            }
+        }
+        _ => {}
+    }
+    // One turn at most, fall-offs included.
+    let room = (359.0 - f0 - f1).max(0.0);
+    if hi - lo > room {
+        hi = lo + room;
+    }
+    Ok(prism_doc::adjust::HueRange::canonical_bounds([lo - f0, lo, hi, hi + f1].map(|v| v.round())))
+}
+
+/// Photoshop 27.4's Invert (반전) for a colour range: the other hues become the range (reds
+/// 315/345/15/45 become 15/45/315/345; measured).
+pub fn invert_hue_range(bounds: [f32; 4]) -> [f32; 4] {
+    let b = prism_doc::adjust::HueRange::canonical_bounds(bounds);
+    prism_doc::adjust::HueRange::canonical_bounds([b[2], b[3], b[0] + 360.0, b[1] + 360.0])
+}
+
 /// The `eyedropper` param of the Levels commands (as for Curves); the rest of `p` is the Levels
 /// settings the picker edits. `None` without the key.
 pub fn levels_eyedropper_from_params(s: &crate::Session, p: &Value) -> Result<Option<Adjustment>> {

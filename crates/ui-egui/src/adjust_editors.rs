@@ -1188,6 +1188,234 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Hue/Saturation in Photoshop 27.4's dialog
+
+/// The colour of range `i` (0 = master, then reds … magentas) on its swatch and slider tracks.
+pub fn hs_range_color(i: usize) -> Color32 {
+    if i == 0 { hue_color(0.0) } else { hue_color(60.0 * (i - 1) as f32) }
+}
+
+/// The range's four sliders as stored in `v` (Photoshop's defaults when absent).
+pub fn hs_bounds(v: &Value, range: usize) -> [f32; 4] {
+    let Some(key) = range.checked_sub(1).and_then(|i| HUE_RANGES.get(i)) else { return [0.0; 4] };
+    let neutral = prism_doc::adjust::HueRange::neutral(range - 1).bounds;
+    HueRange::canonical_bounds(nums(&v[*key], "range", neutral))
+}
+
+/// Stores range `range`'s four sliders in `v`.
+pub fn hs_set_bounds(v: &mut Value, range: usize, b: [f32; 4]) {
+    let Some(key) = range.checked_sub(1).and_then(|i| HUE_RANGES.get(i)) else { return };
+    if !v.get(*key).is_some_and(Value::is_object) {
+        v[*key] = json!({});
+    }
+    v[*key]["range"] = json!(HueRange::canonical_bounds(b).map(|x| x.round()));
+}
+
+/// Is range `range` inverted (its fully-on part centred more than 90° from its own hue)?
+fn hs_inverted(v: &Value, range: usize) -> bool {
+    if range == 0 {
+        return false;
+    }
+    let b = hs_bounds(v, range);
+    let centre = ((b[1] + b[2]) / 2.0).rem_euclid(360.0);
+    let own = 60.0 * (range - 1) as f32;
+    let d = (centre - own + 180.0).rem_euclid(360.0) - 180.0;
+    d.abs() > 90.0
+}
+
+/// Photoshop 27.4's row of range swatches: Master (a colour wheel), then Reds … Magentas; the
+/// chosen one ringed, an inverted range split with its complement. Greyed (and Master) while
+/// Colorize is on. Returns the range picked this frame.
+pub fn hs_swatches(ui: &mut egui::Ui, v: &Value, range: usize, colorize: bool) -> Option<usize> {
+    let t = Tokens::get(ui.ctx());
+    let mut picked = None;
+    let names = std::iter::once(tl!("Master")).chain(RANGE_LABELS.iter().map(|l| tl!(l)));
+    for (i, name) in names.enumerate() {
+        let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), if colorize { Sense::hover() } else { Sense::click() });
+        let c = rect.center();
+        let r = 11.0;
+        let p = ui.painter();
+        let dim = |col: Color32| if colorize { col.gamma_multiply(0.35) } else { col };
+        if i == 0 {
+            // A colour wheel of twelve wedges.
+            for k in 0..12 {
+                let a0 = (k as f32 / 12.0) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+                let a1 = ((k + 1) as f32 / 12.0) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+                let pts = vec![c, c + vec2(a0.cos(), a0.sin()) * r, c + vec2(a1.cos(), a1.sin()) * r];
+                p.add(egui::Shape::convex_polygon(pts, dim(hue_color(k as f32 * 30.0)), Stroke::NONE));
+            }
+        } else if hs_inverted(v, i) {
+            // Split: the range's colour and its complement.
+            let col = hs_range_color(i);
+            let comp = hue_color(60.0 * (i - 1) as f32 + 180.0);
+            p.circle_filled(c, r, dim(comp));
+            let half: Vec<Pos2> =
+                (0..=16).map(|k| std::f32::consts::FRAC_PI_4 + k as f32 / 16.0 * std::f32::consts::PI).map(|a| c + vec2(a.cos(), a.sin()) * r).collect();
+            p.add(egui::Shape::convex_polygon(half, dim(col), Stroke::NONE));
+        } else {
+            p.circle_filled(c, r, dim(hs_range_color(i)));
+        }
+        p.circle_stroke(c, r, Stroke::new(1.0, Color32::from_black_alpha(90)));
+        if i == range {
+            p.circle_stroke(c, r + 3.0, Stroke::new(2.0, if colorize { t.text_faint } else { t.text }));
+        }
+        let resp = resp.on_hover_text(name);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, !colorize, i == range, name));
+        if resp.clicked() {
+            picked = Some(i);
+        }
+    }
+    picked
+}
+
+/// One Hue/Saturation row: "label:" with its field at the right, then the slider on `track`.
+fn hs_row(ui: &mut egui::Ui, text: &str, x: &mut f32, range: std::ops::RangeInclusive<f32>, track: &[Color32]) -> Edit {
+    let mut e = Edit::default();
+    ui.horizontal(|ui| {
+        // Photoshop's own wording in this dialog ("밝기", not the panel's "명도").
+        ui.label(format!("{}:", crate::i18n::tr_ctx(crate::i18n::current(), "adjust", text)));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let r = widgets::value_field(ui, x, range.clone(), "", 48.0);
+            *x = x.round().clamp(*range.start(), *range.end());
+            e.add(Edit::of(&r));
+        });
+    });
+    // A double-click on the slider (knob or track) puts it back to 0, as in Photoshop.
+    let r = widgets::slider_with(ui, x, range.clone(), Some(track), widgets::RowGestures { reset: Some(0.0), wheel_step: None });
+    *x = x.round().clamp(*range.start(), *range.end());
+    e.add(Edit::of(&r));
+    e
+}
+
+/// Hue, Saturation and Lightness of `range` (0 = master) in Photoshop 27.4's rows: the hue track
+/// a spectrum, saturation grey to the range's colour, lightness black to white. Colorize: hue
+/// 0..360 and saturation 0..100 on the master.
+pub fn hs_rows(ui: &mut egui::Ui, v: &mut Value, range: usize, colorize: bool) -> Edit {
+    let mut e = Edit::default();
+    let key = range.checked_sub(1).and_then(|i| HUE_RANGES.get(i)).copied();
+    let mut o = match key {
+        Some(k) if v.get(k).is_some_and(Value::is_object) => v[k].clone(),
+        Some(_) => json!({}),
+        None => v.clone(),
+    };
+    let (hlo, hhi, slo) = if colorize { (0.0, 360.0, 0.0) } else { (-180.0, 180.0, -100.0) };
+    let mut h = num(&o, "hue", 0.0).clamp(hlo, hhi);
+    let mut sat = num(&o, "saturation", 0.0).clamp(slo, 100.0);
+    let mut l = num(&o, "lightness", 0.0).clamp(-100.0, 100.0);
+    let col = hs_range_color(range);
+    let grey = Color32::from_gray(128);
+    e.add(hs_row(ui, "Hue", &mut h, hlo..=hhi, &widgets::hue_stops()));
+    ui.add_space(6.0);
+    e.add(hs_row(ui, "Saturation", &mut sat, slo..=100.0, &[grey, col.lerp_to_gamma(grey, 0.5), col]));
+    ui.add_space(6.0);
+    e.add(hs_row(ui, "Lightness", &mut l, -100.0..=100.0, &[Color32::BLACK, grey, Color32::WHITE]));
+    if e.changed {
+        o["hue"] = json!(h);
+        o["saturation"] = json!(sat);
+        o["lightness"] = json!(l);
+        match key {
+            Some(k) => v[k] = o,
+            None => {
+                v["hue"] = json!(h);
+                v["saturation"] = json!(sat);
+                v["lightness"] = json!(l);
+            }
+        }
+    }
+    e
+}
+
+/// Colorize on or off as Photoshop 27.4 does it: on takes the hue of the foreground colour and
+/// saturation 25 (measured: a red foreground gave hue 359, saturation 25); off brings the hue back
+/// into -180..180.
+pub fn hs_set_colorize(v: &mut Value, on: bool, foreground: [f32; 3]) {
+    v["colorize"] = json!(on);
+    if on {
+        let fg = prism_engine::adjust_params::hue_of(foreground).unwrap_or(0.0).round().rem_euclid(360.0);
+        v["hue"] = json!(fg);
+        v["saturation"] = json!(25.0);
+    } else {
+        let h = num(v, "hue", 0.0);
+        v["hue"] = json!(if h > 180.0 { h - 360.0 } else { h });
+        v["saturation"] = json!(num(v, "saturation", 0.0));
+    }
+}
+
+/// "Before - After" (Photoshop 27.4): one bar, the input hues on its upper half and what they
+/// become on the lower; under it the range's sliders (fully-on part light, fall-offs darker,
+/// white handles) and their degrees, "start/full" at the left and "full\\end" at the right.
+pub fn hs_spectrum(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx, range: usize, colorize: bool) -> Edit {
+    let t = Tokens::get(ui.ctx());
+    let mut e = Edit::default();
+    ui.label(tl!("Before - After"));
+    let w = ui.available_width();
+    let (bar, _) = ui.allocate_exact_size(vec2(w, 14.0), Sense::hover());
+    let p = ui.painter_at(bar.expand(2.0));
+    let input: Vec<Color32> = (0..=36).map(|i| hue_color(i as f32 * 10.0)).collect();
+    let (upper, lower) = (Rect::from_min_max(bar.min, pos2(bar.right(), bar.center().y)), Rect::from_min_max(pos2(bar.left(), bar.center().y), bar.max));
+    spectrum_bar(&p, upper, &input);
+    spectrum_bar(&p, lower, &adjusted_spectrum(v, 37));
+    let (strip, sresp) = ui.allocate_exact_size(vec2(w, 16.0), Sense::click_and_drag());
+    let p = ui.painter_at(strip.expand(2.0));
+    let mid = strip.center().y;
+    p.line_segment([pos2(strip.left(), mid), pos2(strip.right(), mid)], Stroke::new(2.0, Color32::from_gray(150)));
+    let active = range > 0 && !colorize;
+    let mut b = if active { hs_bounds(v, range) } else { [0.0; 4] };
+    if active {
+        let xof = |deg: f32| strip.left() + deg.rem_euclid(360.0) / 360.0 * w;
+        let deg_of = |x: f32| ((x - strip.left()) / w * 360.0).clamp(0.0, 360.0);
+        let band = |a: f32, z: f32, color: Color32| {
+            let (xa, xz) = (xof(a), xof(z));
+            let r = |x0: f32, x1: f32| Rect::from_min_max(pos2(x0, mid - 7.0), pos2(x1, mid + 7.0));
+            if xa <= xz {
+                p.rect_filled(r(xa, xz), 0.0, color);
+            } else {
+                p.rect_filled(r(xa, strip.right()), 0.0, color);
+                p.rect_filled(r(strip.left(), xz), 0.0, color);
+            }
+        };
+        band(b[0], b[1], Color32::from_gray(110));
+        band(b[2], b[3], Color32::from_gray(110));
+        band(b[1], b[2], Color32::from_gray(165));
+        for d in b {
+            let x = xof(d);
+            p.rect_filled(Rect::from_center_size(pos2(x, mid), vec2(3.0, 16.0)), 0.0, Color32::WHITE);
+        }
+        let drag_id = cx.mem.with("hs-ps-range-drag");
+        let mut which: Option<u8> = ui.data(|d| d.get_temp(drag_id)).flatten();
+        if sresp.drag_started()
+            && let Some(pos) = sresp.interact_pointer_pos()
+        {
+            which = nearest(&b.map(xof), pos.x).filter(|k| (xof(b[*k as usize]) - pos.x).abs() < 10.0);
+        }
+        if sresp.dragged()
+            && let (Some(k), Some(pos)) = (which, sresp.interact_pointer_pos())
+        {
+            let before = b;
+            b = move_hue_range_handle(b, k as usize, deg_of(pos.x));
+            if b != before {
+                hs_set_bounds(v, range, b);
+                e.changed = true;
+            }
+        }
+        if sresp.drag_stopped() {
+            which = None;
+            e.commit = true;
+        }
+        ui.data_mut(|d| d.insert_temp(drag_id, which));
+    }
+    let deg = |x: f32| format!("{:.0}°", x.rem_euclid(360.0));
+    let color = if active { t.text } else { t.text_faint };
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(format!("{}/{}", deg(b[0]), deg(b[1]))).color(color));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(RichText::new(format!("{}\\{}", deg(b[2]), deg(b[3]))).color(color));
+        });
+    });
+    e
+}
+
+// ---------------------------------------------------------------------------------------------
 // Color Balance
 
 /// Where the Color Balance editor rooted at `mem` keeps its Tone choice.

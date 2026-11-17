@@ -225,6 +225,57 @@ does (the plain "Vibrance" string elsewhere stays 활기).
 Unchanged: the research notes only estimate Vibrance; Prism's `compose::adjust::vibrance_lin` is
 already fitted to Photoshop's output.
 
+## Hue/Saturation
+
+### Dialog (Photoshop 27.4, measured by driving it)
+
+A redesigned dialog. "Preset:" with a dropdown and a menu button; a row with the On-image
+Adjustment tool and round range swatches (Master as a colour wheel, then Reds, Yellows, Greens,
+Cyans, Blues, Magentas; the chosen one ringed) in place of the old channel dropdown; "Hue:",
+"Saturation:" and "Lightness:" (ko: 색조 / 채도 / 밝기), each with its field and a slider whose
+track is a spectrum, grey → red, black → white; a row with Colorize, the three range eyedroppers
+(Eyedropper, Add to Sample, Subtract from Sample; off on Master) and **Invert** (반전); then
+"Before - After" (이전 - 이후): one bar, input hues on its upper half, the result on its lower half,
+under it the range's sliders (fully-on part light grey, fall-offs darker, white handles) and the
+degrees "315°/345°" at the left and "15°\45°" at the right. Right column: OK, Cancel,
+"Preview(Opt+P)". Fields carry no "+" (180, 100, -100). Measured:
+
+- Invert swaps a range for the other hues: reds 315/345/15/45 become 15/45/315/345; the swatch
+  then shows the range colour split with its complement.
+- Colorize takes the foreground colour's hue (a red foreground gave 359) and saturation 25; the
+  swatches, eyedroppers and Invert go grey and the hue slider runs 0..360.
+- Hue −180..180 (180 at the right end), Saturation −100..100, Lightness −100..100.
+
+Prism (`ui-egui/src/adjust_ps_ui.rs` `hue_saturation`, parts `adjust_editors::hs_*`): the same,
+except the On-image Adjustment tool, Photoshop's presets and the preset menu. The eyedroppers'
+rules are inferred (`adjust_params::hue_range_eyedropper`: Eyedropper centres the fully-on part
+on the sample's hue keeping the widths, Add stretches the nearer edge out to it, Subtract pulls
+the nearer edge in to it). Alt: Reset; Cmd+Z as in the other dialogs. Maths unchanged (the
+research notes only estimate Hue/Saturation).
+
+Photoshop crashed twice while it was being driven (SIGBUS, 07:29 and 08:54; earlier it refused new
+documents with a disk error), so the remaining checks wait for a stable Photoshop.
+
+## Presets
+
+The "Preset:" dropdowns of Levels, Curves, Exposure and Hue/Saturation list Photoshop's built-in
+presets (`ui-egui/src/adjust_presets.rs`), in its order, after Default; Custom shows once the
+settings match none. The settings were **observed, not copied**: Photoshop 27.4 was asked through
+its scripting interface to make an adjustment layer from each of its presets, and the layer's
+settings were read back (2026-11-17). The Korean names are Photoshop's own (its Korean UI strings,
+`preset` context in `ko.tsv`). Curves' "(RGB)" presets are offered for RGB documents only.
+
+- Levels: Darker (input 15/255), Increase Contrast 1/2/3 (10/245, 20/235, 30/225), Lighten Shadows
+  (gamma 1.6), Lighter (0/230), Midtones Brighter (gamma 1.25), Midtones Darker (gamma 0.75).
+- Curves (RGB): Color Negative, Cross Process (per channel), Darker, Increase Contrast, Lighter,
+  Linear Contrast, Medium Contrast, Negative, Strong Contrast (composite points).
+- Exposure: Minus 1.0, Minus 2.0, Plus 1.0, Plus 2.0 (exposure only).
+- Hue/Saturation: Cyanotype (colorize 215/25), Increase Saturation More (+30), Increase Saturation
+  (+10), Old Style (−40 saturation, +5 lightness), Red Boost (hue −5, +20), Sepia (colorize 35/25),
+  Strong Saturation (+50), Yellow Boost (hue +5, +20); all on the master.
+
+Not there yet: the preset menu (save / load / delete) and the user's own saved presets.
+
 ## Still open
 
 - Auto's target curve (Photoshop's trained model) is a stand-in.

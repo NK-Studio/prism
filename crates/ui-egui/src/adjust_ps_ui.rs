@@ -40,6 +40,9 @@ const LEVELS_W: f32 = 290.0;
 /// Levels' button column.
 const LEVELS_BUTTON_W: f32 = 100.0;
 
+/// Hue/Saturation's options column (seven range swatches wide).
+const HS_W: f32 = 276.0;
+
 /// Curves' channel frame (Output gutter, bar and 256-level graph).
 const CURVES_W: f32 = 340.0;
 /// Curves' display options column.
@@ -51,13 +54,14 @@ fn kind(f: &Map<String, Value>) -> &str {
 
 /// Is this dialog drawn in Photoshop's classic adjustment layout?
 pub fn owns(f: &Map<String, Value>) -> bool {
-    matches!(kind(f), "brightnessContrast" | "levels" | "curves" | "exposure" | "vibrance")
+    matches!(kind(f), "brightnessContrast" | "levels" | "curves" | "exposure" | "vibrance" | "hueSaturation")
 }
 
 /// The dialog's content width.
 pub fn width(f: &Map<String, Value>) -> f32 {
     match kind(f) {
         "levels" => LEVELS_W + GAP + LEVELS_BUTTON_W,
+        "hueSaturation" => HS_W + GAP + BUTTON_W,
         "curves" => CURVES_W + GAP + CURVES_VIEW_W + GAP + LEVELS_BUTTON_W,
         _ => WIDTH,
     }
@@ -121,6 +125,7 @@ pub fn body(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
         "curves" => curves(app, ui, f),
         "exposure" => exposure(app, ui, f),
         "vibrance" => vibrance(ui, f),
+        "hueSaturation" => hue_saturation(app, ui, f),
         _ => brightness_contrast(app, ui, f),
     };
     settle(ui, f);
@@ -237,12 +242,7 @@ fn levels(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             // Preset: Default, or Custom once anything differs from it.
             ui.horizontal(|ui| {
                 ui.label(format!("{}:", label("Preset")));
-                let custom = values != defaults;
-                let mut pick = if custom { "custom" } else { "default" }.to_string();
-                let options = [("default".to_string(), tl!("Default")), ("custom".to_string(), tl!("Custom"))];
-                let opts: Vec<(String, &str)> = options.iter().filter(|(k, _)| custom || k == "default").map(|(k, l)| (k.clone(), *l)).collect();
-                if widgets::dropdown(ui, "pslv-preset", &mut pick, &opts, ui.available_width()) && pick == "default" && custom {
-                    values = defaults.clone();
+                if crate::adjust_presets::dropdown(ui, "pslv-preset", "levels", mode, &mut values, &defaults, ui.available_width()) {
                     changed = true;
                 }
             });
@@ -376,12 +376,11 @@ fn exposure(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
             ui.set_width(OPTIONS_W);
             ui.horizontal(|ui| {
                 ui.label(label("Preset"));
-                let custom = (e, o, g) != (0.0, 0.0, 1.0);
-                let mut pick = if custom { "custom" } else { "default" }.to_string();
-                let options = [("default".to_string(), tl!("Default")), ("custom".to_string(), tl!("Custom"))];
-                let opts: Vec<(String, &str)> = options.iter().filter(|(k, _)| custom || k == "default").map(|(k, l)| (k.clone(), *l)).collect();
-                if widgets::dropdown(ui, "psex-preset", &mut pick, &opts, ui.available_width()) && pick == "default" && custom {
-                    reset = true;
+                let defaults = json!({"exposure": 0.0, "offset": 0.0, "gamma": 1.0});
+                let mut values = json!({"exposure": e, "offset": o, "gamma": g});
+                if crate::adjust_presets::dropdown(ui, "psex-preset", "exposure", mode, &mut values, &defaults, ui.available_width()) {
+                    let n = |k: &str, d: f32| values.get(k).and_then(Value::as_f64).map_or(d, |v| v as f32);
+                    (e, o, g) = (n("exposure", 0.0), n("offset", 0.0), n("gamma", 1.0));
                 }
             });
             ui.add_space(6.0);
@@ -424,6 +423,124 @@ fn exposure(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
     f.insert("gamma".into(), json!(g));
     if changed {
         crate::adjust_dialog::rebase_picker(f);
+    }
+    outcome
+}
+
+/// One of Hue/Saturation's range eyedroppers (the Eyedropper, Add to Sample, Subtract from
+/// Sample): the pipette with a "+" or "−" badge.
+fn hs_picker_button(ui: &mut egui::Ui, badge: &str, selected: bool, enabled: bool, tooltip: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::Vec2::splat(28.0), if enabled { egui::Sense::click() } else { egui::Sense::hover() });
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let tint = if enabled { crate::icons::button_chrome(ui, rect, selected, resp.hovered()) } else { t.text_faint };
+    crate::icons::paint(ui, rect, "adjust-eyedropper-fill", 22.0, if enabled { egui::Color32::from_gray(160) } else { egui::Color32::from_gray(90) });
+    crate::icons::paint(ui, rect, "adjust-eyedropper", 22.0, tint);
+    if !badge.is_empty() {
+        ui.painter().text(rect.right_bottom() - vec2(7.0, 6.0), egui::Align2::CENTER_CENTER, badge, egui::FontId::proportional(11.0), tint);
+    }
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, tooltip));
+    resp.on_hover_text(tooltip)
+}
+
+/// Image › Adjustments › Hue/Saturation in Photoshop 27.4's layout: "Preset:", the range
+/// swatches (Master, Reds … Magentas), Hue / Saturation / Lightness rows, Colorize with the three
+/// range eyedroppers and Invert, then "Before - After" with the range's sliders; OK, Cancel (Alt:
+/// Reset) and Preview (Opt+P) at the right. (Photoshop's On-image Adjustment tool isn't here.)
+fn hue_saturation(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
+    use crate::adjust_dialog::{HS_PICKER, HS_RANGE};
+    use crate::adjust_editors::{self, EditorCx};
+    let mut outcome = None;
+    let mode = app.session.active().map_or(prism_doc::ColorMode::Rgb, |s| s.doc.mode);
+    let defaults = prism_engine::adjust_params::default_for("hueSaturation", mode).map(|d| prism_engine::adjust_params::to_params(&d)).unwrap_or(Value::Null);
+    let mut values = crate::filter_dialog::params_of(f);
+    let cx = EditorCx {
+        mem: crate::adjust_dialog::editor_mem("hueSaturation"),
+        hist: None,
+        gray: false,
+        swatches: adjust_editors::swatches(app),
+        gradients: Vec::new(),
+        dialog: true,
+    };
+    let colorize = values.get("colorize").and_then(Value::as_bool).unwrap_or(false);
+    let mut range = f.get(HS_RANGE).and_then(Value::as_u64).filter(|r| *r <= 6).unwrap_or(0) as usize;
+    if colorize {
+        range = 0;
+    }
+    let mut changed = false;
+    let alt = ui.input(|i| i.modifiers.alt);
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(HS_W);
+            ui.horizontal(|ui| {
+                ui.label(format!("{}:", label("Preset")));
+                if crate::adjust_presets::dropdown(ui, "pshs-preset", "hueSaturation", mode, &mut values, &defaults, ui.available_width()) {
+                    changed = true;
+                }
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if let Some(r) = adjust_editors::hs_swatches(ui, &values, range, colorize) {
+                    range = r;
+                    f.remove(HS_PICKER);
+                }
+            });
+            ui.add_space(4.0);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            changed |= adjust_editors::hs_rows(ui, &mut values, range, colorize).changed;
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let mut c = colorize;
+                if widgets::checkbox(ui, &mut c, tl!("Colorize")).changed() {
+                    adjust_editors::hs_set_colorize(&mut values, c, cx.swatches[0]);
+                    f.remove(HS_PICKER);
+                    changed = true;
+                }
+                ui.add_space(6.0);
+                let enabled = range > 0 && !c && mode == prism_doc::ColorMode::Rgb;
+                let armed = f.get(HS_PICKER).and_then(Value::as_str).map(str::to_owned);
+                for (id, badge, tip) in [("sample", "", tl!("Eyedropper Tool")), ("add", "+", tl!("Add to Sample")), ("subtract", "−", tl!("Subtract from Sample"))] {
+                    if hs_picker_button(ui, badge, armed.as_deref() == Some(id), enabled, tip).clicked() {
+                        f.insert(HS_PICKER.into(), json!(id));
+                    }
+                }
+                ui.add_space(6.0);
+                let inv = ui.add_enabled_ui(enabled, |ui| widgets::secondary_button(ui, label("Invert"), 64.0)).inner;
+                if inv.clicked() {
+                    let b = adjust_editors::hs_bounds(&values, range);
+                    adjust_editors::hs_set_bounds(&mut values, range, prism_engine::adjust_params::invert_hue_range(b));
+                    changed = true;
+                }
+            });
+            ui.add_space(8.0);
+            changed |= adjust_editors::hs_spectrum(ui, &mut values, &cx, range, colorize).changed;
+        });
+        ui.add_space(GAP);
+        ui.vertical(|ui| {
+            ui.set_width(BUTTON_W);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            if widgets::primary_button(ui, tl!("OK"), BUTTON_W).clicked() {
+                outcome = Some(true);
+            }
+            if widgets::secondary_button(ui, if alt { tl!("Reset") } else { tl!("Cancel") }, BUTTON_W).clicked() {
+                if alt {
+                    values = defaults.clone();
+                    changed = true;
+                } else {
+                    outcome = Some(false);
+                }
+            }
+            ui.add_space(4.0);
+            preview_checkbox(ui, f, true);
+        });
+    });
+    if range == 0 {
+        f.remove(HS_PICKER);
+    }
+    f.insert(HS_RANGE.into(), json!(range));
+    if changed && let Value::Object(v) = values {
+        f.retain(|k, _| k.starts_with("__"));
+        f.extend(v);
     }
     outcome
 }
@@ -549,12 +666,7 @@ fn curves(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             // Preset: Default, or Custom once anything differs from it.
             ui.horizontal(|ui| {
                 ui.label(format!("{}:", label("Preset")));
-                let custom = values != defaults;
-                let mut pick = if custom { "custom" } else { "default" }.to_string();
-                let options = [("default".to_string(), tl!("Default")), ("custom".to_string(), tl!("Custom"))];
-                let opts: Vec<(String, &str)> = options.iter().filter(|(k, _)| custom || k == "default").map(|(k, l)| (k.clone(), *l)).collect();
-                if widgets::dropdown(ui, "pscv-preset", &mut pick, &opts, CURVES_W) && pick == "default" && custom {
-                    values = defaults.clone();
+                if crate::adjust_presets::dropdown(ui, "pscv-preset", "curves", mode, &mut values, &defaults, CURVES_W) {
                     changed = true;
                 }
             });
@@ -723,8 +835,10 @@ mod tests {
         let mut s = prism_engine::Session::new();
         s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
         s.execute("edit.fill", json!({"color": "#806040"})).unwrap();
+        // Real frame times: a double-click's two clicks must land within the double-click time.
         let mut h = Harness::builder()
             .with_size(egui::vec2(1200.0, 900.0))
+            .with_step_dt(1.0 / 60.0)
             .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), PrismApp::new(s, crate::Services::default()));
         PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         let id = crate::adjust_dialog::open(h.state_mut(), cmd).unwrap();
@@ -1067,6 +1181,85 @@ mod tests {
         assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
     }
 
+    /// Photoshop 27.4's Hue/Saturation: the range swatches, Hue / Saturation / Lightness, Colorize
+    /// (the foreground's hue, saturation 25), the range eyedroppers and Invert (reds 315/345/15/45
+    /// → 15/45/315/345), Before - After with the range's degrees; Alt: Reset; Cmd+Z.
+    #[test]
+    fn hue_saturation_dialog_works_like_photoshops() {
+        let (mut h, id) = dialog_for("image.adjustments.hueSaturation");
+        assert!(owns(&h.state().ui.dialogs[0].fields));
+        for label in ["Master", "Reds", "Magentas", "Hue:", "Saturation:", "Lightness:", "Colorize", "Invert", "Before - After", "OK", "Cancel"] {
+            assert!(h.query_by_label(label).is_some(), "{label}");
+        }
+        // Master: no eyedroppers, no Invert, no range degrees to edit.
+        assert!(!crate::adjust_dialog::picker_armed(h.state()));
+        click(&mut h, "Reds", egui::Modifiers::NONE);
+        assert_eq!(field(&h, id, "__hsRange"), json!(1));
+        assert!(h.query_by_label("315°/345°").is_some(), "the reds' degrees");
+        click(&mut h, "Invert", egui::Modifiers::NONE);
+        assert_eq!(field(&h, id, "reds")["range"], json!([15.0, 45.0, 315.0, 345.0]));
+        key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert_eq!(field(&h, id, "reds")["range"], json!([-45.0, -15.0, 15.0, 45.0]), "Cmd+Z undoes Invert");
+        // Eyedropper: the fill #806040 (hue 30°) centres the reds on it.
+        click(&mut h, "Eyedropper Tool", egui::Modifiers::NONE);
+        assert!(crate::adjust_dialog::picker_armed(h.state()));
+        assert!(crate::adjust_dialog::sample_at(h.state_mut(), 5.0, 5.0));
+        h.run_steps(3);
+        assert_eq!(field(&h, id, "reds")["range"], json!([-15.0, 15.0, 45.0, 75.0]));
+        // Colorize: master only, the foreground's hue, saturation 25.
+        click(&mut h, "Colorize", egui::Modifiers::NONE);
+        assert_eq!(field(&h, id, "colorize"), json!(true));
+        assert_eq!(field(&h, id, "__hsRange"), json!(0));
+        assert_eq!(field(&h, id, "saturation"), json!(25.0));
+        assert!(!crate::adjust_dialog::picker_armed(h.state()));
+        click(&mut h, "Reset", egui::Modifiers::ALT);
+        assert_eq!(field(&h, id, "colorize"), json!(false));
+        let steps = h.state().session.active().unwrap().history.past_len();
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("hue".into(), json!(40));
+        h.run_steps(2);
+        click(&mut h, "OK", egui::Modifiers::NONE);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    }
+
+    /// A double-click on a Hue/Saturation slider's knob puts it back to 0.
+    #[test]
+    fn hue_saturation_slider_double_click_resets_to_zero() {
+        let (mut h, id) = dialog_for("image.adjustments.hueSaturation");
+        let d = h.state_mut().ui.dialog_mut(id).unwrap();
+        d.fields.insert("hue".into(), json!(90));
+        d.fields.insert("lightness".into(), json!(-40));
+        h.run_steps(3);
+        // The hue slider lies between the "Hue:" and "Saturation:" rows, across the column; its
+        // knob three quarters along (90 of -180..180).
+        let (hue, sat) = (h.get_by_label("Hue:").rect(), h.get_by_label("Saturation:").rect());
+        let at = egui::pos2(hue.left() + HS_W * 0.75, (hue.bottom() + sat.top()) / 2.0);
+        h.event(egui::Event::PointerMoved(at));
+        for _ in 0..2 {
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.run_steps(1);
+            }
+        }
+        h.run_steps(2);
+        assert_eq!(field(&h, id, "hue").as_f64(), Some(0.0));
+        assert_eq!(field(&h, id, "lightness").as_f64(), Some(-40.0), "only that slider");
+    }
+
+    #[test]
+    fn hue_saturation_dialog_survives_odd_values() {
+        let (mut h, id) = dialog_for("image.adjustments.hueSaturation");
+        let d = h.state_mut().ui.dialog_mut(id).unwrap();
+        d.fields.insert("__hsRange".into(), json!(99));
+        d.fields.insert("hue".into(), json!("lots"));
+        d.fields.insert("reds".into(), json!({"range": [f64::MAX, -1e30, 3, "x"], "hue": 1e9}));
+        h.run_steps(3);
+        assert_eq!(field(&h, id, "__hsRange"), json!(0));
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("__hsRange".into(), json!(1));
+        h.run_steps(3);
+        assert!(h.state().ui.dialogs.iter().any(|d| d.id == id));
+    }
+
     /// Run explicitly for visual QA: the Exposure dialog in two themes.
     #[test]
     #[ignore = "writes target/exposure-dialog/*.png for visual inspection"]
@@ -1077,7 +1270,7 @@ mod tests {
             let mut s = prism_engine::Session::new();
             s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
             let mut h = Harness::builder()
-                .with_size(egui::vec2(560.0, 340.0))
+                .with_size(egui::vec2(600.0, 560.0))
                 .with_pixels_per_point(2.0)
                 .wgpu()
                 .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), PrismApp::new(s, crate::Services::default()));
@@ -1096,6 +1289,14 @@ mod tests {
             h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("vibrance".into(), json!(53));
             h.run_steps(5);
             h.render().unwrap().save(out.join(format!("{kind:?}-vibrance.png"))).unwrap();
+            let ok = h.state().ui.dialogs.last().map(|d| d.id).unwrap();
+            h.state_mut().ui.dialogs.retain(|d| d.id != ok);
+            let id = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.hueSaturation").unwrap();
+            let d = h.state_mut().ui.dialog_mut(id).unwrap();
+            d.fields.insert("__hsRange".into(), json!(1));
+            d.fields.insert("reds".into(), json!({"hue": 120, "saturation": 30}));
+            h.run_steps(5);
+            h.render().unwrap().save(out.join(format!("{kind:?}-hue-saturation.png"))).unwrap();
         }
     }
 

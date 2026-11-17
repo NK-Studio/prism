@@ -575,7 +575,8 @@ pub fn slider_pointer(ui: &Ui, resp: &mut Response, track: Rect, knob_x: f32, kn
     }
 }
 
-fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>, g: RowGestures) -> Response {
+/// A [`slider`] with Photoshop's extra gestures (see [`RowGestures`]).
+pub fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>, g: RowGestures) -> Response {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width().max(60.0);
     let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click_and_drag());

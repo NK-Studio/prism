@@ -3830,6 +3830,7 @@ adjust	Histogram	막대 그래프
 adjust	Intersection Line	교차 선
 adjust	Gamma Correction	감마 교정
 adjust	Vibrance	생동감
+adjust	Lightness	밝기
 filter	Blur Method	흐림 효과 방법
 filter	Spin	회전
 filter	Zoom	돋보기
@@ -3876,3 +3877,33 @@ submenu	Other…	기타
 	Fast (Real-ESRGAN animevideov3)	빠름 (Real-ESRGAN animevideov3)
 	Show Grid in 25% increments	25% 단위로 격자 표시
 	Show Grid in 10% increments	10% 단위로 격자 표시
+	Before - After	이전 - 이후
+preset	Darker	더 어둡게
+preset	Increase Contrast 1	대비 증가 1
+preset	Increase Contrast 2	대비 증가 2
+preset	Increase Contrast 3	대비 증가 3
+preset	Lighten Shadows	어두운 영역 밝게
+preset	Lighter	더 밝게
+preset	Midtones Brighter	중간 색조 더 밝게
+preset	Midtones Darker	중간 색조 더 어둡게
+preset	Color Negative (RGB)	색상 음화(RGB)
+preset	Cross Process (RGB)	크로스 프로세스(RGB)
+preset	Darker (RGB)	더 어둡게(RGB)
+preset	Increase Contrast (RGB)	대비 증가(RGB)
+preset	Lighter (RGB)	더 밝게(RGB)
+preset	Linear Contrast (RGB)	선형 대비(RGB)
+preset	Medium Contrast (RGB)	중간 대비(RGB)
+preset	Negative (RGB)	음화(RGB)
+preset	Strong Contrast (RGB)	강한 대비(RGB)
+preset	Minus 1.0	-1.0
+preset	Minus 2.0	- 2.0
+preset	Plus 1.0	+1.0
+preset	Plus 2.0	+ 2.0
+preset	Cyanotype	청사진
+preset	Increase Saturation More	채도 더 높이기
+preset	Increase Saturation	채도 증가
+preset	Old Style	올드 스타일
+preset	Red Boost	빨강 증가
+preset	Sepia	암갈색
+preset	Strong Saturation	강한 채도
+preset	Yellow Boost	노랑 증가

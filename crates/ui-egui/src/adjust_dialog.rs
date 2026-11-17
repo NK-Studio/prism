@@ -49,8 +49,32 @@ fn has_pickers(fields: &Map<String, Value>) -> bool {
     matches!(fields.get("__adjust").and_then(Value::as_str), Some("curves" | "levels" | "exposure"))
 }
 
-/// Whether the top modal has a supported Curves or Levels eyedropper armed.
+/// Hue/Saturation's range eyedroppers: the armed one ("sample", "add", "subtract") and the range
+/// they edit (1 = reds … 6 = magentas; the dialog's channel).
+pub(crate) const HS_PICKER: &str = "__hsPicker";
+pub(crate) const HS_RANGE: &str = "__hsRange";
+
+fn hs_pick(fields: &Map<String, Value>) -> Option<(prism_engine::adjust_params::HueRangePick, usize)> {
+    use prism_engine::adjust_params::HueRangePick;
+    if kind_of(fields) != "hueSaturation" || fields.get("colorize").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    let pick = match fields.get(HS_PICKER).and_then(Value::as_str)? {
+        "sample" => HueRangePick::Sample,
+        "add" => HueRangePick::Add,
+        "subtract" => HueRangePick::Subtract,
+        _ => return None,
+    };
+    let range = fields.get(HS_RANGE).and_then(Value::as_u64).filter(|r| (1..=6).contains(r))? as usize;
+    Some((pick, range))
+}
+
+/// Whether the top modal has a supported Curves, Levels, Exposure or Hue/Saturation eyedropper
+/// armed.
 pub fn picker_armed(app: &PrismApp) -> bool {
+    if app.ui.dialogs.last().is_some_and(|d| hs_pick(&d.fields).is_some()) {
+        return app.session.active().is_some_and(|s| s.doc.mode == prism_doc::ColorMode::Rgb);
+    }
     let Some(dialog) = app.ui.dialogs.last().filter(|d| has_pickers(&d.fields)) else { return false };
     let Some(eyedropper) = picker(dialog.fields.get(CURVE_PICKER)) else { return false };
     app.session.active().is_some_and(|s| picker_supported_for(kind_of(&dialog.fields), s.doc.mode, eyedropper))
@@ -60,6 +84,26 @@ pub fn picker_armed(app: &PrismApp) -> bool {
 /// open Curves dialog. Returns true when an armed Curves picker consumed the pointer event, even
 /// if the point was outside the image or transparent.
 pub fn sample_at(app: &mut PrismApp, x: f64, y: f64) -> bool {
+    if let Some((id, pick, range)) = app.ui.dialogs.last().and_then(|d| Some((d.id, hs_pick(&d.fields)?))).map(|(id, (p, r))| (id, p, r)) {
+        if app.session.active().is_none_or(|s| s.doc.mode != prism_doc::ColorMode::Rgb) {
+            return true;
+        }
+        let Some(sample) = crate::canvas::composite_color(app, x, y) else { return true };
+        let Some(dialog) = app.ui.dialog_mut(id) else { return true };
+        let mut values = crate::filter_dialog::params_of(&dialog.fields);
+        let bounds = crate::adjust_editors::hs_bounds(&values, range);
+        match prism_engine::adjust_params::hue_range_eyedropper(bounds, pick, sample) {
+            Ok(b) => {
+                crate::adjust_editors::hs_set_bounds(&mut values, range, b);
+                if let Value::Object(v) = values {
+                    dialog.fields.retain(|k, _| k.starts_with("__"));
+                    dialog.fields.extend(v);
+                }
+            }
+            Err(error) => app.ui.status = error.to_string(),
+        }
+        return true;
+    }
     let Some((id, eyedropper, base, kind)) = app.ui.dialogs.last().and_then(|dialog| {
         let eyedropper = has_pickers(&dialog.fields).then(|| picker(dialog.fields.get(CURVE_PICKER))).flatten()?;
         let base = dialog.fields.get(CURVE_PICKER_BASE).cloned().unwrap_or_else(|| crate::filter_dialog::params_of(&dialog.fields));

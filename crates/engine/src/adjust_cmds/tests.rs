@@ -516,3 +516,32 @@ fn exposure_eyedroppers_set_offset_and_exposure() {
     let LayerContent::Raster(surf) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!() };
     assert!(surf.sample_channel(1, 1, 0) * 255.0 >= 254.0);
 }
+
+/// Hue/Saturation's Invert (measured on Photoshop 27.4: reds 315/345/15/45 → 15/45/315/345) and
+/// its range eyedroppers.
+#[test]
+fn hue_range_invert_and_eyedroppers() {
+    use crate::adjust_params::{HueRangePick, hue_of, hue_range_eyedropper, invert_hue_range};
+    let reds = [-45.0, -15.0, 15.0, 45.0];
+    let inv = invert_hue_range(reds);
+    assert_eq!(inv.map(|v| v.rem_euclid(360.0)), [15.0, 45.0, 315.0, 345.0]);
+    assert_eq!(invert_hue_range(inv).map(|v| v.rem_euclid(360.0)), [315.0, 345.0, 15.0, 45.0]);
+    assert_eq!(hue_of([0.0, 0.0, 1.0]), Some(240.0));
+    assert_eq!(hue_of([0.5; 3]), None);
+    // Sample: the fully-on part centred on the sample (orange, 30°), widths kept.
+    let b = hue_range_eyedropper(reds, HueRangePick::Sample, [1.0, 0.5, 0.0]).unwrap();
+    assert_eq!(b, [-15.0, 15.0, 45.0, 75.0]);
+    // Add yellow (60°) to the reds: the upper fully-on edge moves out to 60.
+    let b = hue_range_eyedropper(reds, HueRangePick::Add, [1.0, 1.0, 0.0]).unwrap();
+    assert_eq!(b, [-45.0, -15.0, 60.0, 90.0]);
+    // Add a magenta-red (350°) that is already inside: nothing changes.
+    assert_eq!(hue_range_eyedropper(reds, HueRangePick::Add, [1.0, 0.0, 1.0 / 6.0]).unwrap(), reds);
+    // Subtract 10°: the nearer edge (upper) comes in.
+    let b = hue_range_eyedropper(reds, HueRangePick::Subtract, [1.0, 1.0 / 6.0, 0.0]).unwrap();
+    assert_eq!(b, [-45.0, -15.0, 10.0, 40.0]);
+    assert!(hue_range_eyedropper(reds, HueRangePick::Sample, [0.3; 3]).is_err());
+    assert!(hue_range_eyedropper([f32::NAN; 4], HueRangePick::Add, [f32::NAN; 3]).is_err());
+    // A huge Add stays within one turn.
+    let wide = hue_range_eyedropper([0.0, 10.0, 340.0, 350.0], HueRangePick::Add, [0.0, 1.0, 1.0]).unwrap();
+    assert!(wide[3] - wide[0] <= 359.0, "{wide:?}");
+}
