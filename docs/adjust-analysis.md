@@ -334,6 +334,46 @@ on black → colour → white tracks; "Total" (총합) as text, "200 %" with a w
 Prism (`ui-egui/src/adjust_ps_ui.rs` `channel_mixer`): the same (Monochrome shows one grey swatch
 and starts from Photoshop's 40/40/20 mix); Alt: Reset; Cmd+Z. Maths unchanged.
 
+## The rest of the menu (Photoshop 27.4, captured 2026-11-17)
+
+Captured one after another from Photoshop's own menus (Photoshop quit twice while this was
+driven: once when Posterize was confirmed, before the others; nothing but a test document was
+open). Prism draws them in `ui-egui/src/adjust_ps_more.rs`, each with OK, Cancel (Alt: Reset), Preview
+and Cmd+Z like the others; maths unchanged. Photoshop controls Prism's adjustments don't model are
+left out rather than shown doing nothing.
+
+- **Posterize** (redesigned): "Levels" with its field and a 2..255 slider.
+- **Threshold** (classic): "Threshold Level:" with its field centred over the histogram, a
+  house-shaped slider under it; Preview without a shortcut in its label.
+- **Gradient Map** (classic): "Gradient Used for Grayscale Mapping" (the gradient, ▾ for the
+  presets; Prism: a click on the gradient edits its stops in place of Photoshop's Gradient Editor)
+  and "Gradient Options" (Dither, Reverse; Photoshop's Method isn't modelled).
+- **Selective Color** (redesigned): "Preset", nine round swatches (Reds … Blacks), Cyan / Magenta /
+  Yellow / Black rows ("0%", colour tracks), Method: Relative / Absolute.
+- **Color Lookup** (redesigned): 3DLUT File / Abstract / Device Link radios with their dropdowns,
+  Dither. Prism: 3DLUT File only (Load 3D LUT… opens the file picker, then the looks).
+- **Shadows/Highlights** (classic): Shadows and Highlights amounts; Show More Options adds Tone /
+  Radius and the Adjustments group (Color "+20", Midtone, Black / White Clip "0.01%"), in
+  hairline-separated groups with right-aligned labels. Prism leaves out Load…, Save… and Save As
+  Defaults.
+- **HDR Toning** (classic): Preset with a gear menu; "Method: Local Adaptation" framing Edge Glow
+  (Radius, Strength, Smooth Edges), Tone and Detail (Gamma, Exposure, Detail), Advanced (Shadow,
+  Highlight, Vibrance, Saturation) and the collapsed Toning Curve and Histogram. Prism: no presets
+  or Smooth Edges; the toning curve uses Curves' graph. (Photoshop showed radius 7 px and strength
+  0.52; Prism's defaults stay 30 / 0.5, not checked against a fresh Photoshop.)
+- **Match Color** (classic): Destination Image ("Target: name (RGB/8)"), Image Options
+  (Luminance, Color Intensity, Fade, Neutralize), Image Statistics (Use Selection in Source /
+  Target, Source, Layer, Load / Save Statistics, a source thumbnail). Prism leaves out Ignore
+  Selection, the statistics files and the thumbnail.
+- **Replace Color** (classic): Eyedropper / Add / Subtract and the "Color:" swatch, Localized Color
+  Clusters, Fuzziness, the Selection / Image preview, then Hue / Saturation / Lightness with the
+  Result swatch; Load…, Save…. Prism: the Eyedropper (one colour), Fuzziness, the preview (cached
+  per document revision), the replacement and Result.
+
+Found on the way: the parameter-form parser read a note after the parameter list
+(`{…} (color: …)`) as part of the last parameter, so Replace Color opened with lightness −100 (and
+other commands with a note lost their last default); fixed in `filter_dialog::parse_spec`.
+
 ## Still open
 
 - Auto's target curve (Photoshop's trained model) is a stand-in.

@@ -3840,6 +3840,55 @@ adjust	Density	조밀도
 adjust	Output Channel	출력 채널
 adjust	Green	녹색
 adjust	Total	총합
+adjust	Levels	레벨
+adjust	Threshold Level:	한계값 레벨:
+adjust	Gradient Used for Grayscale Mapping	회색 음영 매핑에 사용되는 그라디언트
+adjust	Gradient Options	그레이디언트 옵션
+adjust	Cyan	녹청
+adjust	Magenta	마젠타
+adjust	Yellow	노랑
+adjust	Black	검정
+adjust	Method	방법
+adjust	3DLUT File	3DLUT 파일
+adjust	Shadows	어두운 영역
+adjust	Highlights	밝은 영역
+adjust	Radius	반경
+adjust	Midtone	중간 톤
+adjust	Black Clip	검은색 클립
+adjust	White Clip	흰색 클립
+adjust	Show More Options	기타 옵션 표시
+adjust	Local Adaptation	로컬 적용
+adjust	Edge Glow	가장자리 광선
+adjust	Tone and Detail	톤 및 세부 묘사
+adjust	Advanced	고급
+adjust	Toning Curve and Histogram	토닝 곡선과 막대 그래프
+adjust	Radius:	반경:
+adjust	Strength:	강도:
+adjust	Gamma:	감마:
+adjust	Exposure:	노출:
+adjust	Detail:	세부 묘사:
+adjust	Shadow:	그림자:
+adjust	Highlight:	밝은 영역:
+adjust	Vibrance:	생동감:
+adjust	Saturation:	채도:
+adjust	Destination Image	대상 이미지
+adjust	Target:	대상:
+adjust	Image Options	이미지 옵션
+adjust	Luminance	광도
+adjust	Color Intensity	색상 강도
+adjust	Fade	페이드
+adjust	Neutralize	중화
+adjust	Image Statistics	이미지 통계
+adjust	Use Selection in Source to Calculate Colors	소스에서 선택한 내용을 사용하여 색상 계산
+adjust	Use Selection in Target to Calculate Adjustment	대상에서 선택한 내용을 사용하여 조정 계산
+adjust	Source	소스
+adjust	Layer	레이어
+adjust	Fuzziness:	허용량:
+adjust	Selection	선택
+adjust	Image	이미지
+adjust	Hue:	색조:
+adjust	Lightness:	밝기:
+adjust	Result	결과
 adjust	Tone	톤
 adjust	Cyan to Red	녹청에서 빨강
 adjust	Magenta to Green	자홍에서 초록
@@ -3937,3 +3986,4 @@ preset	Black & White with Orange Filter (RGB)	주황 필터가 적용된 흑백(
 preset	Black & White with Red Filter (RGB)	빨강 필터가 적용된 흑백(RGB)
 preset	Black & White with Yellow Filter (RGB)	노랑 필터가 적용된 흑백(RGB)
 	Total exceeds 100%	총합이 100%를 넘습니다
+	Merged	병합

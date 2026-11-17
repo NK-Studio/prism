@@ -1658,44 +1658,68 @@ fn sample_stops(s: &[Stop], t: f32) -> [f32; 3] {
 }
 
 fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
-    let t = Tokens::get(ui.ctx());
     let mut e = Edit::default();
-    let mut stops = read_stops(v);
-    // Photoshop's gradient picker: the same library as the Gradient tool and Gradients panel
-    // (built-in groups and the user's own), Foreground/Background resolved to the current colours.
-    let [fg, bg] = cx.swatches.map(|c| [c[0], c[1], c[2], 1.0]);
     ui.horizontal(|ui| {
         label(ui, tl!("Preset:"));
-        let mut picked = None;
-        egui::ComboBox::from_id_salt(cx.mem.with("gm-preset")).selected_text(tl!("Custom")).width(190.0).height(420.0).icon(widgets::chevron_icon).show_ui(
-            ui,
-            |ui| {
-                for g in &cx.gradients {
-                    ui.label(RichText::new(&g.name).color(t.text_faint));
-                    for p in &g.items {
-                        ui.horizontal(|ui| {
-                            // A map has no transparency: colour stops only, shown opaque.
-                            let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
-                            let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
-                            crate::preset_panels::paint_gradient(ui, r, &rgba);
-                            // Both, not short-circuited: the name is drawn either way.
-                            if swatch.clicked() | ui.selectable_label(false, &p.name).clicked() {
-                                picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
-                            }
-                        });
-                    }
-                }
-            },
-        );
-        if let Some(p) = picked {
-            stops = p;
-            write_stops(v, &stops);
-            e.add(Edit::discrete(true));
-        }
+        e.add(gradient_map_presets(ui, v, cx, false));
     });
     // The gradient.
     let w = ui.available_width().min(300.0);
-    let (r, _) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
+    gradient_map_bar(ui, v, w);
+    ui.add_space(4.0);
+    e.add(gradient_map_stops(ui, v));
+    ui.horizontal(|ui| {
+        for (key, text) in [("reverse", tl!("Reverse")), ("dither", tl!("Dither"))] {
+            let mut b = flag(v, key, false);
+            if widgets::checkbox(ui, &mut b, text).changed() {
+                v[key] = json!(b);
+                e.add(Edit::discrete(true));
+            }
+        }
+    });
+    e
+}
+
+/// Gradient Map's preset picker: the same library as the Gradient tool and Gradients panel
+/// (built-in groups and the user's own), Foreground/Background resolved to the current colours.
+/// `compact`: only the ▾ (Photoshop's Gradient Map dialog), else "Custom" in a wide box.
+pub fn gradient_map_presets(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx, compact: bool) -> Edit {
+    let t = Tokens::get(ui.ctx());
+    let mut e = Edit::default();
+    let [fg, bg] = cx.swatches.map(|c| [c[0], c[1], c[2], 1.0]);
+    let mut picked = None;
+    egui::ComboBox::from_id_salt(cx.mem.with("gm-preset"))
+        .selected_text(if compact { "" } else { tl!("Custom") })
+        .width(if compact { 22.0 } else { 190.0 })
+        .height(420.0).icon(widgets::chevron_icon).show_ui(ui, |ui| {
+        for g in &cx.gradients {
+            ui.label(RichText::new(&g.name).color(t.text_faint));
+            for p in &g.items {
+                ui.horizontal(|ui| {
+                    // A map has no transparency: colour stops only, shown opaque.
+                    let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
+                    let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
+                    crate::preset_panels::paint_gradient(ui, r, &rgba);
+                    // Both, not short-circuited: the name is drawn either way.
+                    if swatch.clicked() | ui.selectable_label(false, &p.name).clicked() {
+                        picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
+                    }
+                });
+            }
+        }
+    });
+    if let Some(p) = picked {
+        write_stops(v, &p);
+        e.add(Edit::discrete(true));
+    }
+    e
+}
+
+/// The map's gradient as a bar `w` wide (reversed when Reverse is on); clickable.
+pub fn gradient_map_bar(ui: &mut egui::Ui, v: &Value, w: f32) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let stops = read_stops(v);
+    let (r, resp) = ui.allocate_exact_size(vec2(w.max(40.0), 22.0), Sense::click());
     let reverse = flag(v, "reverse", false);
     let cols: Vec<Color32> = (0..=48)
         .map(|i| {
@@ -1705,8 +1729,13 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         .collect();
     spectrum_bar(ui.painter(), r, &cols);
     ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-    ui.add_space(4.0);
-    // Stops: colour, location, remove.
+    resp.on_hover_text(tl!("Click to edit the gradient"))
+}
+
+/// The map's stops: colour, location, remove; Add Stop.
+pub fn gradient_map_stops(ui: &mut egui::Ui, v: &mut Value) -> Edit {
+    let mut e = Edit::default();
+    let mut stops = read_stops(v);
     let mut remove = None;
     let mut changed = false;
     for (i, s) in stops.iter_mut().enumerate() {
@@ -1746,15 +1775,6 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         write_stops(v, &stops);
         e.changed = true;
     }
-    ui.horizontal(|ui| {
-        for (key, text) in [("reverse", tl!("Reverse")), ("dither", tl!("Dither"))] {
-            let mut b = flag(v, key, false);
-            if widgets::checkbox(ui, &mut b, text).changed() {
-                v[key] = json!(b);
-                e.add(Edit::discrete(true));
-            }
-        }
-    });
     e
 }
 

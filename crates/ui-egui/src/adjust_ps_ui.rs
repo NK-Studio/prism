@@ -55,12 +55,25 @@ const CURVES_W: f32 = 340.0;
 const CURVES_VIEW_W: f32 = 150.0;
 
 fn kind(f: &Map<String, Value>) -> &str {
-    f.get("__adjust").and_then(Value::as_str).unwrap_or_default()
+    if let Some(k) = f.get("__adjust").and_then(Value::as_str) {
+        return k;
+    }
+    // Adjustments that run as commands with a parameter dialog (not adjustment layers' editors).
+    match f.get("__command").and_then(Value::as_str) {
+        Some("image.adjustments.selectiveColor") => "selectiveColor",
+        Some("image.adjustments.colorLookup") => "colorLookup",
+        Some("image.adjustments.shadowsHighlights") => "shadowsHighlights",
+        Some("image.adjustments.hdrToning") => "hdrToning",
+        Some("image.adjustments.matchColor") => "matchColor",
+        Some("image.adjustments.replaceColor") => "replaceColor",
+        _ => "",
+    }
 }
 
 /// Is this dialog drawn in Photoshop's classic adjustment layout?
 pub fn owns(f: &Map<String, Value>) -> bool {
     matches!(kind(f), "brightnessContrast" | "levels" | "curves" | "exposure" | "vibrance" | "hueSaturation" | "colorBalance" | "blackWhite" | "photoFilter" | "channelMixer")
+        || crate::adjust_ps_more::owns(kind(f))
 }
 
 /// The dialog's content width.
@@ -70,6 +83,7 @@ pub fn width(f: &Map<String, Value>) -> f32 {
         "hueSaturation" => HS_W + GAP + BUTTON_W,
         "colorBalance" => CB_W + GAP + BUTTON_W,
         "blackWhite" => BW_W + GAP + BUTTON_W,
+        k if crate::adjust_ps_more::owns(k) => crate::adjust_ps_more::width(k),
         "curves" => CURVES_W + GAP + CURVES_VIEW_W + GAP + LEVELS_BUTTON_W,
         _ => WIDTH,
     }
@@ -138,6 +152,10 @@ pub fn body(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
         "blackWhite" => black_white(app, ui, f),
         "photoFilter" => photo_filter(ui, f),
         "channelMixer" => channel_mixer(app, ui, f),
+        k if crate::adjust_ps_more::owns(k) => {
+            let k = k.to_string();
+            crate::adjust_ps_more::body(&k, app, ui, f)
+        }
         _ => brightness_contrast(app, ui, f),
     };
     settle(ui, f);

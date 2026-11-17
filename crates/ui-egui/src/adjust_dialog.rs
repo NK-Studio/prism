@@ -72,6 +72,9 @@ fn hs_pick(fields: &Map<String, Value>) -> Option<(prism_engine::adjust_params::
 /// Whether the top modal has a supported Curves, Levels, Exposure or Hue/Saturation eyedropper
 /// armed.
 pub fn picker_armed(app: &PrismApp) -> bool {
+    if app.ui.dialogs.last().is_some_and(|d| d.fields.get(crate::adjust_ps_more::RC_PICKER).and_then(Value::as_str) == Some("sample")) {
+        return app.session.active().is_some();
+    }
     if app.ui.dialogs.last().is_some_and(|d| hs_pick(&d.fields).is_some()) {
         return app.session.active().is_some_and(|s| s.doc.mode == prism_doc::ColorMode::Rgb);
     }
@@ -84,6 +87,15 @@ pub fn picker_armed(app: &PrismApp) -> bool {
 /// open Curves dialog. Returns true when an armed Curves picker consumed the pointer event, even
 /// if the point was outside the image or transparent.
 pub fn sample_at(app: &mut PrismApp, x: f64, y: f64) -> bool {
+    // Replace Color's eyedropper: the sample becomes the colour.
+    if let Some(id) = app.ui.dialogs.last().filter(|d| d.fields.get(crate::adjust_ps_more::RC_PICKER).and_then(Value::as_str) == Some("sample")).map(|d| d.id) {
+        if let Some(c) = crate::canvas::composite_color(app, x, y)
+            && let Some(d) = app.ui.dialog_mut(id)
+        {
+            d.fields.insert("color".into(), json!(prism_engine::adjust_params::hex(c)));
+        }
+        return true;
+    }
     if let Some((id, pick, range)) = app.ui.dialogs.last().and_then(|d| Some((d.id, hs_pick(&d.fields)?))).map(|(id, (p, r))| (id, p, r)) {
         if app.session.active().is_none_or(|s| s.doc.mode != prism_doc::ColorMode::Rgb) {
             return true;
@@ -479,18 +491,21 @@ mod tests {
         assert!(h.state().ui.dialogs.is_empty(), "Cancel closes");
     }
 
-    /// Alt+Cancel is Reset only where it was checked against Photoshop.
+    /// Every Image › Adjustments dialog is drawn in Photoshop's layout (`adjust_ps_ui`), where Alt
+    /// turns Cancel into Reset.
     #[test]
-    fn other_adjustment_dialogs_keep_cancel_under_alt() {
+    fn every_adjustment_dialog_has_photoshops_layout_and_reset() {
         use egui_kittest::kittest::Queryable;
-        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
-        PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-        // (Brightness/Contrast, Levels, Curves, Exposure and Vibrance reset: their Photoshop layout is
-        // `adjust_ps_ui`.)
-        open(h.state_mut(), "image.adjustments.posterize").unwrap();
-        h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
-        h.run_steps(3);
-        assert!(h.query_by_label("Cancel").is_some() && h.query_by_label("Reset").is_none());
+        for kind in adjust_editors::KINDS {
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 1000.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
+            PrismApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            open(h.state_mut(), &format!("{PREFIX}{kind}")).unwrap();
+            h.run_steps(2);
+            assert!(crate::adjust_ps_ui::owns(&h.state().ui.dialogs[0].fields), "{kind}");
+            h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+            h.run_steps(3);
+            assert!(h.query_by_label("Reset").is_some() && h.query_by_label("Cancel").is_none(), "{kind}");
+        }
     }
 
     fn sample_params(kind: &str) -> Value {
