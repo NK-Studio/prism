@@ -77,11 +77,23 @@ const PS_SMOOTHING_MS: [(f64, f64); 9] =
 /// The most a sample counts for without Stroke Catch-up (one display frame).
 const UNTIMED_SAMPLE_MS: f64 = 16.0;
 
-/// Photoshop's smoothing time constant (ms) for a Smoothing `amount` (0..1).
-pub fn photoshop_smoothing_ms(amount: f64) -> f64 {
+/// Photoshop's Stroke Catch-up while the pen rests: the brush keeps closing on the pen, but
+/// slower, with this time constant (ms) by Smoothing value (3–3.5× the moving one). Measured
+/// from lines that stop and rest 0–1600 ms before lifting (docs/pen-input-validation.md ›
+/// Photoshop Stroke Catch-up): e.g. at 128 the lag left falls 121.5 → 77.5 → 48.5 → 18.5 px
+/// over 200 / 400 / 800 ms.
+const PS_REST_SMOOTHING_MS: [(f64, f64); 5] = [(0.0, 0.0), (32.0, 104.5), (64.0, 178.0), (128.0, 435.0), (255.0, 572.0)];
+
+/// The most a pen sample may move, in screen pixels, for smoothing to treat the pen as resting
+/// (Photoshop smoothed a line creeping 0.5 screen px per sample like a moving one).
+const PS_CATCH_UP_REST_PX: f64 = 0.25;
+
+/// Piecewise-linear `table` (Smoothing value 0–255 → ms) at `amount` (0..1).
+fn smoothing_table(table: &[(f64, f64)], amount: f64) -> f64 {
     let s = if amount.is_finite() { amount.clamp(0.0, 1.0) * 255.0 } else { 0.0 };
-    let mut prev = PS_SMOOTHING_MS[0];
-    for &(x, t) in &PS_SMOOTHING_MS[1..] {
+    let Some(&first) = table.first() else { return 0.0 };
+    let mut prev = first;
+    for &(x, t) in table.iter().skip(1) {
         if s <= x {
             let f = if x > prev.0 { (s - prev.0) / (x - prev.0) } else { 1.0 };
             return prev.1 + (t - prev.1) * f;
@@ -89,6 +101,16 @@ pub fn photoshop_smoothing_ms(amount: f64) -> f64 {
         prev = (x, t);
     }
     prev.1
+}
+
+/// Photoshop's smoothing time constant (ms) for a Smoothing `amount` (0..1).
+pub fn photoshop_smoothing_ms(amount: f64) -> f64 {
+    smoothing_table(&PS_SMOOTHING_MS, amount)
+}
+
+/// Photoshop's Stroke Catch-up time constant (ms) while the pen rests, for `amount` (0..1).
+pub fn photoshop_rest_smoothing_ms(amount: f64) -> f64 {
+    smoothing_table(&PS_REST_SMOOTHING_MS, amount)
 }
 
 /// Photoshop's Zoom Compensation for ordinary smoothing: zoomed out below 100 %, the Smoothing
@@ -112,12 +134,14 @@ pub struct Smoother {
     /// Photoshop's measured smoothing (time constant and Zoom Compensation) instead of the
     /// earlier per-16 ms fraction, which the Clip Studio workspace keeps.
     photoshop: bool,
+    /// Without Stroke Catch-up, the one step the brush still takes after the pen stops is done.
+    rest_step_done: bool,
 }
 
 impl Smoother {
     /// `zoom` is the view zoom (only used with `adjust_for_zoom`).
     pub fn new(cfg: &Smoothing, zoom: f32) -> Self {
-        Self { cfg: cfg.clone(), zoom: f64::from(zoom.max(0.01)), pos: None, last_input: None, photoshop: false }
+        Self { cfg: cfg.clone(), zoom: f64::from(zoom.max(0.01)), pos: None, last_input: None, photoshop: false, rest_step_done: false }
     }
 
     /// Smooth like Photoshop ([`photoshop_smoothing_ms`], [`photoshop_zoom_amount`]).
@@ -185,8 +209,25 @@ impl Smoother {
                 return;
             }
             let amount = if self.cfg.adjust_for_zoom { photoshop_zoom_amount(amount, self.zoom) } else { amount };
-            let t = photoshop_smoothing_ms(amount).max(1e-3);
-            // Without Stroke Catch-up a pause doesn't pull the brush along (one sample's worth).
+            // A pen at rest is caught up more slowly with Stroke Catch-up; without it the brush
+            // takes one more step after the pen stops, then stays (measured: 7–9 px, then nothing
+            // for 800 ms). A pen creeping half a screen pixel per sample still moves for this.
+            let resting = prev_input.is_some_and(|q| (p.x - q.x).hypot(p.y - q.y) * self.zoom <= PS_CATCH_UP_REST_PX);
+            let t = if !resting {
+                self.rest_step_done = false;
+                photoshop_smoothing_ms(amount)
+            } else if self.cfg.catch_up {
+                photoshop_rest_smoothing_ms(amount)
+            } else if !std::mem::replace(&mut self.rest_step_done, true) {
+                photoshop_smoothing_ms(amount)
+            } else {
+                // Frozen: keep laying the pen's pressure and pose (and resting dabs) in place.
+                let cur = StrokePoint { x: pos.x, y: pos.y, ..p };
+                out.push(cur);
+                self.pos = Some(cur);
+                return;
+            }
+            .max(1e-3);
             let dt = if self.cfg.catch_up { dt.min(60_000.0) } else { dt.min(UNTIMED_SAMPLE_MS) };
             let a = 1.0 - (-dt / t).exp();
             let cur = StrokePoint { time: p.time, ..lerp_pt(&pos, &p, a) };

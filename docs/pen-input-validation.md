@@ -566,8 +566,7 @@ One run in a freshly restarted Photoshop (after it crashed) showed no resting da
 200 % spacing; the same strokes repeated in the same document gave the table above, so that run
 is treated as lost input.
 
-Still open from the notes: Stroke Catch-up while the pen rests and Pressure Smoothing
-(`pressureSmoothing`).
+Still open from the notes: Pressure Smoothing (`pressureSmoothing`).
 
 ## Photoshop smoothing and Zoom Compensation (2026-11-17)
 
@@ -617,7 +616,37 @@ and move nothing until the next frame; input without timestamps (agents' points)
 per-sample step. The Clip Studio workspace keeps the old smoother. Not measured: corners and
 curves (only straight lines were drawn), the pulled-string radius, and Windows.
 
-Photoshop crashed five times on 2026-11-17 while being driven (stack overflow, the same frames
+## Photoshop Stroke Catch-up (2026-11-17)
+
+The same setup: a line from x 100 to 500 at 1 px/ms, then the pen **resting** at 500 for 0–1600
+ms (samples every 8 ms at the same spot) before it lifts; the lag is how far the ink stops short
+of 500.
+
+| Value | Catch-up | 0 ms | 48 | 96 | 200 | 400 | 800 | 1600 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 32 | on | 30.5 | | | 4.5 | | | |
+| 64 | on | 52.5 | | 31.5 | 16.5 | 5.5 | | |
+| 128 | on | 121.5 | 106.5 | 100.5 | 77.5 | 48.5 | 18.5 | |
+| 255 | on | 148.5 | | | 104.5 | 73.5 | 36.5 | 9.5 |
+| 64 | off | 52.5 | | | | 43.5 | | |
+| 128 | off | 121.5 | 121.5 | 114.5 | 113.5 | 113.5 | 112.5 | |
+| 255 | off | 148.5 | | | 140.5 | 140.5 | | |
+
+With Stroke Catch-up the brush keeps closing on the resting pen exponentially, but 3–3.5×
+slower than while it moves: time constants 104.5 / 178 / 435 / 572 ms at values 32 / 64 / 128 /
+255 (moving: 34.5 / 56.5 / 130.5 / 165.6). Without it the brush takes one more step after the
+pen stops (7–9 px, about one 8 ms sample at the moving time constant) and then stays.
+
+**Prism** (Photoshop's pen rules): a sample that moves 0.25 screen px or less is resting
+(Photoshop smoothed a line creeping 0.5 screen px per sample like a moving one); the smoother
+then uses the resting time constants (`photoshop_rest_smoothing_ms`), or, without Stroke
+Catch-up, one ordinary step and then keeps the brush in place while still passing the pen's
+pressure and time on (so the 100 ms resting dabs land where the brush waits). All 24 measured
+lags match within 4 px (`stroke_catch_up_while_resting_follows_photoshop`). Not measured: a
+mouse at rest (it sends no samples, so Prism's brush waits for the next move), and the 48 ms
+case without catch-up, where Photoshop had not taken its extra step yet (Prism takes it at once).
+
+Photoshop crashed six times on 2026-11-17 while being driven (stack overflow, the same frames
 each time, also once before any pen input that day); each run was redone in a new document.
 
 ## Remaining physical acceptance

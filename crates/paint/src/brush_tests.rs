@@ -2792,3 +2792,71 @@ fn photoshop_smoothing_survives_hostile_times_and_zooms() {
     assert_eq!(crate::dynamics::photoshop_smoothing_ms(f64::NAN), 0.0);
     assert_eq!(crate::dynamics::photoshop_zoom_amount(0.5, f64::NAN), 0.5);
 }
+
+/// Photoshop's smoothing on a line from x 100 to 500 at 1 px/ms (8 ms samples), then the pen
+/// resting `rest` ms at 500: how far the brush is left behind when it lifts.
+fn photoshop_rest_lag(value: f64, catch_up: bool, rest: u32) -> f64 {
+    let cfg = Smoothing { amount: (value / 255.0) as f32, catch_up, ..Default::default() };
+    let mut s = crate::dynamics::Smoother::new(&cfg, 1.0).photoshop();
+    let mut out = Vec::new();
+    for i in 0..=50u32 {
+        let t = f64::from(i * 8);
+        s.push(StrokePoint { time: t, ..StrokePoint::new(100.0 + t, 0.0, 1.0) }, &mut out);
+    }
+    for t in (8..=rest).step_by(8) {
+        s.push(StrokePoint { time: f64::from(400 + t), ..StrokePoint::new(500.0, 0.0, 1.0) }, &mut out);
+    }
+    500.0 - out.last().map_or(500.0, |p| p.x)
+}
+
+#[test]
+fn stroke_catch_up_while_resting_follows_photoshop() {
+    // Photoshop 27.4 (docs/pen-input-validation.md › Photoshop Stroke Catch-up): (value, Stroke
+    // Catch-up, rest ms, lag left in px).
+    let measured = [
+        (128.0, true, 0, 121.5),
+        (128.0, true, 48, 106.5),
+        (128.0, true, 96, 100.5),
+        (128.0, true, 200, 77.5),
+        (128.0, true, 400, 48.5),
+        (128.0, true, 800, 18.5),
+        (255.0, true, 0, 148.5),
+        (255.0, true, 200, 104.5),
+        (255.0, true, 400, 73.5),
+        (255.0, true, 800, 36.5),
+        (255.0, true, 1600, 9.5),
+        (64.0, true, 0, 52.5),
+        (64.0, true, 96, 31.5),
+        (64.0, true, 200, 16.5),
+        (64.0, true, 400, 5.5),
+        (32.0, true, 0, 30.5),
+        (32.0, true, 200, 4.5),
+        // Without it, one more step after the pen stops, then nothing.
+        (128.0, false, 96, 114.5),
+        (128.0, false, 200, 113.5),
+        (128.0, false, 400, 113.5),
+        (128.0, false, 800, 112.5),
+        (255.0, false, 200, 140.5),
+        (255.0, false, 400, 140.5),
+        (64.0, false, 400, 43.5),
+    ];
+    for (value, catch_up, rest, lag) in measured {
+        let got = photoshop_rest_lag(value, catch_up, rest);
+        assert!((got - lag).abs() <= 4.0, "value {value}, catch-up {catch_up}, {rest} ms rest: {got:.1} px, Photoshop {lag}");
+    }
+}
+
+#[test]
+fn a_frozen_brush_still_lays_resting_dabs() {
+    // Without Stroke Catch-up the brush stays put while the pen rests, but Photoshop's resting
+    // pen still lays a dab every 100 ms there.
+    let mut b = BrushSettings { size: 10.0, spacing: 0.25, ..brush() };
+    b.smoothing = Smoothing { amount: 0.5, catch_up: false, ..Default::default() };
+    let mut pts: Vec<_> = (0..=50u32).map(|i| StrokePoint { time: f64::from(i * 8), ..StrokePoint::new(100.0 + f64::from(i * 8), 50.0, 1.0) }).collect();
+    let moving = photoshop_dabs(&b, &pts, 1.0).len();
+    pts.extend((8..=400u32).step_by(8).map(|t| StrokePoint { time: f64::from(400 + t), ..StrokePoint::new(500.0, 50.0, 1.0) }));
+    let d = photoshop_dabs(&b, &pts, 1.0);
+    let end = d.last().map_or(0.0, |d| d.center.x);
+    assert!((380.0..395.0).contains(&end), "the brush stays behind: {end}");
+    assert!(d.len() >= moving + 3, "resting dabs where it stays: {} after {moving}", d.len());
+}
