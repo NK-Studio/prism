@@ -7,6 +7,14 @@
 # language Prism ships (`ko`, `en`): plain text, no Markdown, at most 24 lines of 300 characters.
 # Write the table in the same change as the feature, or at the latest before publishing.
 
+["1.6.0"]
+ko = [
+  "포토샵처럼 브러시의 느낌이 향상되었어요."
+]
+en = [
+  "The feel of the brush has improved, like in Photoshop."
+]
+
 ["1.5.1"]
 ko = [
   "이미지 › 조정의 나머지 대화상자(흑백, 포토 필터, 채널 혼합, 포스터화, 한계값, 그레이디언트 맵, 선택 색상, 색상 검색, 어두운 영역/밝은 영역, HDR 토닝, 색상 일치, 색상 대체)가 Photoshop과 같은 모양이 됐어요.",
