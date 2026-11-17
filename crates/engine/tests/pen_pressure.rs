@@ -258,3 +258,24 @@ fn pen_rules_must_be_photoshop_or_clip_studio() {
     p["penRules"] = json!("photoshop");
     s.execute("paint.stroke", p).unwrap();
 }
+
+#[test]
+fn photoshop_smoothing_trails_a_steady_pen_by_its_measured_time() {
+    // Smoothing 50 % (Photoshop's 128 of 255): a pen moving 1 px/ms is trailed by about 125 px in
+    // Photoshop; the Clip Studio rules keep the earlier, much lighter per-16 ms step.
+    let pts: Vec<StrokePoint> = (0..=60).map(|i| StrokePoint { time: f64::from(i) * 8.0, ..StrokePoint::new(20.0 + f64::from(i) * 8.0, 40.0, 1.0) }).collect();
+    let end = |rules: &str| {
+        let mut s = session(8, false);
+        let id = s.active().unwrap().active_layer.unwrap();
+        let mut p = params(&pts, false, 128.0 / 255.0);
+        p["brush"]["size"] = json!(6);
+        p["brush"]["flow"] = json!(1.0);
+        p["penRules"] = json!(rules);
+        s.execute("paint.stroke", p).unwrap();
+        let surf = target(&s.active().unwrap().doc, id, false);
+        (0..600).rev().find(|&x| surf.pixel(x, 40)[3] > 0.0).unwrap_or(0)
+    };
+    let (ps, csp) = (end("photoshop"), end("clipStudio"));
+    assert!((370..=390).contains(&ps), "Photoshop rules end at {ps} (pen at 500)");
+    assert!(csp > 470, "Clip Studio rules end at {csp}");
+}

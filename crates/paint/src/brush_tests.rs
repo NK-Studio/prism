@@ -2582,9 +2582,9 @@ fn a_pressure_thinned_line_is_as_wide_as_photoshops() {
     }
 }
 
-/// Dabs of a stroke under Photoshop's pen rules ([`StrokeRenderer::with_photoshop_rest`]).
+/// Dabs of a stroke under Photoshop's pen rules ([`StrokeRenderer::with_photoshop_pen`]).
 fn photoshop_dabs(b: &BrushSettings, pts: &[StrokePoint], zoom: f32) -> Vec<Dab> {
-    let mut r = StrokeRenderer::new(b, None, zoom).with_photoshop_rest().record_dabs();
+    let mut r = StrokeRenderer::new(b, None, zoom).with_photoshop_pen().record_dabs();
     r.push(pts);
     r.finish();
     r.dabs().to_vec()
@@ -2701,4 +2701,94 @@ fn photoshop_pressure_buttons_override_the_panel_controls() {
     plain.transfer.opacity.control = Control::Off;
     assert_eq!(plain.clone().with_pressure_overrides(), plain);
     assert_eq!(dabs_of(&plain, &tap)[0].radius, 14.0, "a control that is off already takes the button's pressure (over the minimum)");
+}
+
+/// Where Photoshop's smoothing leaves the brush on a steady line from x 100 to 700 at `v` px/ms
+/// sampled every 8 ms (the measured strokes): its lag behind the pen, in document pixels.
+fn photoshop_lag(value: f64, v: f64, zoom: f32, compensate: bool) -> f64 {
+    let cfg = Smoothing { amount: (value / 255.0) as f32, adjust_for_zoom: compensate, ..Default::default() };
+    let mut s = crate::dynamics::Smoother::new(&cfg, zoom).photoshop();
+    let mut out = Vec::new();
+    let n = (600.0 / v / 8.0).round() as u32;
+    for i in 0..=n {
+        let t = f64::from(i) * 8.0;
+        s.push(StrokePoint { time: t, ..StrokePoint::new(100.0 + v * t, 0.0, 1.0) }, &mut out);
+    }
+    700.0 - out.last().map_or(700.0, |p| p.x)
+}
+
+#[test]
+fn smoothing_trails_the_pen_like_photoshop_at_every_zoom() {
+    // Photoshop 27.4 with the synthetic pen (docs/pen-input-validation.md › Photoshop smoothing):
+    // (Smoothing value 0–255, speed px/ms, zoom, Zoom Compensation, lag in px).
+    let measured = [
+        (32.0, 1.0, 1.0, true, 30.5),
+        (32.0, 0.5, 1.0, true, 15.5),
+        (64.0, 1.0, 1.0, true, 52.5),
+        (96.0, 1.0, 1.0, true, 88.5),
+        (96.0, 0.5, 1.0, true, 44.5),
+        (128.0, 1.0, 1.0, true, 125.5),
+        (128.0, 0.5, 1.0, true, 63.5),
+        (128.0, 0.25, 1.0, true, 32.5),
+        (160.0, 1.0, 1.0, true, 149.5),
+        (160.0, 0.5, 1.0, true, 76.5),
+        (191.0, 1.0, 1.0, true, 156.5),
+        (224.0, 1.0, 1.0, true, 157.5),
+        (255.0, 1.0, 1.0, true, 157.5),
+        (255.0, 0.5, 1.0, true, 81.5),
+        // Zoomed out, Zoom Compensation smooths more; off, it doesn't.
+        (64.0, 1.0, 0.5, true, 74.5),
+        (128.0, 1.0, 0.5, true, 152.5),
+        (128.0, 0.5, 0.5, true, 78.5),
+        (128.0, 0.25, 0.5, true, 39.5),
+        (64.0, 1.0, 0.5, false, 52.5),
+        (128.0, 1.0, 0.5, false, 126.5),
+        (32.0, 1.0, 1.0 / 3.0, true, 43.5),
+        (64.0, 1.0, 1.0 / 3.0, true, 90.5),
+        (96.0, 1.0, 1.0 / 3.0, true, 142.5),
+        (32.0, 1.0, 0.25, true, 42.5),
+        (64.0, 1.0, 0.25, true, 95.5),
+        (96.0, 1.0, 0.25, true, 146.5),
+        (128.0, 1.0, 0.25, true, 157.5),
+        // Zoomed in, nothing changes.
+        (64.0, 1.0, 2.0, true, 52.5),
+        (128.0, 1.0, 2.0, true, 125.5),
+        (255.0, 1.0, 2.0, true, 157.5),
+    ];
+    let mut worst = 0.0f64;
+    for (value, v, zoom, comp, lag) in measured {
+        let got = photoshop_lag(value, v, zoom, comp);
+        assert!((got - lag).abs() <= 3.5, "value {value} at {v} px/ms, zoom {zoom}, compensation {comp}: {got:.1} px, Photoshop {lag}");
+        worst = worst.max((got - lag).abs());
+    }
+    assert!(worst <= 3.5);
+    // Not matched: a short fast line (300 ms at 2 px/ms) trails 237.5 px in Photoshop, closer to
+    // its steady lag than an exponential gets in that time.
+    let short = photoshop_lag(128.0, 2.0, 1.0, true);
+    assert!((215.0..237.5).contains(&short), "{short}");
+    // The earlier per-16 ms model (still the Clip Studio rules') trails far less at 50 %.
+    let cfg = Smoothing { amount: 128.0 / 255.0, ..Default::default() };
+    let mut old = crate::dynamics::Smoother::new(&cfg, 1.0);
+    let mut out = Vec::new();
+    for i in 0..=75u32 {
+        let t = f64::from(i) * 8.0;
+        old.push(StrokePoint { time: t, ..StrokePoint::new(100.0 + t, 0.0, 1.0) }, &mut out);
+    }
+    assert!(700.0 - out.last().map_or(700.0, |p| p.x) < 30.0);
+}
+
+#[test]
+fn photoshop_smoothing_survives_hostile_times_and_zooms() {
+    for zoom in [f32::NAN, 0.0, -1.0, 1e-9, f32::INFINITY, 0.25] {
+        let cfg = Smoothing { amount: 1.0, ..Default::default() };
+        let mut s = crate::dynamics::Smoother::new(&cfg, zoom).photoshop();
+        let mut out = Vec::new();
+        for t in [0.0, f64::NAN, -5.0, 1e300, f64::INFINITY, 8.0] {
+            s.push(StrokePoint { time: t, ..StrokePoint::new(10.0, 0.0, 1.0) }, &mut out);
+            s.push(StrokePoint { time: t, ..StrokePoint::new(20.0, 5.0, 1.0) }, &mut out);
+        }
+        assert!(out.iter().all(|p| p.x.is_finite() && p.y.is_finite()), "zoom {zoom}");
+    }
+    assert_eq!(crate::dynamics::photoshop_smoothing_ms(f64::NAN), 0.0);
+    assert_eq!(crate::dynamics::photoshop_zoom_amount(0.5, f64::NAN), 0.5);
 }

@@ -66,6 +66,42 @@ fn stylus_changed(a: &StrokePoint, b: &StrokePoint) -> bool {
 // Smoothing
 // ---------------------------------------------------------------------------
 
+/// Photoshop's smoothing as a time constant: the brush trails a pen moving at a steady speed by
+/// this many milliseconds (less half a sample interval), by Smoothing value in Photoshop's 0–255
+/// steps. Measured with the synthetic pen in Photoshop 27.4: lines at 0.25–2 px/ms sampled
+/// every 8 ms, Catch-up on Stroke End off, the lag read from where each line stops
+/// (docs/pen-input-validation.md › Photoshop smoothing). Above about 75 % it stops growing.
+const PS_SMOOTHING_MS: [(f64, f64); 9] =
+    [(0.0, 0.0), (32.0, 34.5), (64.0, 56.5), (96.0, 92.75), (128.0, 130.5), (160.0, 156.6), (191.0, 164.3), (224.0, 165.6), (255.0, 165.6)];
+
+/// The most a sample counts for without Stroke Catch-up (one display frame).
+const UNTIMED_SAMPLE_MS: f64 = 16.0;
+
+/// Photoshop's smoothing time constant (ms) for a Smoothing `amount` (0..1).
+pub fn photoshop_smoothing_ms(amount: f64) -> f64 {
+    let s = if amount.is_finite() { amount.clamp(0.0, 1.0) * 255.0 } else { 0.0 };
+    let mut prev = PS_SMOOTHING_MS[0];
+    for &(x, t) in &PS_SMOOTHING_MS[1..] {
+        if s <= x {
+            let f = if x > prev.0 { (s - prev.0) / (x - prev.0) } else { 1.0 };
+            return prev.1 + (t - prev.1) * f;
+        }
+        prev = (x, t);
+    }
+    prev.1
+}
+
+/// Photoshop's Zoom Compensation for ordinary smoothing: zoomed out below 100 %, the Smoothing
+/// value acts larger by `1 + log2(1 / zoom) / 3`, up to 1.6× (measured 1.33× at 50 %, 1.56× at
+/// 33 %, 1.59× at 25 %; zooming in to 200 % changes nothing). The cap is inferred from 25 %.
+pub fn photoshop_zoom_amount(amount: f64, zoom: f64) -> f64 {
+    if !(zoom.is_finite() && zoom > 0.0 && zoom < 1.0) {
+        return amount;
+    }
+    let factor = (1.0 + (1.0 / zoom).log2() / 3.0).min(1.6);
+    (amount * factor).clamp(0.0, 1.0)
+}
+
 /// Incremental stroke smoothing: exponential (with optional time-based catch-up) or pulled string.
 #[derive(Clone, Debug)]
 pub struct Smoother {
@@ -73,12 +109,21 @@ pub struct Smoother {
     zoom: f64,
     pos: Option<StrokePoint>,
     last_input: Option<StrokePoint>,
+    /// Photoshop's measured smoothing (time constant and Zoom Compensation) instead of the
+    /// earlier per-16 ms fraction, which the Clip Studio workspace keeps.
+    photoshop: bool,
 }
 
 impl Smoother {
     /// `zoom` is the view zoom (only used with `adjust_for_zoom`).
     pub fn new(cfg: &Smoothing, zoom: f32) -> Self {
-        Self { cfg: cfg.clone(), zoom: f64::from(zoom.max(0.01)), pos: None, last_input: None }
+        Self { cfg: cfg.clone(), zoom: f64::from(zoom.max(0.01)), pos: None, last_input: None, photoshop: false }
+    }
+
+    /// Smooth like Photoshop ([`photoshop_smoothing_ms`], [`photoshop_zoom_amount`]).
+    pub fn photoshop(mut self) -> Self {
+        self.photoshop = true;
+        self
     }
 
     fn active(&self) -> bool {
@@ -124,6 +169,29 @@ impl Smoother {
             // No positional lag to compensate: a pen pressed in place must resize immediately.
             self.pos = Some(p);
             out.push(p);
+            return;
+        }
+        let timing = prev_input.map(|q| (p.time - q.time, p.time > 0.0));
+        if self.photoshop
+            && let Some((dt, timed)) = timing
+            && dt.is_finite()
+            && (dt > 0.0 || (dt == 0.0 && timed))
+        {
+            // Exponential in time: over `dt` the brush closes `1 − e^(−dt/T)` of its distance to
+            // the pen, so a steady pen is trailed by about `T`, whatever the device's report rate.
+            // Samples of one frame share a time: the next frame's sample catches up for them.
+            // Input without timestamps (an agent's points) keeps the per-sample step below.
+            if dt == 0.0 {
+                return;
+            }
+            let amount = if self.cfg.adjust_for_zoom { photoshop_zoom_amount(amount, self.zoom) } else { amount };
+            let t = photoshop_smoothing_ms(amount).max(1e-3);
+            // Without Stroke Catch-up a pause doesn't pull the brush along (one sample's worth).
+            let dt = if self.cfg.catch_up { dt.min(60_000.0) } else { dt.min(UNTIMED_SAMPLE_MS) };
+            let a = 1.0 - (-dt / t).exp();
+            let cur = StrokePoint { time: p.time, ..lerp_pt(&pos, &p, a) };
+            out.push(cur);
+            self.pos = Some(cur);
             return;
         }
         // Exponential: each iteration moves `a` of the way towards the pointer.
@@ -1050,6 +1118,8 @@ pub struct DabGenerator {
     builder: DabBuilder,
     dual: Option<DualBuilder>,
     scratch: Vec<StrokePoint>,
+    /// Photoshop's pen rules ([`Self::with_photoshop_pen`]).
+    photoshop: bool,
 }
 
 impl DabGenerator {
@@ -1062,11 +1132,14 @@ impl DabGenerator {
         self
     }
 
-    /// Photoshop's resting pen ([`PathWalker::photoshop_rest`]) for the primary and dual brush.
-    /// Off for the Clip Studio rules.
-    pub fn with_photoshop_rest(mut self) -> Self {
+    /// Photoshop's pen rules: its resting pen ([`PathWalker::photoshop_rest`]) for the primary
+    /// and dual brush and its measured smoothing ([`Smoother::photoshop`]). Off for the Clip
+    /// Studio rules.
+    pub fn with_photoshop_pen(mut self) -> Self {
         self.walker = self.walker.photoshop_rest(self.zoom);
         self.dual_walker = self.dual_walker.map(|w| w.photoshop_rest(self.zoom));
+        self.smoother = self.smoother.photoshop();
+        self.photoshop = true;
         self
     }
 
@@ -1088,6 +1161,7 @@ impl DabGenerator {
             builder: DabBuilder::new(&brush),
             dual: dual_on.then(|| DualBuilder::new(&brush)),
             scratch: Vec::new(),
+            photoshop: false,
         }
     }
 
@@ -1113,6 +1187,9 @@ impl DabGenerator {
         let b = &self.builder.brush;
         let mut stabilizer = crate::csp_stabilizer::Stabilizer::new(&b.csp_stabilizer.clone().unwrap_or_default(), self.zoom);
         let mut smoother = Smoother::new(&b.effective_smoothing(), self.zoom);
+        if self.photoshop {
+            smoother = smoother.photoshop();
+        }
         let mut walked = Vec::with_capacity(pts.len());
         let mut caught_up = Vec::new();
         for p in pts {

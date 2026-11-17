@@ -285,7 +285,8 @@ fn pixels_per_point(p: &Value) -> f32 {
 /// Whose pen rules a stroke follows (`penRules`): `"photoshop"` (the default) or `"clipStudio"`
 /// (the Clip Studio workspace). Photoshop's options-bar pressure buttons override the Brush
 /// Settings panel ([`BrushSettings::with_pressure_overrides`]) and a resting pen keeps laying
-/// dabs ([`StrokeRenderer::with_photoshop_rest`]); the Clip Studio rules keep neither.
+/// dabs, and smoothing follows Photoshop's measured time constants and Zoom Compensation
+/// ([`StrokeRenderer::with_photoshop_pen`]); the Clip Studio rules keep none of these.
 fn photoshop_pen(p: &Value, cmd: &str) -> Result<bool> {
     match p.get("penRules") {
         None | Some(Value::Null) => Ok(true),
@@ -295,10 +296,10 @@ fn photoshop_pen(p: &Value, cmd: &str) -> Result<bool> {
     }
 }
 
-/// A stroke's renderer, with Photoshop's resting pen when `photoshop` (see [`photoshop_pen`]).
+/// A stroke's renderer, with Photoshop's pen rules when `photoshop` (see [`photoshop_pen`]).
 fn stroke_renderer(brush: &BrushSettings, surf: &Surface, zoom: f32, ppp: f32, photoshop: bool) -> StrokeRenderer {
     let r = StrokeRenderer::new(brush, Some(surf.format()), zoom).with_pixels_per_point(ppp);
-    if photoshop { r.with_photoshop_rest() } else { r }
+    if photoshop { r.with_photoshop_pen() } else { r }
 }
 
 /// The target layer (`None` for a channel), brush, zoom and pen rules ([`photoshop_pen`]) of a

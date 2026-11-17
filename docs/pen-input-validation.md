@@ -566,8 +566,59 @@ One run in a freshly restarted Photoshop (after it crashed) showed no resting da
 200 % spacing; the same strokes repeated in the same document gave the table above, so that run
 is treated as lost input.
 
-Still open from the notes: Stroke Catch-up while the pen rests, Zoom Compensation for the
-ordinary smoothing and Pressure Smoothing (`pressureSmoothing`).
+Still open from the notes: Stroke Catch-up while the pen rests and Pressure Smoothing
+(`pressureSmoothing`).
+
+## Photoshop smoothing and Zoom Compensation (2026-11-17)
+
+Synthetic-pen lines into Photoshop 27.4: an 800×450 white RGB/8 document, 6 px hard round at 5 %
+spacing, Smoothing on, pulled-string mode off, Stroke Catch-up on, **Catch-up on Stroke End
+off** (the brush stops where it trails), x 100 → 700 at a steady 0.125–2 px/ms sampled every
+8 ms. The lag is 700 minus where the ink ends (less the 3 px radius); it repeats exactly.
+
+Lag ÷ speed at 100 % zoom, by Smoothing value (0–255; % = value × 100 / 255):
+
+| Value | 32 | 64 | 96 | 128 | 160 | 191 | 224 | 255 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ms (1 px/ms) | 30.5 | 52.5 | 88.5 | 125.5 | 149.5 | 156.5 | 157.5 | 157.5 |
+| ms (0.5 px/ms) | 31 | — | 89 | 127 | 153 | — | 163 | 163 |
+
+At 128 the lag is proportional to speed from 0.125 to 2 px/ms (17.5 … 237.5 px), so the
+filter is time-based, not a distance (string) one. Above about 75 % it stops growing. At 255
+and the slowest speeds (0.125–0.375 px/ms) the lag steps between about 60 and 81 px instead of
+following the speed; that part is not modelled. Stroke Catch-up off gave the same lags (it
+only matters while the pen rests).
+
+Zoom Compensation (on by default) only acts when zoomed out:
+
+| Zoom | Value 32 | 64 | 96 | 128 | 255 |
+| --- | --- | --- | --- | --- | --- |
+| 200 % (on or off) | — | 52.5 | — | 125.5 | 157.5 |
+| 100 % | 30.5 | 52.5 | 88.5 | 125.5 | 157.5 |
+| 50 % on / off | — | 74.5 / 52.5 | — | 152.5 / 126.5 | 157.5 / 157.5 |
+| 33 % on | 43.5 | 90.5 | 142.5 | 159.5 | — |
+| 25 % on | 42.5 | 95.5 | 146.5 | 157.5 | — |
+
+(lag in px at 1 px/ms). Read through the 100 % table, the value acts 1.33× larger at 50 %,
+1.56× at 33 % and 1.59× at 25 %: `1 + log2(1 / zoom) / 3`, at most 1.6 (the cap is inferred
+from 25 %). Zooming in changes nothing, contrary to Adobe's description.
+
+**Prism** (outside the Clip Studio workspace, `penRules` "photoshop"): the smoother is an
+exponential in time, `1 − e^(−dt/T)` of the way to the pen per sample, with `T` interpolated
+from the table above (+4 ms for the half-sample offset, high values raised by up to 8 ms so the
+600 ms lines land on Photoshop's lag) and the value scaled by the zoom rule
+(`photoshop_smoothing_ms`, `photoshop_zoom_amount` in `prism-paint` `dynamics.rs`). Before, it
+moved `1 − value` of the way every 16 ms: 16 px of lag at 50 % and 1 px/ms against Photoshop's
+125, and about 300 px at 100 % against 157. The model reproduces 30 of the 31 measured lags
+within 3 px (`smoothing_trails_the_pen_like_photoshop_at_every_zoom`); the exception is a short
+fast line (300 ms at 2 px/ms: Photoshop 237.5 px, Prism 220), where Photoshop reaches its steady
+lag sooner than an exponential does. Samples of one display frame (mouse input) share a time
+and move nothing until the next frame; input without timestamps (agents' points) keeps the old
+per-sample step. The Clip Studio workspace keeps the old smoother. Not measured: corners and
+curves (only straight lines were drawn), the pulled-string radius, and Windows.
+
+Photoshop crashed five times on 2026-11-17 while being driven (stack overflow, the same frames
+each time, also once before any pen input that day); each run was redone in a new document.
 
 ## Remaining physical acceptance
 

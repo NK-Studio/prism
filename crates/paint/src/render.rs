@@ -1465,9 +1465,9 @@ impl StrokeRenderer {
         self
     }
 
-    /// Photoshop's resting pen (see [`DabGenerator::with_photoshop_rest`]).
-    pub fn with_photoshop_rest(mut self) -> Self {
-        self.generator = self.generator.with_photoshop_rest();
+    /// Photoshop's pen rules (see [`DabGenerator::with_photoshop_pen`]).
+    pub fn with_photoshop_pen(mut self) -> Self {
+        self.generator = self.generator.with_photoshop_pen();
         self
     }
 
