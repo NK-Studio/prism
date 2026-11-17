@@ -1419,7 +1419,7 @@ pub fn hs_spectrum(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx, range: usize
 // Color Balance
 
 /// Where the Color Balance editor rooted at `mem` keeps its Tone choice.
-fn color_balance_tone_id(mem: egui::Id) -> egui::Id {
+pub(crate) fn color_balance_tone_id(mem: egui::Id) -> egui::Id {
     mem.with("cb-tone")
 }
 

@@ -3831,6 +3831,10 @@ adjust	Intersection Line	교차 선
 adjust	Gamma Correction	감마 교정
 adjust	Vibrance	생동감
 adjust	Lightness	밝기
+adjust	Tone	톤
+adjust	Cyan to Red	녹청에서 빨강
+adjust	Magenta to Green	자홍에서 초록
+adjust	Yellow to Blue	노랑에서 파랑
 filter	Blur Method	흐림 효과 방법
 filter	Spin	회전
 filter	Zoom	돋보기

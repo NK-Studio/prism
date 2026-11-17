@@ -43,6 +43,9 @@ const LEVELS_BUTTON_W: f32 = 100.0;
 /// Hue/Saturation's options column (seven range swatches wide).
 const HS_W: f32 = 276.0;
 
+/// Color Balance's options column (the three tone swatches with their names).
+const CB_W: f32 = 300.0;
+
 /// Curves' channel frame (Output gutter, bar and 256-level graph).
 const CURVES_W: f32 = 340.0;
 /// Curves' display options column.
@@ -54,7 +57,7 @@ fn kind(f: &Map<String, Value>) -> &str {
 
 /// Is this dialog drawn in Photoshop's classic adjustment layout?
 pub fn owns(f: &Map<String, Value>) -> bool {
-    matches!(kind(f), "brightnessContrast" | "levels" | "curves" | "exposure" | "vibrance" | "hueSaturation")
+    matches!(kind(f), "brightnessContrast" | "levels" | "curves" | "exposure" | "vibrance" | "hueSaturation" | "colorBalance")
 }
 
 /// The dialog's content width.
@@ -62,6 +65,7 @@ pub fn width(f: &Map<String, Value>) -> f32 {
     match kind(f) {
         "levels" => LEVELS_W + GAP + LEVELS_BUTTON_W,
         "hueSaturation" => HS_W + GAP + BUTTON_W,
+        "colorBalance" => CB_W + GAP + BUTTON_W,
         "curves" => CURVES_W + GAP + CURVES_VIEW_W + GAP + LEVELS_BUTTON_W,
         _ => WIDTH,
     }
@@ -126,6 +130,7 @@ pub fn body(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
         "exposure" => exposure(app, ui, f),
         "vibrance" => vibrance(ui, f),
         "hueSaturation" => hue_saturation(app, ui, f),
+        "colorBalance" => color_balance(ui, f),
         _ => brightness_contrast(app, ui, f),
     };
     settle(ui, f);
@@ -541,6 +546,114 @@ fn hue_saturation(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<Stri
     if changed && let Value::Object(v) = values {
         f.retain(|k, _| k.starts_with("__"));
         f.extend(v);
+    }
+    outcome
+}
+
+/// Image › Adjustments › Color Balance in Photoshop 27.4's layout (measured): "Tone" with round
+/// Shadows / Midtones / Highlights swatches (the chosen one ringed), "Cyan to Red", "Magenta to
+/// Green" and "Yellow to Blue" rows (fields written "+58", sliders on colour tracks; a
+/// double-click zeroes one, the wheel steps it, as measured in Photoshop 25.4), Preserve
+/// Luminosity; OK, Cancel (Alt: Reset, which zeroes every tone and shows Midtones) and Preview.
+fn color_balance(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
+    let mut outcome = None;
+    let mem = crate::adjust_dialog::editor_mem("colorBalance");
+    let tone_id = crate::adjust_editors::color_balance_tone_id(mem);
+    let mut tone: usize = ui.data(|d| d.get_temp(tone_id)).unwrap_or(1).min(2);
+    let key = ["shadows", "midtones", "highlights"][tone];
+    let read = |k: &str| -> [f32; 3] {
+        let a = f.get(k).and_then(Value::as_array);
+        std::array::from_fn(|i| a.and_then(|a| a.get(i)).and_then(Value::as_f64).filter(|v| v.is_finite()).map_or(0.0, |v| (v as f32).clamp(-100.0, 100.0)))
+    };
+    let mut vals = read(key);
+    let before = (vals, f.get(key).cloned());
+    let mut preserve = f.get("preserveLuminosity").and_then(Value::as_bool).unwrap_or(true);
+    let preserve_before = f.get("preserveLuminosity").cloned();
+    let alt = ui.input(|i| i.modifiers.alt);
+    let mut reset = false;
+    let t = crate::theme::Tokens::get(ui.ctx());
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(CB_W);
+            ui.horizontal(|ui| {
+                ui.label(label("Tone"));
+                ui.add_space(4.0);
+                for (i, (name, grey)) in [(tl!("Shadows"), 0u8), (tl!("Midtones"), 128), (tl!("Highlights"), 255)].into_iter().enumerate() {
+                    let font = egui::TextStyle::Body.resolve(ui.style());
+                    let galley = ui.painter().layout_no_wrap(name.to_string(), font, t.text);
+                    let (rect, resp) = ui.allocate_exact_size(vec2(36.0 + galley.size().x, 30.0), egui::Sense::click());
+                    let c = egui::pos2(rect.left() + 14.0, rect.center().y);
+                    ui.painter().circle_filled(c, 11.0, egui::Color32::from_gray(grey));
+                    ui.painter().circle_stroke(c, 11.0, egui::Stroke::new(1.0, egui::Color32::from_black_alpha(90)));
+                    if i == tone {
+                        ui.painter().circle_stroke(c, 13.5, egui::Stroke::new(2.0, t.text));
+                    }
+                    ui.painter().galley(egui::pos2(rect.left() + 33.0, rect.center().y - galley.size().y / 2.0), galley, t.text);
+                    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, i == tone, name));
+                    if resp.clicked() {
+                        tone = i;
+                    }
+                }
+            });
+            ui.add_space(6.0);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            let rows = [
+                ("Cyan to Red", egui::Color32::from_rgb(0, 230, 230), egui::Color32::from_rgb(235, 20, 20)),
+                ("Magenta to Green", egui::Color32::from_rgb(230, 20, 230), egui::Color32::from_rgb(20, 220, 20)),
+                ("Yellow to Blue", egui::Color32::from_rgb(235, 235, 20), egui::Color32::from_rgb(20, 20, 235)),
+            ];
+            let gestures = widgets::RowGestures { reset: Some(0.0), wheel_step: Some(1.0) };
+            for (i, (text, a, b)) in rows.into_iter().enumerate() {
+                let Some(x) = vals.get_mut(i) else { continue };
+                ui.horizontal(|ui| {
+                    ui.label(label(text));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let look = widgets::FieldLook { format: Some(whole_text), ..widgets::FieldLook::compact() };
+                        widgets::value_field_look(ui, x, -100.0..=100.0, "", FIELD_W, &look);
+                    });
+                });
+                let grey = egui::Color32::from_gray(128);
+                widgets::slider_with(ui, x, -100.0..=100.0, Some(&[a, a.lerp_to_gamma(grey, 0.6), b.lerp_to_gamma(grey, 0.6), b]), gestures);
+                *x = x.round().clamp(-100.0, 100.0);
+                ui.add_space(6.0);
+            }
+            ui.add_space(8.0);
+            widgets::checkbox(ui, &mut preserve, tl!("Preserve Luminosity"));
+        });
+        ui.add_space(GAP);
+        ui.vertical(|ui| {
+            ui.set_width(BUTTON_W);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            if widgets::primary_button(ui, tl!("OK"), BUTTON_W).clicked() {
+                outcome = Some(true);
+            }
+            if widgets::secondary_button(ui, if alt { tl!("Reset") } else { tl!("Cancel") }, BUTTON_W).clicked() {
+                if alt {
+                    reset = true;
+                } else {
+                    outcome = Some(false);
+                }
+            }
+            ui.add_space(4.0);
+            preview_checkbox(ui, f, true);
+        });
+    });
+    // The values belong to the tone shown when the frame began; written only when they change
+    // (or weren't valid), so the dialog's undo history sees real edits only.
+    if vals != before.0 || before.1.as_ref().and_then(Value::as_array).is_none_or(|a| a.len() != 3) {
+        f.insert(key.into(), json!(vals));
+    }
+    if preserve_before.as_ref().and_then(Value::as_bool) != Some(preserve) {
+        f.insert("preserveLuminosity".into(), json!(preserve));
+    }
+    if reset {
+        let mut values = crate::filter_dialog::params_of(f);
+        crate::adjust_editors::reset_color_balance(ui.ctx(), mem, &mut values);
+        if let Value::Object(v) = values {
+            f.extend(v);
+        }
+    } else {
+        ui.data_mut(|d| d.insert_temp(tone_id, tone));
     }
     outcome
 }
@@ -1222,6 +1335,34 @@ mod tests {
         assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
     }
 
+    /// Photoshop 27.4's Color Balance: Tone swatches switch the rows' tone; Cmd+Z steps back; the
+    /// values carry no undo step until they change.
+    #[test]
+    fn color_balance_dialog_works_like_photoshops() {
+        assert_eq!(whole_text(58.0), "+58");
+        let (mut h, id) = dialog_for("image.adjustments.colorBalance");
+        assert!(owns(&h.state().ui.dialogs[0].fields));
+        for label in ["Shadows", "Midtones", "Highlights", "Cyan to Red", "Magenta to Green", "Yellow to Blue", "Preserve Luminosity", "OK", "Cancel"] {
+            assert!(h.query_by_label(label).is_some(), "{label}");
+        }
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("midtones".into(), json!([58, 0, 0]));
+        h.run_steps(3);
+        click(&mut h, "Shadows", egui::Modifiers::NONE);
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("shadows".into(), json!([0, -20, 0]));
+        h.run_steps(3);
+        key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert_eq!(field(&h, id, "shadows").get(1).and_then(Value::as_f64), Some(0.0));
+        assert_eq!(field(&h, id, "midtones").get(0).and_then(Value::as_f64), Some(58.0), "the midtones edit stays");
+        key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert_eq!(field(&h, id, "midtones").get(0).and_then(Value::as_f64), Some(0.0));
+        let steps = h.state().session.active().unwrap().history.past_len();
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("highlights".into(), json!([0, 0, 30]));
+        h.run_steps(2);
+        click(&mut h, "OK", egui::Modifiers::NONE);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    }
+
     /// A double-click on a Hue/Saturation slider's knob puts it back to 0.
     #[test]
     fn hue_saturation_slider_double_click_resets_to_zero() {
@@ -1297,6 +1438,12 @@ mod tests {
             d.fields.insert("reds".into(), json!({"hue": 120, "saturation": 30}));
             h.run_steps(5);
             h.render().unwrap().save(out.join(format!("{kind:?}-hue-saturation.png"))).unwrap();
+            let ok = h.state().ui.dialogs.last().map(|d| d.id).unwrap();
+            h.state_mut().ui.dialogs.retain(|d| d.id != ok);
+            let id = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.colorBalance").unwrap();
+            h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("midtones".into(), json!([58, -20, 0]));
+            h.run_steps(5);
+            h.render().unwrap().save(out.join(format!("{kind:?}-color-balance.png"))).unwrap();
         }
     }
 

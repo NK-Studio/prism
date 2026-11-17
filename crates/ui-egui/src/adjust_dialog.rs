@@ -439,7 +439,7 @@ mod tests {
     fn color_balance_dialog_gestures_match_photoshop() {
         use egui_kittest::kittest::Queryable;
         let (mut h, id) = color_balance_dialog();
-        let label = h.query_all_by_label("Cyan  ·  Red").last().map(|n| n.rect()).expect("Cyan · Red row");
+        let label = h.query_all_by_label("Cyan to Red").last().map(|n| n.rect()).expect("Cyan to Red row");
         let at = egui::pos2(label.left() + 60.0, label.bottom() + 14.0);
         let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::ALT };
         input(&mut h, egui::Modifiers::ALT, &[egui::Event::PointerMoved(at), press(true), press(false), press(true), press(false)]);

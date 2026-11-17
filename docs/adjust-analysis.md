@@ -276,6 +276,21 @@ settings were read back (2026-11-17). The Korean names are Photoshop's own (its 
 
 Not there yet: the preset menu (save / load / delete) and the user's own saved presets.
 
+## Color Balance
+
+### Dialog (Photoshop 27.4, measured by driving it)
+
+Redesigned: "Tone" (톤) with three round swatches, black "Shadows", grey "Midtones", white
+"Highlights" (어두운 영역 / 중간 영역 / 밝은 영역; the chosen one ringed); "Cyan to Red",
+"Magenta to Green", "Yellow to Blue" (녹청에서 빨강 / 자홍에서 초록 / 노랑에서 파랑), each a field
+written "+58" and a slider on a colour track; "Preserve Luminosity" (광도 유지) at the bottom left;
+OK, Cancel, "Preview(Opt+P)" at the right. Each tone keeps its own values.
+
+Prism (`ui-egui/src/adjust_ps_ui.rs` `color_balance`): the same, with Photoshop 25.4's measured
+gestures kept (double-click zeroes a slider, the wheel steps it, Shift ×10; Alt: Reset zeroes every
+tone and shows Midtones) and Cmd+Z. Maths unchanged. Photoshop quit again when its dialog was
+cancelled (as on Hue/Saturation).
+
 ## Still open
 
 - Auto's target curve (Photoshop's trained model) is a stand-in.
