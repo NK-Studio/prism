@@ -7,6 +7,28 @@
 # language Prism ships (`ko`, `en`): plain text, no Markdown, at most 24 lines of 300 characters.
 # Write the table in the same change as the feature, or at the latest before publishing.
 
+["1.5.0"]
+ko = [
+  "이미지 › 조정의 밝기/대비, 레벨, 곡선, 노출, 생동감, 색조/채도, 색상 균형 대화상자가 Photoshop과 같은 모양과 동작이 됐어요(스포이드, 대화상자 안 실행 취소 포함).",
+  "레벨, 곡선, 노출, 색조/채도에 Photoshop의 기본 사전 설정이 들어갔어요.",
+  "레이어 스타일(그림자, 광선, 경사와 엠보스 등)의 결과가 Photoshop에 더 가까워졌어요.",
+  "필터 › 노이즈부터 기타까지의 필터가 Photoshop과 같은 결과를 내도록 다시 만들었어요.",
+  "뉴럴 필터 › 슈퍼 줌으로 이미지를 선명하게 확대할 수 있어요.",
+  "색상 프로필이 다른 파일을 Photoshop 기본값처럼 묻지 않고 열어요.",
+  "스포이드를 누르고 있으면 Photoshop처럼 새 색과 원래 색을 비교하는 샘플링 링이 보여요.",
+  "레이어 패널 아래 버튼과 레벨·곡선 아이콘을 새로 그렸어요.",
+]
+en = [
+  "Image › Adjustments: Brightness/Contrast, Levels, Curves, Exposure, Vibrance, Hue/Saturation and Color Balance look and work as in Photoshop (eyedroppers and in-dialog undo included).",
+  "Photoshop's built-in presets for Levels, Curves, Exposure and Hue/Saturation.",
+  "Layer styles (shadows, glows, Bevel and Emboss and more) come out closer to Photoshop.",
+  "The Filter › Noise to Other filters were rebuilt to give Photoshop's results.",
+  "Neural Filters › Super Zoom enlarges images sharply.",
+  "Files with a different colour profile open without asking, as with Photoshop's defaults.",
+  "Holding the Eyedropper shows Photoshop's sampling ring, comparing the new colour with the old one.",
+  "New Layers panel footer buttons and Levels and Curves icons.",
+]
+
 ["1.4.3"]
 ko = [
   "펜 기울기와 필압으로 그은 선이 Photoshop과 같아졌어요(기울기 조절, 기울기 비율, 브러시 투영, 가늘어지는 선 끝).",
