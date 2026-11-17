@@ -230,7 +230,13 @@ impl Smoother {
             .max(1e-3);
             let dt = if self.cfg.catch_up { dt.min(60_000.0) } else { dt.min(UNTIMED_SAMPLE_MS) };
             let a = 1.0 - (-dt / t).exp();
-            let cur = StrokePoint { time: p.time, ..lerp_pt(&pos, &p, a) };
+            // Only the position trails: the brush paints with the pen's pressure and pose of the
+            // moment (measured: a pressure step 0.25 ↔ 1 turns the width as sharply as without
+            // smoothing, where the trailing brush is at that moment, 65 px back at 128 and
+            // 0.5 px/ms). Pressure Smoothing, which would smooth it, can't be turned on in
+            // Photoshop 27.4.
+            let to = lerp_pt(&pos, &p, a);
+            let cur = StrokePoint { x: to.x, y: to.y, ..p };
             out.push(cur);
             self.pos = Some(cur);
             return;

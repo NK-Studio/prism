@@ -566,7 +566,8 @@ One run in a freshly restarted Photoshop (after it crashed) showed no resting da
 200 % spacing; the same strokes repeated in the same document gave the table above, so that run
 is treated as lost input.
 
-Still open from the notes: Pressure Smoothing (`pressureSmoothing`).
+Pressure Smoothing (`pressureSmoothing`) turned out to be unreachable in Photoshop 27.4: see
+› Photoshop Pressure Smoothing below.
 
 ## Photoshop smoothing and Zoom Compensation (2026-11-17)
 
@@ -648,6 +649,36 @@ case without catch-up, where Photoshop had not taken its extra step yet (Prism t
 
 Photoshop crashed six times on 2026-11-17 while being driven (stack overflow, the same frames
 each time, also once before any pen input that day); each run was redone in a new document.
+
+## Photoshop Pressure Smoothing (2026-11-17)
+
+The research notes found a Pressure Smoothing option in Photoshop's brush options (`pressureSmoothing`,
+0–255; an options-menu handler sets it to 128 or 0), but Photoshop 27.4 offers no way to turn it on:
+
+- The Smoothing Options flyout (`Required/layouts/Painting/Flyouts/smoothingOptionsFlyout-4323.exv`)
+  defines four check boxes only: Pulled String Mode, Stroke Catch-up, Catch-up on Stroke End and
+  Adjust for Zoom. Neither the English nor the Korean strings have a label for pressure smoothing.
+- With an Intuos Pro M connected and its driver running, the gear menu still shows those four.
+- Setting `pressureSmoothing: true` through Action Manager reads back `false`, as the notes predict
+  (loading options always zeroes it).
+
+So for every Photoshop user the value is 0. What can be measured is how the ordinary (position)
+smoothing treats pressure: a 24 px brush with the options-bar pressure-size button, 5 % spacing,
+x 100 → 700 at 0.5 px/ms, pressure stepping 0.25 ↔ 1 at x 400 (t = 600 ms), Stroke Catch-up on:
+
+| Smoothing | Width turns at (dab centre) | 10–90 % of the width change |
+| --- | --- | --- |
+| 0 | 399 (up) / 395 (down) | 8 px |
+| 128 | 337 / 332 | 8 px |
+| 255 | 321 / 316 | 8 px |
+
+The width turns as sharply with smoothing as without, at the place the trailing brush has reached
+when the pen's pressure steps (65 / 83 px back: the measured time constants at 0.5 px/ms). So
+Photoshop trails only the position and paints with the pen's pressure of the moment. Prism's
+Photoshop pen rules now do the same (the smoother used to carry pressure, tilt and rotation along
+the trailing segment, which softened a step over about 90 ms); tilt and rotation follow the same
+rule but were not measured. The Clip Studio workspace keeps the old interpolation. Test:
+`photoshop_smoothing_paints_with_the_pens_pressure_of_the_moment` (prism-paint).
 
 ## Remaining physical acceptance
 

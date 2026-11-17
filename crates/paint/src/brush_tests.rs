@@ -2847,6 +2847,36 @@ fn stroke_catch_up_while_resting_follows_photoshop() {
 }
 
 #[test]
+fn photoshop_smoothing_paints_with_the_pens_pressure_of_the_moment() {
+    // Photoshop 27.4, synthetic pen (docs/pen-input-validation.md › Photoshop Pressure
+    // Smoothing): a 24 px pressure-size line x 100 → 700 at 0.5 px/ms, pressure stepping
+    // 0.25 ↔ 1 at x 400. The width turns within one dab, where the brush is when the pen
+    // steps: x ≈ 397 / 335 / 318 at Smoothing 0 / 128 / 255.
+    let mut b = BrushSettings { size: 24.0, hardness: 1.0, spacing: 0.05, ..brush() };
+    b.shape_dynamics.enabled = true;
+    b.shape_dynamics.size.control = Control::PenPressure;
+    for (value, at) in [(0.0, 397.0), (128.0, 335.0), (255.0, 318.0)] {
+        b.smoothing = Smoothing { amount: (value / 255.0) as f32, ..Default::default() };
+        for (p0, p1) in [(0.25, 1.0), (1.0, 0.25)] {
+            let pts: Vec<_> = (0..=150u32)
+                .map(|i| {
+                    let t = f64::from(i * 8);
+                    StrokePoint { time: t, ..StrokePoint::new(100.0 + 0.5 * t, 50.0, if t < 600.0 { p0 } else { p1 }) }
+                })
+                .collect();
+            let d = photoshop_dabs(&b, &pts, 1.0);
+            let mid = 12.0 * (0.25 + 1.0) / 2.0;
+            let first = d.iter().position(|d| (d.radius > mid) == (p1 > p0)).unwrap();
+            let x = d[first].center.x;
+            assert!((x - at).abs() <= 4.0, "smoothing {value}, {p0} → {p1}: step at {x}, Photoshop {at}");
+            // Sharp: the dab before is still at the old pressure (within one sample's ramp).
+            let before = d[first.saturating_sub(4)].radius;
+            assert!((before - 12.0 * p0).abs() < 0.5, "smoothing {value}: {before} just before the step");
+        }
+    }
+}
+
+#[test]
 fn a_frozen_brush_still_lays_resting_dabs() {
     // Without Stroke Catch-up the brush stays put while the pen rests, but Photoshop's resting
     // pen still lays a dab every 100 ms there.
