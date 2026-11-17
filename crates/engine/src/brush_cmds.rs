@@ -352,11 +352,21 @@ fn stroke_with(s: &mut Session, p: &Value, cmd: &str, label: &str, brush: BrushS
     let symmetry = s.active().and_then(|st| st.symmetry_path.clone());
     let (id, brush, zoom, photoshop) = stroke_target(s, p, brush, cmd)?;
     let ppp = pixels_per_point(p);
+    // The live stroke already drew these exact pixels: adopt them instead of rendering again.
+    let prepared = s.prepared_stroke.take().filter(|prep| prep.reproduces(s, cmd, p, &pts, &brush, symmetry.as_ref()));
     // CSP post correction: the committed line is smoothed once more (the live stroke is not).
     let pts = match brush.csp_post_correction {
         Some(level) => prism_paint::csp_post_correction::apply(level, zoom, &pts),
         None => pts,
     };
+    if let Some(prep) = prepared {
+        let dmg = s.edit(label, |doc, _| {
+            let (surf, _) = crate::channel_cmds::target_surface(doc, id, p)?;
+            *surf = prep.surface;
+            Ok(prep.damage)
+        })?;
+        return Ok(damage_json(s, dmg));
+    }
     let dmg = s.edit(label, |doc, _| {
         // A CSP brush that does not cross reference-layer lines paints through a narrower selection.
         let sel = crate::reference_layer::constrain(doc, id, &brush, &pts, doc.selection.clone());
@@ -450,6 +460,63 @@ pub struct LiveStroke {
     params: Value,
     /// Where the doc shows the stroke's end as finishing it would draw it (see `push`).
     tail: Rect,
+    /// Every point rendered so far, and the document and revision the stroke started on.
+    points: Vec<StrokePoint>,
+    base: Option<(prism_doc::DocId, u64)>,
+}
+
+/// A live stroke's finished target surface ([`LiveStroke::offer`]), which the commit of the same
+/// command, document revision, params, seed and points adopts instead of rendering the whole
+/// stroke again on release (21–147 ms for a 3 s stroke; docs/brush-latency.md).
+pub(crate) struct PreparedStroke {
+    cmd: String,
+    base: (prism_doc::DocId, u64),
+    /// The live stroke's params without `points` and `seed`.
+    params: Value,
+    seed: u64,
+    points: Vec<StrokePoint>,
+    mirrored: Option<bool>,
+    surface: Surface,
+    damage: Rect,
+}
+
+/// `p` without the keys a commit adds or changes (`points`, `seed`).
+fn stroke_settings(p: &Value) -> Value {
+    let mut p = p.clone();
+    if let Some(o) = p.as_object_mut() {
+        o.remove("points");
+        o.remove("seed");
+    }
+    p
+}
+
+impl PreparedStroke {
+    /// Whether committing `cmd` with `p` and `pts` on the active document gives exactly these
+    /// pixels: same document revision, settings, seed and points, and no brush feature that the
+    /// commit draws differently from the live stroke (CSP start and end and post correction,
+    /// which need the whole path, and reference layers).
+    fn reproduces(
+        &self,
+        s: &Session,
+        cmd: &str,
+        p: &Value,
+        pts: &[StrokePoint],
+        brush: &BrushSettings,
+        symmetry: Option<&crate::symmetry_cmds::SymmetryAxis>,
+    ) -> bool {
+        let base = s.active().map(|st| (st.doc.id, st.revision));
+        let seed = p.get("seed").and_then(Value::as_u64);
+        let mirrored = symmetry.map(|axis| crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(pts, &axis.reflect_points(pts)));
+        self.cmd == cmd
+            && base == Some(self.base)
+            && seed == Some(self.seed)
+            && brush.csp_in_out.is_none()
+            && brush.csp_post_correction.is_none()
+            && !brush.csp_refer_layer
+            && mirrored == self.mirrored
+            && self.points == pts
+            && stroke_settings(p) == self.params
+    }
 }
 
 impl LiveStroke {
@@ -496,9 +563,32 @@ impl LiveStroke {
             layer,
             params: p.clone(),
             tail: Rect::EMPTY,
+            points: Vec::new(),
+            base: s.active().map(|st| (st.doc.id, st.revision)),
         };
         live.push(&pts)?;
         Ok(live)
+    }
+
+    /// Offer the finished stroke to its commit: `cmd` (`paint.stroke` / `paint.pencil`) with the
+    /// same params, points and `"seed": live.seed` on the unchanged document then takes these
+    /// pixels instead of rendering the stroke again. Anything else renders as before, and the
+    /// offer is dropped by the next stroke command or [`Session::clear_prepared_stroke`].
+    pub fn offer(&self, s: &mut Session) {
+        s.prepared_stroke = None;
+        let Some(base) = self.base else { return };
+        let mut doc = (*self.doc).clone();
+        let Ok((surf, _)) = crate::channel_cmds::target_surface(&mut doc, self.layer, &self.params) else { return };
+        s.prepared_stroke = Some(PreparedStroke {
+            cmd: self.cmd.clone(),
+            base,
+            params: stroke_settings(&self.params),
+            seed: self.seed,
+            points: self.points.clone(),
+            mirrored: self.mirror.as_ref().map(|_| self.mirror_distinct),
+            surface: surf.clone(),
+            damage: self.bounds(),
+        });
     }
 
     /// Everything the stroke has touched so far.
@@ -514,6 +604,7 @@ impl LiveStroke {
     /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         check_coords(pts, &self.cmd)?;
+        self.points.extend_from_slice(pts);
         self.renderer.push(pts);
         if let Some((axis, mirror)) = &mut self.mirror {
             let reflected = axis.reflect_points(pts);

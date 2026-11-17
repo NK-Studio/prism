@@ -344,6 +344,9 @@ pub struct Session {
     pub authorize: Option<fn(&str, &serde_json::Value) -> Result<()>>,
     /// Background jobs (see [`jobs`]).
     jobs: jobs::Jobs,
+    /// A live stroke's finished pixels, offered to the commit that reproduces it (see
+    /// [`brush_cmds::LiveStroke::offer`]).
+    prepared_stroke: Option<brush_cmds::PreparedStroke>,
 }
 
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when
@@ -361,6 +364,11 @@ pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
 impl Session {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Drop a live stroke's offered pixels (see [`brush_cmds::LiveStroke::offer`]).
+    pub fn clear_prepared_stroke(&mut self) {
+        self.prepared_stroke = None;
     }
 
     pub fn documents(&self) -> &[DocState] {

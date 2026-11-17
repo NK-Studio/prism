@@ -405,6 +405,10 @@ pub struct PrismApp {
     /// While a batch of recovered pointer samples is replayed, defer the live-stroke update to one
     /// call for the whole frame (see `canvas::canvas_view`).
     defer_live_stroke: bool,
+    /// Live-stroke pushes so far, and how many of them a canvas refresh has shown: a push the
+    /// frame didn't show asks for another frame (see `canvas::refresh_live_stroke`).
+    live_pushes: u64,
+    live_shown: u64,
     /// A live painting stroke started on the press (`canvas_view`): the drag egui recognises later,
     /// or the click, continues or ends it rather than starting another.
     press_stroke: bool,
@@ -611,6 +615,8 @@ impl PrismApp {
             magnetic: Default::default(),
             secondary_erase: false,
             defer_live_stroke: false,
+            live_pushes: 0,
+            live_shown: 0,
             press_stroke: false,
             last_stroke_end: None,
             pixels_per_point: 1.0,
@@ -1460,7 +1466,7 @@ impl eframe::App for PrismApp {
         // Synthetic input is injected one press/release step per frame: keep frames coming until
         // the queue is empty, then release control replies waiting on it.
         doc_windows::finish_drag(self, &ctx);
-        if !self.synthetic.is_empty() || doc_windows::input_pending(self, &ctx) {
+        if !self.synthetic.is_empty() || doc_windows::input_pending(self, &ctx) || (self.live_stroke.is_some() && self.live_pushes != self.live_shown) {
             ctx.request_repaint();
         } else if !self.input_waiters.is_empty() {
             for w in self.input_waiters.drain(..) {

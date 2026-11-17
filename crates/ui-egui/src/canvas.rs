@@ -296,6 +296,13 @@ impl EngineStroke {
             Self::Dab(_) => None,
         }
     }
+
+    /// Offer a brush stroke's finished pixels to its commit (`LiveStroke::offer`).
+    fn offer(&self, session: &mut prism_engine::Session) {
+        if let Self::Brush(s) = self {
+            s.offer(session);
+        }
+    }
 }
 
 /// A stroke shown while it is drawn: the engine renders the real result onto a copy of the
@@ -325,6 +332,11 @@ impl LiveStroke {
 }
 
 /// The live stroke on document `idx`, while it is current.
+/// Whether live stroke `l` was drawn on the active document as it is now.
+fn live_stroke_is_current(app: &PrismApp, l: &LiveStroke) -> bool {
+    app.session.active().is_some_and(|st| st.doc.id == l.doc && st.revision == l.revision)
+}
+
 fn live_stroke(app: &PrismApp, idx: usize) -> Option<&LiveStroke> {
     let st = app.session.documents().get(idx)?;
     app.live_stroke.as_ref().filter(|l| app.drag.is_some() && l.doc == st.doc.id && l.revision == st.revision)
@@ -560,6 +572,7 @@ pub(crate) fn feed_live_stroke(app: &mut PrismApp) {
         Ok(r) => l.damage.push(r),
         Err(_) => app.live_stroke = None,
     }
+    app.live_pushes = app.live_pushes.wrapping_add(1);
     app.perf.frame_trace.live(pts.len(), crate::gpu_canvas::now_ms() - t0);
 }
 
@@ -1157,6 +1170,26 @@ pub(crate) fn effect_reach(layers: &[prism_doc::Layer]) -> i32 {
         })
         .max()
         .unwrap_or(0)
+}
+
+/// The canvas was refreshed (`shown`: GPU canvas or CPU texture) before this frame's pen and
+/// pointer input pushed dabs to the live stroke: refresh it again so they show in this frame, a
+/// frame earlier. Both paths only take the stroke's new damage, and the texture is read when the
+/// frame renders. A push no canvas showed this frame asks for another (`PrismApp::live_pushes`).
+fn refresh_live_stroke(app: &mut PrismApp, ctx: &egui::Context, idx: usize, xf: &ViewXform, shown: Option<bool>, output: Option<u32>) {
+    if live_stroke(app, idx).is_none() || app.live_pushes == app.live_shown {
+        return;
+    }
+    match shown {
+        Some(true) => {
+            ensure_gpu(app, idx, visible_doc_rect(xf));
+        }
+        Some(false) => {
+            let _ = ensure_texture(app, ctx, idx, output);
+        }
+        None => return,
+    }
+    app.live_shown = app.live_pushes;
 }
 
 /// GPU path: make sure document `idx` is current in the GPU canvas. Brush strokes re-composite
@@ -2185,6 +2218,9 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
     // Live adjustment previews on big documents use a downsampled proxy (see proxy.rs), unless
     // Preferences › Performance › Low Resolution Previews is off.
     let mut on_gpu = false;
+    // The document itself is drawn here (not a preview proxy): through the GPU canvas (true) or
+    // the CPU texture (false). A live stroke's dabs pushed below refresh it again this frame.
+    let mut doc_shown = None;
     // A flipped view draws through the CPU path (the GPU canvas shader has no mirroring).
     // Rotation stays on the GPU: it is a view uniform, not a CPU blit.
     let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation);
@@ -2219,6 +2255,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         crate::gpu_canvas::GpuCanvas::paint(&painter, rect, params);
     } else if gpu_ok && ensure_gpu(app, idx, visible_doc_rect(&xf)) {
         on_gpu = true;
+        doc_shown = Some(true);
         app.perf.gpu = true;
         // Shadow, checkerboard, document and pixel grid in one custom shader (gpu_canvas.rs).
         let params = crate::gpu_canvas::ViewParams {
@@ -2264,6 +2301,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
             }
         }
         if let Some((tex, _scale)) = ensure_texture(app, &ctx, idx, output) {
+            doc_shown = Some(false);
             if rotated {
                 paint_mapped_image(&painter, &xf, tex, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), size, Color32::WHITE);
             } else {
@@ -2933,6 +2971,7 @@ pub fn canvas_view(app: &mut PrismApp, ui: &mut egui::Ui, idx: usize, rect: Rect
         // Not the active view: its tool cursor all the same, as a press here makes it active.
         tool_hover_cursor(app, ui, &painter, &xf, &view, &response, tool, p, false, output, zoom_out, true);
     }
+    refresh_live_stroke(app, &ctx, idx, &xf, doc_shown, output);
     // Scrollbars (scrollbars.rs): drawn over the canvas edges, they take the pointer there.
     let t0 = crate::gpu_canvas::now_ms();
     let before = view.center;
@@ -3939,9 +3978,18 @@ pub(crate) fn finish_gesture(app: &mut PrismApp, d: Drag) {
             if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
                 p["seed"] = json!(seed);
             }
+            // The live stroke already drew these pixels: the commit takes them rather than
+            // rendering the whole stroke again on release (it renders when they don't match).
+            if let Some(l) = live.as_ref()
+                && live_stroke_is_current(app, l)
+            {
+                l.stroke.offer(&mut app.session);
+            }
+            let committed = app.run(stroke_command(d.tool), p).is_ok();
+            app.session.clear_prepared_stroke();
             // The canvas already shows the stroke: let the commit's damage rect refresh it rather
             // than recompositing the whole document.
-            if app.run(stroke_command(d.tool), p).is_ok()
+            if committed
                 && let Some(l) = live
             {
                 // Raw preview key 0 = the document itself (its colour display folded in).

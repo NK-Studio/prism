@@ -302,3 +302,20 @@ document, hard round 60 px or soft round 300 px.
 
 Not measured: a physical tablet's report rate and pen-to-photon latency, 120 Hz displays (the
 300 px soft brush's 5–9 ms push would not fit an 8.3 ms frame), Windows.
+
+**Fixed the same day:**
+
+- The release commit takes the live stroke's pixels (`LiveStroke::offer`, then `paint.stroke` /
+  `paint.pencil` adopts them when the command, document revision, settings, seed and points match
+  and no CSP start/end, post correction or reference layer is involved; anything else renders as
+  before). The history step, undo and the journal are unchanged; the stored pixels are exactly
+  what the canvas showed (a replay of the command can differ by up to 1/255, the preview's known
+  rounding). Release commit: **21 / 38 / 147 → 0.2 / 0.3 / 0.2 ms**; the following frame still
+  refreshes the stroke's bounds once (1.2–5.4 ms).
+- Dabs pushed by the frame's input are refreshed in the same frame (`refresh_live_stroke` after
+  the input), one frame earlier: the release frame now finds nothing left to refresh (0 px,
+  was the last push's 8.8 k px).
+- A push no canvas refresh showed asks for another frame (`PrismApp::live_pushes`).
+
+Live frames are unchanged (median UI 2.7–6.9 ms, push 0.6–5.2 ms, frame gap 16.7 ms). One run
+had two slow pushes (41 / 23 ms) late in the stroke; two repeats did not (max 1.5–1.7 ms).

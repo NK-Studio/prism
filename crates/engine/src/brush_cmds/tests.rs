@@ -510,6 +510,102 @@ fn live_stroke_matches_the_committed_stroke() {
     assert!(LiveStroke::begin(&Session::new(), &json!({"points": [[1, 1]]})).is_err());
 }
 
+/// A soft wavy `paint.stroke` drawn live in batches of three, its params and its points.
+fn wavy_live(s: &Session, symmetric: bool) -> (LiveStroke, Value, Vec<[f64; 3]>) {
+    let pts: Vec<[f64; 3]> = (0..30).map(|i| f64::from(i) / 29.0).map(|t| [20.0 + 160.0 * t, 50.0 + 25.0 * (t * 9.0).sin(), 0.3 + 0.7 * t]).collect();
+    let mut p = json!({"points": [pts[0]], "brush": {"size": 24, "hardness": 0.2, "pressureSize": true, "smoothing": {"amount": 0.4}}, "target": "pixels"});
+    if symmetric {
+        p["zoom"] = json!(1.0);
+    }
+    let mut live = LiveStroke::begin(s, &p).unwrap();
+    for c in pts[1..].chunks(3) {
+        let sp: Vec<StrokePoint> = c.iter().map(|q| StrokePoint::new(q[0], q[1], q[2] as f32)).collect();
+        live.push(&sp).unwrap();
+    }
+    (live, p, pts)
+}
+
+fn commit_params(p: &Value, pts: &[[f64; 3]], seed: u64) -> Value {
+    let mut commit = p.clone();
+    commit["points"] = json!(pts);
+    commit["seed"] = json!(seed);
+    commit
+}
+
+#[test]
+fn an_offered_live_stroke_is_its_commit_without_rendering_again() {
+    // Releasing the pen used to render the whole stroke again (21–147 ms for a 3 s stroke): the
+    // commit now takes the live stroke's pixels when it reproduces the same stroke.
+    let mut s = session(200, 100);
+    let mut plain = session(200, 100);
+    let (live, p, pts) = wavy_live(&s, false);
+    live.offer(&mut s);
+    assert!(s.prepared_stroke.is_some());
+    s.execute("paint.stroke", commit_params(&p, &pts, live.seed)).unwrap();
+    assert!(s.prepared_stroke.is_none(), "the commit takes the offer");
+    let shown = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
+    assert!(same_pixels(&shown, &surface(&s), Rect::new(0, 0, 200, 100)), "exactly what the canvas showed");
+    // The same as rendering the stroke from its points (within the preview's rounding).
+    plain.execute("paint.stroke", commit_params(&p, &pts, live.seed)).unwrap();
+    let (a, b) = (surface(&s), surface(&plain));
+    let worst = (0..100).flat_map(|y| (0..200).map(move |x| (x, y))).map(|(x, y)| (0..4).map(|i| (a.rgba(x, y)[i] - b.rgba(x, y)[i]).abs()).fold(0.0f32, f32::max)).fold(0.0f32, f32::max);
+    assert!(worst <= 1.0 / 255.0, "{worst}");
+    assert!(b.rgba(20, 50)[3] > 0.0 || b.rgba(100, 50)[3] > 0.0 || a.rgba(180, 50)[0] < 1.0, "the stroke is there");
+    // It really is the offer that lands (a marker in the offered pixels shows up).
+    let mut marked = session(200, 100);
+    let (live, p, pts) = wavy_live(&marked, false);
+    live.offer(&mut marked);
+    let prep = marked.prepared_stroke.as_mut().unwrap();
+    prep.surface.write_region(Rect::new(0, 0, 1, 1), &[1.0, 0.0, 0.0, 1.0]);
+    marked.execute("paint.stroke", commit_params(&p, &pts, live.seed)).unwrap();
+    assert_eq!(surface(&marked).rgba(0, 0), [1.0, 0.0, 0.0, 1.0]);
+    // One history step, undone like any stroke.
+    assert_eq!(s.active().unwrap().history.past_len(), plain.active().unwrap().history.past_len());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(same_pixels(&surface(&s), &surface(&session(200, 100)), Rect::new(0, 0, 200, 100)));
+}
+
+#[test]
+fn a_commit_that_differs_from_the_offer_renders_its_own_stroke() {
+    let reference = |pts: &[[f64; 3]], p: &Value, seed: u64| {
+        let mut r = session(200, 100);
+        r.execute("paint.stroke", commit_params(p, pts, seed)).unwrap();
+        surface(&r)
+    };
+    // Other points.
+    let mut s = session(200, 100);
+    let (live, p, pts) = wavy_live(&s, false);
+    live.offer(&mut s);
+    let other: Vec<[f64; 3]> = pts.iter().map(|q| [q[0], q[1] + 20.0, q[2]]).collect();
+    s.execute("paint.stroke", commit_params(&p, &other, live.seed)).unwrap();
+    assert!(same_pixels(&surface(&s), &reference(&other, &p, live.seed), Rect::new(0, 0, 200, 100)));
+    assert!(s.prepared_stroke.is_none(), "a stale offer is dropped");
+    // Another seed, other settings, or an edit in between.
+    for change in 0..3 {
+        let mut s = session(200, 100);
+        let (live, p, pts) = wavy_live(&s, false);
+        live.offer(&mut s);
+        let (mut commit, mut want) = (commit_params(&p, &pts, live.seed), session(200, 100));
+        match change {
+            0 => commit["seed"] = json!(live.seed.wrapping_add(1)),
+            1 => commit["brush"]["hardness"] = json!(1.0),
+            _ => {
+                s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+                want.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+            }
+        }
+        s.execute("paint.stroke", commit.clone()).unwrap();
+        want.execute("paint.stroke", commit).unwrap();
+        assert!(same_pixels(&surface(&s), &surface(&want), Rect::new(0, 0, 200, 100)), "change {change}");
+    }
+    // Clearing drops it.
+    let mut s = session(200, 100);
+    let (live, ..) = wavy_live(&s, false);
+    live.offer(&mut s);
+    s.clear_prepared_stroke();
+    assert!(s.prepared_stroke.is_none());
+}
+
 #[test]
 fn stroke_coordinate_validation_keeps_the_existing_bounds() {
     let edges = [StrokePoint::new(-MAX_COORD, MAX_COORD, 1.0), StrokePoint::new(MAX_COORD, -MAX_COORD, 1.0)];
