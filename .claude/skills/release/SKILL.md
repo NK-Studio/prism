@@ -45,19 +45,20 @@ previous step (repeat to go further back).
 
 ## Background the steps rely on
 
-- GitHub Actions: only the `Build` workflow (build.yml) is on. Every push to main packages macOS
-  aarch64 and Windows x64 as run artifacts; the belt takes the Windows `.msi` from there
-  (`gh run download <run id> --repo NK-Studio/prism --name prism-windows-x64 --dir dist/release`).
-  Release/Publish workflows are off, so publishing stays local. macOS is built locally, Apple silicon only:
-  RustRover "Prism Package (macOS)" with ▶ (the hammer only builds the binary) or
-  `packaging/macos/package.sh --arch aarch64`. Without an Actions run, Windows needs a Windows PC (`packaging/windows/package.ps1`).
+- **Release packages always come from GitHub Actions, never from a build on this Mac.** Only the
+  `Build` workflow (build.yml) is on. Every push to main packages macOS aarch64 (Developer ID
+  signed, notarized, embedded fonts) and Windows x64 as run artifacts; the belt takes both from the
+  run of the version commit (`gh run download <run id> --repo NK-Studio/prism --name
+  prism-macos-aarch64 --dir dist/release`, then `--name prism-windows-x64`). Do not run RustRover
+  "Prism Package (macOS)" or `packaging/macos/package.sh` for a release: that build is ad-hoc signed
+  (1.4.0–1.4.2 and the first 1.4.3 upload went out that way by mistake; signed installs refuse such
+  an update). The belt's macOS step checks the DMG is notarized. Release/Publish workflows are off,
+  so only the publishing (the feed and the GitHub Release) stays local.
 - First-time installs come from the public GitHub Release `v<version>` of NK-Studio/prism: the
   `.dmg` (open it, drag Prism onto Applications), like Ramus. `publish-feed` uploads it together
   with the update packages and checks it's on the release.
-- Without Developer ID secrets the app is ad-hoc signed: in-app updates work, but a .dmg
-  downloaded from the web is blocked by Gatekeeper the first time (System Settings › Privacy &
-  Security › Open Anyway; the release notes say so). Once users have a Developer ID–signed build,
-  later updates must use the same Team ID or Prism refuses them.
+- The Actions build is signed with the Developer ID (Team 9PA2HRW995). Installed copies of a
+  signed build accept only updates with the same Team ID; ad-hoc copies accept either.
 - Publishing: RustRover "Prism Publish Update (dry run)" then "Prism Publish Update",
   or `packaging/publish-update.sh`. It signs with `~/prism-update.key`, uploads the `.app.zip` /
   `.msi` update packages and the `.dmg` installer to the GitHub Release `v<version>` of NK-Studio/prism

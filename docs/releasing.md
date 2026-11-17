@@ -268,9 +268,14 @@ machine. It clones `../prism-updates`, signs the feed for `dist/release` with
 from the pushed tag) and checks they download, force-pushes a single commit (as the `NK-Studio`
 gh account) and waits for the live feed. Add `--dry-run` to only print the feed (nothing is
 uploaded or pushed). RustRover has *Prism Publish Update* and *Prism Publish Update (dry run)*
-for it. The local release belt (`cargo xtask release`) builds macOS here and takes the Windows
-`.msi` from the `Build` workflow's `prism-windows-x64` artifact for the version commit
-(`gh run download <run id> --repo NK-Studio/prism --name prism-windows-x64 --dir dist/release`).
+for it. **The packages themselves always come from GitHub Actions, never from a local build:**
+the release belt (`cargo xtask release`) takes both from the `Build` workflow's run for the
+version commit, `prism-macos-aarch64` (Developer ID signed, notarized, with the embedded fonts)
+and `prism-windows-x64`
+(`gh run download <run id> --repo NK-Studio/prism --name prism-macos-aarch64 --dir dist/release`,
+then the same with `prism-windows-x64`). A package built on this Mac is ad-hoc signed: Gatekeeper
+blocks its DMG, and copies installed from a signed build refuse it as an update (the Team ID
+differs). The belt's macOS step checks the DMG is notarized.
 
 **Release checklist:** `cargo xtask release start X.Y.Z` walks a release step by step: version,
 commit, macOS build, smoke test, Windows build, tag, installers, feed, update check. The steps

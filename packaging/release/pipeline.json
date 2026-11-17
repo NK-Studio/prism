@@ -22,21 +22,23 @@
     },
     {
       "id": "build-macos",
-      "title": "Build the macOS packages",
+      "title": "Get the macOS packages from GitHub Actions",
       "do": [
-        "RustRover: run \"Prism Package (macOS)\" with ▶ (not the hammer, which only builds the binary). Terminal: `packaging/macos/package.sh --arch aarch64`. Prism ships for Apple silicon only.",
-        "With a Developer ID set (MACOS_SIGN_IDENTITY plus APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER or APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID) the app is signed and notarized; without, it is ad-hoc signed (fine for in-app updates, blocked by Gatekeeper when downloaded from the web).",
-        "Output: dist/release/prism-{version}-macos-aarch64.dmg and .app.zip."
+        "Release builds are never made on this Mac: the push of the version commit runs the GitHub Actions `Build` workflow (build.yml), which builds macOS Apple silicon with the embedded fonts, signs it with the Developer ID and notarizes it. Wait for it: `gh run list --repo NK-Studio/prism --workflow build.yml --limit 3` (its head must be the version commit).",
+        "Download its macOS artifact into dist/release/: `gh run download <run id> --repo NK-Studio/prism --name prism-macos-aarch64 --dir dist/release`.",
+        "A package built here (RustRover \"Prism Package (macOS)\", `packaging/macos/package.sh`) is ad-hoc signed and has no embedded fonts: fine for trying things, never for a release. This step refuses it.",
+        "Output: dist/release/prism-{version}-macos-aarch64.dmg and .app.zip, signed and notarized."
       ],
       "verify": [
-        { "kind": "files", "paths": ["dist/release/prism-{version}-macos-*.app.zip", "dist/release/prism-{version}-macos-*.dmg"] }
+        { "kind": "files", "paths": ["dist/release/prism-{version}-macos-*.app.zip", "dist/release/prism-{version}-macos-*.dmg"] },
+        { "kind": "command", "run": "spctl -a -vv -t open --context context:primary-signature dist/release/prism-{version}-macos-aarch64.dmg 2>&1 | grep -q 'source=Notarized Developer ID'" }
       ]
     },
     {
       "id": "smoke-test",
       "title": "Try the built app",
       "do": [
-        "Open dist/release/prism-{version}-macos-*.dmg, drag Prism to Applications, launch it.",
+        "Open dist/release/prism-{version}-macos-*.dmg (the one from GitHub Actions), drag Prism to Applications, launch it.",
         "Help › About Prism shows {version}. Open a PSD, paint a stroke, save a copy, quit."
       ],
       "verify": []
@@ -46,9 +48,8 @@
       "title": "Build the Windows installer",
       "optional": true,
       "do": [
-        "The push of the version commit runs the GitHub Actions `Build` workflow (build.yml), which packages Windows x64 (unsigned). Wait for it: `gh run list --repo NK-Studio/prism --workflow build.yml --limit 3`.",
-        "Download its Windows artifact into this Mac's dist/release/: `gh run download <run id> --repo NK-Studio/prism --name prism-windows-x64 --dir dist/release` (or Actions › the run › Artifacts › prism-windows-x64, unzipped into dist/release/).",
-        "No Actions run: on a Windows PC with this commit, `pwsh packaging/windows/package.ps1 -Arch x64`, then copy dist/release/prism-{version}-windows-x64.msi here.",
+        "The same `Build` run as the macOS packages also packages Windows x64 (unsigned).",
+        "Download its Windows artifact into dist/release/: `gh run download <run id> --repo NK-Studio/prism --name prism-windows-x64 --dir dist/release` (or Actions › the run › Artifacts › prism-windows-x64, unzipped into dist/release/).",
         "Skip this step (`cargo xtask release skip`) to ship macOS only."
       ],
       "verify": [{ "kind": "files", "paths": ["dist/release/prism-{version}-windows-*.msi"] }]
