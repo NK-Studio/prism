@@ -1,48 +1,51 @@
 # Releasing Prism
 
-Every push to the `release` branch runs `.github/workflows/release.yml`. The workflow builds
-signed installers for macOS and Windows, plus a FreeBSD tarball, then creates
-or updates a **draft** GitHub Release named `Prism v<version>`. Nobody sees a draft until a
-maintainer publishes it.
+Releases are cut from `main`. Day-to-day work lands on `develop`; merging `develop` into `main`
+and pushing runs the GitHub Actions `Build` workflow (`.github/workflows/build.yml`), which
+builds the signed, notarized macOS Apple silicon package and the Windows x64 package. The
+release belt (`cargo xtask release`, below under *Release checklist*) takes both packages from
+that run, tags the version commit and publishes the GitHub Release and the update feed from this
+machine. There is no `release` branch any more (retired 2026-11-18), and `release.yml` is
+disabled.
 
 This is Prism's implementation of the shared
 [release playbook](release-playbook.md). User-facing names say **Prism**. Files, binaries
 and ids stay lowercase (`prism-<version>-<platform>-<arch>.<ext>`, `com.nkstudio.prism`).
 
+## Branches
+
+| Branch | Use |
+|---|---|
+| `develop` | Everyday work. Pushes run no workflow. |
+| `main` | What ships. Every push runs `Build`; release versions are tagged here. |
+
 ## Cutting a release
 
-1. **Bump the version** on `main`. The only place it lives is `[workspace.package] version`
-   in the root `Cargo.toml`:
+1. **Merge `develop` into `main`** with the work for this release.
+2. **Bump the version** on `main`. The only place it lives is `[workspace.package] version`
+   in the root `Cargo.toml`. Always use the xtask: it updates Prism's own crates in
+   `Cargo.lock` and nothing else (a find-and-replace of the old version also hits third-party
+   crates that happen to share it, and `cargo --locked` then fails in CI):
 
    ```sh
-   cargo xtask version                 # prints the current version, e.g. 0.1.0
-   cargo xtask version set 0.2.0       # or 0.2.0-rc.1; updates Cargo.toml and Cargo.lock
+   cargo xtask version                 # prints the current version, e.g. 1.6.1
+   cargo xtask version set 1.7.0       # or 1.7.0-rc.1; updates Cargo.toml and Cargo.lock
    ```
 
-   Commit the change (`Cargo.toml` + `Cargo.lock`) through the normal review flow.
-2. **Merge `main` into `release`** (or fast-forward it) and push. The workflow starts by itself.
-3. **Wait for the draft.** After about 30 to 45 minutes (notarization is the slow part), the
-   Releases page has a draft `Prism v0.2.0`, tagged `v0.2.0` on the pushed commit, with
-   every artifact and `SHA256SUMS.txt`. The notes are generated from the merged PRs.
-4. **Check it.** Download an installer or two and look at the job summaries. Any
-   `::warning::` there means a signing secret was missing and that artifact is unsigned.
-5. **Add the scorecard deltas** to the draft's notes: what moved in
-   [`docs/scorecard.md`](scorecard.md) since the previous release. Compare the summary table
-   and the performance table of both tags (`git diff v<previous> v<this> -- docs/scorecard.md`)
-   and list each area's done / partial / missing change, the scenarios that newly meet their
-   budget or got slower, corpus floors raised, and the change in settings that do nothing.
-   Quote numbers with the baseline's machine and load average.
-6. **Publish** the draft in the GitHub UI. Publishing creates the `v0.2.0` tag. Versions with a
-   pre-release suffix (`-rc.1`) are marked as pre-releases.
+   Commit `Cargo.toml` + `Cargo.lock` with the version as the message (`1.7.0`) and push `main`.
+3. **Wait for `Build`** on the version commit (about 15 to 25 minutes):
+   `gh run list --workflow build.yml --limit 3`.
+4. **Tag** the version commit, `git tag v1.7.0 && git push origin v1.7.0`, then follow the
+   belt for the installers, the GitHub Release and the update feed.
+5. **Merge `main` back into `develop`** so the version bump is there too.
 
-Pushing to `release` again before you publish rebuilds the same draft and replaces its assets.
-After the draft is published, the workflow refuses to touch that version again, so bump it first.
+`cargo xtask release start X.Y.Z` walks these steps with checks (see *Release checklist*).
 
-**Test runs:** *Actions → Release → Run workflow* runs the whole pipeline by hand. The optional
-`version` input (such as `0.2.0-rc.1`) overrides `Cargo.toml` for that run only. The jobs apply
-it with `cargo xtask version set` before building, so the binaries report it too. The run still
-needs the `release` environment, which only the `release` branch can use, so pick that branch
-in the dialog.
+## The retired `release.yml`
+
+`release.yml` (disabled) built every platform below and made a draft GitHub Release on each push
+to the old `release` branch. It is kept for reference; the sections below still describe its
+packaging scripts, which the `Build` workflow and local packaging share.
 
 ## What gets built
 
@@ -304,10 +307,10 @@ feed URL at run time in any build, which is harmless because the signature is st
 
 Secrets live in two repository environments (*Settings → Environments*):
 
-- **`macos-signing`**, deployment branches `main` and `release`: the `APPLE_*` and
+- **`macos-signing`**, deployment branch `main`: the `APPLE_*` and
   `KEYCHAIN_PASSWORD` secrets below, and nothing else. The macOS jobs of `release.yml` and of
   `build.yml` (signed Apple Silicon builds of every `main` push) declare it.
-- **`release`**, deployment branch `release` only: everything else (Windows signing, the update
+- **`release`**, deployment branch `release` only (the branch is retired; the environment only matters if `release.yml` is revived): everything else (Windows signing, the update
   feed's `PRISM_UPDATE_SECRET_KEY` and `UPDATE_SITE_TOKEN`). The other jobs in `release.yml`
   that sign or publish declare it (the FreeBSD job signs nothing and does not), so nothing on
   `main` can read the update key.

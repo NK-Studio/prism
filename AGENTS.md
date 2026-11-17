@@ -154,7 +154,7 @@ Then append a terse entry to `log/devlog.md` (what landed, numbers, what's still
 - `docs/roadmap.md`: milestones M0–M12, status and the current focus.
 - `docs/parity.md`: generated Photoshop menu coverage.
 - `docs/scorecard.md`: generated scorecard (sources: `scorecard/*.toml`, `perf/budgets.toml`, `perf/baseline.json`, corpus floors, prefs audit).
-- `docs/releasing.md`: cutting a release (`cargo xtask version`, the `release` branch), signing secrets, packaging scripts in `packaging/`.
+- `docs/releasing.md`: branches (`develop` for work, `main` for releases; no `release` branch), cutting a release (`cargo xtask version set`), signing secrets, packaging scripts in `packaging/`.
 - `../craftrules/release/playbook.md`: how every storytold app builds signed release binaries (the canonical recipe; `docs/release-playbook.md` just points there); `docs/releasing.md` is Prism's specifics.
 - `plan/` (local, gitignored): research, parity plan, execution plan, estimates.
 - `log/` (local, gitignored): the dev log.
