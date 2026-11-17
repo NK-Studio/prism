@@ -27,11 +27,11 @@ use serde_json::{Map, Value, json};
 use crate::widgets;
 
 /// Left column: the options.
-const OPTIONS_W: f32 = 232.0;
+pub(crate) const OPTIONS_W: f32 = 232.0;
 /// Right column: the buttons.
-const BUTTON_W: f32 = 112.0;
-const GAP: f32 = 16.0;
-const FIELD_W: f32 = 56.0;
+pub(crate) const BUTTON_W: f32 = 112.0;
+pub(crate) const GAP: f32 = 16.0;
+pub(crate) const FIELD_W: f32 = 56.0;
 /// The dialog's content width.
 pub const WIDTH: f32 = OPTIONS_W + GAP + BUTTON_W;
 
@@ -60,7 +60,7 @@ fn kind(f: &Map<String, Value>) -> &str {
 
 /// Is this dialog drawn in Photoshop's classic adjustment layout?
 pub fn owns(f: &Map<String, Value>) -> bool {
-    matches!(kind(f), "brightnessContrast" | "levels" | "curves" | "exposure" | "vibrance" | "hueSaturation" | "colorBalance" | "blackWhite" | "photoFilter")
+    matches!(kind(f), "brightnessContrast" | "levels" | "curves" | "exposure" | "vibrance" | "hueSaturation" | "colorBalance" | "blackWhite" | "photoFilter" | "channelMixer")
 }
 
 /// The dialog's content width.
@@ -76,11 +76,11 @@ pub fn width(f: &Map<String, Value>) -> f32 {
 }
 
 /// A label in this dialog, with Photoshop's own wording where it differs from Prism's elsewhere.
-fn label(s: &str) -> &str {
+pub(crate) fn label(s: &str) -> &str {
     crate::i18n::tr_ctx(crate::i18n::current(), "adjust", s)
 }
 
-fn num(f: &Map<String, Value>, key: &str) -> f32 {
+pub(crate) fn num(f: &Map<String, Value>, key: &str) -> f32 {
     f.get(key).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0) as f32
 }
 
@@ -137,6 +137,7 @@ pub fn body(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
         "colorBalance" => color_balance(ui, f),
         "blackWhite" => black_white(app, ui, f),
         "photoFilter" => photo_filter(ui, f),
+        "channelMixer" => channel_mixer(app, ui, f),
         _ => brightness_contrast(app, ui, f),
     };
     settle(ui, f);
@@ -210,7 +211,7 @@ fn undo_keys(ui: &egui::Ui, f: &mut Map<String, Value>) {
 }
 
 /// Alt+P (Option+P) turns the preview on and off; the checkbox is labelled with it.
-fn preview_checkbox(ui: &mut egui::Ui, f: &mut Map<String, Value>, shortcut_in_label: bool) {
+pub(crate) fn preview_checkbox(ui: &mut egui::Ui, f: &mut Map<String, Value>, shortcut_in_label: bool) {
     let mut preview = f.get("__preview").and_then(Value::as_bool).unwrap_or(true);
     if ui.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::P)) {
         preview = !preview;
@@ -306,7 +307,7 @@ fn levels(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 
 /// Photoshop 27.4's Exposure fields: up to `decimals` places, trailing zeros dropped, and a "+"
 /// before values of 1 and more ("+20", "+11.86", "+1", but "0.5", "0.42", "-0.5"; measured).
-fn signed(v: f64, decimals: i32) -> String {
+pub(crate) fn signed(v: f64, decimals: i32) -> String {
     let k = 10f64.powi(decimals);
     let r = (v * k).round() / k;
     let r = if r == 0.0 { 0.0 } else { r };
@@ -339,7 +340,7 @@ pub fn gamma_at(p: f32) -> f32 {
 /// An Exposure option: the label with its field at the right (written by `format`), then the
 /// slider on its own scale `prange` (`to_pos` / `from_pos`), values kept to `step`.
 #[allow(clippy::too_many_arguments)]
-fn fine_row(
+pub(crate) fn fine_row(
     ui: &mut egui::Ui,
     text: &str,
     value: &mut f32,
@@ -664,6 +665,145 @@ fn color_balance(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> 
     outcome
 }
 
+/// Image › Adjustments › Channel Mixer in Photoshop 27.4's layout (measured): "Preset" (its six
+/// monochrome presets), "Output Channel" with round red / green / blue swatches (one grey swatch
+/// with Monochrome), Monochrome, the Red / Green / Blue rows (fields "200", "-200"; sliders
+/// -200..200 on black → colour → white tracks), "Total" as text with a warning sign above 100 %,
+/// a hairline, then Constant; OK, Cancel (Alt: Reset) and Preview at the right.
+fn channel_mixer(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
+    let mut outcome = None;
+    let mode = app.session.active().map_or(prism_doc::ColorMode::Rgb, |s| s.doc.mode);
+    let defaults = prism_engine::adjust_params::default_for("channelMixer", mode).map(|d| prism_engine::adjust_params::to_params(&d)).unwrap_or(Value::Null);
+    let mut values = crate::filter_dialog::params_of(f);
+    let mut changed = false;
+    let alt = ui.input(|i| i.modifiers.alt);
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let out_id = crate::adjust_dialog::editor_mem("channelMixer").with("cm-out");
+    let mut out: usize = ui.data(|d| d.get_temp(out_id)).unwrap_or(0).min(2);
+    let mono = values.get("monochrome").and_then(Value::as_bool).unwrap_or(false);
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(OPTIONS_W);
+            ui.horizontal(|ui| {
+                ui.label(label("Preset"));
+                if crate::adjust_presets::dropdown(ui, "pscm-preset", "channelMixer", mode, &mut values, &defaults, ui.available_width()) {
+                    changed = true;
+                }
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(label("Output Channel"));
+                ui.add_space(6.0);
+                let swatches: &[(egui::Color32, &str)] = if mono {
+                    &[(egui::Color32::from_gray(128), "Gray")]
+                } else {
+                    &[(egui::Color32::from_rgb(255, 0, 0), "Red"), (egui::Color32::from_rgb(0, 255, 0), "Green"), (egui::Color32::from_rgb(0, 0, 255), "Blue")]
+                };
+                for (i, (c, name)) in swatches.iter().enumerate() {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), egui::Sense::click());
+                    let centre = rect.center();
+                    ui.painter().circle_filled(centre, 11.0, *c);
+                    ui.painter().circle_stroke(centre, 11.0, egui::Stroke::new(1.0, egui::Color32::from_black_alpha(90)));
+                    let on = mono || i == out;
+                    if on {
+                        ui.painter().circle_stroke(centre, 13.5, egui::Stroke::new(2.0, t.text));
+                    }
+                    let name = tl!(name);
+                    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, name));
+                    if resp.on_hover_text(name).clicked() {
+                        out = i;
+                    }
+                }
+            });
+            ui.add_space(4.0);
+            let mut m = mono;
+            if widgets::checkbox(ui, &mut m, tl!("Monochrome")).changed() {
+                values["monochrome"] = json!(m);
+                if m {
+                    values["gray"] = json!([40.0, 40.0, 20.0, 0.0]);
+                } else if let Some(o) = values.as_object_mut() {
+                    o.remove("gray");
+                }
+                changed = true;
+            }
+            ui.add_space(8.0);
+            let key = if m { "gray" } else { ["red", "green", "blue"][out] };
+            let identity: [f32; 4] = if m { [40.0, 40.0, 20.0, 0.0] } else { std::array::from_fn(|i| if i == out { 100.0 } else { 0.0 }) };
+            let read = values.get(key).and_then(Value::as_array).cloned();
+            let mut row: [f32; 4] = std::array::from_fn(|i| {
+                read.as_ref().and_then(|a| a.get(i)).and_then(Value::as_f64).filter(|v| v.is_finite()).map_or(identity[i], |v| v as f32).clamp(-200.0, 200.0)
+            });
+            let before = row;
+            ui.spacing_mut().item_spacing.y = 2.0;
+            let grey = egui::Color32::from_gray(128);
+            let mix_row = |ui: &mut egui::Ui, text: &str, x: &mut f32, track: &[egui::Color32]| {
+                ui.horizontal(|ui| {
+                    ui.label(text);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        widgets::value_field(ui, x, -200.0..=200.0, "", FIELD_W);
+                    });
+                });
+                widgets::slider(ui, x, -200.0..=200.0, Some(track));
+                *x = x.round().clamp(-200.0, 200.0);
+                ui.add_space(6.0);
+            };
+            for (i, (name, c)) in [("Red", egui::Color32::from_rgb(255, 0, 0)), ("Green", egui::Color32::from_rgb(0, 255, 0)), ("Blue", egui::Color32::from_rgb(0, 0, 255))]
+                .into_iter()
+                .enumerate()
+            {
+                if let Some(x) = row.get_mut(i) {
+                    mix_row(ui, label(name), x, &[egui::Color32::BLACK, c, egui::Color32::WHITE]);
+                }
+            }
+            let total = row[0] + row[1] + row[2];
+            ui.horizontal(|ui| {
+                ui.label(label("Total"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label("%");
+                    ui.label(format!("{total:.0}"));
+                    if total > 100.0 {
+                        ui.label(egui::RichText::new("⚠").color(t.text)).on_hover_text(tl!("Total exceeds 100%"));
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            let line = ui.available_rect_before_wrap();
+            ui.painter().hline(line.x_range(), line.top(), egui::Stroke::new(1.0, t.separator));
+            ui.add_space(8.0);
+            mix_row(ui, label("Constant"), &mut row[3], &[egui::Color32::BLACK, grey, egui::Color32::WHITE]);
+            if row != before {
+                values[key] = json!(row);
+                changed = true;
+            }
+        });
+        ui.add_space(GAP);
+        ui.vertical(|ui| {
+            ui.set_width(BUTTON_W);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            if widgets::primary_button(ui, tl!("OK"), BUTTON_W).clicked() {
+                outcome = Some(true);
+            }
+            if widgets::secondary_button(ui, if alt { tl!("Reset") } else { tl!("Cancel") }, BUTTON_W).clicked() {
+                if alt {
+                    values = defaults.clone();
+                    out = 0;
+                    changed = true;
+                } else {
+                    outcome = Some(false);
+                }
+            }
+            ui.add_space(4.0);
+            preview_checkbox(ui, f, true);
+        });
+    });
+    ui.data_mut(|d| d.insert_temp(out_id, out));
+    if changed && let Value::Object(v) = values {
+        f.retain(|k, _| k.starts_with("__"));
+        f.extend(v);
+    }
+    outcome
+}
+
 /// Image › Adjustments › Photo Filter in Photoshop 27.4's layout (captured): "Filter" (a radio
 /// with the dropdown of its twenty filters, named in English even in the Korean UI) or "Color" (a
 /// radio with the colour swatch), "Density" ("25%" with a slider), Preserve Luminosity; OK, Cancel
@@ -913,7 +1053,7 @@ fn black_white(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String,
     outcome
 }
 
-fn whole_text(v: f64) -> String {
+pub(crate) fn whole_text(v: f64) -> String {
     signed(v, 0)
 }
 
@@ -957,7 +1097,7 @@ fn vibrance(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
 }
 
 /// A titled group box (Photoshop's "Show Amount of:", "Grid size:", "Show:").
-fn group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
     let t = crate::theme::Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(title).color(t.text_dim));
     egui::Frame::new().stroke(egui::Stroke::new(1.0, t.field_border)).corner_radius(t.radius_sm).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
@@ -968,7 +1108,7 @@ fn group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
 }
 
 /// A radio button with its label.
-fn radio(ui: &mut egui::Ui, on: bool, text: &str) -> bool {
+pub(crate) fn radio(ui: &mut egui::Ui, on: bool, text: &str) -> bool {
     let t = crate::theme::Tokens::get(ui.ctx());
     let font = egui::TextStyle::Body.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, t.text);
@@ -1680,6 +1820,37 @@ mod tests {
         assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
     }
 
+    /// Photoshop 27.4's Channel Mixer: Output Channel swatches, Monochrome (Photoshop's grey mix
+    /// 40/40/20), the rows, Total with a warning above 100 %, Constant; Alt: Reset; Cmd+Z.
+    #[test]
+    fn channel_mixer_dialog_works_like_photoshops() {
+        let (mut h, id) = dialog_for("image.adjustments.channelMixer");
+        assert!(owns(&h.state().ui.dialogs[0].fields));
+        for label in ["Output Channel", "Monochrome", "Total", "Constant", "OK", "Cancel"] {
+            assert!(h.query_by_label(label).is_some(), "{label}");
+        }
+        // Red / Green / Blue: an output swatch and a row each.
+        for label in ["Red", "Green", "Blue"] {
+            assert_eq!(h.query_all_by_label(label).count(), 2, "{label}");
+        }
+        assert!(h.query_by_label("⚠").is_none(), "100 % is no warning");
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("red".into(), json!([200, 0, 0, 0]));
+        h.run_steps(3);
+        assert!(h.query_by_label("⚠").is_some(), "200 % warns");
+        click(&mut h, "Monochrome", egui::Modifiers::NONE);
+        assert_eq!(field(&h, id, "gray"), json!([40.0, 40.0, 20.0, 0.0]));
+        key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert_eq!(field(&h, id, "monochrome"), json!(false));
+        click(&mut h, "Reset", egui::Modifiers::ALT);
+        assert_eq!(field(&h, id, "red").get(0).and_then(Value::as_f64), Some(100.0));
+        let steps = h.state().session.active().unwrap().history.past_len();
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("blue".into(), json!([0, 20, 80, 0]));
+        h.run_steps(2);
+        click(&mut h, "OK", egui::Modifiers::NONE);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    }
+
     /// A double-click on a Hue/Saturation slider's knob puts it back to 0.
     #[test]
     fn hue_saturation_slider_double_click_resets_to_zero() {
@@ -1772,6 +1943,12 @@ mod tests {
             crate::adjust_dialog::open(h.state_mut(), "image.adjustments.photoFilter").unwrap();
             h.run_steps(5);
             h.render().unwrap().save(out.join(format!("{kind:?}-photo-filter.png"))).unwrap();
+            let ok = h.state().ui.dialogs.last().map(|d| d.id).unwrap();
+            h.state_mut().ui.dialogs.retain(|d| d.id != ok);
+            let id = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.channelMixer").unwrap();
+            h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("red".into(), json!([200, 0, 0, 0]));
+            h.run_steps(5);
+            h.render().unwrap().save(out.join(format!("{kind:?}-channel-mixer.png"))).unwrap();
         }
     }
 

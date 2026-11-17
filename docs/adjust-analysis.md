@@ -258,7 +258,7 @@ documents with a disk error), so the remaining checks wait for a stable Photosho
 
 ## Presets
 
-The "Preset:" dropdowns of Levels, Curves, Exposure, Hue/Saturation and Black & White list Photoshop's built-in
+The "Preset:" dropdowns of Levels, Curves, Exposure, Hue/Saturation, Black & White and Channel Mixer list Photoshop's built-in
 presets (`ui-egui/src/adjust_presets.rs`), in its order, after Default; Custom shows once the
 settings match none. The settings were **observed, not copied**: Photoshop 27.4 was asked through
 its scripting interface to make an adjustment layer from each of its presets, and the layer's
@@ -319,6 +319,20 @@ Underwater); "Color" (색상) as a radio with the colour swatch (live under Filt
 
 Prism (`ui-egui/src/adjust_ps_ui.rs` `photo_filter`): the same; a custom colour falls back to
 Warming Filter (85) when Filter is chosen; Alt: Reset; Cmd+Z. Filter colours and maths unchanged.
+
+## Channel Mixer
+
+### Dialog (Photoshop 27.4, measured by driving it)
+
+"Preset" with six presets (all monochrome: Black & White Infrared, with Blue / Green / Orange / Red /
+Yellow Filter, each "(RGB)"; observed through Photoshop's scripting) and a menu button; "Output
+Channel" (출력 채널) with round red / green / blue swatches; "Monochrome" (단색); "Red", "Green",
+"Blue" (빨강 / 녹색 / 파랑) rows with fields ("200", "-200", no "+") and sliders linear over −200..200
+on black → colour → white tracks; "Total" (총합) as text, "200 %" with a warning sign once it passes
+100; a hairline; "Constant" (상수); OK, Cancel, "Preview(Opt+P)".
+
+Prism (`ui-egui/src/adjust_ps_ui.rs` `channel_mixer`): the same (Monochrome shows one grey swatch
+and starts from Photoshop's 40/40/20 mix); Alt: Reset; Cmd+Z. Maths unchanged.
 
 ## Still open
 

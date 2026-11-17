@@ -3837,6 +3837,9 @@ adjust	Tint	색조
 adjust	Filter	필터
 adjust	Color	색상
 adjust	Density	조밀도
+adjust	Output Channel	출력 채널
+adjust	Green	녹색
+adjust	Total	총합
 adjust	Tone	톤
 adjust	Cyan to Red	녹청에서 빨강
 adjust	Magenta to Green	자홍에서 초록
@@ -3927,3 +3930,10 @@ preset	Maximum White	최대 흰색
 preset	Neutral Density	중간 밀도
 preset	Red Filter	빨강 필터
 preset	Yellow Filter	노랑 필터
+preset	Black & White Infrared (RGB)	흑백 적외선(RGB)
+preset	Black & White with Blue Filter (RGB)	파랑 필터가 적용된 흑백(RGB)
+preset	Black & White with Green Filter (RGB)	녹색 필터가 적용된 흑백(RGB)
+preset	Black & White with Orange Filter (RGB)	주황 필터가 적용된 흑백(RGB)
+preset	Black & White with Red Filter (RGB)	빨강 필터가 적용된 흑백(RGB)
+preset	Black & White with Yellow Filter (RGB)	노랑 필터가 적용된 흑백(RGB)
+	Total exceeds 100%	총합이 100%를 넘습니다

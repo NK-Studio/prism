@@ -1,5 +1,5 @@
 //! The built-in presets of Photoshop 27.4's Image › Adjustments dialogs (the "Preset:" dropdown):
-//! Levels, Curves, Exposure, Hue/Saturation and Black & White.
+//! Levels, Curves, Exposure, Hue/Saturation, Black & White and Channel Mixer.
 //!
 //! The settings were observed, not copied: Photoshop was asked to make an adjustment layer from
 //! each of its presets and the layer's settings were read back through its scripting interface
@@ -94,6 +94,20 @@ fn bw(w: [i32; 6]) -> Value {
     json!({"reds": w[0], "yellows": w[1], "greens": w[2], "cyans": w[3], "blues": w[4], "magentas": w[5], "tint": false})
 }
 
+/// Channel Mixer's presets (RGB documents): monochrome mixes.
+const CHANNEL_MIXER_RGB: &[Preset] = &[
+    Preset { name: "Black & White Infrared (RGB)", params: || mono([-70, 200, -30, 0]) },
+    Preset { name: "Black & White with Blue Filter (RGB)", params: || mono([0, 0, 100, 0]) },
+    Preset { name: "Black & White with Green Filter (RGB)", params: || mono([0, 100, 0, 0]) },
+    Preset { name: "Black & White with Orange Filter (RGB)", params: || mono([50, 50, 0, 0]) },
+    Preset { name: "Black & White with Red Filter (RGB)", params: || mono([100, 0, 0, 0]) },
+    Preset { name: "Black & White with Yellow Filter (RGB)", params: || mono([34, 66, 0, 0]) },
+];
+
+fn mono(gray: [i32; 4]) -> Value {
+    json!({"monochrome": true, "gray": gray})
+}
+
 /// The built-in presets of adjustment `kind` for a document in `mode` (Photoshop lists its
 /// "(RGB)" Curves presets for RGB documents only).
 pub fn presets(kind: &str, mode: prism_doc::ColorMode) -> &'static [Preset] {
@@ -103,6 +117,7 @@ pub fn presets(kind: &str, mode: prism_doc::ColorMode) -> &'static [Preset] {
         "exposure" => EXPOSURE,
         "hueSaturation" => HUE_SATURATION,
         "blackWhite" => BLACK_WHITE,
+        "channelMixer" if mode == prism_doc::ColorMode::Rgb => CHANNEL_MIXER_RGB,
         _ => &[],
     }
 }
@@ -167,7 +182,7 @@ mod tests {
     /// Every preset resolves to valid settings that differ from the defaults.
     #[test]
     fn every_builtin_preset_resolves() {
-        for kind in ["levels", "curves", "exposure", "hueSaturation", "blackWhite"] {
+        for kind in ["levels", "curves", "exposure", "hueSaturation", "blackWhite", "channelMixer"] {
             let list = presets(kind, prism_doc::ColorMode::Rgb);
             assert!(!list.is_empty(), "{kind}");
             let default = prism_engine::adjust_params::default_for(kind, prism_doc::ColorMode::Rgb).map(|d| prism_engine::adjust_params::to_params(&d)).unwrap();
