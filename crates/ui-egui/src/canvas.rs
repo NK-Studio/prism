@@ -413,45 +413,69 @@ fn display_color(c: [f32; 3]) -> Color32 {
     Color32::from_rgb(b(c[0]), b(c[1]), b(c[2]))
 }
 
-/// The Eyedropper ring's two colours at document point (x, y): the colour under the pointer
-/// (what a click would pick) and the current foreground, or `None` where there is no colour
-/// to sample (#213).
-pub(crate) fn eyedropper_ring_colors(app: &mut PrismApp, x: f64, y: f64) -> Option<(Color32, Color32)> {
-    let new = composite_color(app, x, y)?;
-    let fg = app.session.tools.foreground;
-    Some((display_color(new), display_color([fg[0], fg[1], fg[2]])))
+/// An Eyedropper press while the button is held.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct EyedropperPress {
+    /// The press sets the background colour (⌥ on the Eyedropper itself), not the foreground.
+    pub background: bool,
+    /// The colour it replaces, taken when the press began.
+    pub replaced: [f32; 3],
 }
 
-/// Draw the Eyedropper's comparison ring at `p`: the sampled colour on the upper arc, the
-/// current one below, both over a thin dark outline so they read on any image (#213). Like
-/// Photoshop it shows only while the mouse button is held (`held`): hovering shows the plain
-/// crosshair and samples nothing. `None` when not held, there is nothing to sample, or the
+/// The Eyedropper ring's two colours at document point (x, y): the colour under the pointer
+/// (what a click would pick) and the colour the press replaces, taken when it began (the
+/// current foreground before any press) (#213). Where there is nothing to sample (transparency,
+/// off the image) the upper half keeps the colour picked so far, as in Photoshop: the ring stays
+/// up for the whole press.
+pub(crate) fn eyedropper_ring_colors(app: &mut PrismApp, x: f64, y: f64) -> (Color32, Color32) {
+    let tools = &app.session.tools;
+    let press = app.eyedropper_start;
+    let picked = if press.is_some_and(|p| p.background) { tools.background } else { tools.foreground };
+    let picked = [picked[0], picked[1], picked[2]];
+    let current = press.map_or(picked, |p| p.replaced);
+    let new = composite_color(app, x, y).unwrap_or(picked);
+    (display_color(new), display_color(current))
+}
+
+/// The sampling ring's radii in points: the colour band's inner and outer edge, then the grey
+/// band's outer edge (measured on Photoshop 2026's ring).
+const SAMPLING_RING: [f32; 3] = [59.0, 74.0, 88.0];
+
+/// Draw the Eyedropper's sampling ring around `p`, as Photoshop does: a grey outer band and,
+/// inside it, the sampled colour on the upper half and the colour the press replaces on the
+/// lower one (#213). It shows only while the mouse button is held (`held`); the pointer stays
+/// the pipette throughout, even where there is nothing to sample. `None` when not held or the
 /// Precise-cursor preference wants the plain crosshair.
-fn eyedropper_ring(app: &mut PrismApp, painter: &egui::Painter, xf: &ViewXform, p: Pos2, held: bool) -> Option<egui::CursorIcon> {
+fn eyedropper_ring(app: &mut PrismApp, ctx: &egui::Context, painter: &egui::Painter, xf: &ViewXform, p: Pos2, held: bool) -> Option<egui::CursorIcon> {
     if !held || app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise {
         return None;
     }
     let [x, y] = xf.to_doc(p);
-    let (new, current) = eyedropper_ring_colors(app, x, y)?;
-    // Two arcs with a small gap at 3 and 9 o'clock. Screen y grows down, so PI..TAU is the
-    // upper half (the new colour) and 0..PI the lower (the current one).
-    use std::f32::consts::{PI, TAU};
-    let (r, w, gap) = (11.0_f32, 4.0_f32, 0.16_f32);
-    let arc = |a0: f32, a1: f32| -> Vec<Pos2> {
-        (0..=24)
+    let (new, current) = eyedropper_ring_colors(app, x, y);
+    let [inner, mid, outer] = SAMPLING_RING;
+    // epaint strokes a circle outside its radius, so the grey band starts where the colours end.
+    painter.circle_stroke(p, mid, Stroke::new(outer - mid, crate::theme::Tokens::sampling_ring()));
+    // Two half-annuli split at 3 and 9 o'clock. Screen y grows down, so PI..2PI is the upper
+    // half (the new colour) and 0..PI the lower (the current one).
+    use std::f32::consts::PI;
+    let r = (inner + mid) / 2.0;
+    for (a0, colour) in [(PI, new), (0.0, current)] {
+        let points: Vec<Pos2> = (0..=48)
             .map(|i| {
-                let a = a0 + (a1 - a0) * i as f32 / 24.0;
+                let a = a0 + PI * i as f32 / 48.0;
                 p + vec2(a.cos(), a.sin()) * r
             })
-            .collect()
-    };
-    let outline = crate::theme::Tokens::get(painter.ctx()).shadow;
-    for (a0, a1, colour) in [(PI + gap, TAU - gap, new), (gap, PI - gap, current)] {
-        let points = arc(a0, a1);
-        painter.add(egui::Shape::line(points.clone(), Stroke::new(w + 1.5, outline)));
-        painter.add(egui::Shape::line(points, Stroke::new(w, colour)));
+            .collect();
+        painter.add(egui::Shape::line(points, Stroke::new(mid - inner, colour)));
     }
-    Some(egui::CursorIcon::None)
+    Some(pipette_cursor(ctx, p))
+}
+
+/// An Eyedropper press begins: remember the colour it replaces (the background with ⌥ on the
+/// Eyedropper itself, the foreground otherwise) for the sampling ring's lower half.
+fn begin_eyedropper(app: &mut PrismApp, background: bool) {
+    let c = if background { app.session.tools.background } else { app.session.tools.foreground };
+    app.eyedropper_start = Some(EyedropperPress { background, replaced: [c[0], c[1], c[2]] });
 }
 
 fn begin_live_stroke(app: &PrismApp) -> Option<LiveStroke> {
@@ -1956,8 +1980,8 @@ fn tool_hover_cursor(
         // ⌥ turns a painting tool into the Eyedropper (`alt_eyedropper`): its cursor too,
         // unless Preferences › Cursors › Other Cursors asks for the precise crosshair.
         t if app.alt_sampling || (app.drag.is_none() && alt_samples(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) => {
-            // While it samples (button held), the comparison ring replaces the cursor (#213).
-            if let Some(icon) = eyedropper_ring(app, painter, xf, p, response.is_pointer_button_down_on()) {
+            // While it samples (button held), the sampling ring surrounds the pipette (#213).
+            if let Some(icon) = eyedropper_ring(app, ui.ctx(), painter, xf, p, response.is_pointer_button_down_on()) {
                 icon
             } else if app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise {
                 egui::CursorIcon::Crosshair
@@ -1997,10 +2021,10 @@ fn tool_hover_cursor(
                 }
             }
         }
-        // The Eyedropper: the comparison ring follows the pointer while it samples (#213);
-        // otherwise its pipette, or the crosshair for Precise Other Cursors.
+        // The Eyedropper: its pipette, inside the sampling ring while it samples (#213), or the
+        // crosshair for Precise Other Cursors.
         Tool::Eyedropper => {
-            if let Some(icon) = eyedropper_ring(app, painter, xf, p, response.is_pointer_button_down_on()) {
+            if let Some(icon) = eyedropper_ring(app, ui.ctx(), painter, xf, p, response.is_pointer_button_down_on()) {
                 icon
             } else if app.session.prefs().cursors.other == prism_engine::prefs::OtherCursor::Precise {
                 egui::CursorIcon::Crosshair
@@ -3359,8 +3383,15 @@ fn alt_eyedropper(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) -> b
     }
     match ev {
         // Without ⌥: the sample sets the foreground colour, whatever the Eyedropper would do.
-        ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } => sample_eyedropper(app, x, y, egui::Modifiers::NONE),
-        ToolEvent::Up { .. } => app.alt_sampling = false,
+        ToolEvent::Down { x, y, .. } => {
+            begin_eyedropper(app, false);
+            sample_eyedropper(app, x, y, egui::Modifiers::NONE);
+        }
+        ToolEvent::Move { x, y, .. } => sample_eyedropper(app, x, y, egui::Modifiers::NONE),
+        ToolEvent::Up { .. } => {
+            app.alt_sampling = false;
+            app.eyedropper_start = None;
+        }
     }
     true
 }
@@ -3540,11 +3571,19 @@ pub fn tool_event(app: &mut PrismApp, ev: ToolEvent, mods: egui::Modifiers) {
     let tool = app.ui.tool;
     if tool == Tool::Eyedropper {
         match ev {
-            ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } => {
+            ToolEvent::Down { x, y, .. } => {
+                begin_eyedropper(app, mods.alt);
                 sample_eyedropper(app, x, y, mods);
                 return;
             }
-            ToolEvent::Up { .. } => return,
+            ToolEvent::Move { x, y, .. } => {
+                sample_eyedropper(app, x, y, mods);
+                return;
+            }
+            ToolEvent::Up { .. } => {
+                app.eyedropper_start = None;
+                return;
+            }
         }
     }
     // Move tool over a guide drags the guide (off the canvas deletes it).
@@ -4591,16 +4630,18 @@ mod tests {
         app.run("file.new", json!({"width": 40, "height": 20, "background": "transparent"})).unwrap();
         app.run("shape.create", json!({"kind": "rect", "rect": [0, 0, 20, 20], "fill": "#ff0000"})).unwrap();
         app.run("tools.setColors", json!({"foreground": [0.0, 0.2, 1.0, 1.0]})).unwrap();
-        let (new, current) = super::eyedropper_ring_colors(&mut app, 10.0, 10.0).expect("over the red square");
+        let (new, current) = super::eyedropper_ring_colors(&mut app, 10.0, 10.0);
         let near = |c: egui::Color32, r: u8, g: u8, b: u8| {
             let d = |a: u8, b: u8| i32::from(a).abs_diff(i32::from(b));
             d(c.r(), r) <= 1 && d(c.g(), g) <= 1 && d(c.b(), b) <= 1
         };
         assert!(near(new, 255, 0, 0), "{new:?}");
         assert!(near(current, 0, 51, 255), "{current:?}");
-        // Transparency and points outside the canvas have nothing to compare.
-        assert!(super::eyedropper_ring_colors(&mut app, 30.0, 10.0).is_none());
-        assert!(super::eyedropper_ring_colors(&mut app, -1.0, 10.0).is_none());
+        // Over transparency and outside the canvas the ring stays, showing the colour picked so far.
+        for x in [30.0, -1.0] {
+            let (new, current) = super::eyedropper_ring_colors(&mut app, x, 10.0);
+            assert!(near(new, 0, 51, 255) && near(current, 0, 51, 255), "{x}: {new:?} {current:?}");
+        }
     }
 
     #[test]
@@ -4685,6 +4726,38 @@ mod tests {
 
         tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
         assert!(app.session.tools.foreground[1] > 0.99 && app.session.tools.foreground[0] < 0.01);
+    }
+
+    #[test]
+    fn eyedropper_ring_keeps_the_colour_the_press_replaced() {
+        let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 40, "height": 20, "background": "transparent"})).unwrap();
+        app.run("shape.create", json!({"kind": "rect", "rect": [0, 0, 20, 20], "fill": "#ff0000"})).unwrap();
+        app.run("shape.create", json!({"kind": "rect", "rect": [20, 0, 20, 20], "fill": "#00ff00"})).unwrap();
+        app.run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0], "background": [1.0, 1.0, 1.0, 1.0]})).unwrap();
+        app.ui.tool = Tool::Eyedropper;
+        let blue = egui::Color32::from_rgb(0, 0, 255);
+        // At the press both halves match the sample's start; dragging changes only the upper one.
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        assert_eq!(super::eyedropper_ring_colors(&mut app, 10.0, 10.0), (egui::Color32::from_rgb(255, 0, 0), blue));
+        tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        let green = egui::Color32::from_rgb(0, 255, 0);
+        assert_eq!(super::eyedropper_ring_colors(&mut app, 30.0, 10.0), (green, blue));
+        // Off the image the ring stays up, keeping the green picked so far.
+        tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        assert_eq!(super::eyedropper_ring_colors(&mut app, 60.0, 10.0), (green, blue));
+        tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 10.0 }, egui::Modifiers::NONE);
+        assert!(app.eyedropper_start.is_none());
+        // ⌥ samples the background, so the lower half is the background it replaces.
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::ALT);
+        assert_eq!(app.eyedropper_start, Some(super::EyedropperPress { background: true, replaced: [1.0, 1.0, 1.0] }));
+        tool_event(&mut app, ToolEvent::Up { x: 10.0, y: 10.0 }, egui::Modifiers::ALT);
+        // ⌥ on a painting tool samples the foreground.
+        app.ui.tool = Tool::Brush;
+        tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::ALT);
+        assert_eq!(app.eyedropper_start, Some(super::EyedropperPress { background: false, replaced: [0.0, 1.0, 0.0] }));
+        tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 10.0 }, egui::Modifiers::NONE);
+        assert!(app.eyedropper_start.is_none());
     }
 
     #[test]

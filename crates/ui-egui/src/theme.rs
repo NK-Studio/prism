@@ -164,6 +164,12 @@ impl Tokens {
         }
     }
 
+    /// The Eyedropper sampling ring's outer band: Photoshop's neutral grey, the same in every
+    /// theme since it sits on the image, not on the chrome.
+    pub(crate) fn sampling_ring() -> Color32 {
+        Color32::from_gray(135)
+    }
+
     pub fn for_kind(kind: ThemeKind) -> Self {
         match kind {
             // Sampled from Photoshop 2026's default brightness (raw display values).

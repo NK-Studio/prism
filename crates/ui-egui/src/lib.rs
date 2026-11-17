@@ -420,6 +420,9 @@ pub struct PrismApp {
     /// This press began with ⌥ (Alt) held on a painting tool, so it samples colours instead of
     /// painting until it is released (`canvas::alt_eyedropper`, #417).
     pub(crate) alt_sampling: bool,
+    /// The Eyedropper press being held: which colour it sets and the one it replaces, for the
+    /// sampling ring (`canvas::eyedropper_ring`).
+    pub(crate) eyedropper_start: Option<canvas::EyedropperPress>,
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
     pub(crate) opacity_keys: opacity_keys::Pending,
     /// `--screenshot <file.png>`: save the window after the first frames and quit.
@@ -613,6 +616,7 @@ impl PrismApp {
             quick_pick: false,
             brush_resize_armed: false,
             alt_sampling: false,
+            eyedropper_start: None,
             opacity_keys: None,
             exit_screenshot: None,
             control_rx: None,
