@@ -54,7 +54,32 @@ impl Param {
 /// Parse the registry's parameter notation, e.g.
 /// `{"radius":0.1..1000=1,"method":"spin|zoom","monochromatic":bool,"seed":u32=0,"horizontal":px=0}`.
 pub fn parse_spec(spec: &str) -> Vec<Param> {
-    let inner = spec.trim().trim_start_matches('{').trim_end_matches('}');
+    // Up to the brace that closes the first one: a note may follow it (`{…} (color: "#rrggbb")`),
+    // and it must not become part of the last parameter (Replace Color's lightness read its
+    // default as the minimum, -100).
+    let body = spec.trim();
+    let close = {
+        let (mut depth, mut in_str, mut end) = (0i32, false, None);
+        for (i, ch) in body.char_indices() {
+            match ch {
+                '"' => in_str = !in_str,
+                '{' | '[' if !in_str => depth += 1,
+                '}' | ']' if !in_str => {
+                    depth -= 1;
+                    if depth == 0 && ch == '}' {
+                        end = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        end
+    };
+    let inner = match close {
+        Some(end) if body.starts_with('{') => body.get(1..end).unwrap_or_default(),
+        _ => body.trim_start_matches('{').trim_end_matches('}'),
+    };
     let mut out = Vec::new();
     // Split on commas that start a new `"key":` (not inside strings or brackets).
     let mut parts: Vec<String> = Vec::new();
@@ -453,6 +478,18 @@ pub struct FilterPreview {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A note after the parameter list is not part of the last parameter: Replace Color's
+    /// `"lightness":-100..100=0} (color: …)` keeps its default 0 (it read -100).
+    #[test]
+    fn a_trailing_note_keeps_the_last_default() {
+        let p = parse_spec(r##"{"a":0..10=3,"lightness":-100..100=0} (color: "#rrggbb", default {fg})"##);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[1].kind, Kind::Range { min: -100.0, max: 100.0, default: 0.0 });
+        let spec = prism_engine::commands::find("image.adjustments.replaceColor").map(|c| c.params).unwrap_or_default();
+        let light = parse_spec(spec).into_iter().find(|p| p.key == "lightness");
+        assert!(matches!(light.map(|p| p.kind), Some(Kind::Range { default, .. }) if default == 0.0));
+    }
 
     #[test]
     fn parses_registry_notation() {
