@@ -273,3 +273,32 @@ separate passes at every anti-aliasing level, with flips, on a turning path.
 The committed comparison render (four strokes with their fixed costs) went from 938 to 882 ms.
 Not done: each plane is still sampled with its own bilinear lookup (the weights are not shared);
 `cargo xtask perf` and the `fast` profile were not run.
+
+## Frame pacing and the release hitch, measured (2026-11-17)
+
+`ui.frameTrace` (new) with the synthetic pen on macOS (`fast` build, Apple M2 Pro, Metal, a
+60 Hz display): a 3 s wavy stroke (320 samples 8 ms apart, pressure 0.3 → 1 → 0.3) across the
+document, hard round 60 px or soft round 300 px.
+
+| Document, brush | Frame gap median / max | Live UI ms median / p90 / max | `LiveStroke::push` ms median / max | Release frame: commit ms | Next frame refresh |
+| --- | --- | --- | --- | --- | --- |
+| 1600×900, 60 px | 16.6 / 23.4 | 2.5 / 3.2 / 5.8 | 0.6 / 1.2 | 21 | 0.58 MP, 1.7 ms |
+| 4000×3000, 60 px | 16.7 / 21.3 | 2.9 / 3.5 / 6.4 | 0.9 / 1.6 | 38 | 4.2 MP, 5.8 ms |
+| 4000×3000, 300 px soft | 16.7 / 22.0 | 6.8 / 8.8 / 11.0 | 5.4 / 9.0 | 147 | 5.7 MP, 5.8 ms |
+
+- **While drawing** every frame is on time at 60 Hz (no gap over 25 ms); per-frame refreshes are
+  small (10–300 k px).
+- **Release hitch.** Lifting the pen commits `paint.stroke` with every point and the live seed,
+  re-rendering the whole stroke on the UI thread (`canvas.rs` `finish_gesture`): 21–147 ms for a
+  3 s stroke, growing with stroke length and brush size, so the canvas freezes for 1–9 frames at
+  each lift and the next stroke's first samples wait (P32).
+- **One frame of extra latency.** The canvas refreshes its texture (`ensure_gpu` /
+  `ensure_texture`) before the frame's pen samples are handled (`paint_packets`,
+  `feed_live_stroke`), so dabs reach the screen a frame later than they could (the trace shows a
+  press's dab refreshed in the following frame).
+- **No repaint after a push.** Nothing requests a frame after `feed_live_stroke`, so samples of
+  the last frame before input stops (a mouse held still, a pen that stops reporting) and the
+  smoothing tail wait for the next input event.
+
+Not measured: a physical tablet's report rate and pen-to-photon latency, 120 Hz displays (the
+300 px soft brush's 5–9 ms push would not fit an 8.3 ms frame), Windows.
