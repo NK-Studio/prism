@@ -22,6 +22,8 @@
 //! - `ui.drag {from:[x,y],to:[x,y],window?}`: synthetic primary-button screen-point drag
 //! - `ui.pointer {events: [{kind: down|move|up|cancel, x?, y?, pressure?, tiltX?, tiltY?, rotation?, time?}], modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` opens the tool's canvas context menu or Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
 //! - `ui.penTrace {enabled?, clear?}`: opt-in bounded pen packet diagnostics and replay data.
+//! - `ui.frameTrace {enabled?, clear?}`: opt-in bounded per-frame timings (UI, live stroke,
+//!   canvas refresh, commands).
 //! - `ui.click {x, y, button?, count?}` / `ui.move {x, y}`: synthetic pointer input in screen points
 //!   (`count` at most [`MAX_CLICKS`])
 //! - `ui.key {key, command?, shift?, alt?, ctrl?}` / `ui.type {text}`: synthetic keyboard input
@@ -798,6 +800,17 @@ fn dispatch(app: &mut PrismApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             }
             ok(json!({"enabled": app.stylus.trace_enabled, "capacity": 4096, "events": app.stylus.trace}))
         }
+        "ui.frameTrace" => {
+            if let Some(value) = p.get("enabled") {
+                let Some(enabled) = value.as_bool() else { return err("enabled must be a boolean") };
+                app.perf.frame_trace.enabled = enabled;
+            }
+            if p.get("clear").and_then(Value::as_bool) == Some(true) {
+                app.perf.frame_trace.frames.clear();
+            }
+            let t = &app.perf.frame_trace;
+            ok(json!({"enabled": t.enabled, "capacity": crate::gpu_canvas::FRAME_TRACE_CAPACITY, "frames": t.frames}))
+        }
         "ui.pointer" => {
             let Some(events) = p.get("events").and_then(Value::as_array) else { return err("missing `events`") };
             if events.len() > 4096 {
@@ -1439,6 +1452,42 @@ mod tests {
         let cleared = call(&mut app, &ctx, "ui.penTrace", json!({"clear":true}));
         assert_eq!(cleared["result"]["enabled"], false);
         assert!(cleared["result"]["events"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn frame_trace_is_opt_in_bounded_and_records_the_frames_work() {
+        let mut app = pen_control_app();
+        let ctx = egui::Context::default();
+        let initial = call(&mut app, &ctx, "ui.frameTrace", json!({}));
+        assert_eq!(initial["result"]["enabled"], false);
+        app.perf.frame(1.0);
+        assert!(call(&mut app, &ctx, "ui.frameTrace", json!({}))["result"]["frames"].as_array().unwrap().is_empty());
+        assert_eq!(call(&mut app, &ctx, "ui.frameTrace", json!({"enabled":true,"clear":true}))["result"]["enabled"], true);
+        app.perf.frame_trace.live(3, 0.5);
+        app.perf.record("gpu-rect", 1200, 1.5, 0.25);
+        app.perf.command("paint.stroke", 4.0);
+        app.perf.frame(6.0);
+        app.perf.frame(2.0);
+        let trace = call(&mut app, &ctx, "ui.frameTrace", json!({}));
+        let frames = trace["result"]["frames"].as_array().unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0]["samples"], 3);
+        assert_eq!(frames[0]["pushMs"], 0.5);
+        assert_eq!(frames[0]["refresh"], "gpu-rect");
+        assert_eq!(frames[0]["refreshPx"], 1200);
+        assert_eq!(frames[0]["refreshMs"], 1.75);
+        assert_eq!(frames[0]["command"], "paint.stroke");
+        assert_eq!(frames[0]["uiMs"], 6.0);
+        assert_eq!(frames[1]["samples"], 0, "each frame starts empty");
+        for _ in 0..crate::gpu_canvas::FRAME_TRACE_CAPACITY + 5 {
+            app.perf.frame(1.0);
+        }
+        assert_eq!(app.perf.frame_trace.frames.len(), crate::gpu_canvas::FRAME_TRACE_CAPACITY);
+        assert_eq!(call(&mut app, &ctx, "ui.frameTrace", json!({"enabled":1}))["ok"], false);
+        let stopped = call(&mut app, &ctx, "ui.frameTrace", json!({"enabled":false,"clear":true}));
+        assert!(stopped["result"]["frames"].as_array().unwrap().is_empty());
+        app.perf.frame(1.0);
+        assert!(app.perf.frame_trace.frames.is_empty());
     }
 
     #[test]

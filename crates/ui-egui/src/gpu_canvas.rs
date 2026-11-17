@@ -796,6 +796,62 @@ pub struct Perf {
     pub spans: std::collections::BTreeMap<&'static str, f64>,
     #[serde(skip)]
     max_decay: f64,
+    /// Opt-in per-frame log for `ui.frameTrace`.
+    #[serde(skip)]
+    pub frame_trace: FrameTrace,
+}
+
+/// Frames kept by `ui.frameTrace` (about a minute at 60 fps).
+pub const FRAME_TRACE_CAPACITY: usize = 4096;
+
+/// One frame of `ui.frameTrace`: when it started, how long the UI took, and the canvas work in it.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameSample {
+    /// Frame start on the app's clock (ms since launch, [`now_ms`]).
+    pub start_ms: f64,
+    /// CPU time building the UI (ms).
+    pub ui_ms: f64,
+    /// Pen or pointer samples handed to the live stroke.
+    pub samples: u32,
+    /// Time in `LiveStroke::push` (ms).
+    pub push_ms: f64,
+    /// Canvas refreshes: kind of the last one, pixels and time (composite + upload) in all.
+    pub refresh: &'static str,
+    pub refresh_px: u64,
+    pub refresh_ms: f64,
+    /// Commands run through the app in this frame (a stroke commits as one) and their time.
+    pub command: String,
+    pub command_ms: f64,
+}
+
+/// Bounded per-frame log, off by default (`ui.frameTrace`).
+#[derive(Clone, Debug, Default)]
+pub struct FrameTrace {
+    pub enabled: bool,
+    pub frames: std::collections::VecDeque<FrameSample>,
+    cur: FrameSample,
+}
+
+impl FrameTrace {
+    /// Samples pushed to the live stroke and the time it took.
+    pub fn live(&mut self, samples: usize, ms: f64) {
+        if self.enabled {
+            self.cur.samples = self.cur.samples.saturating_add(u32::try_from(samples).unwrap_or(u32::MAX));
+            self.cur.push_ms += ms;
+        }
+    }
+
+    fn end_frame(&mut self, start_ms: f64, ui_ms: f64) {
+        let cur = std::mem::take(&mut self.cur);
+        if !self.enabled {
+            return;
+        }
+        if self.frames.len() >= FRAME_TRACE_CAPACITY {
+            self.frames.pop_front();
+        }
+        self.frames.push_back(FrameSample { start_ms, ui_ms, ..cur });
+    }
 }
 
 /// What the app renders with and why (Help › System Info, Preferences › Performance, the `perf`
@@ -885,6 +941,12 @@ pub fn backend_name(b: wgpu::Backend) -> &'static str {
 
 impl Perf {
     pub fn record(&mut self, kind: &'static str, px: u64, composite_ms: f64, upload_ms: f64) {
+        if self.frame_trace.enabled {
+            let cur = &mut self.frame_trace.cur;
+            cur.refresh = kind;
+            cur.refresh_px = cur.refresh_px.saturating_add(px);
+            cur.refresh_ms += composite_ms + upload_ms;
+        }
         self.last_refresh = kind;
         self.last_refresh_px = px;
         self.composite_ms = composite_ms;
@@ -895,10 +957,25 @@ impl Perf {
             self.gpu_fallback = None;
         }
     }
+    /// A command run through the app (for `ui.frameTrace`).
+    pub fn command(&mut self, name: &str, ms: f64) {
+        self.last_command = name.to_owned();
+        self.command_ms = ms;
+        if self.frame_trace.enabled {
+            let cur = &mut self.frame_trace.cur;
+            if !cur.command.is_empty() {
+                cur.command.push_str(", ");
+            }
+            cur.command.push_str(name);
+            cur.command_ms += ms;
+        }
+    }
+
     pub fn span(&mut self, name: &'static str, ms: f64) {
         self.spans.insert(name, (ms * 100.0).round() / 100.0);
     }
     pub fn frame(&mut self, ms: f64) {
+        self.frame_trace.end_frame(now_ms() - ms, ms);
         self.ui_ms = if self.ui_ms == 0.0 { ms } else { self.ui_ms * 0.9 + ms * 0.1 };
         self.max_decay += 1.0;
         if ms > self.ui_max_ms || self.max_decay > 60.0 {

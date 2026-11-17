@@ -12,6 +12,15 @@ pressure validity, pressure, pose, phase and millisecond time. Inspect
 using constant mouse pressure; `null` means capability is still unknown.
 Diagnostics record the selected canvas; they are not a system-wide input logger.
 
+`ui.frameTrace {"enabled":true,"clear":true}` enables a bounded per-frame log (4096 frames,
+about a minute at 60 fps), off by default. `ui.frameTrace {}` reads it and `{"enabled":false}`
+stops it. Each frame records `startMs` (ms since launch), `uiMs` (CPU time building the UI),
+`samples` and `pushMs` (pen or pointer samples handed to the live stroke and the time in
+`LiveStroke::push`), `refresh`, `refreshPx` and `refreshMs` (canvas refreshes: kind of the last
+one, pixels and composite + upload time) and `command` / `commandMs` (commands run through the
+app, such as the stroke's commit). Gaps between `startMs` show frame pacing; pair it with
+`ui.penTrace` and the synthetic pen (`pen_inject`) to measure a stroke.
+
 `ui.pointer` accepts optional per-event `time` in milliseconds and `kind:"cancel"`.
 Cancel drops the uncommitted painting preview without adding history. Existing
 requests without time keep their previous format. Batches are bounded to 4096

@@ -848,8 +848,7 @@ impl PrismApp {
             self.clip_external = false;
             self.export_os_clipboard();
         }
-        self.perf.last_command = id.to_string();
-        self.perf.command_ms = gpu_canvas::now_ms() - t0;
+        self.perf.command(id, gpu_canvas::now_ms() - t0);
         match &r {
             Ok(_) => {
                 self.sync_views();

@@ -554,10 +554,13 @@ pub(crate) fn feed_live_stroke(app: &mut PrismApp) {
         return;
     }
     l.fed = d.points.len();
-    match l.stroke.push(&pts) {
+    let t0 = crate::gpu_canvas::now_ms();
+    let pushed = l.stroke.push(&pts);
+    match pushed {
         Ok(r) => l.damage.push(r),
         Err(_) => app.live_stroke = None,
     }
+    app.perf.frame_trace.live(pts.len(), crate::gpu_canvas::now_ms() - t0);
 }
 
 /// Tools whose gesture follows a freehand path (a polyline of the input points), so every pointer
