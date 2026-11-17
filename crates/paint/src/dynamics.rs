@@ -30,6 +30,16 @@ pub const MIN_DAB_STEP: f64 = 1.0;
 /// Maximum airbrush catch-up dabs for one input segment.
 const MAX_AIRBRUSH_DABS_PER_SEGMENT: usize = 512;
 
+/// Photoshop's resting pen, with the airbrush off: one dab about every this many milliseconds
+/// while the pen rests on the canvas, and one more when it lifts (measured with the synthetic
+/// pen: a 0.1 / 0.2 / 0.4 / 0.8 s hold leaves 3 / 4 / 6 / 10 dabs; docs/pen-input-validation.md
+/// › A resting pen keeps painting). A pressure change at rest lays nothing by itself.
+pub const PS_REST_INTERVAL_MS: f64 = 100.0;
+
+/// The most a pen sample may move, in screen pixels, and still count as resting: Photoshop rests
+/// a pen creeping 1 px or less per sample and not one moving 1.5 px or more.
+pub const PS_REST_MAX_STEP_PX: f64 = 1.25;
+
 #[inline]
 fn lerp_pt(a: &StrokePoint, b: &StrokePoint, f: f64) -> StrokePoint {
     let ff = f as f32;
@@ -217,6 +227,13 @@ pub struct PathWalker {
     /// The velocity input at the current segment's two ends; steps between them interpolate.
     seg_from: f32,
     seg_to: f32,
+    /// Photoshop's resting pen ([`PS_REST_INTERVAL_MS`]): the longest step, in document pixels,
+    /// that still counts as resting (None = off, the Clip Studio rules).
+    rest_step: Option<f64>,
+    /// Time spent resting since the last rest dab (ms).
+    rest_acc: f64,
+    /// The last timed segment was a rest: lifting the pen lays one more dab.
+    at_rest: bool,
 }
 
 impl PathWalker {
@@ -240,7 +257,20 @@ impl PathWalker {
             speed_at_last: 0.0,
             seg_from: 0.0,
             seg_to: 0.0,
+            rest_step: None,
+            rest_acc: 0.0,
+            at_rest: false,
         }
+    }
+
+    /// Photoshop's pen rules at view `zoom`: a resting pen lays a dab every
+    /// [`PS_REST_INTERVAL_MS`] (with the airbrush off) and one more on lift, and a pressure or
+    /// pose change without movement lays nothing by itself.
+    pub fn photoshop_rest(mut self, zoom: f32) -> Self {
+        let zoom = if zoom.is_finite() && zoom > 0.0 { f64::from(zoom).clamp(1e-3, 1e3) } else { 1.0 };
+        self.rest_step = Some(PS_REST_MAX_STEP_PX / zoom);
+        self.in_place = false;
+        self
     }
 
     /// The view zoom (screen pixels per document pixel) the stroke is drawn at: speeds are on-screen.
@@ -389,6 +419,26 @@ impl PathWalker {
                 }
             }
         }
+        if let (Some(max_step), None) = (self.rest_step, self.interval) {
+            let dt = p.time - a.time;
+            if len > max_step {
+                self.rest_acc = 0.0;
+                self.at_rest = false;
+            } else if dt > 0.0 && dt.is_finite() {
+                self.rest_acc += dt;
+                let mut n = 0;
+                while self.rest_acc >= PS_REST_INTERVAL_MS && n < MAX_AIRBRUSH_DABS_PER_SEGMENT {
+                    self.rest_acc -= PS_REST_INTERVAL_MS;
+                    self.emit(p, self.travelled + len, 1.0, out);
+                    n += 1;
+                }
+                if n == MAX_AIRBRUSH_DABS_PER_SEGMENT {
+                    // A stalled or hostile timestamp must not replay an arbitrarily long backlog.
+                    self.rest_acc = 0.0;
+                }
+                self.at_rest = true;
+            }
+        }
         if self.in_place && len <= 1e-9 && stylus_changed(&a, &p) && !emitted_endpoint {
             // Distance spacing cannot represent a pressure/pose change in place. Emit it once,
             // keeping unchanged stationary samples inert and avoiding a duplicate airbrush dab.
@@ -403,6 +453,14 @@ impl PathWalker {
             && !self.wait_for_direction
         {
             self.emit(f, self.travelled, 0.0, out);
+        }
+        // Photoshop lays one more dab when a resting pen lifts.
+        if self.rest_step.is_some()
+            && self.interval.is_none()
+            && std::mem::take(&mut self.at_rest)
+            && let Some(p) = self.last
+        {
+            self.emit(p, self.travelled, 1.0, out);
         }
     }
 }
@@ -997,6 +1055,14 @@ impl DabGenerator {
         let ppp = if ppp.is_finite() && ppp > 0.0 { ppp.clamp(0.1, 10.0) } else { 1.0 };
         self.walker = self.walker.with_zoom(self.zoom * ppp);
         self.dual_walker = self.dual_walker.map(|w| w.with_zoom(self.zoom * ppp));
+        self
+    }
+
+    /// Photoshop's resting pen ([`PathWalker::photoshop_rest`]) for the primary and dual brush.
+    /// Off for the Clip Studio rules.
+    pub fn with_photoshop_rest(mut self) -> Self {
+        self.walker = self.walker.photoshop_rest(self.zoom);
+        self.dual_walker = self.dual_walker.map(|w| w.photoshop_rest(self.zoom));
         self
     }
 

@@ -2581,3 +2581,93 @@ fn a_pressure_thinned_line_is_as_wide_as_photoshops() {
         assert!((ours - width).abs() <= 0.45, "pressure {level}/255: {ours} vs Photoshop's {width}");
     }
 }
+
+/// Dabs of a stroke under Photoshop's pen rules ([`StrokeRenderer::with_photoshop_rest`]).
+fn photoshop_dabs(b: &BrushSettings, pts: &[StrokePoint], zoom: f32) -> Vec<Dab> {
+    let mut r = StrokeRenderer::new(b, None, zoom).with_photoshop_rest().record_dabs();
+    r.push(pts);
+    r.finish();
+    r.dabs().to_vec()
+}
+
+/// A pen resting at one spot for `ms`, one sample every 8 ms (a tablet's report rate).
+fn rest(ms: u32, step: f64) -> Vec<StrokePoint> {
+    (0..=ms / 8).map(|i| StrokePoint { x: 50.0 + f64::from(i) * step, time: f64::from(i * 8), ..StrokePoint::new(50.0, 50.0, 0.5) }).collect()
+}
+
+#[test]
+fn a_resting_pen_keeps_laying_dabs_like_photoshop() {
+    // Measured in Photoshop 2026 with the synthetic pen, airbrush off, 10 % flow: a 0.1 / 0.2 /
+    // 0.4 / 0.8 s hold leaves 3 / 4 / 6 / 10 dabs (one every 100 ms and one on lift); a shorter
+    // hold with a second sample 2, a single sample 1 (docs/pen-input-validation.md).
+    let b = BrushSettings { size: 60.0, hardness: 1.0, flow: 0.1, spacing: 0.05, ..brush() };
+    for (ms, n) in [(104, 3), (200, 4), (400, 6), (800, 10), (40, 2)] {
+        assert_eq!(photoshop_dabs(&b, &rest(ms, 0.0), 1.0).len(), n, "{ms} ms hold");
+    }
+    assert_eq!(photoshop_dabs(&b, &rest(0, 0.0), 1.0).len(), 1, "a single sample");
+    // The Clip Studio rules (the walker's default) lay the first dab only.
+    assert_eq!(dabs_of(&b, &rest(800, 0.0)).len(), 1);
+    // A pen creeping 1 px or less per sample rests too; 1.5 px per sample does not.
+    let creep = photoshop_dabs(&b, &rest(400, 1.0), 1.0).len();
+    let moving = photoshop_dabs(&b, &rest(400, 1.5), 1.0).len();
+    let spaced = dabs_of(&b, &rest(400, 1.5)).len();
+    assert_eq!(moving, spaced, "no rest dabs while moving");
+    assert_eq!(creep, dabs_of(&b, &rest(400, 1.0)).len() + 5, "four 100 ms dabs and one on lift");
+    // The rest is in screen pixels: at 50 % zoom a 1.5 px document step is 0.75 px on screen.
+    assert_eq!(photoshop_dabs(&b, &rest(400, 1.5), 0.5).len(), spaced + 5);
+    // The airbrush keeps its own timing instead.
+    let air = BrushSettings { build_up: true, ..b.clone() };
+    assert_eq!(photoshop_dabs(&air, &rest(400, 0.0), 1.0).len(), dabs_of(&air, &rest(400, 0.0)).len());
+}
+
+#[test]
+fn photoshop_pressure_at_rest_waits_for_the_next_resting_dab() {
+    // Pressing harder at rest lays no dab of its own (Photoshop: a 0.3 → 1 press at 10 % flow
+    // leaves 47.6 % ink, Prism's old per-change dabs 99.6 %); the next 100 ms dab is the bigger one.
+    let b = BrushSettings { size: 40.0, pressure_size: true, flow: 0.1, ..brush() };
+    let press: Vec<_> =
+        (0..=8).map(|i| StrokePoint { pressure: 0.3 + 0.7 * i as f32 / 8.0, time: f64::from(i * 8), ..StrokePoint::new(50.0, 50.0, 0.3) }).collect();
+    let ps = photoshop_dabs(&b, &press, 1.0);
+    assert_eq!(ps.len(), 2, "the first dab and the one on lift");
+    assert_eq!((ps[0].radius, ps[1].radius), (6.0, 20.0));
+    assert_eq!(dabs_of(&b, &press).len(), 9, "the Clip Studio rules lay one per pressure change");
+    let mut held = press.clone();
+    held.push(StrokePoint { time: 150.0, ..press[8] });
+    let ps = photoshop_dabs(&b, &held, 1.0);
+    assert_eq!(ps.iter().map(|d| d.radius).collect::<Vec<_>>(), [6.0, 20.0, 20.0]);
+}
+
+#[test]
+fn hostile_rest_times_lay_a_bounded_number_of_dabs() {
+    let b = brush();
+    let a = StrokePoint::new(20.0, 20.0, 1.0);
+    for t in [f64::MAX, f64::INFINITY, f64::NAN, -5.0] {
+        let d = photoshop_dabs(&b, &[a, StrokePoint { time: t, ..a }], 1.0);
+        assert!(d.len() <= 514, "{t}: {}", d.len());
+    }
+}
+
+#[test]
+fn photoshop_pressure_buttons_override_the_panel_controls() {
+    // `usePressureOverridesSize` / `…Opacity`: the options-bar button wins over the panel's
+    // control (Fade, Pen Tilt…), which follows pressure instead; Minimum stays.
+    let mut b = BrushSettings { size: 40.0, pressure_size: true, pressure_opacity: true, ..brush() };
+    b.shape_dynamics = ShapeDynamics { enabled: true, size: Dynamic { minimum: 0.5, ..Dynamic::controlled(Control::Fade) }, ..Default::default() };
+    b.transfer.enabled = true;
+    b.transfer.opacity = Dynamic::controlled(Control::PenTilt);
+    let tap = [StrokePoint { tilt_x: 30.0, ..StrokePoint::new(50.0, 50.0, 0.4) }];
+    let panel = dabs_of(&b, &tap);
+    let ps = dabs_of(&b.clone().with_pressure_overrides(), &tap);
+    assert_eq!(panel[0].radius, 20.0, "the panel's Fade starts at full size");
+    assert_eq!(ps[0].radius, 20.0 * (0.5 + 0.5 * 0.4), "pressure 0.4 over the 50 % minimum");
+    assert!((panel[0].opacity - 0.5).abs() < 1e-3, "Pen Tilt: half of the full 60° tilt");
+    assert!((ps[0].opacity - 0.4).abs() < 1e-6, "opacity = pressure");
+    // Buttons off, or controls off: nothing changes.
+    let off = BrushSettings { pressure_size: false, pressure_opacity: false, ..b.clone() };
+    assert_eq!(off.clone().with_pressure_overrides(), off);
+    let mut plain = b.clone();
+    plain.shape_dynamics.size.control = Control::Off;
+    plain.transfer.opacity.control = Control::Off;
+    assert_eq!(plain.clone().with_pressure_overrides(), plain);
+    assert_eq!(dabs_of(&plain, &tap)[0].radius, 14.0, "a control that is off already takes the button's pressure (over the minimum)");
+}

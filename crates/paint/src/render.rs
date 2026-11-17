@@ -1465,6 +1465,12 @@ impl StrokeRenderer {
         self
     }
 
+    /// Photoshop's resting pen (see [`DabGenerator::with_photoshop_rest`]).
+    pub fn with_photoshop_rest(mut self) -> Self {
+        self.generator = self.generator.with_photoshop_rest();
+        self
+    }
+
     /// Keep a copy of every primary dab (for tests and sequential tools).
     pub fn record_dabs(mut self) -> Self {
         self.all_dabs = Some(Vec::new());

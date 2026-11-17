@@ -348,6 +348,11 @@ fn stroke_params(app: &PrismApp, drag: &Drag, points: &[Vec<f64>]) -> serde_json
     if drag.tool == Tool::Pencil {
         p["autoErase"] = json!(app.ui.tool_options.pencil_auto_erase);
     }
+    if crate::csp_tools::active(app) {
+        // The Clip Studio workspace keeps its own pen handling: no options-bar pressure
+        // overrides and no resting-pen dabs (Photoshop's rules, the engine's default).
+        p["penRules"] = json!("clipStudio");
+    }
     p
 }
 
@@ -3428,6 +3433,7 @@ fn tool_move(app: &mut PrismApp, x: f64, y: f64, pressure: f32, mods: egui::Modi
         crate::vector_ui::pen_move(app, x, y);
     }
     let zoom = app.current_zoom();
+    let resting_dabs = !crate::csp_tools::active(app);
     if let Some(d) = app.drag.as_mut().filter(|d| d.reposition) {
         d.track(mods);
         d.shift_to([x, y]);
@@ -3439,10 +3445,11 @@ fn tool_move(app: &mut PrismApp, x: f64, y: f64, pressure: f32, mods: egui::Modi
         let [x, y] = crate::special_ruler_ui::snap(d, [x, y], mods.shift);
         let sample = app.stylus.sample().unwrap_or_default();
         let pose_changed = app.stylus.stroke.last().is_some_and(|p| *p != [sample.tilt_x, sample.tilt_y, sample.rotation]);
-        // A pen at rest still counts for the airbrush and for CSP's velocity input (the rest is a
-        // segment at speed 0, not part of the next move's duration).
+        // A pen at rest still counts for the airbrush, for CSP's velocity input (the rest is a
+        // segment at speed 0, not part of the next move's duration) and, outside the Clip Studio
+        // workspace, for Photoshop's resting pen, which keeps laying dabs.
         let brush = &app.session.tools.brush;
-        let timed = (brush.build_up || brush.reads_speed()) && app.stylus.times.last().is_some_and(|t| app.stylus.time > *t);
+        let timed = (brush.build_up || brush.reads_speed() || resting_dabs) && app.stylus.times.last().is_some_and(|t| app.stylus.time > *t);
         if d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25 || p[2] != f64::from(pressure)) || pose_changed || timed {
             d.points.push([x, y, pressure as f64]);
             app.stylus.record_point();
@@ -4694,9 +4701,13 @@ mod tests {
     #[test]
     fn a_resting_pen_keeps_its_samples_for_csp_velocity_input() {
         // CLIP STUDIO counts a pen held still as segments at speed 0: the first move after a rest
-        // reads half its speed, not the move spread over the whole rest.
-        let points = |speed: bool| {
+        // reads half its speed, not the move spread over the whole rest. Outside the Clip Studio
+        // workspace every brush keeps them (Photoshop's resting pen keeps laying dabs).
+        let points = |speed: bool, csp: bool| {
             let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
+            if csp {
+                crate::workspace_ui::set_style(&mut app, prism_engine::prefs::WorkspaceStyle::ClipStudio);
+            }
             app.run("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
             app.ui.tool = Tool::Brush;
             if speed {
@@ -4710,7 +4721,8 @@ mod tests {
             }
             app.drag.as_ref().map_or(0, |d| d.points.len())
         };
-        assert_eq!(points(true), points(false) + 3, "three resting samples kept");
+        assert_eq!(points(true, true), points(false, true) + 3, "three resting samples kept");
+        assert_eq!(points(false, false), points(true, true), "Photoshop's rules keep them for every brush");
     }
 
     #[test]
@@ -4840,7 +4852,9 @@ mod tests {
         let mut app = PrismApp::new(prism_engine::Session::new(), Default::default());
         let ctx = egui::Context::default();
         app.run("file.new", json!({"width": 4097, "height": 90, "background": "transparent"})).unwrap();
-        let tilt = json!({"size": 30, "hardness": 1.0, "spacing": 0.05, "shapeDynamics": {"enabled": true, "size": {"control": "penTilt"}, "tiltScale": 1.0}});
+        // The options bar's pressure-for-size button is off, as in the Photoshop measurement: on, it
+        // would override the Pen Tilt control.
+        let tilt = json!({"size": 30, "hardness": 1.0, "spacing": 0.05, "pressureSize": false, "shapeDynamics": {"enabled": true, "size": {"control": "penTilt"}, "tiltScale": 1.0}});
         app.run("tools.setBrush", json!({ "brush": tilt })).unwrap();
         app.ui.tool = Tool::Brush;
         assert_eq!(ensure_texture(&mut app, &ctx, 0, None).map(|t| t.1), Some(0.5));

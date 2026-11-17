@@ -44,8 +44,16 @@ fn params(points: &[StrokePoint], mask: bool, smoothing: f32) -> Value {
     })
 }
 
+/// The same params under the Clip Studio workspace's pen rules.
+fn csp(mut p: Value) -> Value {
+    p["penRules"] = json!("clipStudio");
+    p
+}
+
 #[test]
 fn stationary_pressure_grows_live_then_commits_as_one_undo_step() {
+    // The Clip Studio rules: a pressure change at rest lays a dab at once.
+    let params = |points: &[StrokePoint], mask: bool, smoothing: f32| csp(params(points, mask, smoothing));
     for depth in [8, 16, 32] {
         for mask in [false, true] {
             let mut s = session(depth, mask);
@@ -203,4 +211,51 @@ fn benchmark_smoothing_end_on_36mp() {
         times.sort_by(f64::total_cmp);
         println!("36 MP, smoothing 100, catchUpOnEnd={catch_up}: median {:.2} ms; samples {times:?}", times[1]);
     }
+}
+
+#[test]
+fn photoshop_resting_pen_grows_every_100_ms_live_and_committed() {
+    // Photoshop's rules (the default): pressing harder at rest lays nothing until the next 100 ms
+    // resting dab; live and committed pixels agree, and lifting adds one more dab.
+    for depth in [8, 16] {
+        let mut s = session(depth, false);
+        let state = s.active().unwrap();
+        let id = state.active_layer.unwrap();
+        let before = target(&state.doc, id, false).clone();
+        let a = StrokePoint::new(40.0, 40.0, 0.1);
+        let grow = StrokePoint { pressure: 0.8, time: 20.0, ..a };
+        let hold = StrokePoint { time: 120.0, ..grow };
+        let mut live = LiveStroke::begin(&s, &params(&[a], false, 0.0)).unwrap();
+        live.push(&[grow]).unwrap();
+        // The lift dab of a resting pen is part of the preview's tail: the grown mark shows.
+        let tail = target(&live.doc, id, false).clone();
+        assert_ne!(tail.pixel(52, 40), before.pixel(52, 40), "the lift dab at the new pressure");
+        live.push(&[hold]).unwrap();
+        let held = target(&live.doc, id, false).clone();
+        let mut p = params(&[a, grow, hold], false, 0.0);
+        p["seed"] = json!(live.seed);
+        s.execute("paint.stroke", p.clone()).unwrap();
+        same_pixels(target(&s.active().unwrap().doc, id, false), &held);
+        s.execute("edit.undo", json!({})).unwrap();
+        // The Clip Studio rules draw it differently (one dab per pressure change, none on lift).
+        s.execute("paint.stroke", csp(p)).unwrap();
+        assert_ne!(target(&s.active().unwrap().doc, id, false).pixel(40, 40), held.pixel(40, 40), "depth {depth}");
+    }
+}
+
+#[test]
+fn pen_rules_must_be_photoshop_or_clip_studio() {
+    let mut s = session(8, false);
+    let a = StrokePoint::new(40.0, 40.0, 1.0);
+    for bad in [json!("illustrator"), json!(3), json!(true), json!({})] {
+        for cmd in ["paint.stroke", "paint.pencil"] {
+            let mut p = params(&[a], false, 0.0);
+            p["penRules"] = bad.clone();
+            assert!(s.execute(cmd, p.clone()).is_err(), "{cmd} {bad}");
+            assert!(LiveStroke::begin(&s, &p).is_err());
+        }
+    }
+    let mut p = params(&[a], false, 0.0);
+    p["penRules"] = json!("photoshop");
+    s.execute("paint.stroke", p).unwrap();
 }

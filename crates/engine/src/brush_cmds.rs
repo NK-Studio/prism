@@ -282,11 +282,34 @@ fn pixels_per_point(p: &Value) -> f32 {
     num(p, "pixelsPerPoint").filter(|v| v.is_finite() && *v > 0.0).map_or(1.0, |v| v.clamp(0.1, 10.0))
 }
 
-fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option<prism_doc::LayerId>, BrushSettings, f32)> {
+/// Whose pen rules a stroke follows (`penRules`): `"photoshop"` (the default) or `"clipStudio"`
+/// (the Clip Studio workspace). Photoshop's options-bar pressure buttons override the Brush
+/// Settings panel ([`BrushSettings::with_pressure_overrides`]) and a resting pen keeps laying
+/// dabs ([`StrokeRenderer::with_photoshop_rest`]); the Clip Studio rules keep neither.
+fn photoshop_pen(p: &Value, cmd: &str) -> Result<bool> {
+    match p.get("penRules") {
+        None | Some(Value::Null) => Ok(true),
+        Some(Value::String(v)) if v == "photoshop" => Ok(true),
+        Some(Value::String(v)) if v == "clipStudio" => Ok(false),
+        Some(_) => Err(bad(cmd, "`penRules` must be \"photoshop\" or \"clipStudio\"")),
+    }
+}
+
+/// A stroke's renderer, with Photoshop's resting pen when `photoshop` (see [`photoshop_pen`]).
+fn stroke_renderer(brush: &BrushSettings, surf: &Surface, zoom: f32, ppp: f32, photoshop: bool) -> StrokeRenderer {
+    let r = StrokeRenderer::new(brush, Some(surf.format()), zoom).with_pixels_per_point(ppp);
+    if photoshop { r.with_photoshop_rest() } else { r }
+}
+
+/// The target layer (`None` for a channel), brush, zoom and pen rules ([`photoshop_pen`]) of a
+/// stroke.
+fn stroke_target(s: &Session, p: &Value, brush: BrushSettings, cmd: &str) -> Result<(Option<prism_doc::LayerId>, BrushSettings, f32, bool)> {
+    let photoshop = photoshop_pen(p, cmd)?;
     let gray = is_mask_target(p) || crate::channel_cmds::is_channel_target(p);
     let id = if crate::channel_cmds::is_channel_target(p) { None } else { Some(layer_id(s, p)?) };
     let brush = if gray && brush.erase { BrushSettings { erase: false, color: s.tools.background, ..brush } } else { brush };
-    Ok((id, brush, num(p, "zoom").unwrap_or(1.0)))
+    let brush = if photoshop { brush.with_pressure_overrides() } else { brush };
+    Ok((id, brush, num(p, "zoom").unwrap_or(1.0), photoshop))
 }
 
 /// Erasing a layer with locked transparency (e.g. the Background) can't remove opacity, so it
@@ -300,22 +323,33 @@ fn erase_locked(brush: &mut BrushSettings, lock: bool, bg: [f32; 4]) {
 
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
 /// [`prism_paint::render_stroke`] at `ppp` physical pixels per view point (CSP's velocity input).
-fn render_on_screen(surf: &mut Surface, brush: &BrushSettings, pts: &[StrokePoint], sel: Option<&Surface>, lock: bool, zoom: f32, ppp: f32) -> prism_geom::Rect {
+#[allow(clippy::too_many_arguments)]
+fn render_on_screen(
+    surf: &mut Surface,
+    brush: &BrushSettings,
+    pts: &[StrokePoint],
+    sel: Option<&Surface>,
+    lock: bool,
+    zoom: f32,
+    ppp: f32,
+    photoshop: bool,
+) -> prism_geom::Rect {
     if pts.is_empty() {
         return prism_geom::Rect::EMPTY;
     }
     let pre = surf.clone();
-    let mut r = StrokeRenderer::new(brush, Some(surf.format()), zoom).with_full_path(pts).with_mixing_source(&pre).with_pixels_per_point(ppp);
+    let mut r = stroke_renderer(brush, surf, zoom, ppp, photoshop).with_full_path(pts).with_mixing_source(&pre);
     r.push(pts);
     r.finish();
     r.composite(&pre, surf, sel, lock, true)
 }
 
-fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
+#[allow(clippy::too_many_arguments)]
+fn stroke_with(s: &mut Session, p: &Value, cmd: &str, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
     let bg = s.tools.background;
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry_path.clone());
-    let (id, brush, zoom) = stroke_target(s, p, brush)?;
+    let (id, brush, zoom, photoshop) = stroke_target(s, p, brush, cmd)?;
     let ppp = pixels_per_point(p);
     // CSP post correction: the committed line is smoothed once more (the live stroke is not).
     let pts = match brush.csp_post_correction {
@@ -335,20 +369,18 @@ fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
             let reflected = axis.reflect_points(&pts);
             if crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, &reflected) {
                 let pre = surf.clone();
-                let mut original =
-                    StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_full_path(&pts).with_mixing_source(&pre).with_pixels_per_point(ppp);
+                let mut original = stroke_renderer(&brush, surf, zoom, ppp, photoshop).with_full_path(&pts).with_mixing_source(&pre);
                 original.push(&pts);
                 original.finish();
-                let mut mirror =
-                    StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_full_path(&reflected).with_mixing_source(&pre).with_pixels_per_point(ppp);
+                let mut mirror = stroke_renderer(&brush, surf, zoom, ppp, photoshop).with_full_path(&reflected).with_mixing_source(&pre);
                 mirror.push(&reflected);
                 mirror.finish();
                 original.composite_union(&mirror, &pre, surf, sel.as_ref(), lock)
             } else {
-                render_on_screen(surf, &brush, &pts, sel.as_ref(), lock, zoom, ppp)
+                render_on_screen(surf, &brush, &pts, sel.as_ref(), lock, zoom, ppp, photoshop)
             }
         } else {
-            render_on_screen(surf, &brush, &pts, sel.as_ref(), lock, zoom, ppp)
+            render_on_screen(surf, &brush, &pts, sel.as_ref(), lock, zoom, ppp, photoshop)
         };
         Ok(damage)
     })?;
@@ -395,7 +427,7 @@ pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.stroke")?;
     let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
     let label = if brush.erase { "Eraser" } else { "Brush Tool" };
-    stroke_with(s, p, label, brush, pts, false)
+    stroke_with(s, p, "paint.stroke", label, brush, pts, false)
 }
 
 /// A `paint.stroke` rendered while it is drawn, onto a copy of the active document, so the canvas
@@ -437,7 +469,7 @@ impl LiveStroke {
         };
         let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
         let (seed, fg) = (brush.seed, brush.color);
-        let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
+        let (layer, mut brush, zoom, photoshop) = stroke_target(s, p, brush, cmd)?;
         let ppp = pixels_per_point(p);
         let mut doc = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
         let sel = doc.selection.clone();
@@ -446,11 +478,9 @@ impl LiveStroke {
         if pencil && flag(p, "autoErase", false) {
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
         }
-        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_mixing_source(surf).with_pixels_per_point(ppp);
-        let mirror = s
-            .active()
-            .and_then(|st| st.symmetry_path.clone())
-            .map(|axis| (axis, StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_mixing_source(surf).with_pixels_per_point(ppp)));
+        let renderer = stroke_renderer(&brush, surf, zoom, ppp, photoshop).with_mixing_source(surf);
+        let mirror =
+            s.active().and_then(|st| st.symmetry_path.clone()).map(|axis| (axis, stroke_renderer(&brush, surf, zoom, ppp, photoshop).with_mixing_source(surf)));
         let pre = surf.clone();
         let mut live = Self {
             doc: std::sync::Arc::new(doc),
@@ -527,7 +557,7 @@ fn pencil(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.pencil")?;
     let brush = pencil_brush(s, p)?;
     let label = if brush.erase { "Eraser" } else { "Pencil" };
-    stroke_with(s, p, label, brush, pts, flag(p, "autoErase", false))
+    stroke_with(s, p, "paint.pencil", label, brush, pts, flag(p, "autoErase", false))
 }
 
 fn pct(p: &Value, k: &str, d: f32) -> f32 {
@@ -902,7 +932,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "paint.pencil",
             "Pencil",
-            r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"opacity":0..1?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…"="normal","erase":bool?,"autoErase":bool=false,"seed":u64?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
+            r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"opacity":0..1?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…"="normal","erase":bool?,"autoErase":bool=false,"penRules":"photoshop"|"clipStudio"="photoshop","seed":u64?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
             has_paintable,
             pencil,
             true

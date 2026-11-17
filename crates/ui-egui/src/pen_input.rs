@@ -345,12 +345,32 @@ mod tests {
         let strokes: Vec<_> = app.session.journal.iter().filter(|(id, _)| id == "paint.stroke").collect();
         assert_eq!(strokes.len(), 1);
         let points = strokes[0].1["points"].as_array().unwrap();
-        assert_eq!(points.len(), 2, "unchanged hold and hovering release do not add dabs");
+        // Photoshop's resting pen keeps the timed hold (it lays a dab every 100 ms); the hovering
+        // release adds nothing.
+        assert_eq!(points.len(), 3, "the timed hold is kept, the hovering release is not");
+        assert_eq!((points[2][0].as_f64(), points[2][6].as_f64()), (Some(64.0), Some(30.0)));
         assert_eq!(points[0][2], serde_json::json!(f64::from(0.1f32)));
         assert_eq!(points[1][2], serde_json::json!(f64::from(0.8f32)));
         assert_eq!(points[1][6], 20.0);
         assert_eq!(points[1][0], 64.0);
         assert!(app.drag.is_none() && app.live_stroke.is_none());
+    }
+
+    #[test]
+    fn the_clip_studio_workspace_keeps_its_own_pen_rules() {
+        // Photoshop's pen rules (pressure buttons over the panel, resting dabs) are the engine's
+        // default; the Clip Studio workspace asks for its own.
+        for csp in [false, true] {
+            let mut app = app();
+            if csp {
+                crate::workspace_ui::set_style(&mut app, prism_engine::prefs::WorkspaceStyle::ClipStudio);
+            }
+            paint(&mut app, &[packet(Phase::Down, 64.0, 0.5, 10.0), packet(Phase::Move, 64.0, 0.5, 20.0), packet(Phase::Up, 64.0, 0.0, 30.0)]);
+            let p = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").map(|(_, p)| p.clone()).unwrap();
+            assert_eq!(p.get("penRules").and_then(|v| v.as_str()), csp.then_some("clipStudio"));
+            let points = p["points"].as_array().map_or(0, Vec::len);
+            assert_eq!(points, if csp { 1 } else { 2 }, "only Photoshop's rules keep the resting sample");
+        }
     }
 
     #[test]

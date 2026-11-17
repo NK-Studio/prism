@@ -817,6 +817,22 @@ impl BrushSettings {
             .any(|d| d.csp_speed.is_some())
     }
 
+    /// Photoshop's options-bar pressure buttons (`usePressureOverridesSize` / `…Opacity`)
+    /// override the Brush Settings panel: with one on, a Size (Shape Dynamics) or Opacity
+    /// (Transfer) control set to anything else (Fade, Pen Tilt…) follows pen pressure instead.
+    /// The panel's Minimum and Jitter stay (not measured; the control alone is replaced). A
+    /// control that is Off, or a section that is off, already takes the button's plain pressure.
+    /// Not used in the Clip Studio workspace, where the panel always wins.
+    pub fn with_pressure_overrides(mut self) -> Self {
+        if self.pressure_size && self.shape_dynamics.enabled && self.shape_dynamics.size.control != Control::Off {
+            self.shape_dynamics.size.control = Control::PenPressure;
+        }
+        if self.pressure_opacity && self.transfer.enabled && self.transfer.opacity.control != Control::Off {
+            self.transfer.opacity.control = Control::PenPressure;
+        }
+        self
+    }
+
     /// Keep Photoshop's tool setting available for switching back without filtering CSP input.
     pub fn effective_smoothing(&self) -> Smoothing {
         if self.csp_correction { Smoothing::default() } else { self.smoothing.clone() }
