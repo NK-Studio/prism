@@ -938,6 +938,33 @@ mod tests {
         }
     }
 
+    /// Photoshop 27.4: Desaturate is (max + min) / 2 rounded down at 8 bits; Invert is 255 − v.
+    #[test]
+    fn desaturate_and_invert_match_photoshop_at_8_bits() {
+        let mut s = session(8);
+        let c = |v: f32| v / 255.0;
+        paint_square(&mut s, Rect::new(0, 0, 10, 30), [c(101.0), c(100.0), c(50.0), 1.0]);
+        paint_square(&mut s, Rect::new(10, 0, 20, 30), [c(10.0), c(20.0), c(30.0), 1.0]);
+        paint_square(&mut s, Rect::new(20, 0, 30, 30), [c(255.0), c(0.0), c(0.0), 1.0]);
+        paint_square(&mut s, Rect::new(30, 0, 40, 30), [c(1.0), c(0.0), c(0.0), 1.0]);
+        let q = |p: Vec<f32>| p[..3].iter().map(|v| (v * 255.0).round() as u8).collect::<Vec<_>>();
+        s.execute("image.adjustments.invert", json!({})).unwrap();
+        assert_eq!(q(pixel(&s, 1, 1)), [154, 155, 205]);
+        s.execute("image.adjustments.invert", json!({})).unwrap();
+        s.execute("image.adjustments.desaturate", json!({})).unwrap();
+        assert_eq!(q(pixel(&s, 1, 1)), [75, 75, 75], "75.5 rounds down");
+        assert_eq!(q(pixel(&s, 11, 1)), [20, 20, 20]);
+        assert_eq!(q(pixel(&s, 21, 1)), [127, 127, 127], "127.5 rounds down");
+        assert_eq!(q(pixel(&s, 31, 1)), [0, 0, 0], "0.5 rounds down");
+        // Through a selection, only the selected pixels change.
+        let mut s = session(16);
+        paint_square(&mut s, Rect::new(0, 0, 40, 30), [1.0, 0.0, 0.0, 1.0]);
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 30})).unwrap();
+        s.execute("image.adjustments.desaturate", json!({})).unwrap();
+        assert!((pixel(&s, 1, 1)[1] - 0.5).abs() < 0.001, "{:?}", pixel(&s, 1, 1));
+        assert_eq!(pixel(&s, 30, 1)[1], 0.0);
+    }
+
     #[test]
     fn average_and_clouds() {
         let mut s = session(8);

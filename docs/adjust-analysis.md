@@ -374,6 +374,17 @@ Found on the way: the parameter-form parser read a note after the parameter list
 (`{…} (color: …)`) as part of the last parameter, so Replace Color opened with lightness −100 (and
 other commands with a note lost their last default); fixed in `filter_dialog::parse_spec`.
 
+## Invert and Desaturate (Photoshop 27.4, measured 2026-11-17)
+
+Each applied by script to 8-bit test images (a hue/saturation chart, uneven random colours, grey
+steps, a low-contrast ramp, two colours) and the saved results compared pixel by pixel.
+
+- **Invert**: `255 − v` on every channel, exact. Prism unchanged.
+- **Desaturate**: each pixel becomes the grey `(max + min) / 2` (HSL lightness), and at 8 bits the
+  half is **rounded down** (exact on every pixel; rounding to nearest is off by one on half the
+  chart). Prism's Hue/Saturation path rounded up, so `pixels::desaturate_surface` now rounds 8-bit
+  RGB halves down; other depths and colour models take the Hue/Saturation path as before.
+
 ## Still open
 
 - Auto's target curve (Photoshop's trained model) is a stand-in.

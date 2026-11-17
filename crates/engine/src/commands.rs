@@ -908,12 +908,15 @@ fn build() -> Vec<CommandSpec> {
             turn(s, "Rotate Canvas", crate::canvas_geom::Turn::Ccw90)
         }),
         cmd!("image.adjustments.desaturate", "Desaturate", ["Image", "Adjustments"], Some("Cmd+Shift+U"), "{}", has_pixel_layer, |s, _| {
-            destructive_adjust(
-                s,
-                "Desaturate",
-                Adjustment::HueSaturation { hue: 0.0, saturation: -100.0, lightness: 0.0, colorize: false, ranges: prism_doc::adjust::HueRange::defaults() },
-                &Value::Null,
-            )
+            let id = layer_param(s, &Value::Null)?;
+            s.edit("Desaturate", |doc, _| {
+                let sel = doc.selection.clone();
+                let mode = doc.mode;
+                let surf = paint_surface(doc, id, &Value::Null)?;
+                pixels::desaturate_surface(surf, sel.as_ref(), mode);
+                Ok(())
+            })?;
+            Ok(Value::Null)
         }),
         // Paint
         cmd!(

@@ -17,6 +17,48 @@ pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surf
     s.write_region(r, &out);
 }
 
+/// Image › Adjustments › Desaturate: Hue/Saturation at −100 saturation, so each pixel becomes the
+/// grey of its HSL lightness `(max + min) / 2`. At 8 bits in RGB, Photoshop 27.4 rounds that half
+/// down (measured: exact on every pixel of a hue/saturation chart), where the shared path would
+/// round it up; other depths and colour models take the shared path.
+pub fn desaturate_surface(s: &mut Surface, selection: Option<&Surface>, mode: prism_color::ColorMode) {
+    let fmt = s.format();
+    if fmt.sample != prism_color::SampleType::U8 || fmt.mode != prism_color::ColorMode::Rgb {
+        adjust_surface(s, &desaturate(), selection, mode);
+        return;
+    }
+    let r = s.content_bounds();
+    if r.is_empty() {
+        return;
+    }
+    let n = fmt.channels();
+    let mut raw = s.read_region(r);
+    let w = r.width() as usize;
+    for (i, px) in raw.chunks_exact_mut(n).enumerate() {
+        let k = selection.map_or(1.0, |sel| sel.sample_channel(r.x0 + (i % w) as i32, r.y0 + (i / w) as i32, 0));
+        if k <= 0.0 {
+            continue;
+        }
+        let o = to_rgba(&fmt, px);
+        let (max, min) = (o[0].max(o[1]).max(o[2]), o[0].min(o[1]).min(o[2]));
+        // A quarter level down: (max + min) / 2 is a whole or half 8-bit level, and the encoder
+        // rounds to the nearest, so this rounds halves down and leaves whole levels alone.
+        let grey = ((max + min) * 0.5 - 0.25 / 255.0).max(0.0);
+        let mixed: [f32; 4] = std::array::from_fn(|c| if c < 3 { o[c] + (grey - o[c]) * k } else { o[c] });
+        let mut enc = [0.0f32; 8];
+        let m = prism_raster::from_rgba_into(&fmt, mixed, &mut enc);
+        if let (Some(dst), Some(src)) = (px.get_mut(..m), enc.get(..m)) {
+            dst.copy_from_slice(src);
+        }
+    }
+    s.write_region(r, &raw);
+}
+
+/// Desaturate as an adjustment: Hue/Saturation with saturation −100.
+pub fn desaturate() -> Adjustment {
+    Adjustment::HueSaturation { hue: 0.0, saturation: -100.0, lightness: 0.0, colorize: false, ranges: prism_doc::adjust::HueRange::defaults() }
+}
+
 /// Applies `adj` to a layer mask through the selection. Untouched mask pixels count (they read as
 /// the mask's default value), and without a selection the default changes too, since a mask
 /// reaches past the canvas: Invert turns a reveal-all mask into a hide-all one (#780).
