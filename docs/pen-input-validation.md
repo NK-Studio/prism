@@ -676,9 +676,24 @@ The width turns as sharply with smoothing as without, at the place the trailing 
 when the pen's pressure steps (65 / 83 px back: the measured time constants at 0.5 px/ms). So
 Photoshop trails only the position and paints with the pen's pressure of the moment. Prism's
 Photoshop pen rules now do the same (the smoother used to carry pressure, tilt and rotation along
-the trailing segment, which softened a step over about 90 ms); tilt and rotation follow the same
-rule but were not measured. The Clip Studio workspace keeps the old interpolation. Test:
-`photoshop_smoothing_paints_with_the_pens_pressure_of_the_moment` (prism-paint).
+the trailing segment, which softened a step over about 90 ms). The Clip Studio workspace keeps
+the old interpolation.
+
+Tilt and rotation, measured the same way (Shape Dynamics on, size control off): roundness on Pen
+Tilt with Minimum Roundness 25 % and tilt stepping 0 ↔ 60° along x, and angle on Rotation with a
+20 % round tip and rotation stepping 0 ↔ 90°:
+
+| Smoothing | Tilt: width turns at | Rotation: width turns at | 10–90 % |
+| --- | --- | --- | --- |
+| 0 | 395 / 399 | 397 / 397 | 9–12 px |
+| 128 | 333 / 337 | 334 / 335 | 9–12 px |
+| 255 | 317 / 321 | 318 / 319 | 9–12 px |
+
+Both turn where pressure does, as sharply as without smoothing (the rotation step leaves a small
+fan of dabs at in-between angles over one sample, with or without smoothing). So Photoshop trails
+the position only and takes pressure, tilt and rotation from the current sample, which is what
+Prism's Photoshop pen rules now do. Test:
+`photoshop_smoothing_paints_with_the_pens_pressure_and_pose_of_the_moment` (prism-paint).
 
 ## Remaining physical acceptance
 

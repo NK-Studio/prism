@@ -2847,31 +2847,53 @@ fn stroke_catch_up_while_resting_follows_photoshop() {
 }
 
 #[test]
-fn photoshop_smoothing_paints_with_the_pens_pressure_of_the_moment() {
+fn photoshop_smoothing_paints_with_the_pens_pressure_and_pose_of_the_moment() {
     // Photoshop 27.4, synthetic pen (docs/pen-input-validation.md › Photoshop Pressure
-    // Smoothing): a 24 px pressure-size line x 100 → 700 at 0.5 px/ms, pressure stepping
-    // 0.25 ↔ 1 at x 400. The width turns within one dab, where the brush is when the pen
-    // steps: x ≈ 397 / 335 / 318 at Smoothing 0 / 128 / 255.
-    let mut b = BrushSettings { size: 24.0, hardness: 1.0, spacing: 0.05, ..brush() };
-    b.shape_dynamics.enabled = true;
-    b.shape_dynamics.size.control = Control::PenPressure;
-    for (value, at) in [(0.0, 397.0), (128.0, 335.0), (255.0, 318.0)] {
-        b.smoothing = Smoothing { amount: (value / 255.0) as f32, ..Default::default() };
-        for (p0, p1) in [(0.25, 1.0), (1.0, 0.25)] {
-            let pts: Vec<_> = (0..=150u32)
-                .map(|i| {
-                    let t = f64::from(i * 8);
-                    StrokePoint { time: t, ..StrokePoint::new(100.0 + 0.5 * t, 50.0, if t < 600.0 { p0 } else { p1 }) }
-                })
-                .collect();
-            let d = photoshop_dabs(&b, &pts, 1.0);
-            let mid = 12.0 * (0.25 + 1.0) / 2.0;
-            let first = d.iter().position(|d| (d.radius > mid) == (p1 > p0)).unwrap();
-            let x = d[first].center.x;
-            assert!((x - at).abs() <= 4.0, "smoothing {value}, {p0} → {p1}: step at {x}, Photoshop {at}");
-            // Sharp: the dab before is still at the old pressure (within one sample's ramp).
-            let before = d[first.saturating_sub(4)].radius;
-            assert!((before - 12.0 * p0).abs() < 0.5, "smoothing {value}: {before} just before the step");
+    // Smoothing): a 24 px line x 100 → 700 at 0.5 px/ms whose pressure (size on Pen Pressure),
+    // tilt 0 ↔ 60° (roundness on Pen Tilt, minimum 25 %) or rotation 0 ↔ 90° (angle on Rotation,
+    // 20 % round tip) steps at x 400. The dab turns within one sample, where the brush is when
+    // the pen steps: x ≈ 397 / 335 / 318 at Smoothing 0 / 128 / 255.
+    type Probe = fn(&Dab) -> f32;
+    type Set = fn(&mut StrokePoint, bool);
+    let base = BrushSettings { size: 24.0, hardness: 1.0, spacing: 0.05, ..brush() };
+    let mut pressure = base.clone();
+    pressure.shape_dynamics.enabled = true;
+    pressure.shape_dynamics.size.control = Control::PenPressure;
+    let mut tilt = base.clone();
+    tilt.shape_dynamics.enabled = true;
+    tilt.shape_dynamics.roundness.control = Control::PenTilt;
+    tilt.shape_dynamics.roundness.minimum = 0.25;
+    let mut rotation = BrushSettings { roundness: 0.2, ..base };
+    rotation.shape_dynamics.enabled = true;
+    rotation.shape_dynamics.angle.control = Control::Rotation;
+    let channels: [(&str, BrushSettings, Set, Probe); 3] = [
+        ("pressure", pressure, |p, on| p.pressure = if on { 1.0 } else { 0.25 }, |d| d.radius),
+        ("tilt", tilt, |p, on| p.tilt_x = if on { 60.0 } else { 0.0 }, |d| d.roundness),
+        ("rotation", rotation, |p, on| p.rotation = if on { 90.0 } else { 0.0 }, |d| d.angle.sin().abs()),
+    ];
+    for (name, mut b, set, probe) in channels {
+        for (value, at) in [(0.0, 397.0), (128.0, 335.0), (255.0, 318.0)] {
+            b.smoothing = Smoothing { amount: (value / 255.0) as f32, ..Default::default() };
+            for up in [true, false] {
+                let pts: Vec<_> = (0..=150u32)
+                    .map(|i| {
+                        let t = f64::from(i * 8);
+                        let mut p = StrokePoint { time: t, ..StrokePoint::new(100.0 + 0.5 * t, 50.0, 1.0) };
+                        set(&mut p, (t >= 600.0) == up);
+                        p
+                    })
+                    .collect();
+                let d = photoshop_dabs(&b, &pts, 1.0);
+                let (v0, v1) = (probe(&d[2]), probe(&d[d.len() - 2]));
+                assert!((v0 - v1).abs() > 0.3, "{name}: the step shows ({v0} → {v1})");
+                let mid = (v0 + v1) / 2.0;
+                let first = d.iter().position(|d| (probe(d) > mid) == (v1 > v0)).unwrap();
+                let x = d[first].center.x;
+                assert!((x - at).abs() <= 4.0, "{name}, smoothing {value}, up {up}: step at {x}, Photoshop {at}");
+                // Sharp: a few dabs before, the brush still has the old value.
+                let before = probe(&d[first.saturating_sub(4)]);
+                assert!((before - v0).abs() < 0.05, "{name}, smoothing {value}: {before} just before the step, {v0} earlier");
+            }
         }
     }
 }
