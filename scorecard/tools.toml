@@ -213,7 +213,7 @@ id = "TOOL-214-15"
 target = "Content-Aware Fill workspace: paint the sampling area, preview, rotate/scale/mirror, new layer"
 status = "partial"
 issue = 214
-note = "Engine sampling auto, rect, custom (edit_menu_cmds.rs:324); generic dialog"
+note = "Workspace caf_ui.rs (Sampling Brush, Lasso fill-area edits, overlay, Preview, Apply/OK, all fill settings and outputs) over edit.contentAwareFill (caf_cmds.rs, algo caf.rs). Missing: Lasso Feather/Anti-alias, polygonal lasso flyout, Preview at full resolution for very large fill windows"
 
 [[item]]
 id = "TOOL-214-16"

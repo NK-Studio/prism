@@ -257,6 +257,9 @@ pub fn handle(app: &mut PrismApp, ctx: &egui::Context) {
     if app.distort.liquify.is_some() && !ctx.text_edit_focused() {
         crate::liquify_ui::keys(app, ctx);
     }
+    if app.distort.caf.is_some() && !ctx.text_edit_focused() {
+        crate::caf_ui::keys(app, ctx);
+    }
     use crate::shortcut_dispatch::{Focus, dispatch_pressed};
     let focus = Focus::of(ctx);
     // Dialogs (and Liquify's panel while one of its controls has focus) keep canvas zoom; a

@@ -3940,6 +3940,45 @@ submenu	Other…	기타
 	Show Grid in 25% increments	25% 단위로 격자 표시
 	Show Grid in 10% increments	10% 단위로 격자 표시
 	Before - After	이전 - 이후
+	Sampling Brush Tool (B)	샘플링 브러시 도구 (B)
+	Lasso Tool (L)	올가미 도구 (L)
+	Hand Tool (H)	손 도구 (H)
+	Zoom Tool (Z)	돋보기 도구 (Z)
+	Cancel and leave Content-Aware Fill	취소하고 내용 인식 채우기에서 나가기
+	Add to the sampling area	샘플링 영역에 추가
+	Subtract from the sampling area (Alt)	샘플링 영역에서 빼기 (Alt)
+	Add to selection	선택 영역에 추가
+	Subtract from selection	선택 영역에서 빼기
+	Intersect with selection	선택 영역과 교차
+	{n} px	{n}픽셀
+	Sampling Area Overlay	샘플링 영역 오버레이
+	Show Sampling Area	샘플링 영역 표시
+	Sampling Area	샘플링 영역
+	Excluded Area	제외된 영역
+	Sampling Area Options	샘플링 영역 옵션
+	Fill Settings	채우기 설정
+	Output Settings	출력 설정
+	Output To	출력 위치
+	Reset all settings	모든 설정 재설정
+	Updating…	업데이트 중…
+caf	Step	단위
+caf	Expand	확대
+caf	Contract	축소
+caf	Show	표시
+caf	Auto	자동
+caf	Rectangular	사각형
+caf	Custom	사용자 정의
+caf	Color Adaptation	색상 적용
+caf	Rotation Adaptation	회전 적용
+caf	None	없음
+caf	Default	기본값
+caf	High	고
+caf	Very High	최고값
+caf	Low	저
+caf	Medium	중
+caf	Full	전체
+caf	Scale	비율
+caf	Mirror	뒤집기
 preset	Darker	더 어둡게
 preset	Increase Contrast 1	대비 증가 1
 preset	Increase Contrast 2	대비 증가 2

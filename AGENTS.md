@@ -95,6 +95,13 @@ written independently from the documented formulas and constants, parts the note
 estimates stay as measured against the corpus, and raw analysis stays outside the repository.
 Records: `docs/layer-style-analysis.md`.
 
+On 2026-11-17 the maintainer also asked to rebuild Edit › Content-Aware Fill as Photoshop's
+workspace, from their research notes on Photoshop 2026's `AdbePM.framework` (patch search and
+voting) and from screenshots of Photoshop's own workspace taken for each feature. The same
+boundary applies: Prism's code is written independently from the documented rules and
+constants; values the notes mark as estimates stay estimates; screenshots and raw analysis stay
+outside the repository. Records: `docs/content-aware-fill-analysis.md`.
+
 ## 4. Picking work
 
 Priorities: important infrastructure first, then low-hanging parity, then the long tail.

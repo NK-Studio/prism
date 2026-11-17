@@ -62,21 +62,21 @@ pub fn color_level(level: &str) -> f32 {
 }
 
 /// One source variant: pixels and which of them are usable.
-struct Variant {
-    w: usize,
-    h: usize,
-    img: Vec<f32>,
-    ok: Vec<bool>,
+pub(crate) struct Variant {
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) img: Vec<f32>,
+    pub(crate) ok: Vec<bool>,
 }
 
 /// A source buffer and which of its pixels may be sampled.
 #[derive(Clone, Copy)]
-struct Src<'a> {
-    w: usize,
-    h: usize,
-    ch: usize,
-    img: &'a [f32],
-    ok: &'a [bool],
+pub(crate) struct Src<'a> {
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) ch: usize,
+    pub(crate) img: &'a [f32],
+    pub(crate) ok: &'a [bool],
 }
 
 /// Sample the source bilinearly at (x, y); false when any tap is unusable.
@@ -103,7 +103,7 @@ fn sample(src: Src, x: f32, y: f32, out: &mut [f32]) -> bool {
 }
 
 /// Transformed copy of the source: rotation (degrees) and scale about the centre, optional mirror.
-fn variant(src: Src, deg: f32, scale: f32, mirror: bool) -> Variant {
+pub(crate) fn variant(src: Src, deg: f32, scale: f32, mirror: bool) -> Variant {
     let Src { w, h, ch, .. } = src;
     let (s, c) = (-deg.to_radians()).sin_cos();
     // Output size: the rotated, scaled bounding box.
@@ -253,7 +253,7 @@ pub fn fill_with(
 
 /// Pull the fill's low frequencies towards the membrane interpolation of the hole boundary.
 #[allow(clippy::too_many_arguments)]
-fn adapt_colors(
+pub(crate) fn adapt_colors(
     w: usize,
     h: usize,
     ch: usize,

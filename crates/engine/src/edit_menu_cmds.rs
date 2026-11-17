@@ -5,15 +5,15 @@
 //! Check Spelling is not implemented: it needs a word list per language, and no permissively
 //! licensed dictionary small enough to bundle (or a pure-Rust checker with one) was available.
 
-use prism_color::{BlendMode, PixelFormat};
+use prism_color::BlendMode;
 use prism_doc::vector::Path;
-use prism_doc::{DocId, Document, Layer, LayerContent, LayerId};
+use prism_doc::{DocId, Document, LayerContent, LayerId};
 use prism_geom::Rect;
 use prism_raster::{Surface, from_rgba_into, to_rgba};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, blend_from_str, int, layer_param};
+use crate::commands::{CommandSpec, blend_from_str, layer_param};
 use crate::{EngineError, Result, Session};
 
 // ------------------------------------------------------------------ state
@@ -287,15 +287,6 @@ fn can_purge_all(s: &Session) -> std::result::Result<(), String> {
 
 // ------------------------------------------------------------------ Content-Aware Fill
 
-fn can_caf(s: &Session) -> std::result::Result<(), String> {
-    pixel_layer(s)?;
-    let d = s.active().ok_or("no document open")?;
-    if d.doc.selection.as_ref().is_none_or(|m| m.content_bounds().is_empty()) {
-        return Err("make a selection around what to remove".into());
-    }
-    Ok(())
-}
-
 /// Mask surface (gray) of an alpha channel by index or name.
 fn channel_mask<'a>(doc: &'a Document, v: &Value) -> Option<&'a Surface> {
     match v {
@@ -303,183 +294,6 @@ fn channel_mask<'a>(doc: &'a Document, v: &Value) -> Option<&'a Surface> {
         Value::String(name) => doc.channels.iter().find(|c| c.name == *name).map(|c| &c.surface),
         _ => None,
     }
-}
-
-/// `key` as an `[x, y, w, h]` rectangle. The saturating float→int casts bound each component;
-/// the additions saturate too — `area: [1e30, 0, 1e30, 10]` is a whole-canvas window, not an
-/// overflow (it panicked in debug builds before the `saturating_add`).
-fn rect_param(p: &Value, key: &str, cmd: &str) -> Result<Rect> {
-    let a = p.get(key).and_then(Value::as_array).ok_or_else(|| bad(cmd, format!("`{key}` must be [x, y, w, h]")))?;
-    let n = |i: usize| {
-        a.get(i)
-            .and_then(Value::as_f64)
-            .filter(|f| f.is_finite())
-            .map(|v| v.round() as i32)
-            .ok_or_else(|| bad(cmd, format!("`{key}` must be four finite numbers")))
-    };
-    let (x, y, w, h) = (n(0)?, n(1)?, n(2)?, n(3)?);
-    Ok(Rect::new(x, y, x.saturating_add(w.max(0)), y.saturating_add(h.max(0))))
-}
-
-fn content_aware_fill(s: &mut Session, p: &Value) -> Result<Value> {
-    content_aware_fill_as(s, p, "edit.contentAwareFill", "Content-Aware Fill")
-}
-
-/// Delete and Fill Selection (#1286): Photoshop's one-click removal from the selection-tool
-/// context menu. Content-Aware Fill with its default settings into the layer, no dialog.
-fn delete_and_fill(s: &mut Session, _: &Value) -> Result<Value> {
-    content_aware_fill_as(s, &json!({}), "edit.deleteAndFillSelection", "Delete and Fill Selection")
-}
-
-fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &'static str) -> Result<Value> {
-    use prism_algo::content_aware::{FillOptions, color_level, fill_with, rotation_level};
-    let id = pixel_layer(s).map_err(EngineError::Other)?;
-    let st = s.active().ok_or(EngineError::NoDocument)?;
-    let doc = st.doc.clone();
-    let sel = doc.selection.clone().ok_or_else(|| bad(cmd, "no selection"))?;
-    let hb = sel.content_bounds().intersect(&doc.bounds());
-    if hb.is_empty() {
-        return Err(bad(cmd, "the selection is outside the canvas"));
-    }
-    // The canvas is at most i32 wide, so the extent fits; saturate anyway rather than wrap (#963).
-    let ext = i32::try_from(hb.width().max(hb.height())).unwrap_or(i32::MAX);
-    let sampling = str_or(p, "sampling", "auto").to_string();
-    let custom_mask: Option<Surface> = p.get("channel").and_then(|v| channel_mask(&doc, v)).cloned();
-    let custom_rect = if p.get("area").is_some() { Some(rect_param(p, "area", cmd)?) } else { None };
-    let window = match sampling.as_str() {
-        "auto" => hb.inflate(crate::fill_cmds::sampling_margin(hb)),
-        "rectangular" => hb.inflate(int(p, "margin").map_or(ext.max(16), |m| m.clamp(0, 100_000) as i32)),
-        "custom" => {
-            let r = match (custom_rect, custom_mask.as_ref()) {
-                (Some(r), _) => r,
-                (None, Some(m)) => m.content_bounds(),
-                (None, None) => return Err(bad(cmd, "custom sampling needs `area` [x,y,w,h] or `channel` (alpha channel index or name)")),
-            };
-            r.union(&hb).inflate(4)
-        }
-        other => return Err(bad(cmd, format!("unknown sampling `{other}` (auto|rectangular|custom)"))),
-    }
-    .intersect(&doc.bounds());
-    let opts = FillOptions {
-        color_adaptation: color_level(str_or(p, "colorAdaptation", "default")),
-        rotations: rotation_level(str_or(p, "rotationAdaptation", "none")),
-        scale: bool_or(p, "scale", false),
-        mirror: bool_or(p, "mirror", false),
-        seed: p.get("seed").and_then(Value::as_u64).unwrap_or(1),
-    };
-    let output = str_or(p, "output", "current").to_string();
-    if !matches!(output.as_str(), "current" | "new" | "duplicate") {
-        return Err(bad(cmd, "`output` must be current|new|duplicate"));
-    }
-    let surf = doc.layer(id).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(id))?;
-    let fmt = surf.format();
-    let n = fmt.channels();
-    // Refuse a window too large to read before allocating for it, whatever the sampling (#963).
-    let (w, h) = crate::fill_cmds::window_size(window)?;
-    // A background job when started with `Session::start` (#210): reading the window and the
-    // PatchMatch fill run on a worker against the document snapshot, cancellable per row band.
-    crate::jobs::run(
-        s,
-        label,
-        true,
-        move |ctx| {
-            ctx.progress(0.0, label);
-            let surf = doc.layer(id).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(id))?;
-            let img = surf.read_region(window);
-            let mut cover = vec![0.0f32; w * h];
-            let mut hole = vec![false; w * h];
-            let mut source = vec![true; w * h];
-            for y in 0..h {
-                if y % 64 == 0 {
-                    ctx.check()?;
-                }
-                for x in 0..w {
-                    let (dx, dy) = (window.x0 + x as i32, window.y0 + y as i32);
-                    let i = y * w + x;
-                    cover[i] = sel.sample_channel(dx, dy, 0);
-                    hole[i] = cover[i] > 0.0;
-                    if sampling == "custom" {
-                        source[i] = match (custom_rect, custom_mask.as_ref()) {
-                            (Some(r), _) => r.contains(dx, dy),
-                            (None, Some(m)) => m.sample_channel(dx, dy, 0) > 0.5,
-                            _ => true,
-                        };
-                    }
-                }
-            }
-            ctx.check()?;
-            let filled = ctx.stage(0.05, 1.0, label, |ctl| fill_with(w, h, n, &img, &hole, &source, &opts, ctl)).map_err(|_| EngineError::Cancelled)?;
-            Ok((img, cover, hole, filled))
-        },
-        move |s, (img, cover, hole, filled)| apply_content_aware_fill(s, label, id, &output, fmt, window, &img, &cover, &hole, &filled),
-    )
-}
-
-/// Write a Content-Aware Fill result (the job's apply step): into the layer, a new layer or a
-/// duplicate, as one undo step.
-#[allow(clippy::too_many_arguments)]
-fn apply_content_aware_fill(
-    s: &mut Session,
-    label: &str,
-    id: LayerId,
-    output: &str,
-    fmt: PixelFormat,
-    window: Rect,
-    img: &[f32],
-    cover: &[f32],
-    hole: &[bool],
-    filled: &[f32],
-) -> Result<Value> {
-    let n = fmt.channels();
-    let (w, h) = (window.width() as usize, window.height() as usize);
-    let n_hole = hole.iter().filter(|h| **h).count();
-    let layer = s.edit(label, |doc, active| {
-        let target = match output {
-            "new" => {
-                let mut l = Layer::raster(doc.next_layer_name("Content-Aware Fill"), PixelFormat { alpha: true, ..fmt });
-                let mut px = vec![0.0f32; w * h * n.max(1)];
-                let lf = l.surface().map(|s| s.format()).unwrap_or(fmt);
-                let ln = lf.channels();
-                px.resize(w * h * ln, 0.0);
-                for i in 0..w * h {
-                    if hole[i] {
-                        let rgba = to_rgba(&fmt, &filled[i * n..(i + 1) * n]);
-                        let mut enc = [0.0f32; 8];
-                        from_rgba_into(&lf, [rgba[0], rgba[1], rgba[2], rgba[3] * cover[i]], &mut enc);
-                        px[i * ln..(i + 1) * ln].copy_from_slice(&enc[..ln]);
-                    }
-                }
-                if let Some(s) = l.surface_mut() {
-                    s.write_region(window, &px);
-                    s.prune();
-                }
-                let nid = doc.insert_above(Some(id), l);
-                *active = Some(nid);
-                return Ok(nid);
-            }
-            "duplicate" => {
-                let mut dup = doc.layer(id).ok_or(EngineError::NoLayer(id))?.duplicate();
-                dup.name = doc.copy_name(&dup.name);
-                let nid = doc.insert_above(Some(id), dup);
-                *active = Some(nid);
-                nid
-            }
-            _ => id,
-        };
-        let surf = writable_surface(doc, target)?;
-        let mut out = img.to_vec();
-        for (i, &k) in cover.iter().enumerate() {
-            if k > 0.0 {
-                for c in 0..n {
-                    let j = i * n + c;
-                    out[j] = img[j] + (filled[j] - img[j]) * k;
-                }
-            }
-        }
-        surf.write_region(window, &out);
-        Ok(target)
-    })?;
-    Ok(json!({"layer": layer.0, "filled": n_hole, "window": [window.x0, window.y0, window.width(), window.height()]}))
 }
 
 // ------------------------------------------------------------------ Content-Aware Scale
@@ -958,16 +772,6 @@ pub fn specs() -> Vec<CommandSpec> {
             json!({"purged": [], "bytes": 0, "message": "nothing to purge (no video layers)"})
         )),
         spec!("edit.purge.all", "All", ["Edit", "Purge"], None, "{}", can_purge_all, |s, _| purge(s, "all")),
-        spec!(
-            "edit.contentAwareFill",
-            "Content-Aware Fill…",
-            ["Edit"],
-            None,
-            r##"{"sampling":"auto|rectangular|custom","margin":px?,"area":[x,y,w,h]?,"channel":index|name?,"colorAdaptation":"default|none|high|veryHigh","rotationAdaptation":"none|low|medium|high|full","scale":bool=false,"mirror":bool=false,"output":"current|new|duplicate","seed":u64=1}"##,
-            can_caf,
-            content_aware_fill
-        ),
-        spec!("edit.deleteAndFillSelection", "Delete and Fill Selection", [], None, "{}", can_caf, delete_and_fill),
         spec!(
             "edit.contentAwareScale",
             "Content-Aware Scale",

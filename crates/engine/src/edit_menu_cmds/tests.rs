@@ -1,4 +1,6 @@
 use super::*;
+use prism_color::PixelFormat;
+use prism_doc::Layer;
 use prism_doc::vector::Subpath;
 
 fn session(depth: u32) -> Session {
@@ -107,7 +109,11 @@ fn content_aware_fill_huge_area_neither_panics_nor_wraps() {
     // `[1e30, 0, 1e30, 10]` overflowed the i32 additions in the area parser (a debug-build
     // panic, a garbage sampling window in release); the additions saturate now, so this is
     // simply a whole-canvas window.
-    let r = s.execute("edit.contentAwareFill", json!({"sampling": "custom", "area": [1e30, 0.0, 1e30, 10.0], "colorAdaptation": "none"})).unwrap();
+    // That window holds no pixel to sample, which is the "nothing to copy from" error now
+    // (Photoshop leaves the fill area empty), not a crash.
+    let err = s.execute("edit.contentAwareFill", json!({"sampling": "custom", "area": [1e30, 0.0, 1e30, 10.0], "colorAdaptation": "none"})).unwrap_err();
+    assert!(err.to_string().contains("nothing to copy from"), "{err}");
+    let r = s.execute("edit.contentAwareFill", json!({"sampling": "custom", "area": [0.0, 0.0, 1e30, 1e30], "colorAdaptation": "none"})).unwrap();
     assert!(r["filled"].as_u64().unwrap() > 100);
     // A malformed area names the problem instead of silently falling back.
     for area in [json!([0.0, 0.0, null, 10.0]), json!([0.0, 0.0, 10.0]), json!("nope")] {

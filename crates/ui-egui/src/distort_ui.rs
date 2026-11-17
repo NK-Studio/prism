@@ -25,11 +25,13 @@ pub struct Distort {
     pub perspective: Option<crate::perspective_ui::PerspSession>,
     /// Filter Gallery dialog (gallery_ui).
     pub gallery: Option<crate::gallery_ui::GalleryDialog>,
+    /// Edit › Content-Aware Fill workspace (caf_ui).
+    pub caf: Option<crate::caf_ui::CafWorkspace>,
 }
 
 impl Distort {
     pub fn active(&self) -> bool {
-        self.liquify.is_some() || self.puppet.is_some() || self.perspective.is_some()
+        self.liquify.is_some() || self.puppet.is_some() || self.perspective.is_some() || self.caf.is_some()
     }
 
     /// Short description for `ui.inspect`.
@@ -39,6 +41,7 @@ impl Distort {
             "puppet": self.puppet.as_ref().map(|p| p.describe()),
             "perspective": self.perspective.as_ref().map(|p| p.describe()),
             "gallery": self.gallery.as_ref().map(|g| g.describe()),
+            "contentAwareFill": self.caf.as_ref().map(|c| c.describe()),
         })
     }
 }
@@ -104,6 +107,10 @@ pub fn menu(app: &mut PrismApp, ctx: &egui::Context, id: &str, params: &Value) -
     match id {
         "filter.filterGallery" if empty => Some(crate::gallery_ui::open(app).map(|_| json!({"gallery": app.distort.describe()["gallery"]}))),
         "filter.filterGallery" if ui.is_some() && app.distort.gallery.is_some() => Some(crate::gallery_ui::control(app, ui.unwrap_or(&Value::Null))),
+        "edit.contentAwareFill" if empty => {
+            Some(crate::caf_ui::open(app, ctx).map(|_| json!({"contentAwareFill": app.distort.describe()["contentAwareFill"]})))
+        }
+        "edit.contentAwareFill" if ui.is_some() && app.distort.caf.is_some() => Some(crate::caf_ui::control(app, ctx, ui.unwrap_or(&Value::Null))),
         "filter.liquify" if empty => Some(crate::liquify_ui::open(app, ctx).map(|_| json!({"liquify": app.distort.describe()["liquify"]}))),
         "filter.liquify" if ui.is_some() && app.distort.liquify.is_some() => Some(crate::liquify_ui::control(app, ui.unwrap_or(&Value::Null))),
         "edit.puppetWarp" | "layer.smartObjects.puppetWarp" if empty => {
@@ -150,6 +157,16 @@ pub fn keys(app: &mut PrismApp, ctx: &egui::Context) -> bool {
             let _ = crate::gallery_ui::commit(app);
         } else if esc(ctx) {
             app.distort.gallery = None;
+        }
+        return true;
+    }
+    if app.distort.caf.is_some() {
+        if enter(ctx) {
+            let _ = crate::caf_ui::commit(app);
+        } else if esc(ctx) {
+            crate::caf_ui::cancel(app);
+        } else {
+            crate::caf_ui::keys(app, ctx);
         }
         return true;
     }
@@ -212,6 +229,9 @@ pub fn show(app: &mut PrismApp, ctx: &egui::Context) {
     }
     if app.distort.liquify.is_some() {
         crate::liquify_ui::show(app, ctx);
+    }
+    if app.distort.caf.is_some() {
+        crate::caf_ui::show(app, ctx);
     }
 }
 
