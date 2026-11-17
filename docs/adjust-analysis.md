@@ -258,7 +258,7 @@ documents with a disk error), so the remaining checks wait for a stable Photosho
 
 ## Presets
 
-The "Preset:" dropdowns of Levels, Curves, Exposure and Hue/Saturation list Photoshop's built-in
+The "Preset:" dropdowns of Levels, Curves, Exposure, Hue/Saturation and Black & White list Photoshop's built-in
 presets (`ui-egui/src/adjust_presets.rs`), in its order, after Default; Custom shows once the
 settings match none. The settings were **observed, not copied**: Photoshop 27.4 was asked through
 its scripting interface to make an adjustment layer from each of its presets, and the layer's
@@ -290,6 +290,35 @@ Prism (`ui-egui/src/adjust_ps_ui.rs` `color_balance`): the same, with Photoshop 
 gestures kept (double-click zeroes a slider, the wheel steps it, Shift ×10; Alt: Reset zeroes every
 tone and shows Midtones) and Cmd+Z. Maths unchanged. Photoshop quit again when its dialog was
 cancelled (as on Hue/Saturation).
+
+## Black & White
+
+### Dialog (Photoshop 27.4, measured by driving it)
+
+"Preset:" with its twelve presets and a menu button; "Reds:", "Yellows:", "Greens:", "Cyans:",
+"Blues:", "Magentas:" (빨강 / 노랑 / 녹색 / 녹청 / 파랑 / 마젠타 계열), each a field written "40%"
+(no "+": "300%", "-200%") and a slider linear over −200..300 % on a black → colour → white track;
+"Tint" (색조) with its colour swatch, then "Hue" (42°) and "Saturation" (20%) of the tint, greyed
+while Tint is off; OK, Cancel, Auto, "Preview(Opt+P)". The default tint is 225/211/179 (hue 42,
+saturation 20 in HSB). Closing the dialog with OK (not Cancel) kept Photoshop running.
+
+Prism (`ui-egui/src/adjust_ps_ui.rs` `black_white`): the same, except Auto (Photoshop's rule for
+it isn't known). The tint's Hue and Saturation edit its colour in HSB, keeping its brightness. The
+twelve presets (Blue Filter … Yellow Filter, observed through Photoshop's scripting) are in
+`adjust_presets`. Maths unchanged.
+
+## Photo Filter
+
+### Dialog (Photoshop 27.4, captured)
+
+"Filter" (필터) as a radio with a dropdown of its twenty filters, named in English even in the
+Korean UI (Warming Filter (85), (LBA), (81), Cooling Filter (80), (LBB), (82), Red, Orange, Yellow,
+Green, Cyan, Blue, Violet, Magenta, Sepia, Deep Red, Deep Blue, Deep Emerald, Deep Yellow,
+Underwater); "Color" (색상) as a radio with the colour swatch (live under Filter too); "Density"
+(조밀도) "25%" with a slider; "Preserve Luminosity"; OK, Cancel, "Preview(Opt+P)".
+
+Prism (`ui-egui/src/adjust_ps_ui.rs` `photo_filter`): the same; a custom colour falls back to
+Warming Filter (85) when Filter is chosen; Alt: Reset; Cmd+Z. Filter colours and maths unchanged.
 
 ## Still open
 

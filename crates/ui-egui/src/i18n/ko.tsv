@@ -3831,6 +3831,12 @@ adjust	Intersection Line	교차 선
 adjust	Gamma Correction	감마 교정
 adjust	Vibrance	생동감
 adjust	Lightness	밝기
+adjust	Greens	녹색 계열
+adjust	Cyans	녹청 계열
+adjust	Tint	색조
+adjust	Filter	필터
+adjust	Color	색상
+adjust	Density	조밀도
 adjust	Tone	톤
 adjust	Cyan to Red	녹청에서 빨강
 adjust	Magenta to Green	자홍에서 초록
@@ -3911,3 +3917,13 @@ preset	Red Boost	빨강 증가
 preset	Sepia	암갈색
 preset	Strong Saturation	강한 채도
 preset	Yellow Boost	노랑 증가
+preset	Blue Filter	파랑 필터
+preset	Green Filter	녹색 필터
+preset	High Contrast Blue Filter	고대비 파랑 필터
+preset	High Contrast Red Filter	고대비 빨강 필터
+preset	Infrared	적외선
+preset	Maximum Black	최대 검정
+preset	Maximum White	최대 흰색
+preset	Neutral Density	중간 밀도
+preset	Red Filter	빨강 필터
+preset	Yellow Filter	노랑 필터

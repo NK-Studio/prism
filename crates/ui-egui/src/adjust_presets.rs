@@ -1,5 +1,5 @@
 //! The built-in presets of Photoshop 27.4's Image › Adjustments dialogs (the "Preset:" dropdown):
-//! Levels, Curves, Exposure and Hue/Saturation.
+//! Levels, Curves, Exposure, Hue/Saturation and Black & White.
 //!
 //! The settings were observed, not copied: Photoshop was asked to make an adjustment layer from
 //! each of its presets and the layer's settings were read back through its scripting interface
@@ -74,6 +74,26 @@ const HUE_SATURATION: &[Preset] = &[
     Preset { name: "Yellow Boost", params: || json!({"hue": 5, "saturation": 20, "lightness": 0}) },
 ];
 
+/// Black & White's presets set the six weights (reds … magentas) and leave Tint off.
+const BLACK_WHITE: &[Preset] = &[
+    Preset { name: "Blue Filter", params: || bw([0, 0, 0, 110, 110, 110]) },
+    Preset { name: "Darker", params: || bw([30, 50, 30, 50, 10, 70]) },
+    Preset { name: "Green Filter", params: || bw([50, 120, 90, 50, 0, 0]) },
+    Preset { name: "High Contrast Blue Filter", params: || bw([-50, -50, -50, 150, 150, 150]) },
+    Preset { name: "High Contrast Red Filter", params: || bw([120, 120, -10, -50, -50, 120]) },
+    Preset { name: "Infrared", params: || bw([-40, 235, 144, -68, -3, -107]) },
+    Preset { name: "Lighter", params: || bw([50, 70, 50, 70, 30, 90]) },
+    Preset { name: "Maximum Black", params: || bw([0, 0, 0, 0, 0, 0]) },
+    Preset { name: "Maximum White", params: || bw([100, 100, 100, 100, 100, 100]) },
+    Preset { name: "Neutral Density", params: || bw([128, 128, 100, 100, 128, 100]) },
+    Preset { name: "Red Filter", params: || bw([120, 110, -10, -50, 0, 120]) },
+    Preset { name: "Yellow Filter", params: || bw([120, 110, 40, -30, 0, 70]) },
+];
+
+fn bw(w: [i32; 6]) -> Value {
+    json!({"reds": w[0], "yellows": w[1], "greens": w[2], "cyans": w[3], "blues": w[4], "magentas": w[5], "tint": false})
+}
+
 /// The built-in presets of adjustment `kind` for a document in `mode` (Photoshop lists its
 /// "(RGB)" Curves presets for RGB documents only).
 pub fn presets(kind: &str, mode: prism_doc::ColorMode) -> &'static [Preset] {
@@ -82,6 +102,7 @@ pub fn presets(kind: &str, mode: prism_doc::ColorMode) -> &'static [Preset] {
         "curves" if mode == prism_doc::ColorMode::Rgb => CURVES_RGB,
         "exposure" => EXPOSURE,
         "hueSaturation" => HUE_SATURATION,
+        "blackWhite" => BLACK_WHITE,
         _ => &[],
     }
 }
@@ -146,7 +167,7 @@ mod tests {
     /// Every preset resolves to valid settings that differ from the defaults.
     #[test]
     fn every_builtin_preset_resolves() {
-        for kind in ["levels", "curves", "exposure", "hueSaturation"] {
+        for kind in ["levels", "curves", "exposure", "hueSaturation", "blackWhite"] {
             let list = presets(kind, prism_doc::ColorMode::Rgb);
             assert!(!list.is_empty(), "{kind}");
             let default = prism_engine::adjust_params::default_for(kind, prism_doc::ColorMode::Rgb).map(|d| prism_engine::adjust_params::to_params(&d)).unwrap();

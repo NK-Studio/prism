@@ -46,6 +46,9 @@ const HS_W: f32 = 276.0;
 /// Color Balance's options column (the three tone swatches with their names).
 const CB_W: f32 = 300.0;
 
+/// Black & White's options column.
+const BW_W: f32 = 250.0;
+
 /// Curves' channel frame (Output gutter, bar and 256-level graph).
 const CURVES_W: f32 = 340.0;
 /// Curves' display options column.
@@ -57,7 +60,7 @@ fn kind(f: &Map<String, Value>) -> &str {
 
 /// Is this dialog drawn in Photoshop's classic adjustment layout?
 pub fn owns(f: &Map<String, Value>) -> bool {
-    matches!(kind(f), "brightnessContrast" | "levels" | "curves" | "exposure" | "vibrance" | "hueSaturation" | "colorBalance")
+    matches!(kind(f), "brightnessContrast" | "levels" | "curves" | "exposure" | "vibrance" | "hueSaturation" | "colorBalance" | "blackWhite" | "photoFilter")
 }
 
 /// The dialog's content width.
@@ -66,6 +69,7 @@ pub fn width(f: &Map<String, Value>) -> f32 {
         "levels" => LEVELS_W + GAP + LEVELS_BUTTON_W,
         "hueSaturation" => HS_W + GAP + BUTTON_W,
         "colorBalance" => CB_W + GAP + BUTTON_W,
+        "blackWhite" => BW_W + GAP + BUTTON_W,
         "curves" => CURVES_W + GAP + CURVES_VIEW_W + GAP + LEVELS_BUTTON_W,
         _ => WIDTH,
     }
@@ -131,6 +135,8 @@ pub fn body(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Va
         "vibrance" => vibrance(ui, f),
         "hueSaturation" => hue_saturation(app, ui, f),
         "colorBalance" => color_balance(ui, f),
+        "blackWhite" => black_white(app, ui, f),
+        "photoFilter" => photo_filter(ui, f),
         _ => brightness_contrast(app, ui, f),
     };
     settle(ui, f);
@@ -654,6 +660,255 @@ fn color_balance(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> 
         }
     } else {
         ui.data_mut(|d| d.insert_temp(tone_id, tone));
+    }
+    outcome
+}
+
+/// Image › Adjustments › Photo Filter in Photoshop 27.4's layout (captured): "Filter" (a radio
+/// with the dropdown of its twenty filters, named in English even in the Korean UI) or "Color" (a
+/// radio with the colour swatch), "Density" ("25%" with a slider), Preserve Luminosity; OK, Cancel
+/// (Alt: Reset) and Preview at the right.
+fn photo_filter(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
+    use prism_engine::adjust_params::{PHOTO_FILTERS, hex};
+    let mut outcome = None;
+    let default_colour = [236.0 / 255.0, 138.0 / 255.0, 0.0];
+    let colour_of = |f: &Map<String, Value>| -> [f32; 3] {
+        let h = f.get("color").and_then(Value::as_str).unwrap_or("#ec8a00").trim_start_matches('#').to_string();
+        let b = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok()).map(|x| f32::from(x) / 255.0);
+        match (b(0), b(2), b(4)) {
+            (Some(r), Some(g), Some(bb)) => [r, g, bb],
+            _ => default_colour,
+        }
+    };
+    let mut colour = colour_of(f);
+    let preset = PHOTO_FILTERS.iter().position(|p| hex(p.2.map(|x| f32::from(x) / 255.0)) == hex(colour));
+    let mode_id = crate::adjust_dialog::editor_mem("photoFilter").with("pf-mode");
+    let mut use_colour: bool = ui.data(|d| d.get_temp(mode_id)).unwrap_or(preset.is_none());
+    let mut density = f.get("density").and_then(Value::as_f64).filter(|v| v.is_finite()).map_or(25.0, |v| v as f32).clamp(1.0, 100.0);
+    let mut preserve = f.get("preserveLuminosity").and_then(Value::as_bool).unwrap_or(true);
+    // As stored, so an out-of-range value is written back clamped.
+    let before = (
+        f.get("color").and_then(Value::as_str).unwrap_or_default().to_string(),
+        f.get("density").and_then(Value::as_f64).map_or(f32::NAN, |v| v as f32),
+        f.get("preserveLuminosity").and_then(Value::as_bool),
+    );
+    let alt = ui.input(|i| i.modifiers.alt);
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(OPTIONS_W);
+            ui.horizontal(|ui| {
+                if radio(ui, !use_colour, label("Filter")) {
+                    use_colour = false;
+                    if preset.is_none() {
+                        colour = default_colour;
+                    }
+                }
+                ui.add_space(4.0);
+                let mut sel = preset.map_or_else(|| "custom".to_string(), |i| i.to_string());
+                let mut opts: Vec<(String, &str)> = PHOTO_FILTERS.iter().enumerate().map(|(i, p)| (i.to_string(), p.1)).collect();
+                if preset.is_none() {
+                    opts.insert(0, ("custom".into(), tl!("Custom")));
+                }
+                let picked = ui.add_enabled_ui(!use_colour, |ui| widgets::dropdown(ui, "pspf-filter", &mut sel, &opts, ui.available_width())).inner;
+                if picked && let Some(p) = sel.parse::<usize>().ok().and_then(|i| PHOTO_FILTERS.get(i)) {
+                    colour = p.2.map(|x| f32::from(x) / 255.0);
+                }
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if radio(ui, use_colour, label("Color")) {
+                    use_colour = true;
+                }
+                ui.add_space(4.0);
+                // Photoshop keeps the swatch live under Filter too: picking a colour selects Color.
+                let mut srgb = colour.map(|x| (x.clamp(0.0, 1.0) * 255.0).round() as u8);
+                if widgets::color_edit_button_srgb(ui, &mut srgb).changed() {
+                    colour = srgb.map(|x| f32::from(x) / 255.0);
+                    use_colour = true;
+                }
+            });
+            ui.add_space(8.0);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.horizontal(|ui| {
+                ui.label(label("Density"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    widgets::value_field(ui, &mut density, 1.0..=100.0, "%", FIELD_W);
+                });
+            });
+            widgets::slider(ui, &mut density, 1.0..=100.0, None);
+            density = density.round().clamp(1.0, 100.0);
+            ui.add_space(10.0);
+            widgets::checkbox(ui, &mut preserve, tl!("Preserve Luminosity"));
+        });
+        ui.add_space(GAP);
+        ui.vertical(|ui| {
+            ui.set_width(BUTTON_W);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            if widgets::primary_button(ui, tl!("OK"), BUTTON_W).clicked() {
+                outcome = Some(true);
+            }
+            if widgets::secondary_button(ui, if alt { tl!("Reset") } else { tl!("Cancel") }, BUTTON_W).clicked() {
+                if alt {
+                    (colour, density, preserve, use_colour) = (default_colour, 25.0, true, false);
+                } else {
+                    outcome = Some(false);
+                }
+            }
+            ui.add_space(4.0);
+            preview_checkbox(ui, f, true);
+        });
+    });
+    ui.data_mut(|d| d.insert_temp(mode_id, use_colour));
+    // Written only when they change, so the dialog's undo history sees real edits only.
+    if (hex(colour), density, Some(preserve)) != before {
+        f.insert("color".into(), json!(hex(colour)));
+        f.insert("density".into(), json!(density));
+        f.insert("preserveLuminosity".into(), json!(preserve));
+        f.remove("filter");
+    }
+    outcome
+}
+
+/// HSV of an RGB colour: hue in degrees, saturation and value in 0..=1.
+fn hsv(c: [f32; 3]) -> [f32; 3] {
+    let mx = c[0].max(c[1]).max(c[2]);
+    let mn = c[0].min(c[1]).min(c[2]);
+    let s = if mx > 0.0 { (mx - mn) / mx } else { 0.0 };
+    [prism_engine::adjust_params::hue_of(c).unwrap_or(0.0), s, mx]
+}
+
+/// RGB (as stored, 0..=1) of a hue in degrees, saturation and value (Photoshop's HSB).
+fn from_hsv([h, s, v]: [f32; 3]) -> [f32; 3] {
+    let (h, s, v) = (if h.is_finite() { h.rem_euclid(360.0) } else { 0.0 } / 60.0, s.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+    let c = v * s;
+    let x = c * (1.0 - (h.rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r + m, g + m, b + m]
+}
+
+/// Image › Adjustments › Black & White in Photoshop 27.4's layout (measured): "Preset:" with its
+/// twelve presets; Reds … Magentas rows ("40%", sliders -200..300 % on black → colour → white
+/// tracks); Tint with its colour swatch, then Hue (°) and Saturation (%) of the tint (greyed while
+/// Tint is off); OK, Cancel (Alt: Reset) and Preview at the right. (Photoshop's Auto isn't here.)
+fn black_white(app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
+    use prism_engine::adjust_params::{BW_DEFAULTS, HUE_RANGES};
+    let mut outcome = None;
+    let mode = app.session.active().map_or(prism_doc::ColorMode::Rgb, |s| s.doc.mode);
+    let defaults = prism_engine::adjust_params::default_for("blackWhite", mode).map(|d| prism_engine::adjust_params::to_params(&d)).unwrap_or(Value::Null);
+    let mut values = crate::filter_dialog::params_of(f);
+    let mut changed = false;
+    let alt = ui.input(|i| i.modifiers.alt);
+    let names = ["Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"];
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(BW_W);
+            ui.horizontal(|ui| {
+                ui.label(format!("{}:", label("Preset")));
+                if crate::adjust_presets::dropdown(ui, "psbw-preset", "blackWhite", mode, &mut values, &defaults, ui.available_width()) {
+                    changed = true;
+                }
+            });
+            ui.add_space(6.0);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for (i, (key, name)) in HUE_RANGES.iter().zip(names).enumerate() {
+                let d = BW_DEFAULTS.get(i).copied().unwrap_or(0.0);
+                let mut x = values.get(*key).and_then(Value::as_f64).filter(|v| v.is_finite()).map_or(d, |v| v as f32).clamp(-200.0, 300.0);
+                let before = x;
+                ui.horizontal(|ui| {
+                    ui.label(format!("{}:", label(name)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        widgets::value_field(ui, &mut x, -200.0..=300.0, "%", FIELD_W);
+                    });
+                });
+                let colour = crate::adjust_editors::hs_range_color(i + 1);
+                widgets::slider(ui, &mut x, -200.0..=300.0, Some(&[egui::Color32::BLACK, colour, egui::Color32::WHITE]));
+                x = x.round().clamp(-200.0, 300.0);
+                if x != before {
+                    values[*key] = json!(x);
+                    changed = true;
+                }
+                ui.add_space(6.0);
+            }
+            // Tint: the checkbox and its colour, then its hue and saturation.
+            let mut tint = values.get("tint").and_then(Value::as_bool).unwrap_or(false);
+            let hex = values.get("tintColor").and_then(Value::as_str).unwrap_or("#e1d3b3").to_string();
+            let parse = |i: usize| hex.trim_start_matches('#').get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok()).map_or(0.8, |x| f32::from(x) / 255.0);
+            let mut colour = [parse(0), parse(2), parse(4)];
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if widgets::checkbox(ui, &mut tint, label("Tint")).changed() {
+                    values["tint"] = json!(tint);
+                    changed = true;
+                }
+                ui.add_space(8.0);
+                let mut srgb = colour.map(|x| (x.clamp(0.0, 1.0) * 255.0).round() as u8);
+                if ui.add_enabled_ui(tint, |ui| widgets::color_edit_button_srgb(ui, &mut srgb)).inner.changed() {
+                    colour = srgb.map(|x| f32::from(x) / 255.0);
+                    values["tintColor"] = json!(prism_engine::adjust_params::hex(colour));
+                    changed = true;
+                }
+            });
+            ui.add_space(4.0);
+            // Shown in whole degrees and percent, as Photoshop shows them (42°, 20%).
+            let [h, s, v] = hsv(colour);
+            let (mut h, mut sat) = (h.round(), (s * 100.0).round());
+            ui.add_enabled_ui(tint, |ui| {
+                let tint_row = |ui: &mut egui::Ui, text: &str, x: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str, track: &[egui::Color32]| -> bool {
+                    let before = *x;
+                    ui.horizontal(|ui| {
+                        ui.label(text);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            widgets::value_field(ui, x, range.clone(), unit, FIELD_W);
+                        });
+                    });
+                    widgets::slider(ui, x, range.clone(), Some(track));
+                    *x = x.round().clamp(*range.start(), *range.end());
+                    *x != before
+                };
+                let dull: Vec<egui::Color32> = (0..=12).map(|k| {
+                    let c = from_hsv([k as f32 * 30.0, 0.55, 0.75]).map(|x| (x * 255.0).round() as u8);
+                    egui::Color32::from_rgb(c[0], c[1], c[2])
+                }).collect();
+                let hue_changed = tint_row(ui, label("Hue"), &mut h, 0.0..=360.0, "°", &dull);
+                ui.add_space(6.0);
+                let full = from_hsv([h, 1.0, v.max(0.5)]).map(|x| (x * 255.0).round() as u8);
+                let sat_changed = tint_row(ui, label("Saturation"), &mut sat, 0.0..=100.0, "%", &[egui::Color32::from_gray(128), egui::Color32::from_rgb(full[0], full[1], full[2])]);
+                if hue_changed || sat_changed {
+                    values["tintColor"] = json!(prism_engine::adjust_params::hex(from_hsv([h, sat / 100.0, v])));
+                    changed = true;
+                }
+            });
+        });
+        ui.add_space(GAP);
+        ui.vertical(|ui| {
+            ui.set_width(BUTTON_W);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            if widgets::primary_button(ui, tl!("OK"), BUTTON_W).clicked() {
+                outcome = Some(true);
+            }
+            if widgets::secondary_button(ui, if alt { tl!("Reset") } else { tl!("Cancel") }, BUTTON_W).clicked() {
+                if alt {
+                    values = defaults.clone();
+                    changed = true;
+                } else {
+                    outcome = Some(false);
+                }
+            }
+            ui.add_space(4.0);
+            preview_checkbox(ui, f, true);
+        });
+    });
+    if changed && let Value::Object(v) = values {
+        f.retain(|k, _| k.starts_with("__"));
+        f.extend(v);
     }
     outcome
 }
@@ -1363,6 +1618,68 @@ mod tests {
         assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
     }
 
+    /// Photoshop 27.4's Black & White: Preset (its twelve), the six weights, Tint with its
+    /// colour, hue and saturation (greyed while off); Alt: Reset; Cmd+Z.
+    #[test]
+    fn black_white_dialog_works_like_photoshops() {
+        let (mut h, id) = dialog_for("image.adjustments.blackWhite");
+        assert!(owns(&h.state().ui.dialogs[0].fields));
+        for label in ["Reds:", "Yellows:", "Greens:", "Cyans:", "Blues:", "Magentas:", "Tint", "OK", "Cancel"] {
+            assert!(h.query_by_label(label).is_some(), "{label}");
+        }
+        click(&mut h, "Tint", egui::Modifiers::NONE);
+        assert_eq!(field(&h, id, "tint"), json!(true));
+        // The tint's hue and saturation edit its colour: hue 42, saturation 20 is the default.
+        assert_eq!(hsv([225.0 / 255.0, 211.0 / 255.0, 179.0 / 255.0]).map(|x| (x * 100.0).round() / 100.0), [41.74, 0.2, 0.88]);
+        let c = from_hsv([200.0, 0.5, 0.8]);
+        assert!((hsv(c)[0] - 200.0).abs() < 0.01 && (hsv(c)[1] - 0.5).abs() < 0.001);
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("reds".into(), json!(300));
+        h.run_steps(3);
+        key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert_eq!(field(&h, id, "reds").as_f64(), Some(40.0));
+        click(&mut h, "Reset", egui::Modifiers::ALT);
+        assert_eq!(field(&h, id, "tint"), json!(false));
+        // A preset's weights resolve to valid settings.
+        let p = crate::adjust_presets::presets("blackWhite", prism_doc::ColorMode::Rgb);
+        assert_eq!(p.len(), 12);
+        let steps = h.state().session.active().unwrap().history.past_len();
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("blues".into(), json!(110));
+        h.run_steps(2);
+        click(&mut h, "OK", egui::Modifiers::NONE);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    }
+
+    /// Photoshop 27.4's Photo Filter: Filter (twenty, English names) or Color, Density, Preserve
+    /// Luminosity; Alt: Reset; Cmd+Z.
+    #[test]
+    fn photo_filter_dialog_works_like_photoshops() {
+        let (mut h, id) = dialog_for("image.adjustments.photoFilter");
+        assert!(owns(&h.state().ui.dialogs[0].fields));
+        for label in ["Filter", "Color", "Density", "Preserve Luminosity", "OK", "Cancel"] {
+            assert!(h.query_by_label(label).is_some(), "{label}");
+        }
+        // Color: the swatch takes over; Filter again comes back to a filter.
+        click(&mut h, "Color", egui::Modifiers::NONE);
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("#3366cc"));
+        h.run_steps(3);
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("density".into(), json!(60));
+        h.run_steps(3);
+        key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert_eq!(field(&h, id, "density").as_f64(), Some(25.0));
+        click(&mut h, "Filter", egui::Modifiers::NONE);
+        assert_eq!(field(&h, id, "color"), json!("#ec8a00"), "a custom colour gives way to Warming Filter (85)");
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("density".into(), json!(1e9));
+        h.run_steps(3);
+        assert_eq!(field(&h, id, "density").as_f64(), Some(100.0));
+        click(&mut h, "Reset", egui::Modifiers::ALT);
+        assert_eq!(field(&h, id, "density").as_f64(), Some(25.0));
+        let steps = h.state().session.active().unwrap().history.past_len();
+        click(&mut h, "OK", egui::Modifiers::NONE);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    }
+
     /// A double-click on a Hue/Saturation slider's knob puts it back to 0.
     #[test]
     fn hue_saturation_slider_double_click_resets_to_zero() {
@@ -1411,7 +1728,7 @@ mod tests {
             let mut s = prism_engine::Session::new();
             s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
             let mut h = Harness::builder()
-                .with_size(egui::vec2(600.0, 560.0))
+                .with_size(egui::vec2(600.0, 700.0))
                 .with_pixels_per_point(2.0)
                 .wgpu()
                 .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), PrismApp::new(s, crate::Services::default()));
@@ -1444,6 +1761,17 @@ mod tests {
             h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("midtones".into(), json!([58, -20, 0]));
             h.run_steps(5);
             h.render().unwrap().save(out.join(format!("{kind:?}-color-balance.png"))).unwrap();
+            let ok = h.state().ui.dialogs.last().map(|d| d.id).unwrap();
+            h.state_mut().ui.dialogs.retain(|d| d.id != ok);
+            let id = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.blackWhite").unwrap();
+            h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("tint".into(), json!(true));
+            h.run_steps(5);
+            h.render().unwrap().save(out.join(format!("{kind:?}-black-white.png"))).unwrap();
+            let ok = h.state().ui.dialogs.last().map(|d| d.id).unwrap();
+            h.state_mut().ui.dialogs.retain(|d| d.id != ok);
+            crate::adjust_dialog::open(h.state_mut(), "image.adjustments.photoFilter").unwrap();
+            h.run_steps(5);
+            h.render().unwrap().save(out.join(format!("{kind:?}-photo-filter.png"))).unwrap();
         }
     }
 
