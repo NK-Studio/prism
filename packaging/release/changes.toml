@@ -7,6 +7,24 @@
 # language Prism ships (`ko`, `en`): plain text, no Markdown, at most 24 lines of 300 characters.
 # Write the table in the same change as the feature, or at the latest before publishing.
 
+["1.5.1"]
+ko = [
+  "이미지 › 조정의 나머지 대화상자(흑백, 포토 필터, 채널 혼합, 포스터화, 한계값, 그레이디언트 맵, 선택 색상, 색상 검색, 어두운 영역/밝은 영역, HDR 토닝, 색상 일치, 색상 대체)가 Photoshop과 같은 모양이 됐어요.",
+  "흑백과 채널 혼합에 Photoshop의 기본 사전 설정이 들어갔어요.",
+  "모든 조정 대화상자에서 Alt를 누르면 취소가 재설정으로 바뀌고, ⌘Z로 대화상자 안의 편집을 되돌릴 수 있어요.",
+  "색조/채도 슬라이더를 더블클릭하면 0으로 돌아가요.",
+  "편집 › 내용 인식 채우기가 Photoshop과 같은 작업 화면으로 열려요.",
+  "색상 대체가 밝기 -100으로 열리던 문제를 고쳤어요.",
+]
+en = [
+  "The rest of Image › Adjustments (Black & White, Photo Filter, Channel Mixer, Posterize, Threshold, Gradient Map, Selective Color, Color Lookup, Shadows/Highlights, HDR Toning, Match Color, Replace Color) now look like Photoshop's.",
+  "Photoshop's built-in presets for Black & White and Channel Mixer.",
+  "In every adjustment dialog, Alt turns Cancel into Reset and Cmd+Z undoes edits inside the dialog.",
+  "A double-click on a Hue/Saturation slider sets it back to 0.",
+  "Edit › Content-Aware Fill opens a workspace laid out like Photoshop's.",
+  "Replace Color no longer opens with Lightness at -100.",
+]
+
 ["1.5.0"]
 ko = [
   "이미지 › 조정의 밝기/대비, 레벨, 곡선, 노출, 생동감, 색조/채도, 색상 균형 대화상자가 Photoshop과 같은 모양과 동작이 됐어요(스포이드, 대화상자 안 실행 취소 포함).",
