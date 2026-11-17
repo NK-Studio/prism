@@ -215,8 +215,8 @@ fn benchmark_smoothing_end_on_36mp() {
 
 #[test]
 fn photoshop_resting_pen_grows_every_100_ms_live_and_committed() {
-    // Photoshop's rules (the default): pressing harder at rest lays nothing until the next 100 ms
-    // resting dab; live and committed pixels agree, and lifting adds one more dab.
+    // Photoshop's rules (the default): pressing harder at rest lays no dab per change; the first
+    // resting sample lays one, then one every 100 ms. Live and committed pixels agree.
     for depth in [8, 16] {
         let mut s = session(depth, false);
         let state = s.active().unwrap();
@@ -227,9 +227,8 @@ fn photoshop_resting_pen_grows_every_100_ms_live_and_committed() {
         let hold = StrokePoint { time: 120.0, ..grow };
         let mut live = LiveStroke::begin(&s, &params(&[a], false, 0.0)).unwrap();
         live.push(&[grow]).unwrap();
-        // The lift dab of a resting pen is part of the preview's tail: the grown mark shows.
-        let tail = target(&live.doc, id, false).clone();
-        assert_ne!(tail.pixel(52, 40), before.pixel(52, 40), "the lift dab at the new pressure");
+        let grown = target(&live.doc, id, false).clone();
+        assert_ne!(grown.pixel(52, 40), before.pixel(52, 40), "the first resting sample's dab at the new pressure");
         live.push(&[hold]).unwrap();
         let held = target(&live.doc, id, false).clone();
         let mut p = params(&[a, grow, hold], false, 0.0);

@@ -508,7 +508,7 @@ Windows (Prism treats 60° as full tilt there too).
   plain tip 0.53 px smaller in Photoshop (59.3 against 59.8 px by area; profile fitted). Not
   applied: lines don't show the same offset.
 - **A resting pen keeps painting.** With the airbrush off, Photoshop lays a dab about every
-  100 ms while the pen rests, and one more when it lifts: at 10 % flow a 0.1 / 0.2 / 0.4 /
+  100 ms while the pen rests, and one more when it lifts (corrected below: the extra one is the first resting sample's): at 10 % flow a 0.1 / 0.2 / 0.4 /
   0.8 s hold leaves 3 / 4 / 6 / 10 dabs (2 for any shorter hold with a second sample, 1 for a
   single sample). The same happens when the pen creeps (1 px or less per sample; from 1.5 px
   per sample at 20 Hz or more it doesn't). A mouse held still for 1.6 s leaves one dab: it
@@ -533,18 +533,41 @@ default) or `"clipStudio"`, which the canvas sends while the Clip Studio workspa
   pressure whatever the panel sets it to (Fade, Pen Tilt…). Prism used to let the panel win.
   `BrushSettings::with_pressure_overrides` replaces the control only; Minimum and Jitter stay
   (whether Photoshop keeps them is not measured).
-- **A resting pen keeps painting.** With the airbrush off, a pen resting (1.25 screen px or less
-  per sample, between the measured 1 and 1.5) lays a dab every 100 ms and one more on lift, and
-  a pressure or pose change at rest lays nothing by itself
-  (`PathWalker::photoshop_rest`, `PS_REST_INTERVAL_MS`). The canvas now keeps resting pen samples
-  for every brush (before: only the airbrush and velocity-reading brushes). Tests reproduce the
-  measured 3 / 4 / 6 / 10 dabs for 0.1 / 0.2 / 0.4 / 0.8 s holds and the 2 / 1 for a short hold
-  and a single sample. A mouse has no resting samples and still leaves one dab.
+- **A resting pen keeps painting.** A pen resting (1.25 screen px or less per sample, between
+  the measured 1 and 1.5) lays a dab every 100 ms, and a pressure or pose change at rest lays
+  nothing by itself (`PathWalker::photoshop_rest`, `PS_REST_INTERVAL_MS`). The canvas now keeps
+  resting pen samples for every brush (before: only the airbrush and velocity-reading brushes).
+  A mouse has no resting samples and still leaves one dab.
 
-Still open from the notes: the airbrush's own interval (Prism 50 ms, Photoshop not measured),
-Stroke Catch-up while the pen rests, Zoom Compensation for the ordinary smoothing, Pressure
-Smoothing (`pressureSmoothing`), and whether a moving stroke also gets the lift dab (Prism lays
-it only after a rest).
+**Measured again the same day** (synthetic pen into Photoshop 27.4, 1600×900 white RGB/8 at
+100 %, black, hard round, smoothing and dynamics off, centre ink read as a dab count):
+
+| Case | Photoshop |
+| --- | --- |
+| Hold 0 / 40 / 96 / 200 / 400 / 800 ms, 60 px, 5 % spacing, flow 10 % | 1 / 2 / 2 / 4 / 6 / 10 dabs |
+| The same with the airbrush on, flow 5 / 10 / 30 % | identical (1.6 s: ≈ 19, the injector's frames run a little over 8 ms) |
+| Hold 400 ms, 30 px, flow 50 %, spacing 5 / 10 / 25 / 50 / 100 / 200 % | 6 dabs at every spacing |
+| Line to x 500 at 200 % spacing (dabs every 60 px, last at 480), then lift | no dab at 500 |
+| The same line, resting 48 / 152 / 256 ms at the end | 0 / 1 / 2 dabs at 500, nothing on lift |
+| Resting 152 ms at the start, then the line | 3 dabs at the start |
+| 25 % and 5 % spacing, resting 256 ms at the end | 2 extra dabs at the end |
+
+So the earlier reading "one more when it lifts" was wrong: the extra dab of a hold is laid on the
+**first resting sample of a stroke that has not moved yet** (it shows at the start of a stroke
+that rests and then moves), and a lift lays nothing, after a rest or a move. The rest timer
+starts at touch-down and restarts when the pen moves. The airbrush at rest is no different from
+a resting pen, at any flow, so the airbrush's default rate is now 10 dabs/s (100 ms; it was 20)
+and the built-in airbrush presets use it; Prism's Rate slider stays as an extension. Not
+measured: the airbrush while the pen moves, and a mouse with the airbrush on.
+
+Tests: `a_resting_pen_keeps_laying_dabs_like_photoshop`, `photoshop_rests_inside_a_moving_stroke`
+(prism-paint) and `photoshop_resting_pen_grows_every_100_ms_live_and_committed` (engine).
+One run in a freshly restarted Photoshop (after it crashed) showed no resting dabs at all at
+200 % spacing; the same strokes repeated in the same document gave the table above, so that run
+is treated as lost input.
+
+Still open from the notes: Stroke Catch-up while the pen rests, Zoom Compensation for the
+ordinary smoothing and Pressure Smoothing (`pressureSmoothing`).
 
 ## Remaining physical acceptance
 

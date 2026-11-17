@@ -49,7 +49,7 @@ fn general(base: &BrushSettings) -> Vec<BrushPreset> {
             "Hard Round Pressure Opacity and Flow",
             BrushSettings { size: 30.0, hardness: 0.9, transfer: transfer(pressure(), pressure_min(0.2)), ..base.clone() },
         ),
-        g("Airbrush Soft", BrushSettings { size: 80.0, hardness: 0.0, flow: 0.1, spacing: 0.1, build_up: true, build_up_rate: 25.0, ..base.clone() }),
+        g("Airbrush Soft", BrushSettings { size: 80.0, hardness: 0.0, flow: 0.1, spacing: 0.1, build_up: true, ..base.clone() }),
         g(
             "Airbrush Pressure Flow",
             BrushSettings {
@@ -58,7 +58,6 @@ fn general(base: &BrushSettings) -> Vec<BrushPreset> {
                 flow: 0.15,
                 spacing: 0.1,
                 build_up: true,
-                build_up_rate: 30.0,
                 transfer: transfer(Dynamic::default(), pressure()),
                 ..base.clone()
             },

@@ -762,7 +762,9 @@ impl Default for BrushSettings {
             wet_edges: false,
             csp_water_edge: None,
             build_up: false,
-            build_up_rate: 20.0,
+            // Photoshop has no rate: its airbrush (like a resting pen) lays a dab every 100 ms at
+            // any flow (measured, docs/pen-input-validation.md › Photoshop pen rules).
+            build_up_rate: 10.0,
             smoothing: Smoothing::default(),
             csp_correction: false,
             csp_sub_color: None,

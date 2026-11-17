@@ -2597,14 +2597,19 @@ fn rest(ms: u32, step: f64) -> Vec<StrokePoint> {
 
 #[test]
 fn a_resting_pen_keeps_laying_dabs_like_photoshop() {
-    // Measured in Photoshop 2026 with the synthetic pen, airbrush off, 10 % flow: a 0.1 / 0.2 /
-    // 0.4 / 0.8 s hold leaves 3 / 4 / 6 / 10 dabs (one every 100 ms and one on lift); a shorter
-    // hold with a second sample 2, a single sample 1 (docs/pen-input-validation.md).
+    // Measured in Photoshop 2026 with the synthetic pen (docs/pen-input-validation.md › Photoshop
+    // pen rules), 5 / 10 / 30 % flow, airbrush off or on, 5–200 % spacing: a hold of 0 / 40 / 96
+    // / 200 / 400 / 800 ms leaves 1 / 2 / 2 / 4 / 6 / 10 dabs: the first, one more on the first
+    // resting sample, then one every 100 ms. Lifting adds nothing.
     let b = BrushSettings { size: 60.0, hardness: 1.0, flow: 0.1, spacing: 0.05, ..brush() };
-    for (ms, n) in [(104, 3), (200, 4), (400, 6), (800, 10), (40, 2)] {
+    for (ms, n) in [(0, 1), (40, 2), (96, 2), (104, 3), (200, 4), (400, 6), (800, 10)] {
         assert_eq!(photoshop_dabs(&b, &rest(ms, 0.0), 1.0).len(), n, "{ms} ms hold");
     }
-    assert_eq!(photoshop_dabs(&b, &rest(0, 0.0), 1.0).len(), 1, "a single sample");
+    // The airbrush lays the same at its default rate (100 ms).
+    let air = BrushSettings { build_up: true, ..b.clone() };
+    for (ms, n) in [(0, 1), (40, 2), (200, 4), (400, 6), (800, 10)] {
+        assert_eq!(photoshop_dabs(&air, &rest(ms, 0.0), 1.0).len(), n, "airbrush, {ms} ms hold");
+    }
     // The Clip Studio rules (the walker's default) lay the first dab only.
     assert_eq!(dabs_of(&b, &rest(800, 0.0)).len(), 1);
     // A pen creeping 1 px or less per sample rests too; 1.5 px per sample does not.
@@ -2612,29 +2617,55 @@ fn a_resting_pen_keeps_laying_dabs_like_photoshop() {
     let moving = photoshop_dabs(&b, &rest(400, 1.5), 1.0).len();
     let spaced = dabs_of(&b, &rest(400, 1.5)).len();
     assert_eq!(moving, spaced, "no rest dabs while moving");
-    assert_eq!(creep, dabs_of(&b, &rest(400, 1.0)).len() + 5, "four 100 ms dabs and one on lift");
+    assert_eq!(creep, dabs_of(&b, &rest(400, 1.0)).len() + 5, "one on the first resting sample, four 100 ms dabs");
     // The rest is in screen pixels: at 50 % zoom a 1.5 px document step is 0.75 px on screen.
     assert_eq!(photoshop_dabs(&b, &rest(400, 1.5), 0.5).len(), spaced + 5);
-    // The airbrush keeps its own timing instead.
-    let air = BrushSettings { build_up: true, ..b.clone() };
-    assert_eq!(photoshop_dabs(&air, &rest(400, 0.0), 1.0).len(), dabs_of(&air, &rest(400, 0.0)).len());
+}
+
+/// A 30 px line from x 0 to `end` over 496 ms, resting `pre` ms before and `post` ms after.
+fn line_with_rests(end: f64, pre: u32, post: u32) -> Vec<StrokePoint> {
+    let at = |x: f64, t: u32| StrokePoint { x, time: f64::from(t), ..StrokePoint::new(0.0, 50.0, 1.0) };
+    let mut pts: Vec<_> = (0..pre).step_by(8).map(|t| at(0.0, t)).collect();
+    pts.extend((0..=62).map(|i| at(end * f64::from(i) / 62.0, pre + i * 8)));
+    pts.extend((8..=post).step_by(8).map(|t| at(end, pre + 496 + t)));
+    pts
+}
+
+#[test]
+fn photoshop_rests_inside_a_moving_stroke() {
+    // Photoshop, 30 px hard round at 200 % spacing (separate dabs), a line to x = 500 (last
+    // spaced dab at 480): resting 48 / 152 / 256 ms at the end lays 0 / 1 / 2 dabs where the pen
+    // rests and nothing on lift; resting 152 ms at the start leaves 3 dabs there (the first, the
+    // first resting sample's and one at 100 ms); a moving lift adds nothing.
+    let b = BrushSettings { size: 30.0, hardness: 1.0, flow: 0.5, spacing: 2.0, ..brush() };
+    let at = |d: &[Dab], x: f64| d.iter().filter(|d| (d.center.x - x).abs() < 0.5).count();
+    let moving = photoshop_dabs(&b, &line_with_rests(500.0, 0, 0), 1.0);
+    assert_eq!(moving.len(), dabs_of(&b, &line_with_rests(500.0, 0, 0)).len());
+    assert_eq!((moving.len(), at(&moving, 500.0)), (9, 0));
+    for (post, n) in [(48, 0), (152, 1), (256, 2)] {
+        let d = photoshop_dabs(&b, &line_with_rests(500.0, 0, post), 1.0);
+        assert_eq!((d.len(), at(&d, 500.0)), (9 + n, n), "{post} ms rest at the end");
+    }
+    let d = photoshop_dabs(&b, &line_with_rests(500.0, 152, 0), 1.0);
+    assert_eq!((at(&d, 0.0), at(&d, 500.0)), (3, 0), "152 ms rest at the start");
 }
 
 #[test]
 fn photoshop_pressure_at_rest_waits_for_the_next_resting_dab() {
-    // Pressing harder at rest lays no dab of its own (Photoshop: a 0.3 → 1 press at 10 % flow
-    // leaves 47.6 % ink, Prism's old per-change dabs 99.6 %); the next 100 ms dab is the bigger one.
+    // Pressing harder at rest lays no dab per change (Photoshop: a 0.3 → 1 press at 10 % flow
+    // leaves 47.6 % ink, Prism's old per-change dabs 99.6 %): the first resting sample's dab
+    // and then the 100 ms dabs carry the pressure of their moment.
     let b = BrushSettings { size: 40.0, pressure_size: true, flow: 0.1, ..brush() };
     let press: Vec<_> =
         (0..=8).map(|i| StrokePoint { pressure: 0.3 + 0.7 * i as f32 / 8.0, time: f64::from(i * 8), ..StrokePoint::new(50.0, 50.0, 0.3) }).collect();
     let ps = photoshop_dabs(&b, &press, 1.0);
-    assert_eq!(ps.len(), 2, "the first dab and the one on lift");
-    assert_eq!((ps[0].radius, ps[1].radius), (6.0, 20.0));
+    let radii = |d: &[Dab]| d.iter().map(|d| (d.radius * 100.0).round() / 100.0).collect::<Vec<_>>();
+    assert_eq!(radii(&ps), [6.0, 7.75], "the first dab and the first resting sample's");
     assert_eq!(dabs_of(&b, &press).len(), 9, "the Clip Studio rules lay one per pressure change");
     let mut held = press.clone();
     held.push(StrokePoint { time: 150.0, ..press[8] });
     let ps = photoshop_dabs(&b, &held, 1.0);
-    assert_eq!(ps.iter().map(|d| d.radius).collect::<Vec<_>>(), [6.0, 20.0, 20.0]);
+    assert_eq!(radii(&ps), [6.0, 7.75, 20.0], "the 100 ms dab at full pressure");
 }
 
 #[test]
