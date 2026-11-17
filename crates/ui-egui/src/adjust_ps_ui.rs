@@ -66,6 +66,7 @@ fn kind(f: &Map<String, Value>) -> &str {
         Some("image.adjustments.hdrToning") => "hdrToning",
         Some("image.adjustments.matchColor") => "matchColor",
         Some("image.adjustments.replaceColor") => "replaceColor",
+        Some("image.adjustments.equalize") => "equalize",
         _ => "",
     }
 }

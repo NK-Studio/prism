@@ -1,6 +1,7 @@
 //! The rest of Image › Adjustments in Photoshop 27.4's layouts (captured 2026-11-17, see
 //! `docs/adjust-analysis.md`): Posterize, Threshold, Gradient Map, Selective Color, Color Lookup,
-//! Shadows/Highlights, HDR Toning, Match Color and Replace Color.
+//! Shadows/Highlights, HDR Toning, Match Color and Replace Color; and Equalize's selection
+//! dialog.
 //!
 //! Each dialog edits the command's params (plus private `__` keys) like the other adjustment
 //! dialogs, so the preview, OK / Cancel (Alt: Reset), Cmd+Z and automation work the same way.
@@ -18,7 +19,16 @@ use crate::widgets;
 pub fn owns(kind: &str) -> bool {
     matches!(
         kind,
-        "posterize" | "threshold" | "gradientMap" | "selectiveColor" | "colorLookup" | "shadowsHighlights" | "hdrToning" | "matchColor" | "replaceColor"
+        "posterize"
+            | "threshold"
+            | "gradientMap"
+            | "selectiveColor"
+            | "colorLookup"
+            | "shadowsHighlights"
+            | "hdrToning"
+            | "matchColor"
+            | "replaceColor"
+            | "equalize"
     )
 }
 
@@ -33,6 +43,7 @@ fn options_w(kind: &str) -> f32 {
         "hdrToning" => 300.0,
         "matchColor" => 320.0,
         "replaceColor" => 330.0,
+        "equalize" => 300.0,
         _ => OPTIONS_W,
     }
 }
@@ -69,6 +80,7 @@ pub fn body(kind: &str, app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Ma
                 "hdrToning" => hdr_toning(app, ui, &mut values),
                 "matchColor" => match_color(app, ui, &mut values),
                 "replaceColor" => replace_color(app, ui, &mut values, f),
+                "equalize" => equalize(ui, &mut values),
                 _ => false,
             };
         });
@@ -87,10 +99,17 @@ pub fn body(kind: &str, app: &mut crate::PrismApp, ui: &mut egui::Ui, f: &mut Ma
                     outcome = Some(false);
                 }
             }
-            ui.add_space(4.0);
-            preview_checkbox(ui, f, column.shortcut);
+            // Equalize applies only on OK: Photoshop's dialog has no Preview.
+            if kind != "equalize" {
+                ui.add_space(4.0);
+                preview_checkbox(ui, f, column.shortcut);
+            }
         });
     });
+    if kind == "equalize" && outcome == Some(true) {
+        let only = values.get("selectedAreaOnly").and_then(Value::as_bool).unwrap_or(false);
+        ui.ctx().data_mut(|d| d.insert_temp(equalize_memory(), only));
+    }
     if changed && let Value::Object(v) = values {
         f.retain(|k, _| k.starts_with("__"));
         f.extend(v);
@@ -117,6 +136,7 @@ fn defaults(kind: &str, app: &crate::PrismApp) -> Value {
         "hdrToning" => json!({"radius": 30, "strength": 0.5, "gamma": 1, "exposure": 0, "detail": 30, "shadow": 0, "highlight": 0, "vibrance": 0, "saturation": 20}),
         "matchColor" => json!({"luminance": 100, "intensity": 100, "fade": 0, "neutralize": false, "useSelectionInSource": false, "useSelectionInTarget": false}),
         "replaceColor" => json!({"fuzziness": 40, "hue": 0, "saturation": 0, "lightness": 0}),
+        "equalize" => json!({"selectedAreaOnly": false}),
         _ => Value::Null,
     }
 }
@@ -181,6 +201,47 @@ fn posterize(ui: &mut egui::Ui, v: &mut Value) -> bool {
         put(v, "levels", levels);
     }
     changed
+}
+
+// ---------------------------------------------------------------------------------------------
+// Equalize
+
+/// Where the last Equalize choice is kept (Photoshop opens the dialog on the last one used).
+fn equalize_memory() -> egui::Id {
+    egui::Id::new("equalize-selected-area-only")
+}
+
+/// Image › Adjustments › Equalize from the menu: with a selection, Photoshop asks whether to
+/// equalize only the selection or the whole image from the selection's histogram (first shown
+/// on the second, then on the last choice); without one it just runs. `None` without a
+/// selection.
+pub fn open_equalize(app: &mut crate::PrismApp, ctx: &egui::Context) -> Option<u64> {
+    app.session.active().and_then(|d| d.doc.selection.as_ref())?;
+    let id = crate::filter_dialog::open(app, "image.adjustments.equalize")?;
+    let only = ctx.data(|d| d.get_temp::<bool>(equalize_memory())).unwrap_or(false);
+    if let Some(d) = app.ui.dialog_mut(id) {
+        d.fields.insert("selectedAreaOnly".into(), json!(only));
+    }
+    Some(id)
+}
+
+/// Photoshop 27.4: an "Options" box with the two choices.
+fn equalize(ui: &mut egui::Ui, v: &mut Value) -> bool {
+    let only = v.get("selectedAreaOnly").and_then(Value::as_bool).unwrap_or(false);
+    let mut pick = only;
+    group(ui, label("Options"), |ui| {
+        if radio(ui, only, label("Equalize Selected Area Only")) {
+            pick = true;
+        }
+        if radio(ui, !only, label("Equalize entire image based on selected area")) {
+            pick = false;
+        }
+    });
+    if pick == only {
+        return false;
+    }
+    v["selectedAreaOnly"] = json!(pick);
+    true
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -786,7 +847,7 @@ mod tests {
     #[test]
     fn every_kind_has_a_width_and_defaults() {
         let app = crate::PrismApp::new(prism_engine::Session::new(), crate::Services::default());
-        for k in ["posterize", "threshold", "gradientMap", "selectiveColor", "colorLookup", "shadowsHighlights", "hdrToning", "matchColor", "replaceColor"] {
+        for k in ["posterize", "threshold", "gradientMap", "selectiveColor", "colorLookup", "shadowsHighlights", "hdrToning", "matchColor", "replaceColor", "equalize"] {
             assert!(owns(k));
             assert!(width(k) > 300.0, "{k}");
             assert!(defaults(k, &app).is_object(), "{k}");
@@ -873,6 +934,34 @@ mod dialog_tests {
         }
     }
 
+    /// Equalize with a selection asks first, as Photoshop 27.4 does: "Options" with the two
+    /// choices, no Preview; OK applies once and the next dialog starts on that choice. Without a
+    /// selection there is no dialog.
+    #[test]
+    fn equalize_asks_how_to_use_the_selection() {
+        let (mut h, first) = open("image.adjustments.posterize");
+        h.state_mut().ui.dialogs.retain(|d| d.id != first);
+        let ctx = h.ctx.clone();
+        assert!(super::open_equalize(h.state_mut(), &ctx).is_none(), "no selection, no dialog");
+        h.state_mut().session.execute("select.rect", json!({"x": 10, "y": 0, "width": 20, "height": 48})).unwrap();
+        let id = super::open_equalize(h.state_mut(), &ctx).unwrap();
+        h.run_steps(4);
+        assert!(crate::adjust_ps_ui::owns(&h.state().ui.dialogs[0].fields));
+        for l in ["Options", "Equalize Selected Area Only", "Equalize entire image based on selected area", "OK", "Cancel"] {
+            assert!(h.query_all_by_label(l).next().is_some(), "{l}");
+        }
+        assert!(h.query_by_label("Preview").is_none(), "no Preview");
+        assert_eq!(field(&h, id, "selectedAreaOnly"), json!(false), "first time: the whole image");
+        click(&mut h, "Equalize Selected Area Only", egui::Modifiers::NONE);
+        assert_eq!(field(&h, id, "selectedAreaOnly"), json!(true));
+        let steps = h.state().session.active().unwrap().history.past_len();
+        click(&mut h, "OK", egui::Modifiers::NONE);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "{}", h.state().ui.status);
+        let id = super::open_equalize(h.state_mut(), &ctx).unwrap();
+        assert_eq!(field(&h, id, "selectedAreaOnly"), json!(true), "remembers the last choice");
+    }
+
     /// Shadows/Highlights: Show More Options adds Tone / Radius and the Adjustments rows.
     #[test]
     fn shadows_highlights_shows_more_options() {
@@ -935,6 +1024,7 @@ mod dialog_tests {
             "hdrToning",
             "matchColor",
             "replaceColor",
+            "equalize",
         ] {
             let mut s = prism_engine::Session::new();
             s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();

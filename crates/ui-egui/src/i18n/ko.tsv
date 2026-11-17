@@ -4026,3 +4026,6 @@ preset	Black & White with Red Filter (RGB)	빨강 필터가 적용된 흑백(RGB
 preset	Black & White with Yellow Filter (RGB)	노랑 필터가 적용된 흑백(RGB)
 	Total exceeds 100%	총합이 100%를 넘습니다
 	Merged	병합
+adjust	Equalize Selected Area Only	선택 영역만 균일화
+adjust	Equalize entire image based on selected area	선택 영역에 기초하여 전체 이미지 균일화
+	Selected Area Only	선택 영역만

@@ -359,7 +359,13 @@ fn every_adjustment_command_runs() {
         // re-select the background for destructive ones
         let bg = s.active().unwrap().doc.layers[0].id;
         s.select_layer(bg).unwrap();
-        s.execute(id, json!({})).unwrap_or_else(|e| panic!("{id}: {e}"));
+        let r = s.execute(id, json!({}));
+        if id == "image.adjustments.equalize" {
+            // A one-colour image has a single level: Photoshop refuses to equalize it.
+            assert!(r.as_ref().is_err_and(|e| e.to_string().contains("only one brightness value")), "{id}: {r:?}");
+            continue;
+        }
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
 }
 

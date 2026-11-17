@@ -374,7 +374,7 @@ Found on the way: the parameter-form parser read a note after the parameter list
 (`{…} (color: …)`) as part of the last parameter, so Replace Color opened with lightness −100 (and
 other commands with a note lost their last default); fixed in `filter_dialog::parse_spec`.
 
-## Invert and Desaturate (Photoshop 27.4, measured 2026-11-17)
+## Invert, Desaturate and Equalize (Photoshop 27.4, measured 2026-11-17)
 
 Each applied by script to 8-bit test images (a hue/saturation chart, uneven random colours, grey
 steps, a low-contrast ramp, two colours) and the saved results compared pixel by pixel.
@@ -384,6 +384,20 @@ steps, a low-contrast ramp, two colours) and the saved results compared pixel by
   half is **rounded down** (exact on every pixel; rounding to nearest is off by one on half the
   chart). Prism's Hue/Saturation path rounded up, so `pixels::desaturate_surface` now rounds 8-bit
   RGB halves down; other depths and colour models take the Hue/Saturation path as before.
+- **Equalize**: one table for all three channels, from the histogram of every R, G and B value
+  together (not luminosity: off by up to 69 levels). Level `v` sits at `below(v) + ⌊count(v)/2⌋`;
+  the darkest level present maps to 0, the brightest to 255, the rest in proportion, rounded.
+  Exact on all six images, the selection case included (`⌊count/2⌋` rather than `count/2` was
+  settled by one level that came out 178 rather than 179). Prism's previous table
+  (`(cdf − first) / (total − first)`) was off by up to 30 levels. An image with only one level
+  can't be equalized: Photoshop refuses ("…only one brightness value"), and so does Prism, leaving no
+  history step.
+- **Equalize with a selection**: Photoshop opens "균일화" (Equalize) with an "Options" box,
+  *Equalize Selected Area Only* / *Equalize entire image based on selected area*, and OK / Cancel;
+  no Preview. Both use the selected pixels' histogram; the first applies the table to the
+  selection, the second to the whole layer (both measured exact). The dialog opens on the last
+  choice; the first time it showed the second, which Prism uses as its default
+  (`selectedAreaOnly: false`). Without a selection there is no dialog.
 
 ## Still open
 

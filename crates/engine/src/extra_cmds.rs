@@ -65,12 +65,32 @@ fn step_key(s: &Session, what: &str) -> String {
 /// Quick Mask or the layer mask (`Session::execute` fills that in from the Channels panel), that
 /// grayscale surface is rewritten instead, as the core filters do (#935).
 pub(crate) fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
+    map_pixels_with(s, label, p, false, |_, area, px, cover| {
+        f(area, px, cover);
+        Ok(())
+    })
+}
+
+/// [`map_pixels`] that also hands `f` the surface's pixel format. With `everywhere`, the whole
+/// canvas is rewritten (not just the selection); `f` still gets the selection coverage, so it can
+/// measure the selection and apply the result to everything (Equalize's "Equalize entire image
+/// based on selected area").
+pub(crate) fn map_pixels_with(
+    s: &mut Session,
+    label: &str,
+    p: &Value,
+    everywhere: bool,
+    f: impl FnOnce(&prism_color::PixelFormat, Rect, &mut [[f32; 4]], &[f32]) -> Result<()>,
+) -> Result<Value> {
     let id = layer_param(s, &Value::Null)?;
     let channel = crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels;
     s.edit(label, |doc, _| {
         let canvas = doc.bounds();
         let selection = doc.selection.clone();
-        let area = selection.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
+        let area = match &selection {
+            Some(m) if !everywhere => m.content_bounds().intersect(&canvas),
+            _ => canvas,
+        };
         let (surf, lock_alpha) = if channel {
             let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(id), p)? else { return Ok(()) };
             (surf, false)
@@ -95,10 +115,10 @@ pub(crate) fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce
             None => vec![1.0; orig.len()],
         };
         let mut px = orig.clone();
-        f(area, &mut px, &cover);
+        f(&fmt, area, &mut px, &cover)?;
         let mut enc = [0.0f32; 8];
         for (i, out) in raw.chunks_exact_mut(n).enumerate() {
-            let k = cover[i];
+            let k = if everywhere { 1.0 } else { cover[i] };
             if k <= 0.0 {
                 continue;
             }
@@ -159,37 +179,71 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
-/// Histogram equalization, like Photoshop's: one CDF over the R, G and B values of
-/// the selected pixels, applied to every channel.
+/// Image › Adjustments › Equalize, measured against Photoshop 27.4 (exact at 8 bits): one table
+/// for all three channels, built from the histogram of every channel value together. Level `v`
+/// sits at `below(v) + count(v) / 2` (integer halving) in that histogram; the darkest level present
+/// maps to black, the brightest to white, and the rest in proportion between them. With a
+/// selection, the histogram comes from the selected pixels and the table is applied to the
+/// selection (`selectedAreaOnly`) or to the whole layer ("Equalize entire image based on selected
+/// area", the default). An image with a single level can't be equalized, as in Photoshop.
 fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
-    map_pixels(s, "Equalize", p, |_, px, cover| {
-        let mut hist = [0f64; 256];
+    let only = match p.get("selectedAreaOnly") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or_else(|| EngineError::Other("selectedAreaOnly must be true or false".into()))?,
+    };
+    let everywhere = !only && s.active().is_some_and(|d| d.doc.selection.is_some());
+    map_pixels_with(s, "Equalize", p, everywhere, |_, _, px, cover| {
+        let mut hist = [0u64; 256];
         for (p, &k) in px.iter().zip(cover) {
             if k > 0.0 && p[3] > 0.0 {
                 for &v in &p[..3] {
-                    hist[(v.clamp(0.0, 1.0) * 255.0).round() as usize] += 1.0;
+                    hist[level(v)] += 1;
                 }
             }
         }
-        let total: f64 = hist.iter().sum();
-        if total == 0.0 {
-            return;
-        }
-        let first = hist.iter().copied().find(|v| *v > 0.0).unwrap_or(0.0);
-        let mut lut = [0f32; 256];
-        let mut acc = 0.0;
-        for (i, h) in hist.iter().enumerate() {
-            acc += h;
-            lut[i] = if total > first { ((acc - first) / (total - first)).clamp(0.0, 1.0) as f32 } else { i as f32 / 255.0 };
-        }
-        // Same 256 bins as the histogram, at every depth (like Photoshop).
-        let map = |v: f32| lut[(v.clamp(0.0, 1.0) * 255.0).round() as usize];
+        let Some(lut) = equalize_table(&hist) else {
+            if hist.iter().any(|&h| h > 0) {
+                // The edit is dropped: no history step.
+                return Err(EngineError::Other(
+                    "Could not complete the Equalize command because the image contains only one brightness value.".into(),
+                ));
+            }
+            return Ok(());
+        };
         for p in px.iter_mut() {
             for v in &mut p[..3] {
-                *v = map(*v);
+                *v = lut[level(*v)];
             }
         }
+        Ok(())
     })
+}
+
+/// The histogram bin (0..=255) of a 0..1 value: the same 256 bins at every depth.
+fn level(v: f32) -> usize {
+    (v.clamp(0.0, 1.0) * 255.0).round() as usize
+}
+
+/// Equalize's table from a 256-level histogram, or `None` without at least two levels.
+pub(crate) fn equalize_table(hist: &[u64; 256]) -> Option<[f32; 256]> {
+    let first = hist.iter().position(|&h| h > 0)?;
+    let last = hist.iter().rposition(|&h| h > 0)?;
+    let mut mid = [0u64; 256];
+    let mut below = 0u64;
+    for (m, &h) in mid.iter_mut().zip(hist) {
+        *m = below.saturating_add(h / 2);
+        below = below.saturating_add(h);
+    }
+    let (lo, hi) = (mid[first], mid[last]);
+    if hi <= lo {
+        return None;
+    }
+    let span = (hi - lo) as f64;
+    let mut lut = [0f32; 256];
+    for (o, &m) in lut.iter_mut().zip(&mid) {
+        *o = ((m.saturating_sub(lo) as f64 / span).clamp(0.0, 1.0)) as f32;
+    }
+    Some(lut)
 }
 
 /// Filter › Blur › Average: the selection (or layer) filled with its mean colour.
@@ -667,7 +721,7 @@ pub fn specs() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"selected": true}))
         }),
-        spec!("image.adjustments.equalize", "Equalize", &["Image", "Adjustments"], None, "{}", has_pixels, equalize),
+        spec!("image.adjustments.equalize", "Equalize", &["Image", "Adjustments"], None, r#"{"selectedAreaOnly":bool=false} (with a selection: equalize only the selection, or the whole layer from the selection's histogram)"#, has_pixels, equalize),
         spec!("image.revealAll", "Reveal All", &["Image"], None, "{}", has_doc, |s, _| {
             let d = s.active().ok_or(EngineError::NoDocument)?;
             let all = reveal_all_bounds(&d.doc);
@@ -936,6 +990,70 @@ mod tests {
             let (dark, light) = (pixel(&s, 1, 1)[0], pixel(&s, 1, 20)[0]);
             assert!(dark < 0.05 && light > 0.95, "{depth}: {dark} {light}");
         }
+    }
+
+    /// Photoshop 27.4's tables (Image › Adjustments › Equalize on 8-bit test images, 2026-11-17).
+    #[test]
+    fn equalize_matches_photoshop() {
+        // Grey columns of 30, 31, 100 and 180 (64, 32, 104 and 56 columns): Photoshop gave
+        // 0, 62, 151 and 255.
+        let mut hist = [0u64; 256];
+        for (v, n) in [(30, 64), (31, 32), (100, 104), (180, 56)] {
+            hist[v] = 3 * 128 * n;
+        }
+        let lut = equalize_table(&hist).unwrap();
+        let got: Vec<u8> = [30, 31, 100, 180].iter().map(|&v| (lut[v] * 255.0).round() as u8).collect();
+        assert_eq!(got, [0, 62, 151, 255]);
+        // Half grey 100, half (200, 50, 10): Photoshop gave 153 and (255, 51, 0).
+        let mut s = session(8);
+        let c = |v: f32| v / 255.0;
+        paint_square(&mut s, Rect::new(0, 0, 20, 30), [c(100.0), c(100.0), c(100.0), 1.0]);
+        paint_square(&mut s, Rect::new(20, 0, 40, 30), [c(200.0), c(50.0), c(10.0), 1.0]);
+        s.execute("image.adjustments.equalize", json!({})).unwrap();
+        let q = |p: Vec<f32>| p[..3].iter().map(|v| (v * 255.0).round() as u8).collect::<Vec<_>>();
+        assert_eq!(q(pixel(&s, 1, 1)), [153, 153, 153]);
+        assert_eq!(q(pixel(&s, 30, 1)), [255, 51, 0]);
+        // A count halved with a remainder rounds down: 151 at 17285 below+through (167 of it)
+        // with the levels spanning 1..24573 is 178 in Photoshop, not 178.5 → 179.
+        let mut hist = [0u64; 256];
+        hist[0] = 2;
+        hist[151] = 167;
+        hist[150] = 17285 - 167 - 2;
+        hist[255] = 2 * (24573 - 17285) + 1;
+        let lut = equalize_table(&hist).unwrap();
+        assert_eq!((lut[151] * 255.0).round() as u8, 178, "{}", lut[151] * 255.0);
+    }
+
+    #[test]
+    fn equalize_with_a_selection_and_a_flat_image() {
+        let setup = || {
+            let mut s = session(8);
+            paint_square(&mut s, Rect::new(0, 0, 40, 30), [0.6, 0.6, 0.6, 1.0]);
+            paint_square(&mut s, Rect::new(0, 0, 10, 30), [0.2, 0.2, 0.2, 1.0]);
+            paint_square(&mut s, Rect::new(10, 0, 20, 30), [0.4, 0.4, 0.4, 1.0]);
+            s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 30})).unwrap();
+            s
+        };
+        // The selection holds 0.2 and 0.4 only: they become black and white.
+        let mut s = setup();
+        s.execute("image.adjustments.equalize", json!({"selectedAreaOnly": true})).unwrap();
+        assert_eq!(pixel(&s, 1, 1)[0], 0.0);
+        assert_eq!(pixel(&s, 15, 1)[0], 1.0);
+        assert!((pixel(&s, 30, 1)[0] - 0.6).abs() < 0.003, "outside untouched");
+        // By default the whole layer takes the selection's table: 0.6 is past the brightest
+        // selected level, so it turns white too.
+        let mut s = setup();
+        s.execute("image.adjustments.equalize", json!({})).unwrap();
+        assert_eq!(pixel(&s, 1, 1)[0], 0.0);
+        assert_eq!(pixel(&s, 30, 1)[0], 1.0, "outside follows the selection's table");
+        assert!(s.execute("image.adjustments.equalize", json!({"selectedAreaOnly": "yes"})).is_err());
+        // One brightness level: Photoshop refuses, and no history step is left.
+        let mut s = session(8);
+        paint_square(&mut s, Rect::new(0, 0, 40, 30), [0.4, 0.4, 0.4, 1.0]);
+        let past = s.active().unwrap().history.past_len();
+        let err = s.execute("image.adjustments.equalize", json!({})).unwrap_err().to_string();
+        assert!(err.contains("only one brightness value"), "{err}");
+        assert_eq!(s.active().unwrap().history.past_len(), past);
     }
 
     /// Photoshop 27.4: Desaturate is (max + min) / 2 rounded down at 8 bits; Invert is 255 − v.
