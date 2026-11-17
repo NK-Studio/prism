@@ -108,7 +108,7 @@ fn full_preset() -> Descriptor {
                     .with("Opct", Value::Integer(80))
                     .with("flow", Value::Integer(60))
                     .with("smoothing", Value::Boolean(true))
-                    .with("smoothingValue", Value::Integer(40))
+                    .with("smoothingValue", Value::Integer(102))
                     .with("usePressureOverridesSize", Value::Boolean(true)),
             ),
         )
@@ -170,6 +170,7 @@ fn v6_settings_map_onto_brush_sections() {
         assert_eq!((b.pose.tilt_x, b.pose.rotation), (45.0, 90.0));
         assert!(b.wet_edges && b.noise && b.build_up);
         assert_eq!((b.opacity, b.flow, b.smoothing.amount, b.pressure_size), (0.8, 0.6, 0.4, true));
+        assert!(b.smoothing.enabled, "smoothingValue is 0–255: 102 is 40 %");
         assert!(imp.warnings.iter().any(|w| w.contains("someFutureKey")), "{:?}", imp.warnings);
         // The computed preset.
         let r = &imp.presets[1].brush;

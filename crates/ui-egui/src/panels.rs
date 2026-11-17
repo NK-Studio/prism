@@ -2762,6 +2762,19 @@ fn brush_tip(p: &egui::Painter, c: egui::Pos2, rad: f32, hardness: f32, color: C
 
 /// Options-bar Smoothing % (the brush's stroke smoothing; the live stroke and the commit use it).
 fn smoothing_field(ui: &mut egui::Ui, b: &mut prism_engine::BrushSettings, width: f32) {
+    if !b.smoothing.enabled {
+        // Brush Settings › Smoothing is off: Photoshop shows the field greyed and blank.
+        ui.add_enabled_ui(false, |ui| {
+            let _ = opt_label(ui, tl!("Smoothing"));
+            let t = Tokens::get(ui.ctx());
+            let (r, resp) = ui.allocate_exact_size(vec2(width + widgets::POPUP_ARROW_W, 24.0), Sense::hover());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, false, tl!("Smoothing")));
+            let r = r.shrink2(vec2(0.0, 1.0));
+            ui.painter().rect_filled(r, t.radius_sm, t.field.gamma_multiply(0.5));
+            ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.field_border.gamma_multiply(0.5)), egui::StrokeKind::Inside);
+        });
+        return;
+    }
     let mut sm = (b.smoothing.amount * 100.0).round();
     if scrubby_percent(ui, tl!("Smoothing"), &mut sm, 0.0..=100.0, width) {
         b.smoothing.amount = (sm / 100.0).clamp(0.0, 1.0);

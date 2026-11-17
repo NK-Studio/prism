@@ -41,7 +41,7 @@ pub const SECTIONS: [(&str, bool); 13] = [
     ("Noise", true),
     ("Wet Edges", true),
     ("Build-up", true),
-    ("Smoothing", false),
+    ("Smoothing", true),
     ("Protect Texture", true),
 ];
 
@@ -83,7 +83,7 @@ pub struct BrushesPanelState {
     pub renaming: Option<Renaming>,
 }
 
-/// The enable flag behind section `i` (None for Brush Tip Shape and Smoothing).
+/// The enable flag behind section `i` (None for Brush Tip Shape).
 pub fn section_flag(b: &mut BrushSettings, i: usize) -> Option<&mut bool> {
     Some(match i {
         1 => &mut b.shape_dynamics.enabled,
@@ -96,6 +96,7 @@ pub fn section_flag(b: &mut BrushSettings, i: usize) -> Option<&mut bool> {
         8 => &mut b.noise,
         9 => &mut b.wet_edges,
         10 => &mut b.build_up,
+        11 => &mut b.smoothing.enabled,
         12 => &mut b.protect_texture,
         _ => return None,
     })

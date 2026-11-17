@@ -523,6 +523,9 @@ impl Default for Pose {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Smoothing {
+    /// Brush Settings › Smoothing's check box (Photoshop's `smoothing`, on by default): off, the
+    /// brush isn't smoothed whatever `amount` says, and the options bar's Smoothing is unavailable.
+    pub enabled: bool,
     /// 0..1.
     pub amount: f32,
     /// Lazy-mouse: paint only when the pointer pulls a string of `amount × 100 px` taut.
@@ -538,7 +541,7 @@ pub struct Smoothing {
 
 impl Default for Smoothing {
     fn default() -> Self {
-        Self { amount: 0.0, pulled_string: false, catch_up: true, catch_up_on_end: false, adjust_for_zoom: true }
+        Self { enabled: true, amount: 0.0, pulled_string: false, catch_up: true, catch_up_on_end: false, adjust_for_zoom: true }
     }
 }
 
@@ -836,8 +839,15 @@ impl BrushSettings {
     }
 
     /// Keep Photoshop's tool setting available for switching back without filtering CSP input.
+    /// The smoothing a stroke uses: none with Smoothing switched off.
     pub fn effective_smoothing(&self) -> Smoothing {
-        if self.csp_correction { Smoothing::default() } else { self.smoothing.clone() }
+        if self.csp_correction {
+            Smoothing::default()
+        } else if !self.smoothing.enabled {
+            Smoothing { amount: 0.0, ..self.smoothing.clone() }
+        } else {
+            self.smoothing.clone()
+        }
     }
 
     /// Copy the settings with the primary and dual diameters and Scatter amounts constrained for

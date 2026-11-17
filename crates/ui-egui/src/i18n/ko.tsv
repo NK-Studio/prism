@@ -717,7 +717,7 @@
 	Add space before paragraph	단락 앞 간격 추가
 	Add to Sample	샘플에 추가
 	Add to selection  ({key})	선택 영역에 추가  ({key})
-	Adjust for Zoom	확대/축소에 맞게 조정
+	Adjust for Zoom	확대/축소 조정
 	Adjustment visible	조정 표시
 	Adobe RGB (1998) compatible	Adobe RGB (1998) 호환
 	Align and Distribute	정렬 및 분포
@@ -801,7 +801,7 @@
 	Canvas extension color:	캔버스 확장 색상:
 	Capture	캡처
 	Capture the visibility, position and style of every layer with + below, then switch between versions.	아래 + 버튼으로 모든 레이어의 표시 여부, 위치 및 스타일을 저장한 다음 버전 간에 전환하세요.
-	Catch-up on Stroke End	획 끝에서 따라잡기
+	Catch-up on Stroke End	획 끝에서 캐치업
 	Center	중앙
 	Center Crop Marks	중앙 자르기 표시
 	Center text	텍스트 가운데 정렬
@@ -1246,7 +1246,7 @@
 	Protect Foreground Color	전경색 보호
 	Protect Tones	색조 보호
 	Proximity Match	근접 일치
-	Pulled String Mode	당겨진 끈 모드
+	Pulled String Mode	보조선 당기기 모드
 	Puppet Warp is not active	퍼펫 뒤틀기가 활성화되어 있지 않습니다
 	Purity	순도
 	Quality	품질
@@ -1325,7 +1325,7 @@
 	Selective	선택적
 	Selective Color	선택 색상
 	Send the selected pin backward	선택한 핀 뒤로 보내기
-	Set additional smoothing options	추가 매끄럽게 옵션 설정
+	Set additional smoothing options	추가 보정 옵션 설정
 	Set background color	배경색 설정
 	Set foreground color	전경색 설정
 	Set painting symmetry options	페인팅 대칭 옵션 설정
@@ -1357,7 +1357,7 @@
 	Slices From Guides	안내선에서 분할 영역 만들기
 	Slices are locked (View › Lock Slices)	분할 영역이 잠겨 있습니다(보기 › 분할 영역 잠금)
 	Small Caps	작은 대문자
-	Smoothing	매끄럽게
+	Smoothing	보정
 	Space After	단락 뒤 간격
 	Space Before	단락 앞 간격
 	Spacing	간격
@@ -1370,7 +1370,7 @@
 	Strength:	강도:
 	Strikethrough	취소선
 	Stroke	획
-	Stroke Catch-up	획 따라잡기
+	Stroke Catch-up	획 캐치업
 	Stroke:	획:
 	Style	스타일
 	Style Options	스타일 옵션

@@ -2974,6 +2974,24 @@ fn photoshop_pulled_string_paints_with_the_pens_pressure_of_the_moment() {
 }
 
 #[test]
+fn smoothing_switched_off_does_not_smooth_whatever_the_amount() {
+    // Photoshop's Brush Settings › Smoothing check box (`smoothing`): off, the options bar's value
+    // is unavailable and the brush follows the pen.
+    let line: Vec<_> = (0..=75u32).map(|i| StrokePoint { time: f64::from(i * 8), ..StrokePoint::new(100.0 + f64::from(i * 8), 50.0, 1.0) }).collect();
+    let end = |enabled: bool| {
+        let b = BrushSettings { size: 6.0, smoothing: Smoothing { enabled, amount: 0.5, ..Default::default() }, ..brush() };
+        photoshop_dabs(&b, &line, 1.0).last().map_or(0.0, |d| d.center.x)
+    };
+    assert!(end(true) < 650.0, "on: the brush trails ({})", end(true));
+    assert!(end(false) > 695.0, "off: it reaches the pen ({})", end(false));
+    let off = BrushSettings { smoothing: Smoothing { enabled: false, amount: 0.7, ..Default::default() }, ..brush() };
+    assert_eq!(off.effective_smoothing().amount, 0.0);
+    // Older settings without the flag keep smoothing on.
+    let old: Smoothing = serde_json::from_str(r#"{"amount":0.3}"#).unwrap();
+    assert!(old.enabled);
+}
+
+#[test]
 fn a_frozen_brush_still_lays_resting_dabs() {
     // Without Stroke Catch-up the brush stays put while the pen rests, but Photoshop's resting
     // pen still lays a dab every 100 ms there.

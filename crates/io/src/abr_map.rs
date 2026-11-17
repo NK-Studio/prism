@@ -477,10 +477,13 @@ impl Mapper<'_> {
             }
             b.pressure_size = boolean(to, "usePressureOverridesSize").unwrap_or(false);
             b.pressure_opacity = boolean(to, "usePressureOverridesOpacity").unwrap_or(false);
-            if boolean(to, "smoothing").unwrap_or(true)
-                && let Some(v) = pct(to, "smoothingValue")
-            {
-                b.smoothing.amount = v.clamp(0.0, 1.0);
+            // Brush Settings › Smoothing's check box, and the value: 0–255 (the options bar shows
+            // `v × 100 / 255` %).
+            if let Some(on) = boolean(to, "smoothing") {
+                b.smoothing.enabled = on;
+            }
+            if let Some(v) = num(to, "smoothingValue").filter(|v| v.is_finite()) {
+                b.smoothing.amount = (v / 255.0).clamp(0.0, 1.0) as f32;
             }
             if let Some(v) = boolean(to, "smoothingRadiusMode") {
                 b.smoothing.pulled_string = v;
