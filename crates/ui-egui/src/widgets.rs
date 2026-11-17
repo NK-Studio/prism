@@ -549,21 +549,41 @@ fn second_click(ui: &Ui, resp: &Response) -> bool {
     double
 }
 
+/// A slider's value under the pointer, from the moment it presses on the slider. Waiting for
+/// egui's drag decision (`Response::dragged` of a click-and-drag widget holds a press for 6 points
+/// of motion or 0.8 s, then the knob jumps) makes the first move stick. Pressing on the knob
+/// (within `knob_half` of `knob_x`) grabs it where it was hit, so it doesn't jump either; a press
+/// on the track moves it there, as Photoshop's sliders do. Marks `resp` changed when it moves.
+#[allow(clippy::too_many_arguments)]
+pub fn slider_pointer(ui: &Ui, resp: &mut Response, track: Rect, knob_x: f32, knob_half: f32, value: &mut f32, lo: f32, hi: f32) {
+    let key = resp.id.with("slider-grab");
+    let Some(p) = resp.interact_pointer_pos().filter(|_| resp.is_pointer_button_down_on() && hi > lo) else {
+        ui.data_mut(|d| d.remove::<f32>(key));
+        return;
+    };
+    let grab = ui.data_mut(|d| {
+        *d.get_temp_mut_or_insert_with(key, || {
+            let off = p.x - knob_x;
+            if off.abs() <= knob_half { off } else { 0.0 }
+        })
+    });
+    let f = ((p.x - grab - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0);
+    let v = lo + f * (hi - lo);
+    if (v - *value).abs() > f32::EPSILON {
+        *value = v;
+        resp.mark_changed();
+    }
+}
+
 fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>, g: RowGestures) -> Response {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width().max(60.0);
     let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click_and_drag());
     let (lo, hi) = (*range.start(), *range.end());
     let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 14.0, if gradient.is_some() { 5.0 } else { 3.0 }));
-    if let Some(p) = resp.interact_pointer_pos()
-        && (resp.dragged() || resp.clicked())
-    {
-        let f = ((p.x - track.left()) / track.width()).clamp(0.0, 1.0);
-        let nv = lo + f * (hi - lo);
-        if (nv - *value).abs() > f32::EPSILON {
-            *value = nv;
-            resp.mark_changed();
-        }
+    if hi > lo {
+        let knob_x = track.left() + ((*value - lo) / (hi - lo)).clamp(0.0, 1.0) * track.width();
+        slider_pointer(ui, &mut resp, track, knob_x, 6.0, value, lo, hi);
     }
     // The double-click's first click has moved the knob to the pointer; the second resets.
     if let Some(reset) = g.reset
@@ -1160,6 +1180,41 @@ fn product(s: &str) -> Option<f64> {
 mod tests {
     use egui::{Key, Modifiers};
     use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn slider_follows_the_pointer_from_the_press_and_grabs_the_knob() {
+        // State: value and the slider's rect.
+        let mut h = Harness::builder().with_size(egui::vec2(214.0, 40.0)).build_ui_state(
+            |ui, s: &mut (f32, egui::Rect)| {
+                s.1 = super::slider(ui, &mut s.0, 0.0..=100.0, None).rect;
+            },
+            (50.0f32, egui::Rect::NOTHING),
+        );
+        h.run_steps(2);
+        let r = h.state().1;
+        let track = egui::Rect::from_center_size(r.center(), egui::vec2(r.width() - 14.0, 3.0));
+        let at = |v: f32| egui::pos2(track.left() + v / 100.0 * track.width(), r.center().y);
+        let px = track.width() / 100.0;
+        let ev = |h: &mut Harness<'_, (f32, egui::Rect)>, e: egui::Event| {
+            h.event(e);
+            h.run_steps(1);
+        };
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        // Press on the knob a little right of its centre: grabbed, no jump.
+        let grab = at(50.0) + egui::vec2(3.0, 0.0);
+        ev(&mut h, egui::Event::PointerMoved(grab));
+        ev(&mut h, button(grab, true));
+        assert!((h.state().0 - 50.0).abs() < 1e-3, "grabbing the knob moved it to {}", h.state().0);
+        // A 3-point move (under egui's 6-point drag decision) already moves the value.
+        ev(&mut h, egui::Event::PointerMoved(grab + egui::vec2(3.0, 0.0)));
+        assert!((h.state().0 - (50.0 + 3.0 / px)).abs() < 0.05, "small move: {}", h.state().0);
+        ev(&mut h, button(grab + egui::vec2(3.0, 0.0), false));
+        // A press on the track moves the knob there at once.
+        ev(&mut h, egui::Event::PointerMoved(at(20.0)));
+        ev(&mut h, button(at(20.0), true));
+        assert!((h.state().0 - 20.0).abs() < 0.05, "track press: {}", h.state().0);
+        ev(&mut h, button(at(20.0), false));
+    }
 
     /// Sets up a test with one value field. Its state is its value and how many times it changed.
     fn field(value: f32, range: std::ops::RangeInclusive<f32>) -> Harness<'static, (f32, u32)> {

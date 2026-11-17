@@ -1045,14 +1045,15 @@ fn fs_mblur(in: VOut) -> @location(0) vec4<f32> {
     return mout(acc);
 }
 
-// Precise glow from a distance map: p0 = (solid, soft, invert).
+// Precise glow from its seeded distance map (`effects::PreciseGlow::strength`): p0 = (spread r,
+// fade 1 + s, invert (centre), scale 0.5).
 @fragment
 fn fs_mglow(in: VOut) -> @location(0) vec4<f32> {
     let d = textureLoad(tex_a, local(in.pos), 0).r;
     var m = clamp(1.0 - (d - op.p0.x) / op.p0.y, 0.0, 1.0);
     if (d <= op.p0.x) { m = 1.0; }
     if (op.p0.z > 0.5) { m = 1.0 - m; }
-    return mout(m);
+    return mout(m * op.p0.w);
 }
 
 // Last step of a coverage map: p0 = (|A - B| (satin), 1 - v, contour (LUT row 0), × shape
@@ -1068,27 +1069,27 @@ fn fs_mfinish(in: VOut) -> @location(0) vec4<f32> {
     return mout(v);
 }
 
-// Chiselled bevel height from A = dist_inside, B = dist_outside (`effects::bevel_chisel_h`):
-// p0 = (paint (0 outer, 1 both / emboss, 2 inner), size).
+// Chiselled bevel height from the seeded chamfer fields A (inside) and B (outside)
+// (`effects::bevel_chisel_h`): p0 = (paint (0 outer, 1 both / emboss, 2 inner), fade).
 @fragment
 fn fs_mbevelh(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     let din = textureLoad(tex_a, p, 0).r;
     let dout = textureLoad(tex_b, p, 0).r;
-    let size = op.p0.y;
+    let fade = max(op.p0.y, 1.0);
     var h: f32;
     switch i32(op.p0.x) {
-        case 0: { h = 1.0 - clamp(dout / size, 0.0, 1.0); }
+        case 0: { h = 1.0 - clamp(dout / fade, 0.0, 1.0); }
         case 1: {
             if (din > 0.0) {
-                h = 0.5 + 0.5 * clamp(din / (size / 2.0), 0.0, 1.0);
+                h = 0.5 + 0.5 * clamp(din / fade, 0.0, 1.0);
             } else {
-                h = 0.5 - 0.5 * clamp(dout / (size / 2.0), 0.0, 1.0);
+                h = 0.5 - 0.5 * clamp(dout / fade, 0.0, 1.0);
             }
         }
-        default: { h = clamp(din / size, 0.0, 1.0); }
+        default: { h = clamp(din / fade, 0.0, 1.0); }
     }
-    return mout(h);
+    return mout(0.5 * h);
 }
 
 // Bevel shading of the blurred height map A over shape S (`layer_tex`): p0 = light vector,
@@ -1097,10 +1098,10 @@ fn fs_mbevelh(in: VOut) -> @location(0) vec4<f32> {
 fn fs_mbevelshade(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     let s = textureLoad(layer_tex, p, 0).r;
-    // effects::bevel_maps' on_bevel: the height above BEVEL_H_EPS (emboss styles: or a
-    // 4-neighbour's).
+    // effects::bevel_maps' on_bevel: the height above BEVEL_H_EPS (outer bevel and emboss styles:
+    // or a 4-neighbour's).
     var hmax = ra(p);
-    if (op.p1.y > 1.5) {
+    if (op.p1.y > 0.5) {
         hmax = max(max(hmax, max(ra(p + vec2(1, 0)), ra(p - vec2(1, 0)))), max(ra(p + vec2(0, 1)), ra(p - vec2(0, 1))));
     }
     let outside = select(0.0, 1.0, s < 1.0 - INSIDE_EPS && hmax > 1e-5);
@@ -1117,8 +1118,15 @@ fn fs_mbevelshade(in: VOut) -> @location(0) vec4<f32> {
 // One bevel shading value (`bevel_maps`' shade_into): highlight (p1.z = 0) or shadow amount for
 // height-gradient scale `depth`, times `region`, through the gloss contour.
 fn bevel_part(p: vec2<i32>, depth: f32, region: f32) -> f32 {
-    let gx = (ra(p + vec2(1, 0)) - ra(p - vec2(1, 0))) * 0.5 * depth;
-    let gy = (ra(p + vec2(0, 1)) - ra(p - vec2(0, 1))) * 0.5 * depth;
+    // Prewitt 3 × 3 gradient (`effects::prewitt`): central differences averaged over three lines.
+    var sx = 0.0;
+    var sy = 0.0;
+    for (var k = -1; k <= 1; k++) {
+        sx += ra(p + vec2(1, k)) - ra(p + vec2(-1, k));
+        sy += ra(p + vec2(k, 1)) - ra(p + vec2(k, -1));
+    }
+    let gx = sx / 6.0 * depth;
+    let gy = sy / 6.0 * depth;
     let n = vec3(-gx, -gy, 1.0);
     let len = sqrt(n.x * n.x + n.y * n.y + 1.0);
     let shade = (n.x * op.p0.x + n.y * op.p0.y + n.z * op.p0.z) / len;

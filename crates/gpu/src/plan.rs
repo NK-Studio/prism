@@ -158,6 +158,8 @@ pub struct MapRef {
     pub fx: usize,
     pub item: usize,
     pub map: usize,
+    /// Whole-pixel offset the map is read at (`fx::MapProgram::shift`): pixel `p` reads `p - shift`.
+    pub shift: [i32; 2],
 }
 
 #[derive(Clone, Debug)]
@@ -913,7 +915,7 @@ impl<'a> Planner<'a> {
         let canvas = self.cx.canvas;
         let region = bounds::effect_region(layer, canvas);
         let sb = prism_compose::paint_bounds(layer).unwrap_or_else(|| bounds::layer_bounds(layer, canvas));
-        let clip = if bounds::transparent_outside(layer) { region } else { canvas };
+        let clip = if bounds::transparent_outside(layer) { bounds::effect_paint_region(layer, canvas) } else { canvas };
         // A stroked shape's vector stroke goes above its clipped layers and interior effects
         // (compose::split_parts): the fill and the stroke unmasked, the masks applied after.
         let split = match &layer.content {
@@ -969,7 +971,7 @@ impl<'a> Planner<'a> {
             let mut p = Pass::new(Kernel::FxInit, 0);
             p.a = Some(content);
             p.adjust_kind = INIT_OUTLINE;
-            p.map = Some(MapRef { fx, item: SHAPE_MAP, map: 0 });
+            p.map = Some(MapRef { fx, item: SHAPE_MAP, map: 0, shift: [0, 0] });
             p.clip = Some(clip);
             content = self.emit(p);
         }
@@ -978,7 +980,12 @@ impl<'a> Planner<'a> {
         // Linked patterns tile from the effects reference point (else the layer's top-left).
         let anchor = layer.effects.reference.unwrap_or((f64::from(sb.x0), f64::from(sb.y0)));
         let vector_shape = matches!(layer.content, LayerContent::Shape(_)) && !outline;
-        let map = |item: usize, map: usize| MapRef { fx, item, map };
+        let map = |item: usize, map: usize| MapRef { fx, item, map, shift: [0, 0] };
+        let light = self.cx.light;
+        let shadow_map = |item: usize, s: &prism_doc::Shadow| {
+            let (dx, dy) = crate::fx::shadow_shift(s, &light);
+            MapRef { fx, item, map: 0, shift: [dx, dy] }
+        };
         let rev: Vec<(usize, &'a Effect)> = items.iter().copied().enumerate().rev().collect();
         let init = |s: &mut Self, src: Slot, b: Option<Slot>, kind: i32, opacity: f32| {
             let mut p = Pass::new(Kernel::FxInit, 0);
@@ -1005,7 +1012,7 @@ impl<'a> Planner<'a> {
                 w = self.paint_k(
                     w,
                     content,
-                    Cov::Map(map(i, 0), 0.0),
+                    Cov::Map(shadow_map(i, s), crate::fx::shadow_outside(s, false)),
                     &Paint::Color(s.color.to_rgb()),
                     s.common.blend,
                     s.common.opacity,
@@ -1062,7 +1069,18 @@ impl<'a> Planner<'a> {
         }
         for &(i, e) in &rev {
             if let Effect::InnerShadow(s) = e {
-                l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &Paint::Color(s.color.to_rgb()), s.common.blend, s.common.opacity, F_REL, clip, sb);
+                // The map is unmultiplied by the shape (`fx::program_with`): gated, not relative.
+                l = self.paint(
+                    l,
+                    content,
+                    Cov::Map(shadow_map(i, s), crate::fx::shadow_outside(s, true)),
+                    &Paint::Color(s.color.to_rgb()),
+                    s.common.blend,
+                    s.common.opacity,
+                    F_GATE,
+                    clip,
+                    sb,
+                );
             }
         }
         if let Some(s) = vstroke {
@@ -1686,7 +1704,7 @@ mod tests {
         d.layers.push(l);
         let p = plan(&d).unwrap();
         assert_eq!(p.fx.len(), 1);
-        let m = prism_compose::effects::margin(&d.layers[1]);
+        let m = bounds::effect_margin(&d.layers[1]);
         assert_eq!(p.fx[0].region, Rect::new(2, 2, 5, 5).inflate(m).intersect(&d.bounds().inflate(m)));
         // The effect result lands back in the backdrop slot.
         let last = p.passes.last().unwrap();

@@ -1350,15 +1350,11 @@ fn page_slider(ui: &mut egui::Ui, value: &mut f32, range: std::ops::RangeInclusi
     let (lo, hi) = (*range.start(), *range.end());
     let c = rect.center().y;
     let track = egui::Rect::from_min_max(egui::pos2(rect.left() + 7.0, c - 6.0), egui::pos2(rect.right() - 7.0, c - 3.25));
-    if let Some(p) = resp.interact_pointer_pos()
-        && (resp.dragged() || resp.clicked())
-        && hi > lo
-    {
-        let v = lo + ((p.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * (hi - lo);
-        if (v - *value).abs() > f32::EPSILON {
-            *value = v;
-            resp.mark_changed();
-        }
+    if hi > lo {
+        // Follows the pointer from the press (not egui's 6-point drag decision); the pointer
+        // shape grabs where it was hit.
+        let knob_x = track.left() + ((*value - lo) / (hi - lo)).clamp(0.0, 1.0) * track.width();
+        widgets::slider_pointer(ui, &mut resp, track, knob_x, 5.0, value, lo, hi);
     }
     let f = if hi > lo { ((*value - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 };
     let x = track.left() + f * track.width();

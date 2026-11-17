@@ -14,10 +14,10 @@
 //! of strokes blend onto the backdrop with their own modes, an upper stroke covering the
 //! lower ones. Drop shadows are knocked out only through see-through fill.
 //!
-//! Shapes come from the layer's alpha (after its mask). Strokes and spread / choke measure
-//! distances with a 5 × 5 chamfer metric seeded at sub-pixel edge offsets (as Photoshop does);
-//! precise glows and chiselled bevels use an exact Euclidean distance transform. Soft falloffs
-//! are two box blurs (a tent).
+//! Shapes come from the layer's alpha (after its mask). Strokes, spread / choke, precise glows
+//! and chiselled bevels measure distances with a 5 × 5 chamfer metric seeded at sub-pixel edge
+//! offsets (as Photoshop does). Soft falloffs are Photoshop's tent of a whole-pixel radius
+//! (`ceil(size)`, 2 to 250). Formulas and their sources: `docs/layer-style-analysis.md`.
 
 use prism_color::blend::BlendMode;
 use prism_doc::Pattern;
@@ -37,11 +37,26 @@ pub fn has_effects(layer: &Layer) -> bool {
 
 /// Pixels an effect stack can reach beyond the layer's shape.
 pub fn margin(layer: &Layer) -> i32 {
+    reach_of(layer, true)
+}
+
+/// Pixels the effect *maps* must cover beyond the layer's shape when shadows are painted from
+/// a map built at distance 0 and read at their offset (the GPU compositor): a drop shadow's
+/// Distance moves where it paints ([`margin`]), not how far its map reaches.
+pub fn map_margin(layer: &Layer) -> i32 {
+    reach_of(layer, false)
+}
+
+fn reach_of(layer: &Layer, with_shadow_distance: bool) -> i32 {
     let mut m = 0.0f32;
     for e in layer.effects.items.iter().filter(|e| e.enabled()) {
         let r = match e {
-            Effect::DropShadow(s) | Effect::InnerShadow(s) => s.distance + s.size,
-            Effect::OuterGlow(g) | Effect::InnerGlow(g) => g.size,
+            // An inner shadow's source (`1 - alpha`) is 1 beyond the maps, which their blur
+            // doesn't see: its maps keep covering the distance.
+            Effect::DropShadow(s) => (if with_shadow_distance { s.distance } else { 0.0 }) + s.size,
+            Effect::InnerShadow(s) => s.distance + s.size,
+            // A precise glow fades over `1 + s` past its spread: one pixel beyond its size.
+            Effect::OuterGlow(g) | Effect::InnerGlow(g) => g.size + 1.0,
             Effect::Stroke(s) => s.size,
             Effect::Satin(s) => s.distance + s.size,
             Effect::BevelEmboss(b) => b.size + b.soften,
@@ -238,15 +253,18 @@ fn chamfer_from(mut d: Vec<f32>, w: usize, h: usize) -> (Vec<f32>, Vec<usize>) {
 /// pixel is placed by its alpha (coverage), as Photoshop does. Inside pixels
 /// get ≤ 0.
 fn dist_outside(s: &Map) -> Vec<f32> {
-    dist_outside_by(s, Metric::Euclidean)
+    dist_outside_by(s, Metric::Chamfer)
 }
 
 /// Distance metric for effect distance fields.
 #[derive(Clone, Copy, PartialEq)]
 enum Metric {
-    /// Exact Euclidean (precise glows, bevels).
+    /// Exact Euclidean (kept for comparisons; Photoshop measures every effect distance with the
+    /// chamfer metric).
+    #[allow(dead_code)]
     Euclidean,
-    /// 5 × 5 chamfer (strokes, spread / choke; see [`chamfer_nearest`]).
+    /// 5 × 5 chamfer (strokes, spread / choke, precise glows, chiselled bevels; see
+    /// [`chamfer_nearest`]).
     Chamfer,
 }
 
@@ -265,7 +283,7 @@ fn dist_outside_by(s: &Map, m: Metric) -> Vec<f32> {
 /// Distance from each pixel centre inside the shape to the shape's edge
 /// (≤ 0 outside).
 fn dist_inside(s: &Map) -> Vec<f32> {
-    dist_inside_by(s, Metric::Euclidean)
+    dist_inside_by(s, Metric::Chamfer)
 }
 
 fn dist_inside_by(s: &Map, m: Metric) -> Vec<f32> {
@@ -406,9 +424,14 @@ pub fn hash_noise(x: i64, y: i64) -> f32 {
 }
 
 /// Effect noise (Photoshop's Noise slider): monochrome speckle in the coverage,
-/// applied after the contour. `amount` is 0..=1; 0 leaves the map untouched.
+/// applied after the contour. `amount` is 0..=1; 0 leaves the map untouched. Photoshop takes the
+/// whole percent (`int(noise) × 255 × 2.56` in 16-bit units), so 0.5 % is no noise.
 fn noise(m: &mut Map, amount: f32, x0: i32, y0: i32) {
     if !amount.is_finite() || amount <= 0.0 {
+        return;
+    }
+    let amount = (amount * 100.0 + 1e-3).floor() / 100.0;
+    if amount <= 0.0 {
         return;
     }
     for y in 0..m.h {
@@ -439,11 +462,23 @@ fn rgb(c: &prism_color::Color) -> [f32; 3] {
     c.to_rgb()
 }
 
-/// Offset of an effect lit from `angle` at `distance` (shadow falls away from
-/// the light), rounded to whole pixels as Photoshop does.
-fn offset(angle: f32, distance: f32) -> (f32, f32) {
-    let a = angle.to_radians();
-    ((-a.cos() * distance).round(), (a.sin() * distance).round())
+/// Offset of an effect lit from `angle` at `distance` (the shadow falls away from the light):
+/// `(-round(d·cos θ), round(d·sin θ))` in whole pixels, halves rounded away from zero. Photoshop
+/// reads whole-degree angles from an exact cosine / sine table, so `5 px` at 60° moves 2.5 → 3 px
+/// left; in `f32` the cosine comes out a hair under 0.5 and rounded the other way (2 px), so the
+/// products are taken in `f64` and snapped to the half they mean. Non-finite input moves nothing.
+pub fn offset(angle: f32, distance: f32) -> (f32, f32) {
+    let (a, d) = (f64::from(angle), f64::from(distance));
+    if !a.is_finite() || !d.is_finite() {
+        return (0.0, 0.0);
+    }
+    let (s, c) = a.rem_euclid(360.0).to_radians().sin_cos();
+    (-round_half_away(d * c) as f32, round_half_away(d * s) as f32)
+}
+
+/// Rounds halves away from zero, counting values within float noise of a half as that half.
+fn round_half_away(v: f64) -> f64 {
+    (v + 1e-9 * v.signum()).round()
 }
 
 /// The lengths a 100 % gradient at `angle` spans in a `w` × `h` frame: the chord (Linear and
@@ -554,7 +589,8 @@ fn paint_color(dst: &mut Buffer, m: &Map, c: [f32; 3], blend: BlendMode, opacity
 /// (`size × spread` rounded: a 2 % spread of a 5 px shadow doesn't grow it at all), the blur
 /// keeps `size × (1 − spread)` (ag-psd effects 10.6 → 3.8 % of pixels off).
 pub fn spread_split(size: f32, spread: f32) -> (f32, f32) {
-    ((size * spread).round(), size * (1.0 - spread))
+    let r = (size * spread).round();
+    (r, size - r)
 }
 
 fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bool, origin: (i32, i32)) -> Map {
@@ -575,6 +611,45 @@ fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bool, origin:
     m
 }
 
+/// A precise glow's geometry (Photoshop's 'Precise' technique, from the research notes and the
+/// Photoshop oracles): the alpha becomes a signed value (opaque +1, transparent −1, a half-covered
+/// pixel 0) that falls by `1 / (1 + s)` per chamfer pixel, `s` the glow's soft width (size minus
+/// the whole-pixel spread `r`). Measured: a 16 px glow with 40 % spread is solid for 6 px and fades
+/// over 11; an 18 px centre glow with 30 % choke is clear for 5 px and rises over 14.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PreciseGlow {
+    /// Whole-pixel spread / choke.
+    pub r: f32,
+    /// Fade length `1 + s`.
+    pub fade: f32,
+    /// Seed scale: a pixel of alpha `a` starts `k × (1 − a)` px away (`k = 2 (1 + s)`).
+    pub k: f32,
+}
+
+impl PreciseGlow {
+    /// Strength before the Range (`glow_lut`) at seed distance `d`: half the edge-to-fade ramp,
+    /// like a soft glow's blur (0.5 at the solid edge), so the default 50 % Range draws it at full
+    /// strength. A centre glow is the complement.
+    pub fn strength(&self, d: f32, center: bool) -> f32 {
+        let e = (1.0 - (d - self.r).max(0.0) / self.fade).clamp(0.0, 1.0);
+        0.5 * if center { 1.0 - e } else { e }
+    }
+}
+
+/// [`PreciseGlow`] for a glow of `size` px and `spread` (0..=1).
+pub fn precise_glow(size: f32, spread: f32) -> PreciseGlow {
+    let (r, s) = spread_split(if size.is_finite() { size.clamp(0.0, MAX_REACH) } else { 0.0 }, if spread.is_finite() { spread.clamp(0.0, 1.0) } else { 0.0 });
+    let fade = 1.0 + s.max(0.0);
+    PreciseGlow { r, fade, k: 2.0 * fade }
+}
+
+/// Chamfer distance to the seeds of a precise glow: every pixel with coverage `a` starts at
+/// `k × (1 − a)` (opaque pixels at 0), and the field holds the least start + path length.
+fn precise_field(seeds: &Map, k: f32) -> Vec<f32> {
+    let start = seeds.v.iter().map(|&a| if a > INSIDE_EPS { k * (1.0 - a.min(1.0)) } else { CHAMFER_INF }).collect();
+    chamfer_from(start, seeds.w, seeds.h).0
+}
+
 fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -> Map {
     let src = if inner {
         match g.source {
@@ -586,19 +661,13 @@ fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -> Map {
     };
     let mut m = match g.technique {
         GlowTechnique::Precise => {
-            // An inner glow, from either source, measures from the edge inwards; a centre glow is
-            // the inverse below (the distance outside is ≤ 0 everywhere inside, #966).
-            let d = if inner { dist_inside(shape) } else { dist_outside(&src) };
-            let solid = g.size * g.spread;
-            let soft = (g.size - solid).max(1e-3);
-            let mut m = Map::new(shape.w, shape.h, 0.0);
-            for (o, d) in m.v.iter_mut().zip(d) {
-                *o = if d <= solid { 1.0 } else { (1.0 - (d - solid) / soft).clamp(0.0, 1.0) };
-            }
-            if inner && g.source == GlowSource::Center {
-                m = m.map(|v| 1.0 - v);
-            }
-            m
+            // An inner glow, from either source, measures from the edge inwards (the transparent
+            // side seeds it); a centre glow is the inverse below.
+            let p = precise_glow(g.size, g.spread);
+            let seeds = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
+            let d = precise_field(&seeds, p.k);
+            let center = inner && g.source == GlowSource::Center;
+            Map { w: shape.w, h: shape.h, v: d.iter().map(|&d| p.strength(d, center)).collect() }
         }
         GlowTechnique::Softer => {
             let (r, bw) = spread_split(g.size, g.spread);
@@ -708,81 +777,59 @@ fn paint_glow(dst: &mut Buffer, m: &Map, g: &Glow, shape_bounds: Rect, anchor: (
     paint(dst, &strength, |i| prepared.sample(1.0 - m.v.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0)), g.common.blend, g.common.opacity);
 }
 
-/// A box width as the blurs use it: at least 1, at most [`MAX_REACH`] (an effect never reaches
-/// further, see [`margin`]), and 1 for NaN. A size or softness from a command or a file can be
-/// anything, and an unbounded width sizes the kernel and its buffers (#1543).
-fn box_width(w: f32) -> f32 {
-    if w.is_nan() { 1.0 } else { w.clamp(1.0, MAX_REACH) }
-}
+/// Largest soft-blur radius (Photoshop's effect sizes stop at 250 px).
+pub const MAX_BLUR_RADIUS: i64 = 250;
 
-/// Normalised weights of a centred box of (fractional) width `w`: tap `i` gets the overlap of
-/// `[i - 0.5, i + 0.5]` with `[-w/2, w/2]`.
-fn box_weights(w: f32) -> Vec<f32> {
-    let w = box_width(w);
-    let half = w / 2.0;
-    let r = (half - 0.5).ceil().max(0.0) as i64;
-    let v: Vec<f32> = (-r..=r).map(|i| ((i as f32 + 0.5).min(half) - (i as f32 - 0.5).max(-half)).max(0.0)).collect();
-    let sum: f32 = v.iter().sum();
-    v.iter().map(|x| x / sum).collect()
-}
-
-/// The 1D kernel of two box passes of width `w` (a tent of half-width ≈ `w`): `(radius, weights)`.
-/// Photoshop's bevel height maps are this blur of the shape (fitted on the corpus: a smooth
-/// inner bevel of size 5 matches within 0.7 % mean, size 41 within 2.6 %).
-pub fn tent_kernel(w: f32) -> (i32, Vec<f32>) {
-    let b = box_weights(w);
-    let n = b.len() * 2 - 1;
-    let mut t = vec![0.0f32; n];
-    for (i, x) in b.iter().enumerate() {
-        for (j, y) in b.iter().enumerate() {
-            t[i + j] += x * y;
-        }
+/// Photoshop's soft-blur radius for an effect of `size` px: `ceil(size)`, at least 2 and at most
+/// 250 (a 0.5 or 1 px size still blurs over radius 2; 7.5 px blurs like 8). `0` (no blur) for a
+/// size of 0 or less, or NaN: a hard-edged shadow stays hard. Sizes within 2⁻¹⁵ px above a whole
+/// pixel count as that pixel (Photoshop stores sizes in 16.16 fixed point).
+pub fn blur_radius(size: f32) -> i64 {
+    if size.is_nan() || size <= 0.0 {
+        return 0;
     }
-    ((n as i32 - 1) / 2, t)
+    let s = f64::from(size).min(MAX_BLUR_RADIUS as f64);
+    ((s - 1.0 / 32768.0).ceil() as i64).clamp(2, MAX_BLUR_RADIUS)
 }
 
-/// Box geometry for a (fractional) width: (`r`, end-tap weight `f`, 1 / width) — the
-/// [`box_weights`] taps are `r - 1` full ones each side of the centre plus the two end taps at `f`.
-fn box_geom(bw: f32) -> (i64, f64, f64) {
-    let bw = box_width(bw);
-    let half = bw / 2.0;
-    let r = (half - 0.5).ceil().max(0.0) as i64;
-    let f = f64::from((half - (r as f32 - 0.5)).clamp(0.0, 1.0));
-    (r, f, 1.0 / f64::from(bw))
-}
-
-/// One box pass over `src` (zero outside it) evaluated at `x0 .. x0 + dst.len()`, as a running
-/// sum (O(1) per sample whatever the width).
-fn box_line(src: &[f64], x0: i64, dst: &mut [f64], bw: f32) {
-    let n = src.len() as i64;
-    let (r, f, norm) = box_geom(bw);
-    let at = |i: i64| if i >= 0 && i < n { src[i as usize] } else { 0.0 };
+/// The 1D kernel of Photoshop's soft blur of `w` px: a tent of radius `r` = [`blur_radius`]`(w)`,
+/// weights `(r − |k|) / r²` for `|k| < r` (`(radius, weights)`; the identity for no blur). It is
+/// what Photoshop's two running sums produce (`d += x[i+r] − 2x[i] + x[i−r]`, `s += d`,
+/// normalised by `1/r²`), and the bevel's smooth height map is the same blur of the shape.
+pub fn tent_kernel(w: f32) -> (i32, Vec<f32>) {
+    let r = blur_radius(w);
     if r == 0 {
-        for (k, d) in dst.iter_mut().enumerate() {
-            *d = at(x0 + k as i64);
-        }
+        return (0, vec![1.0]);
+    }
+    let n2 = (r * r) as f32;
+    ((r - 1) as i32, (-(r - 1)..r).map(|k| (r - k.abs()) as f32 / n2).collect())
+}
+
+/// One line through the tent of [`tent_kernel`] (zero outside `src`), as two running sums: a box of
+/// `r` taps ending at each sample, then a box of `r` taps starting there (O(1) per sample).
+fn tent_line(src: &[f32], dst: &mut [f32], bw: f32) {
+    let r = blur_radius(bw) as usize;
+    let n = src.len();
+    if r == 0 {
+        dst.copy_from_slice(src);
         return;
     }
-    let mut inner: f64 = (x0 - (r - 1)..=x0 + (r - 1)).map(at).sum();
-    for (k, d) in dst.iter_mut().enumerate() {
-        let x = x0 + k as i64;
-        *d = (inner + f * (at(x - r) + at(x + r))) * norm;
-        inner += at(x + r) - at(x - r + 1);
+    let at = |i: usize| src.get(i).map_or(0.0, |v| f64::from(*v));
+    // mid[j] = src[j - r + 1 ..= j]
+    let mut mid = vec![0.0f64; n + r];
+    let mut acc = 0.0f64;
+    for (j, m) in mid.iter_mut().enumerate() {
+        acc += at(j);
+        if j >= r {
+            acc -= at(j - r);
+        }
+        *m = acc;
     }
-}
-
-/// Two box passes along a line, exactly the convolution with [`tent_kernel`] (zero outside): the
-/// first pass is evaluated `r` samples beyond each end so the second sees what lies there.
-fn tent_line(src: &[f32], dst: &mut [f32], bw: f32) {
-    let (r, _, _) = box_geom(bw);
-    let s: Vec<f64> = src.iter().map(|v| f64::from(*v)).collect();
-    let mut mid = vec![0.0f64; src.len() + 2 * r as usize];
-    box_line(&s, -r, &mut mid, bw);
-    let mut out = vec![0.0f64; src.len()];
-    // `mid[k]` holds position k - r: output position p reads index p + r.
-    box_line(&mid, r, &mut out, bw);
-    for (d, v) in dst.iter_mut().zip(out) {
-        *d = v as f32;
+    let norm = 1.0 / (r * r) as f64;
+    let mut acc: f64 = mid[..r].iter().sum();
+    for (x, d) in dst.iter_mut().enumerate() {
+        *d = (acc * norm) as f32;
+        acc += mid.get(x + r).copied().unwrap_or(0.0) - mid[x];
     }
 }
 
@@ -901,8 +948,9 @@ pub struct BevelGeom {
     pub depth: f32,
     /// Pillow emboss: the outside slopes face the other way.
     pub pillow: bool,
-    /// Chisel Soft: extra tent width over the chiselled height map.
-    pub chisel_soft: f32,
+    /// Chisel: the height ramp's length `1 + width` and its seed scale `2 (1 + width)` (see
+    /// [`bevel_chisel_h`]).
+    pub chisel_fade: f32,
 }
 
 pub fn bevel_geom(b: &Bevel) -> BevelGeom {
@@ -915,36 +963,42 @@ pub fn bevel_geom(b: &Bevel) -> BevelGeom {
     };
     // Emboss styles straddle the edge with half the size, rounded up to whole pixels: a 41 px
     // emboss blurs over 21 (psd-tools layer_effects: 20.5 left narrow letter parts up to
-    // 5.7/255 dark, 21 is within 2.2).
+    // 5.7/255 dark, 21 is within 2.2). The research notes show the size halved; with the
+    // rounded-up half as the slope scale D too, Photoshop's emboss-smooth-colored-normal oracle
+    // has 3 pixels off by more than 2/255, with the exact half 2438 (layer_effects: 0 vs 428).
     let width = if emboss { (size / 2.0).ceil() } else { size };
     let smooth = b.technique == BevelTechnique::Smooth;
     let sign = if b.up { 1.0 } else { -1.0 };
+    // Photoshop's slope scale is `D = max(1, depth × size)` (its `c = 1530 / D` against Prewitt
+    // gradients of 16-bit heights). Chisel emboss styles keep the whole size in D while their
+    // height ramps over the half (Photoshop oracles bevel-emboss / bevel-pillow-chisel-*: 4472
+    // pixels off by more than 2/255 against 7142 with the half).
+    let d = b.depth * if smooth { width } else { size };
     BevelGeom {
         paint,
         width,
-        depth: b.depth * if smooth { width } else { size } * sign,
+        depth: if d.is_finite() { d.max(1.0) } else { 1.0 } * sign,
         pillow: b.style == BevelStyle::PillowEmboss,
-        chisel_soft: if b.technique == BevelTechnique::ChiselSoft { (size / 4.0).max(1.0) } else { 0.0 },
+        chisel_fade: 1.0 + width,
     }
 }
 
-/// Bevel height map in `0..=1`. Smooth: the shape blurred by two box passes of the bevel
-/// width. Chisel: linear ramps of the exact distance to the edge (size wide; emboss styles
-/// straddle the edge), slightly blurred for Chisel Soft. Soften blurs the result.
+/// Bevel height map in `0..=1`. Smooth: the shape through Photoshop's soft-blur tent of the bevel
+/// width. Chisel (Hard and Soft alike): [`bevel_chisel_h`] of the seeded chamfer fields (emboss
+/// styles straddle the edge). What sets Chisel Soft apart in Photoshop is unknown: the extra blur
+/// it used to get here moved every chisel-soft oracle further off (inner 3902 → 5653 pixels).
+/// Soften blurs the result.
 fn bevel_height(shape: &Map, b: &Bevel, g: &BevelGeom, tex: &TextureCtx, patterns: &PreparedPatterns<'_>) -> Map {
-    let size = b.size.max(1.0);
     let mut h = if b.technique == BevelTechnique::Smooth {
         let mut h = shape.clone();
         tent(&mut h, g.width);
         h
     } else {
-        let (din, dout) = (dist_inside(shape), dist_outside(shape));
+        let k = 2.0 * g.chisel_fade;
+        let (din, dout) = (precise_field(&shape.clone().map(|a| 1.0 - a), k), precise_field(shape, k));
         let mut h = Map::new(shape.w, shape.h, 0.0);
         for i in 0..h.v.len() {
-            h.v[i] = bevel_chisel_h(g.paint, size, din[i], dout[i]);
-        }
-        if g.chisel_soft > 0.0 {
-            tent(&mut h, g.chisel_soft);
+            h.v[i] = bevel_chisel_h(g.paint, g.chisel_fade, din[i], dout[i]);
         }
         h
     };
@@ -984,19 +1038,39 @@ pub struct TextureCtx<'a> {
     pub anchor: (f64, f64),
 }
 
-/// Chiselled height from the inside / outside distances (keep in sync with `fs_mbevelh`).
-pub fn bevel_chisel_h(paint: BevelPaint, size: f32, din: f32, dout: f32) -> f32 {
-    match paint {
-        BevelPaint::Outer => 1.0 - (dout / size).clamp(0.0, 1.0),
+/// Chiselled height from the [`precise_field`]s inside (`din`, seeded by `1 - alpha`) and outside
+/// (`dout`, seeded by the alpha) (keep in sync with `fs_mbevelh`). Photoshop builds it like a
+/// precise glow: the signed alpha falls by `1 / fade` per chamfer pixel (`fade` = 1 + size, half
+/// the size, rounded up, for emboss styles), and the height is half that ramp, so a 100 % chisel
+/// of 10 px slopes 10 / 22 per pixel (Photoshop oracle bevel-inner-chisel-hard: the lower facet
+/// takes 71 % of the shadow, a full-height ramp 100 %).
+pub fn bevel_chisel_h(paint: BevelPaint, fade: f32, din: f32, dout: f32) -> f32 {
+    let fade = fade.max(1.0);
+    let ramp = |d: f32| (d / fade).clamp(0.0, 1.0);
+    0.5 * match paint {
+        BevelPaint::Outer => 1.0 - ramp(dout),
         BevelPaint::Both => {
             if din > 0.0 {
-                0.5 + 0.5 * (din / (size / 2.0)).clamp(0.0, 1.0)
+                0.5 + 0.5 * ramp(din)
             } else {
-                0.5 - 0.5 * (dout / (size / 2.0)).clamp(0.0, 1.0)
+                0.5 - 0.5 * ramp(dout)
             }
         }
-        BevelPaint::Inner => (din / size).clamp(0.0, 1.0),
+        BevelPaint::Inner => ramp(din),
     }
+}
+
+/// The height map's slope at `(x, y)` scaled by `depth`: Photoshop's 3 × 3 Prewitt gradient (the
+/// central difference averaged over the three rows / columns), so a lone bumpy row shades a third
+/// as much as a clean edge.
+fn prewitt(h: &Map, x: i64, y: i64, depth: f32) -> (f32, f32) {
+    let mut gx = 0.0;
+    let mut gy = 0.0;
+    for k in -1..=1 {
+        gx += h.get(x + 1, y + k) - h.get(x - 1, y + k);
+        gy += h.get(x + k, y + 1) - h.get(x + k, y - 1);
+    }
+    (gx / 6.0 * depth, gy / 6.0 * depth)
 }
 
 /// Bevel highlight and shadow maps: `[hi, sh]` (inner or outer) or `[hi, sh, hi_out, sh_out]`
@@ -1013,7 +1087,7 @@ fn bevel_maps(shape: &Map, b: &Bevel, light: &GlobalLight, tex: &TextureCtx, pat
     // past the blur's reach (a raised 4-neighbour: it still slopes; psd-tools layer_effects'
     // emboss shadow runs one row past it), outer bevels don't (Photoshop oracle
     // bevel-outer-smooth).
-    let reach_past = g.paint == BevelPaint::Both;
+    let reach_past = g.paint != BevelPaint::Inner;
     let on_bevel = |x: i64, y: i64| {
         hmap.get(x, y) > BEVEL_H_EPS || (reach_past && [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| hmap.get(x + dx, y + dy) > BEVEL_H_EPS))
     };
@@ -1022,8 +1096,7 @@ fn bevel_maps(shape: &Map, b: &Bevel, light: &GlobalLight, tex: &TextureCtx, pat
         for y in 0..shape.h as i64 {
             for x in 0..shape.w as i64 {
                 let i = y as usize * shape.w + x as usize;
-                let gx = (hmap.get(x + 1, y) - hmap.get(x - 1, y)) * 0.5 * depth;
-                let gy = (hmap.get(x, y + 1) - hmap.get(x, y - 1)) * 0.5 * depth;
+                let (gx, gy) = prewitt(&hmap, x, y, depth);
                 let n = [-gx, -gy, 1.0];
                 let len = (n[0] * n[0] + n[1] * n[1] + 1.0).sqrt();
                 let shade = (n[0] * light_v[0] + n[1] * light_v[1] + n[2] * light_v[2]) / len;
@@ -1550,9 +1623,9 @@ fn mix_premul(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
 /// `glow_map`, `bevel_maps` and `build_maps`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FieldKind {
-    /// `dist_outside` of the shape: precise outer glows, bevels.
+    /// `dist_outside` of the shape: chiselled bevels.
     Outside,
-    /// `dist_inside` of the shape: precise inner glows, bevels.
+    /// `dist_inside` of the shape: chiselled bevels.
     Inside,
     /// Chamfer distance outside the shape: outside strokes, and the spread of drop shadows and
     /// softer outer glows ([`dilate`]).
@@ -1563,6 +1636,10 @@ pub enum FieldKind {
     StrokeInside,
     /// Stroke distance outside a shape layer's outline (from its local coverage).
     StrokeOutsideVector,
+    /// [`precise_field`] of the shape with seed scale `k` (`f32` bits): precise outer glows.
+    PreciseOutside(u32),
+    /// [`precise_field`] of `1 - alpha` with seed scale `k` (`f32` bits): precise inner glows.
+    PreciseInside(u32),
 }
 
 /// The `kind` distance field of the shape `alpha` (row-major `w × h`).
@@ -1575,6 +1652,8 @@ pub fn distance_field(kind: FieldKind, alpha: Vec<f32>, w: usize, h: usize) -> V
         FieldKind::ChokeInside => dist_outside_by(&s.map(|a| 1.0 - a), Metric::Chamfer),
         FieldKind::StrokeInside => dist_inside_by(&s, Metric::Chamfer),
         FieldKind::StrokeOutsideVector => dist_outside_by(&local_coverage(&s), Metric::Chamfer),
+        FieldKind::PreciseOutside(k) => precise_field(&s, f32::from_bits(k)),
+        FieldKind::PreciseInside(k) => precise_field(&s.map(|a| 1.0 - a), f32::from_bits(k)),
     }
 }
 
@@ -1689,22 +1768,135 @@ mod tests {
     }
 
     #[test]
-    fn tent_kernel_is_two_boxes() {
+    fn tent_kernel_is_photoshops_whole_radius_tent() {
+        // r = ceil(size): weights (r - |k|) / r², 2r - 1 taps.
         let (r, k) = tent_kernel(5.0);
         assert_eq!(r, 4);
         let sum: f32 = k.iter().sum();
         assert!((sum - 1.0).abs() < 1e-6);
         assert!((k[4] - 5.0 / 25.0).abs() < 1e-6 && (k[0] - 1.0 / 25.0).abs() < 1e-6);
-        // Fractional widths taper the end taps; width 1 is the identity.
-        let (r, k) = tent_kernel(4.0);
-        assert_eq!(r, 4);
-        assert!(k[0] > 0.0 && k[0] < 1.0 / 25.0);
-        assert_eq!(tent_kernel(1.0), (0, vec![1.0]));
-        // #1543: a huge, infinite or NaN width is capped, not turned into a kernel of 2^62 taps.
-        for w in [1e30, f32::INFINITY, f32::MAX] {
-            assert_eq!(tent_kernel(w), tent_kernel(MAX_REACH), "{w}");
-        }
+        // Even and fractional sizes round up: 4 is a radius-4 tent, 4.25 a radius-5 one.
+        assert_eq!(tent_kernel(4.0), (3, vec![1.0 / 16.0, 2.0 / 16.0, 3.0 / 16.0, 4.0 / 16.0, 3.0 / 16.0, 2.0 / 16.0, 1.0 / 16.0]));
+        assert_eq!(tent_kernel(4.25), tent_kernel(5.0));
+        // 16.16 noise just above a whole pixel doesn't add one.
+        assert_eq!(tent_kernel(7.000_01), tent_kernel(7.0));
+        // Small sizes still blur over radius 2; 0 and NaN are the identity.
+        assert_eq!(tent_kernel(0.5), (1, vec![0.25, 0.5, 0.25]));
+        assert_eq!(tent_kernel(1.0), tent_kernel(2.0));
+        assert_eq!(tent_kernel(0.0), (0, vec![1.0]));
+        assert_eq!(tent_kernel(-3.0), (0, vec![1.0]));
         assert_eq!(tent_kernel(f32::NAN), (0, vec![1.0]));
+        // #1543: a huge or infinite size is capped at radius 250, not a kernel of 2^62 taps.
+        for w in [251.0, 1e30, f32::INFINITY, f32::MAX] {
+            assert_eq!(tent_kernel(w), tent_kernel(250.0), "{w}");
+        }
+        assert_eq!(tent_kernel(250.0).0, 249);
+    }
+
+    #[test]
+    fn offsets_round_halves_away_from_zero_at_every_angle() {
+        // 5 px at 60°: 2.5 px left, 4.33 down -> (-3, 4); f32 cos(60°) rounded it to -2.
+        assert_eq!(offset(60.0, 5.0), (-3.0, 4.0));
+        assert_eq!(offset(120.0, 5.0), (3.0, 4.0));
+        assert_eq!(offset(210.0, 5.0), (4.0, -3.0));
+        assert_eq!(offset(30.0, 3.0), (-3.0, 2.0));
+        assert_eq!(offset(90.0, 3.0), (0.0, 3.0));
+        assert_eq!(offset(0.0, 3.0), (-3.0, 0.0));
+        assert_eq!(offset(-300.0, 5.0), offset(60.0, 5.0));
+        assert_eq!(offset(f32::NAN, 5.0), (0.0, 0.0));
+        assert_eq!(offset(90.0, f32::INFINITY), (0.0, 0.0));
+    }
+
+    #[test]
+    fn bevel_slope_is_prewitt_and_depth_at_least_one() {
+        // A ramp along x on one row only: Prewitt averages it with the flat rows above and below.
+        let mut h = Map::new(5, 5, 0.0);
+        for x in 0..5 {
+            h.v[2 * 5 + x] = x as f32 * 0.1;
+        }
+        let (gx, gy) = prewitt(&h, 2, 2, 3.0);
+        assert!((gx - 0.1 / 3.0 * 3.0).abs() < 1e-6, "{gx}");
+        assert!(gy.abs() < 1e-6);
+        // D = max(1, depth × size): a 1 % bevel of 7 px still slopes at depth 1.
+        let mut b = fresh_bevel();
+        b.size = 7.0;
+        b.depth = 0.01;
+        assert_eq!(bevel_geom(&b).depth, 1.0);
+        b.up = false;
+        assert_eq!(bevel_geom(&b).depth, -1.0);
+        // Emboss halves the size, rounded up (41 -> 21), for the blur and for D.
+        b.style = BevelStyle::Emboss;
+        b.size = 41.0;
+        b.depth = 1.0;
+        assert_eq!(bevel_geom(&b).width, 21.0);
+    }
+
+    fn fresh_bevel() -> Bevel {
+        Bevel {
+            enabled: true,
+            style: BevelStyle::InnerBevel,
+            technique: BevelTechnique::Smooth,
+            depth: 1.0,
+            up: true,
+            size: 5.0,
+            soften: 0.0,
+            angle: 120.0,
+            altitude: 30.0,
+            use_global_light: true,
+            gloss_contour: Contour::Linear,
+            highlight: prism_doc::FxCommon::new(BlendMode::Screen, 0.75),
+            highlight_color: prism_color::Color::WHITE,
+            shadow: prism_doc::FxCommon::new(BlendMode::Multiply, 0.75),
+            shadow_color: prism_color::Color::BLACK,
+            contour: None,
+            texture: None,
+        }
+    }
+
+    #[test]
+    fn precise_distances_use_the_chamfer_metric() {
+        // One opaque pixel: at offset (1, 3) the chamfer distance is √5 + 1 (Euclidean √10).
+        let mut m = Map::new(9, 9, 0.0);
+        m.v[4 * 9 + 4] = 1.0;
+        let d = dist_outside(&m);
+        assert!((d[7 * 9 + 5] - (5f32.sqrt() + 1.0 - 0.5)).abs() < 1e-4, "{}", d[7 * 9 + 5]);
+    }
+
+    #[test]
+    fn precise_glows_fade_over_one_plus_the_soft_width() {
+        // A 16 px outer glow with 40 % spread on a straight edge (Photoshop oracle
+        // outer-glow-precise-spread40): solid for 6 px, then 1/11 less per pixel.
+        let (w, h) = (40usize, 5usize);
+        let mut shape = Map::new(w, h, 0.0);
+        for y in 0..h {
+            for x in 30..w {
+                shape.v[y * w + x] = 1.0;
+            }
+        }
+        let p = precise_glow(16.0, 0.4);
+        assert_eq!((p.r, p.fade, p.k), (6.0, 11.0, 22.0));
+        let d = precise_field(&shape, p.k);
+        let at = |x: usize| 2.0 * p.strength(d[2 * w + x], false);
+        assert_eq!(at(24), 1.0); // 6 px out
+        assert!((at(23) - 10.0 / 11.0).abs() < 1e-5, "{}", at(23));
+        assert!((at(14) - 1.0 / 11.0).abs() < 1e-5, "{}", at(14));
+        assert_eq!(at(13), 0.0);
+        // Centre source: the complement.
+        assert!((2.0 * p.strength(d[2 * w + 23], true) - 1.0 / 11.0).abs() < 1e-5);
+        // Hostile sizes don't blow up.
+        for (s, sp) in [(f32::NAN, 0.5), (f32::INFINITY, f32::NAN), (-4.0, 2.0)] {
+            let p = precise_glow(s, sp);
+            assert!(p.r.is_finite() && p.fade >= 1.0 && p.k.is_finite());
+        }
+    }
+
+    #[test]
+    fn noise_takes_whole_percents() {
+        let mut m = Map::new(8, 8, 0.5);
+        noise(&mut m, 0.009, 0, 0);
+        assert!(m.v.iter().all(|v| *v == 0.5));
+        noise(&mut m, 0.2, 0, 0);
+        assert!(m.v.iter().any(|v| *v != 0.5));
     }
 
     fn no_tex() -> TextureCtx<'static> {

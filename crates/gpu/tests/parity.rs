@@ -857,6 +857,33 @@ fn layer_effects_every_kind() {
 }
 
 #[test]
+fn shadows_painted_far_past_their_maps() {
+    // Shadow maps are built at distance 0 and read at the offset: a distance far beyond the
+    // shadow's size reads past the maps' region (the contour's value at 0 / 1 there), also per
+    // page cell (the doc exceeds the paged compositor's 256 px limit).
+    let Some(mut g) = gpu() else { return };
+    for (angle, distance) in [(30.0, 70.0), (200.0, 140.0), (120.0, 5.0)] {
+        let d = fx_doc(420, 300, SampleType::U8);
+        let l = blob("fx", d.pixel_format(), 150.0, 140.0, 40.0, [0.9, 0.4, 0.2]);
+        let mut drop = shadow(BlendMode::Multiply, 0.8, angle, distance, 6.0, 0.3);
+        drop.contour = contour();
+        let mut inner = shadow(BlendMode::Normal, 0.7, angle + 90.0, distance * 0.5, 8.0, 0.0);
+        inner.contour = contour();
+        for (name, items) in [
+            ("drop", vec![Effect::DropShadow(drop.clone())]),
+            ("inner", vec![Effect::InnerShadow(inner.clone())]),
+            ("both", vec![Effect::DropShadow(drop.clone()), Effect::InnerShadow(inner.clone())]),
+        ] {
+            let mut d = d.clone();
+            let mut l = l.clone();
+            l.effects.items = items;
+            d.layers.push(l);
+            fx_check(&mut g, &d, &format!("{name} shadows at {angle}° {distance} px"));
+        }
+    }
+}
+
+#[test]
 fn layer_effects_opacity_fill_blend_and_off_canvas() {
     let Some(mut g) = gpu() else { return };
     let stack = effect_cases().into_iter().find(|(n, _)| *n == "full stack").unwrap().1;

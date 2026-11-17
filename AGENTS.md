@@ -89,6 +89,12 @@ boundary applies. Where the research notes give a formula read from the binary, 
 written (2026-11-17: no measured comparison needed), in code written independently from the
 formulas and constants. Records: `docs/adjust-analysis.md`.
 
+On 2026-11-17 the maintainer asked to rework the layer-style (Layer › Layer Style) maths from their
+research notes on Photoshop 2026's layer-effect code. The same boundary applies: Prism's code is
+written independently from the documented formulas and constants, parts the notes mark as
+estimates stay as measured against the corpus, and raw analysis stays outside the repository.
+Records: `docs/layer-style-analysis.md`.
+
 ## 4. Picking work
 
 Priorities: important infrastructure first, then low-hanging parity, then the long tail.

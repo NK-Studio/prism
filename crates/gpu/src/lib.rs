@@ -900,11 +900,17 @@ impl Compositor {
             let cell = (part.x0.div_euclid(page as i32), part.y0.div_euclid(page as i32));
             let cr = cell_rect(cell, page);
             for (i, f) in plan.fx.iter().enumerate() {
-                let pf = cr.intersect(&f.region);
+                // A cell within the apron of the maps reads them (a shadow paints at its offset,
+                // possibly past the maps' region).
+                let apron = aprons.get(i).copied().unwrap_or(0);
+                let pf = cr.intersect(&f.region.inflate(apron));
                 if !paged.get(i).copied().unwrap_or(false) || pf.is_empty() {
                     continue;
                 }
-                let window = pf.inflate(aprons.get(i).copied().unwrap_or(0)).intersect(&f.region);
+                let window = pf.inflate(apron).intersect(&f.region);
+                if window.is_empty() {
+                    continue;
+                }
                 self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, Some(cell)), window, &mut stats);
             }
             let chunks = grid_rects(part, self.chunk);
@@ -1056,7 +1062,8 @@ impl Compositor {
                     return Some((e.shape.view.clone(), e.region));
                 }
                 let t = e.progs.get(m.item)?.maps.get(m.map)?.as_ref()?;
-                Some((t.view.clone(), e.region))
+                // A shifted read: the map's origin moves by the shift, so pixel `p` reads `p - shift`.
+                Some((t.view.clone(), e.region.translate(m.shift[0], m.shift[1])))
             }));
         }
         Bound { views, keys, maps }
@@ -1535,10 +1542,17 @@ impl Compositor {
                 continue;
             }
             if !same {
-                e.progs[i] = ProgState {
-                    key: prog.key,
-                    maps: (0..prog.maps).map(|k| prog.stages.iter().any(|s| s.out == Some(k)).then(|| Tex::map(device, "pc_fx_map", region, MAP16))).collect(),
-                };
+                // New settings over the same region (a distance or size drag): keep the map
+                // textures whose slots are still used, allocate only the missing ones.
+                let old = std::mem::take(&mut e.progs[i].maps);
+                let mut old = old.into_iter().map(|t| t.filter(|t| (t.texture.width(), t.texture.height()) == (region.width(), region.height())));
+                let maps = (0..prog.maps)
+                    .map(|k| {
+                        let kept = old.next().flatten();
+                        prog.stages.iter().any(|s| s.out == Some(k)).then(|| kept.unwrap_or_else(|| Tex::map(device, "pc_fx_map", region, MAP16)))
+                    })
+                    .collect();
+                e.progs[i] = ProgState { key: prog.key, maps };
             }
             stats.fx_programs += 1;
             self.run_program(device, queue, encoder, key, i, prog, d, stats);

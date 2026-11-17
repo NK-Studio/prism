@@ -73,6 +73,9 @@ pub(crate) struct MapProgram {
     pub stages: Vec<Stage>,
     /// Distance fields read, with the distance up to which each must be exact.
     pub fields: Vec<(FieldKind, i32)>,
+    /// Whole-pixel offset the paint passes read the maps at (shadows: the maps are built at
+    /// distance 0 and shifted when painted, so a Distance drag doesn't rebuild them).
+    pub shift: (i32, i32),
 }
 
 /// How far a field value depends on the shape, for a field exact up to `reach`.
@@ -84,7 +87,7 @@ pub(crate) fn field_radius(_kind: FieldKind, reach: i32) -> i32 {
 
 impl MapProgram {
     fn empty() -> Self {
-        MapProgram { key: 0, maps: 0, stages: Vec::new(), fields: Vec::new() }
+        MapProgram { key: 0, maps: 0, stages: Vec::new(), fields: Vec::new(), shift: (0, 0) }
     }
 
     /// Per-stage output window for a shape damage rect `d` (all inside `region`): what each stage
@@ -133,7 +136,8 @@ impl MapProgram {
     /// How far (px) any final map depends on the shape: maps computed over a window are exact
     /// at least this far inside it.
     pub fn reach(&self, field_reach: &dyn Fn(FieldKind) -> i32) -> i32 {
-        self.stage_reach(field_reach).into_iter().zip(&self.stages).filter(|(_, s)| s.out.is_some()).map(|(r, _)| r).max().unwrap_or(0)
+        let maps = self.stage_reach(field_reach).into_iter().zip(&self.stages).filter(|(_, s)| s.out.is_some()).map(|(r, _)| r).max().unwrap_or(0);
+        maps.saturating_add(self.shift.0.unsigned_abs().max(self.shift.1.unsigned_abs()).min(i32::MAX as u32) as i32)
     }
 
     /// Physical temporary index per stage (None for final maps), reusing temporaries after
@@ -264,8 +268,26 @@ fn contour_lut(c: &Contour) -> Option<Vec<f32>> {
 
 /// `compose::effects::offset`: shadow offset away from the light, whole pixels.
 fn offset(angle: f32, distance: f32) -> (f32, f32) {
-    let a = angle.to_radians();
-    ((-a.cos() * distance).round(), (a.sin() * distance).round())
+    prism_compose::effects::offset(angle, distance)
+}
+
+/// A shadow's whole-pixel offset (`shadow_map`), as the paint passes apply it to its map.
+pub(crate) fn shadow_shift(s: &prism_doc::Shadow, light: &GlobalLight) -> (i32, i32) {
+    let angle = if s.use_global_light { light.angle } else { s.angle };
+    let (dx, dy) = offset(angle, s.distance);
+    let px = |v: f32| v.clamp(-(prism_compose::effects::MAX_REACH * 4.0), prism_compose::effects::MAX_REACH * 4.0) as i32;
+    (px(dx), px(dy))
+}
+
+/// A shadow map's value beyond its region (read when the shift points past it): the contour of
+/// no coverage (drop shadow) or of full coverage (inner shadow, whose source is `1 - alpha`).
+pub(crate) fn shadow_outside(s: &prism_doc::Shadow, inner: bool) -> f32 {
+    let v = if inner { 1.0 } else { 0.0 };
+    match contour_lut(&s.contour) {
+        Some(l) if inner => l.last().copied().unwrap_or(v),
+        Some(l) => l.first().copied().unwrap_or(v),
+        None => v,
+    }
 }
 
 /// The map program of one enabled effect (`build_maps`), without pattern sources.
@@ -278,28 +300,24 @@ pub(crate) fn program(e: &Effect, light: &GlobalLight, vector_shape: bool) -> Ma
 /// `anchor` (`effects::TextureCtx`).
 pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, patterns: &[Pattern], anchor: (f64, f64)) -> MapProgram {
     let mut b = B { stages: Vec::new(), fields: Vec::new() };
+    let mut shift = (0, 0);
     let maps = match e {
         Effect::DropShadow(s) | Effect::InnerShadow(s) => {
-            // shadow_map
+            // shadow_map at distance 0: a whole-pixel shift commutes with the spread, the blur and
+            // the contour, so the paint passes read the map at the offset instead (`shift`) and a
+            // Distance change keeps the maps. An inner shadow's `× shape` happens there too (its
+            // paint gates on the shape).
             let inner = matches!(e, Effect::InnerShadow(_));
-            let angle = if s.use_global_light { light.angle } else { s.angle };
-            let (dx, dy) = offset(angle, s.distance);
-            let src = b.shift(In::Shape, dx, dy, if inner { 1.0 } else { 0.0 }, inner);
+            shift = shadow_shift(s, light);
+            let src = b.shift(In::Shape, 0.0, 0.0, if inner { 1.0 } else { 0.0 }, inner);
             let (r, bw) = prism_compose::effects::spread_split(s.size, s.spread);
             let mut m = src;
             if r > 0.0 {
-                // dist_outside of the shifted map is the shifted field (integer offsets; shifted-in
-                // pixels are far away for a drop shadow, inside for an inner shadow).
                 let f = b.field(if inner { FieldKind::ChokeInside } else { FieldKind::StrokeOutside }, r);
-                let d = if dx == 0.0 && dy == 0.0 {
-                    f
-                } else {
-                    b.push(stage(Kernel::MShift, Some(f), None, [dx, dy, if inner { -0.5 } else { 1e10 }, 0.0], dx.abs().max(dy.abs()) as i32))
-                };
-                m = b.dilate(src, d, r);
+                m = b.dilate(src, f, r);
             }
             let m = b.blur(m, bw);
-            b.finish(m, None, false, &s.contour, inner, 0);
+            b.finish(m, None, false, &s.contour, false, 0);
             1
         }
         Effect::OuterGlow(g) | Effect::InnerGlow(g) => {
@@ -308,10 +326,11 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
             let center = inner && g.source == GlowSource::Center;
             match g.technique {
                 GlowTechnique::Precise => {
-                    let d = b.field(if inner { FieldKind::Inside } else { FieldKind::Outside }, g.size);
-                    let solid = g.size * g.spread;
-                    let soft = (g.size - solid).max(1e-3);
-                    let m = b.push(stage(Kernel::MGlow, Some(d), None, [solid, soft, f32::from(u8::from(center)), 0.0], 0));
+                    // `effects::PreciseGlow`: the seeded chamfer field, then its ramp.
+                    let p = prism_compose::effects::precise_glow(g.size, g.spread);
+                    let kind = if inner { FieldKind::PreciseInside(p.k.to_bits()) } else { FieldKind::PreciseOutside(p.k.to_bits()) };
+                    let d = b.field(kind, p.r + p.fade);
+                    let m = b.push(stage(Kernel::MGlow, Some(d), None, [p.r, p.fade, f32::from(u8::from(center)), 0.5], 0));
                     b.finish_lut(m, None, false, prism_compose::effects::glow_lut(g), inner, 0);
                 }
                 GlowTechnique::Softer => {
@@ -343,7 +362,6 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
             // bevel_maps: height map (tent blur of the shape, or chiselled distance ramps), then
             // highlight / shadow shading inside and / or outside the shape.
             let g = prism_compose::effects::bevel_geom(bv);
-            let size = bv.size.max(1.0);
             let paint = |p: BevelPaint| match p {
                 BevelPaint::Outer => 0.0,
                 BevelPaint::Both => 1.0,
@@ -352,10 +370,11 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
             let mut h = if bv.technique == BevelTechnique::Smooth {
                 b.conv(In::Shape, prism_compose::effects::tent_kernel(g.width))
             } else {
-                let din = b.field(FieldKind::Inside, size);
-                let dout = b.field(FieldKind::Outside, size);
-                let h = b.push(stage(Kernel::MBevelH, Some(din), Some(dout), [paint(g.paint), size, 0.0, 0.0], 0));
-                if g.chisel_soft > 0.0 { b.conv(h, prism_compose::effects::tent_kernel(g.chisel_soft)) } else { h }
+                // `effects::bevel_chisel_h` of the seeded chamfer fields.
+                let k = (2.0 * g.chisel_fade).to_bits();
+                let din = b.field(FieldKind::PreciseInside(k), g.chisel_fade);
+                let dout = b.field(FieldKind::PreciseOutside(k), g.chisel_fade);
+                b.push(stage(Kernel::MBevelH, Some(din), Some(dout), [paint(g.paint), g.chisel_fade, 0.0, 0.0], 0))
             };
             if let Some(c) = &bv.contour {
                 // Contour element: the height through the contour over its range.
@@ -443,7 +462,7 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
         }
     }
     (maps, &b.fields).hash(&mut h);
-    MapProgram { key: h.finish() | 1, maps, stages: b.stages, fields: b.fields }
+    MapProgram { key: h.finish() | 1, maps, stages: b.stages, fields: b.fields, shift }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -651,6 +670,25 @@ mod tests {
     }
 
     #[test]
+    fn shadow_distance_shifts_the_paint_not_the_maps() {
+        let light = GlobalLight::default();
+        for inner in [false, true] {
+            let Effect::DropShadow(mut s) = Effect::default_drop_shadow() else { unreachable!() };
+            s.spread = 0.2;
+            let wrap = |s: &prism_doc::Shadow| if inner { Effect::InnerShadow(s.clone()) } else { Effect::DropShadow(s.clone()) };
+            let a = program(&wrap(&s), &light, false);
+            s.distance = 17.0;
+            let b = program(&wrap(&s), &light, false);
+            assert_eq!(a.key, b.key, "inner {inner}: a distance drag keeps the maps");
+            let (dx, dy) = prism_compose::effects::offset(light.angle, 17.0);
+            assert_eq!(b.shift, (dx as i32, dy as i32));
+            // Paged maps reach as far as the shifted reads.
+            let reach = |p: &MapProgram| p.reach(&|_| 10);
+            assert_eq!(reach(&b) - reach(&a), dx.abs().max(dy.abs()) as i32 - a.shift.0.abs().max(a.shift.1.abs()));
+        }
+    }
+
+    #[test]
     fn windows_grow_by_reach_and_temps_are_reused() {
         let light = GlobalLight::default();
         let Effect::DropShadow(mut s) = Effect::default_drop_shadow() else { unreachable!() };
@@ -683,9 +721,16 @@ mod tests {
                 shape[y * w + x] = (90.0 - r).clamp(0.0, 1.0) * if (x / 13 + y / 17) % 5 == 0 { 0.6 } else { 1.0 };
             }
         }
-        for kind in
-            [FieldKind::Outside, FieldKind::Inside, FieldKind::ChokeInside, FieldKind::StrokeOutside, FieldKind::StrokeInside, FieldKind::StrokeOutsideVector]
-        {
+        for kind in [
+            FieldKind::Outside,
+            FieldKind::Inside,
+            FieldKind::ChokeInside,
+            FieldKind::StrokeOutside,
+            FieldKind::StrokeInside,
+            FieldKind::StrokeOutsideVector,
+            FieldKind::PreciseOutside(9.0f32.to_bits()),
+            FieldKind::PreciseInside(9.0f32.to_bits()),
+        ] {
             let reach = 9;
             let whole = prism_compose::effects::distance_field(kind, shape.clone(), w, h);
             let banded = field(kind, reach, &shape, region, region);
