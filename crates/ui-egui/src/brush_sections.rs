@@ -250,10 +250,19 @@ fn same_tip(tip: &TipShape, size: f32, hardness: f32, p: &BrushPreset) -> bool {
         }
 }
 
+/// The one tip the grid highlights: the tip last picked while the brush still has it, else the
+/// first that looks like the brush's. Several presets can share a tip (Photoshop's list repeats
+/// the 30 px hard round), and only one is selected.
+fn highlighted_tip(picked: Option<usize>, presets: &[BrushPreset], selected: impl Fn(&BrushPreset) -> bool) -> Option<usize> {
+    picked.filter(|&i| presets.get(i).is_some_and(&selected)).or_else(|| presets.iter().position(&selected))
+}
+
 /// Photoshop's scrolling grid of preset tips with their sizes. Returns the clicked preset index.
 fn tip_grid(ui: &mut egui::Ui, id: &str, presets: &[BrushPreset], selected: impl Fn(&BrushPreset) -> bool) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
     let mut clicked = None;
+    let picked_id = egui::Id::new((id, "picked"));
+    let highlighted = highlighted_tip(ui.ctx().data(|d| d.get_temp::<usize>(picked_id)), presets, &selected);
     let frame = egui::Frame::NONE.fill(t.field).stroke(Stroke::new(1.0, t.field_border)).corner_radius(t.radius_sm as u8).inner_margin(egui::Margin::same(3));
     frame.show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt(id).max_height(104.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -264,7 +273,7 @@ fn tip_grid(ui: &mut egui::Ui, id: &str, presets: &[BrushPreset], selected: impl
                     if !ui.is_rect_visible(cell) {
                         continue;
                     }
-                    if selected(p) {
+                    if highlighted == Some(i) {
                         ui.painter().rect_filled(cell, 3.0, t.accent_soft);
                         ui.painter().rect_stroke(cell, 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
                     } else if resp.hovered() {
@@ -288,6 +297,9 @@ fn tip_grid(ui: &mut egui::Ui, id: &str, presets: &[BrushPreset], selected: impl
             });
         });
     });
+    if let Some(i) = clicked {
+        ui.ctx().data_mut(|d| d.insert_temp(picked_id, i));
+    }
     ui.add_space(6.0);
     clicked
 }
@@ -639,6 +651,21 @@ pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_one_of_several_identical_tips_is_highlighted() {
+        // Photoshop's tip list repeats the 30 px hard round: one cell is selected, not all three.
+        let presets = paint::presets::builtin();
+        let same: Vec<String> = [0usize, 4, 6].iter().filter_map(|&i| presets.get(i)).map(|p| p.name.clone()).collect();
+        let looks_alike = |p: &BrushPreset| same.contains(&p.name);
+        assert_eq!(highlighted_tip(None, &presets, looks_alike), Some(0), "the first match by default");
+        assert_eq!(highlighted_tip(Some(4), &presets, looks_alike), Some(4), "the one picked");
+        assert_eq!(highlighted_tip(Some(6), &presets, looks_alike), Some(6));
+        // A pick the brush no longer has (another tip, or out of range) falls back to the first match.
+        assert_eq!(highlighted_tip(Some(1), &presets, looks_alike), Some(0));
+        assert_eq!(highlighted_tip(Some(usize::MAX), &presets, looks_alike), Some(0));
+        assert_eq!(highlighted_tip(Some(4), &presets, |_| false), None);
+    }
 
     #[test]
     fn ellipse_widget_drags_angle_and_roundness() {
